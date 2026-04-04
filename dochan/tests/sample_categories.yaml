@@ -1,0 +1,42 @@
+# 샘플 문서 분류 (테스트 우선순위)
+
+categories:
+  - name: 기본_텍스트
+    description: 텍스트만 포함된 단순 문서
+    priority: 1
+    files: []
+
+  - name: 표_포함
+    description: 표(단순/병합)가 포함된 문서
+    priority: 1
+    files: []
+
+  - name: 수식_포함
+    description: 수학 수식이 포함된 문서
+    priority: 2
+    files: []
+
+  - name: 이미지_포함
+    description: 이미지가 포함된 문서
+    priority: 2
+    files: []
+
+  - name: 복합_문서
+    description: 표+수식+이미지 복합
+    priority: 3
+    files: []
+
+  - name: 머리글_바닥글
+    description: 머리글/바닥글/각주 포함
+    priority: 3
+    files: []
+
+  - name: 대용량
+    description: 50페이지 이상 문서
+    priority: 4
+    files: []
+
+  - name: 특수_형식
+    description: 암호화/DRM/배포용 문서
+    priority: 5
+    files: []

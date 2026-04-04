@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dochan"
+version = "0.1.0"
+description = "dochan — HWP/HWPX 문서 파서, AI/LLM 최적 Markdown 변환"
+requires-python = ">=3.9"
+license = "MIT"
+readme = "README.md"
+keywords = ["hwp", "hwpx", "parser", "korean", "document", "markdown", "ai", "llm", "hancom"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Markup",
+]
+dependencies = [
+    "olefile>=0.47",
+    "lxml>=4.9",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+ocr = ["pytesseract>=0.3", "Pillow>=9.0"]
+
+[project.urls]
+Homepage = "https://github.com/illuwa/dochan"
+Repository = "https://github.com/illuwa/dochan"
+Issues = "https://github.com/illuwa/dochan/issues"
+
+[project.scripts]
+dochan = "dochan.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dochan*"]
+
+[tool.pytest.ini_options]
+testpaths = ["dochan/tests"]

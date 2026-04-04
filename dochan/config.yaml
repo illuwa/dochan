@@ -1,0 +1,33 @@
+# Dochan 설정
+
+# 파싱 옵션
+parsing:
+  strict_mode: false          # true: 에러 시 즉시 중단
+  max_file_size_mb: 100       # 최대 파일 크기 제한
+  timeout_seconds: 60         # 단일 파일 파싱 타임아웃
+
+# 출력 옵션
+output:
+  default_format: markdown    # markdown, json, text
+  image_handling: reference   # reference(파일명만), embed(base64), extract(파일로 추출)
+  image_output_dir: ./images
+  equation_format: raw        # raw(원본 스크립트), latex(변환 시도)
+
+# 필터 서버 (폴백/GT 비교)
+filter_server:
+  enabled: false
+  base_url: http://localhost:8080
+  timeout: 30
+  api_key: ""
+
+# 배치 처리
+batch:
+  max_workers: 4
+  extensions:
+    - .hwp
+    - .hwpx
+
+# 로깅
+logging:
+  level: INFO                 # DEBUG, INFO, WARNING, ERROR
+  file: null                  # 로그 파일 경로 (null = 콘솔만)

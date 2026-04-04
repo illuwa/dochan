@@ -306,6 +306,19 @@ class HWPXParser:
                     ))
                     text_parts = []
                 results.append(self._parse_picture_elem(child))
+            elif tag == 'ctrl':
+                # <run> 안의 <ctrl> — 머리글/바닥글/각주 등
+                ctrl_result = self._parse_ctrl(child)
+                if ctrl_result:
+                    if text_parts:
+                        results.append(TextRun(
+                            text=''.join(text_parts),
+                            bold=bold, italic=italic,
+                            font_size_pt=font_size_pt,
+                            underline=underline, strikeout=strikeout,
+                        ))
+                        text_parts = []
+                    results.append(ctrl_result)
 
         # 남은 텍스트
         if text_parts:
@@ -333,8 +346,46 @@ class HWPXParser:
                 return Equation(script=script)
             elif tag == 'pic':
                 return self._parse_picture_elem(child)
+            elif tag == 'header':
+                return self._parse_header_footer_elem(child, 'header')
+            elif tag == 'footer':
+                return self._parse_header_footer_elem(child, 'footer')
+            elif tag == 'footNote':
+                return self._parse_footnote_elem(child, 'footnote')
+            elif tag == 'endNote':
+                return self._parse_footnote_elem(child, 'endnote')
 
         return None
+
+    def _parse_header_footer_elem(self, elem, hf_type: str):
+        """<header>/<footer> → HeaderFooter"""
+        hf = HeaderFooter(type=hf_type)
+
+        for child in elem:
+            tag = _local_tag(child.tag)
+            if tag == 'subList':
+                for sub in child:
+                    if _local_tag(sub.tag) == 'p':
+                        elems = self._parse_paragraph_elem(sub)
+                        for e in elems:
+                            if hasattr(e, 'runs'):
+                                hf.paragraphs.append(e)
+        return hf
+
+    def _parse_footnote_elem(self, elem, fn_type: str):
+        """<footNote>/<endNote> → Footnote"""
+        fn = Footnote(type=fn_type)
+
+        for child in elem:
+            tag = _local_tag(child.tag)
+            if tag == 'subList':
+                for sub in child:
+                    if _local_tag(sub.tag) == 'p':
+                        elems = self._parse_paragraph_elem(sub)
+                        for e in elems:
+                            if hasattr(e, 'runs'):
+                                fn.paragraphs.append(e)
+        return fn
 
     def _parse_table_elem(self, tbl_elem) -> Table:
         """<tbl> → Table"""

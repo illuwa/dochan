@@ -430,6 +430,7 @@ def test_parse_biff_workbook_tracks_defined_name_provenance_path():
     assert doc.sections[0].provenance.path == "Book#Summary"
     assert doc.sections[0].elements[0].text == "Defined name: SalesRange = Summary!A2:A3"
     assert doc.sections[0].elements[0].provenance.path == "Book"
+    assert doc.sections[0].elements[0].runs[0].provenance.path == "Book"
     assert doc.sections[0].elements[1].rows[0][0].provenance.path == "Book#Summary"
 
 
@@ -1413,6 +1414,32 @@ def test_parse_biff_workbook_restores_sheet_headers_and_footers():
     assert section.elements[0].text == "Header: Confidential"
     assert section.elements[1].text == "Footer: Page 1"
     assert section.elements[2].rows[1][0].text == "10"
+    assert section.elements[0].runs[0].provenance.path == "Workbook#Report"
+    assert section.elements[1].runs[0].provenance.path == "Workbook#Report"
+    assert section.elements[2].rows[0][0].paragraphs[0].runs[0].provenance.path == "Workbook#Report"
+
+
+def test_parse_biff_workbook_tracks_run_provenance_in_hyperlink_comment_cells():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "Report")
+        + _hlink(0, 0, 0, 0, "https://example.com/report")
+        + _label(1, 0, "Revenue")
+        + _note(1, 0, "Reviewer")
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "Links"))
+    workbook = globals_part + _boundsheet(offset, "Links") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+    assert table.rows[0][0].text == "Report <https://example.com/report>"
+    assert table.rows[1][0].text == "Revenue [comment: Reviewer]"
+    assert table.rows[0][0].paragraphs[0].runs[0].provenance.path == "Workbook#Links"
+    assert table.rows[0][0].paragraphs[0].runs[0].provenance.cell == "A1"
+    assert table.rows[1][0].paragraphs[0].runs[0].provenance.path == "Workbook#Links"
+    assert table.rows[1][0].paragraphs[0].runs[0].provenance.cell == "A2"
 
 
 def test_parse_biff_workbook_decodes_header_footer_control_codes():

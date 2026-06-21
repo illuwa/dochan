@@ -922,6 +922,13 @@ def _decode_formula_token_stream(
         elif token == 0x1C and offset + 1 <= len(tokens):  # ptgErr
             stack.append(_format_biff_error(tokens[offset]))
             offset += 1
+        elif token == 0x19:  # ptgAttr: skip attribute metadata
+            if offset >= len(tokens):
+                return ""
+            if offset + 1 < len(tokens):
+                offset += 2
+            else:
+                return ""
         elif token == 0x12 and stack:  # ptgUplus
             stack[-1] = f"+{stack[-1]}"
         elif token == 0x13 and stack:  # ptgUminus

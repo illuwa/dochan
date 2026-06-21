@@ -280,6 +280,10 @@ def _ptg_str(text):
     return bytes([0x17, len(text), 0]) + encoded
 
 
+def _ptg_attr(value=0x0000):
+    return bytes([0x19, value & 0xFF, (value >> 8) & 0xFF])
+
+
 def _ptg_bool(value):
     return bytes([0x1D, 1 if value else 0])
 
@@ -799,6 +803,25 @@ def test_parse_biff_workbook_restores_basic_formula_tokens():
     table = doc.sections[0].elements[0]
 
     assert table.rows[1][2].text == "30 (=A2+B2)"
+
+
+def test_parse_biff_workbook_restores_formula_with_attribute_tokens():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "A")
+        + _label(0, 1, "B")
+        + _label(1, 0, "Score")
+        + _formula_with_tokens(1, 1, 30, _ptg_ref(1, 0) + _ptg_int(10) + _ptg_attr(0x0001) + _ptg_add())
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "FormulaAttr"))
+    workbook = globals_part + _boundsheet(offset, "FormulaAttr") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.rows[1][1].text == "30 (=A2+10)"
 
 
 def test_parse_biff_workbook_preserves_unknown_fixed_formula_functions():

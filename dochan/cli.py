@@ -1,4 +1,4 @@
-"""dochan CLI — HWP/HWPX 문서를 터미널에서 변환
+"""dochan CLI — 문서를 터미널에서 변환
 
 사용법:
   dochan convert 문서.hwp                    # → stdout에 Markdown
@@ -17,13 +17,13 @@ import os
 def main():
     parser = argparse.ArgumentParser(
         prog='dochan',
-        description='dochan — 독한 HWP/HWPX 파서, AI/LLM 최적 Markdown 변환',
+        description='dochan — 독한 native 문서 파서, AI/LLM 최적 Markdown 변환',
     )
     subparsers = parser.add_subparsers(dest='command', help='명령')
 
     # convert
-    conv = subparsers.add_parser('convert', help='HWP/HWPX → Markdown/JSON/Text 변환')
-    conv.add_argument('file', help='HWP 또는 HWPX 파일 경로')
+    conv = subparsers.add_parser('convert', help='문서 → Markdown/JSON/Text 변환')
+    conv.add_argument('file', help='문서 파일 경로')
     conv.add_argument('-o', '--output', default=None, help='출력 파일 경로 (기본: stdout)')
     conv.add_argument('-f', '--format', choices=['markdown', 'json', 'text'],
                       default='markdown', help='출력 형식 (기본: markdown)')
@@ -39,7 +39,7 @@ def main():
 
     # info
     inf = subparsers.add_parser('info', help='문서 메타데이터 출력')
-    inf.add_argument('file', help='HWP 또는 HWPX 파일 경로')
+    inf.add_argument('file', help='문서 파일 경로')
 
     args = parser.parse_args()
 
@@ -110,7 +110,7 @@ def _cmd_info(args):
     doc = Dochan(args.file)
     info = doc.metadata
     info['file'] = args.file
-    info['format'] = 'hwpx' if args.file.lower().endswith('.hwpx') else 'hwp'
+    info['format'] = info.get('source_format') or ('hwpx' if args.file.lower().endswith('.hwpx') else 'hwp')
     print(json.dumps(info, ensure_ascii=False, indent=2))
 
 

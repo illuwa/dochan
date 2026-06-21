@@ -15,6 +15,13 @@ from .hwp.doc_info import DocInfoParser
 from .hwp.section import SectionParser
 from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
 from .hwpx.parser import HWPXParser
+from .office_binary.doc import DOCReader
+from .office_binary.ppt import PPTReader
+from .office_binary.xls import XLSReader
+from .ooxml.docx import DOCXReader
+from .ooxml.package import detect_ooxml_format
+from .ooxml.pptx import PPTXReader
+from .ooxml.xlsx import XLSXReader
 from .output.markdown import to_markdown
 from .output.json_out import to_json, to_dict
 from .output.plain_text import to_plain_text
@@ -43,6 +50,18 @@ class Dochan:
             self._parse_hwpx()
         elif ext == '.hwp':
             self._parse_hwp()
+        elif ext == '.doc':
+            self._parse_doc()
+        elif ext == '.ppt':
+            self._parse_ppt()
+        elif ext == '.xls':
+            self._parse_xls()
+        elif ext == '.docx':
+            self._parse_docx()
+        elif ext == '.pptx':
+            self._parse_pptx()
+        elif ext == '.xlsx':
+            self._parse_xlsx()
         else:
             # 매직 바이트로 판별
             with open(self.file_path, 'rb') as f:
@@ -50,7 +69,17 @@ class Dochan:
             if magic[:4] == b'\xd0\xcf\x11\xe0':  # OLE 매직
                 self._parse_hwp()
             elif magic[:2] == b'PK':  # ZIP 매직
-                self._parse_hwpx()
+                ooxml_format = detect_ooxml_format(self.file_path)
+                if ooxml_format == 'docx':
+                    self._parse_docx()
+                elif ooxml_format == 'pptx':
+                    self._parse_pptx()
+                elif ooxml_format == 'xlsx':
+                    self._parse_xlsx()
+                elif ooxml_format:
+                    self.doc.errors.append(f"ERR: 아직 지원하지 않는 OOXML 형식: {ooxml_format}")
+                else:
+                    self._parse_hwpx()
             else:
                 self.doc.errors.append(f"ERR: 알 수 없는 파일 형식: {self.file_path}")
 
@@ -131,6 +160,30 @@ class Dochan:
         """HWPX (ZIP/XML) 파싱"""
         parser = HWPXParser()
         self.doc = parser.parse(self.file_path)
+
+    def _parse_xls(self):
+        """XLS (BIFF/OLE) 파싱"""
+        self.doc = XLSReader().read(self.file_path)
+
+    def _parse_doc(self):
+        """DOC (Word Binary/OLE) 파싱"""
+        self.doc = DOCReader().read(self.file_path)
+
+    def _parse_ppt(self):
+        """PPT (PowerPoint Binary/OLE) 파싱"""
+        self.doc = PPTReader().read(self.file_path)
+
+    def _parse_docx(self):
+        """DOCX (Office Open XML) 파싱"""
+        self.doc = DOCXReader().read(self.file_path)
+
+    def _parse_pptx(self):
+        """PPTX (Office Open XML) 파싱"""
+        self.doc = PPTXReader().read(self.file_path)
+
+    def _parse_xlsx(self):
+        """XLSX (Office Open XML) 파싱"""
+        self.doc = XLSXReader().read(self.file_path)
 
     def _run_ocr(self):
         """모든 이미지에 OCR 실행 (표 셀 안 이미지 포함)"""

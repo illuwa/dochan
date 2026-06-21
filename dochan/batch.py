@@ -81,7 +81,7 @@ def batch_convert(
     output_dir: str,
     output_format: str = 'markdown',
     max_workers: int = 4,
-    extensions: tuple = ('.hwp', '.hwpx'),
+    extensions: tuple = ('.hwp', '.hwpx', '.doc', '.ppt', '.xls', '.docx', '.pptx', '.xlsx'),
 ) -> BatchSummary:
     """
     디렉토리 내 HWP 파일 일괄 변환
@@ -121,6 +121,20 @@ def batch_convert(
 
     summary = BatchSummary(total=len(files))
     logger.info(f"배치 시작: {len(files)}개 파일, {max_workers} 워커")
+
+    if max_workers <= 1:
+        for file_path in files:
+            result = _process_single(file_path, output_dir, output_format)
+            summary.results.append(result)
+            if result.success:
+                summary.success += 1
+                logger.info(f"✓ {os.path.basename(file_path)}")
+            else:
+                summary.failed += 1
+                logger.error(f"✗ {os.path.basename(file_path)}: {result.errors}")
+
+        logger.info(f"배치 완료: {summary.success}/{summary.total} 성공 ({summary.success_rate:.1f}%)")
+        return summary
 
     # 병렬 처리
     with ProcessPoolExecutor(max_workers=max_workers) as executor:

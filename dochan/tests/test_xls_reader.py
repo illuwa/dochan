@@ -1643,7 +1643,41 @@ def test_xls_reader_returns_error_when_workbook_stream_unreadable(monkeypatch, t
 
     assert doc.metadata["source_format"] == "xls"
     assert doc.sections == []
-    assert doc.errors == ["ERR: XLS Workbook stream read 실패: stream is unreadable"]
+    assert doc.errors == ["ERR: XLS Workbook stream 처리 실패: stream is unreadable"]
+
+
+def test_xls_reader_falls_back_to_book_when_workbook_stream_unreadable(monkeypatch, tmp_path):
+    class FallbackOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name in {"Workbook", "Book"}
+
+        def openstream(self, name):
+            if name == "Workbook":
+                raise IOError("stream is unreadable")
+            if name == "Book":
+                class Stream:
+                    def read(self):
+                        return _minimal_biff_workbook()
+
+                return Stream()
+            raise KeyError(name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", FallbackOle)
+
+    path = tmp_path / "fallback.xls"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = XLSReader().read(str(path))
+
+    assert doc.sections[0].provenance.path == "Book#Sheet1"
+    assert to_markdown(doc) == "| Name | Value |\n| --- | --- |\n| A | 10 |"
+    assert doc.errors == []
 
 
 def test_xls_reader_reads_legacy_book_stream(monkeypatch, tmp_path):

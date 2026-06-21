@@ -1177,16 +1177,18 @@ class XLSReader:
 
         doc = Document(source_format="xls")
         try:
-            stream_name = "Workbook" if ole.exists("Workbook") else "Book"
-            if not ole.exists(stream_name):
+            stream_names = [name for name in ("Workbook", "Book") if ole.exists(name)]
+            if not stream_names:
                 doc.errors.append("ERR: XLS Workbook stream not found")
                 return doc
-            try:
-                workbook_data = ole.openstream(stream_name).read()
-            except Exception as exc:
-                doc.errors.append(f"ERR: XLS {stream_name} stream read 실패: {exc}")
-                return doc
-            return parse_biff_workbook(workbook_data, workbook_stream=stream_name)
+            for stream_name in stream_names:
+                try:
+                    workbook_data = ole.openstream(stream_name).read()
+                    return parse_biff_workbook(workbook_data, workbook_stream=stream_name)
+                except Exception as exc:
+                    doc.errors.append(f"ERR: XLS {stream_name} stream 처리 실패: {exc}")
+                    continue
+            return doc
         except Exception as exc:
             doc.errors.append(f"ERR: XLS 파싱 중 오류: {exc}")
             return doc

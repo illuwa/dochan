@@ -55,6 +55,24 @@ def test_ppt_reader_extracts_text_records(monkeypatch, tmp_path):
     assert doc.sections[0].elements[1].text == "Latin note"
 
 
+def test_ppt_reader_returns_error_when_powerpoint_stream_unreadable(monkeypatch, tmp_path):
+    class CorruptPptOle(FakeOle):
+        def openstream(self, name):
+            if name != "PowerPoint Document":
+                raise KeyError(name)
+            raise IOError("stream is unreadable")
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", CorruptPptOle)
+    path = tmp_path / "corrupt.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert doc.metadata["source_format"] == "ppt"
+    assert doc.sections == []
+    assert doc.errors == ["ERR: PPT PowerPoint Document stream read 실패: stream is unreadable"]
+
+
 def test_ppt_reader_preserves_cp1252_punctuation_in_byte_text_records(monkeypatch, tmp_path):
     class Cp1252Ole(FakeOle):
         def openstream(self, name):

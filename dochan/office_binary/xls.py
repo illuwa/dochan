@@ -1175,13 +1175,20 @@ class XLSReader:
             doc.errors.append(f"ERR: XLS OLE 파일 열기 실패: {exc}")
             return doc
 
+        doc = Document(source_format="xls")
         try:
             stream_name = "Workbook" if ole.exists("Workbook") else "Book"
             if not ole.exists(stream_name):
-                doc = Document(source_format="xls")
                 doc.errors.append("ERR: XLS Workbook stream not found")
                 return doc
-            workbook_data = ole.openstream(stream_name).read()
+            try:
+                workbook_data = ole.openstream(stream_name).read()
+            except Exception as exc:
+                doc.errors.append(f"ERR: XLS {stream_name} stream read 실패: {exc}")
+                return doc
             return parse_biff_workbook(workbook_data, workbook_stream=stream_name)
+        except Exception as exc:
+            doc.errors.append(f"ERR: XLS 파싱 중 오류: {exc}")
+            return doc
         finally:
             ole.close()

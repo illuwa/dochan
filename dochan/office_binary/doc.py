@@ -278,12 +278,16 @@ class DOCReader:
             doc.errors.append(f"ERR: DOC OLE 파일 열기 실패: {exc}")
             return doc
 
+        doc = Document(source_format="doc")
         try:
             if not ole.exists("WordDocument"):
-                doc = Document(source_format="doc")
                 doc.errors.append("ERR: DOC WordDocument stream not found")
                 return doc
-            word_data = ole.openstream("WordDocument").read()
+            try:
+                word_data = ole.openstream("WordDocument").read()
+            except Exception as exc:
+                doc.errors.append(f"ERR: DOC WordDocument stream read 실패: {exc}")
+                return doc
             best_document = None
             best_score = None
 
@@ -309,5 +313,8 @@ class DOCReader:
             if best_document is None:
                 return parse_doc_word_stream(word_data)
             return best_document
+        except Exception as exc:
+            doc.errors.append(f"ERR: DOC 파싱 중 오류: {exc}")
+            return doc
         finally:
             ole.close()

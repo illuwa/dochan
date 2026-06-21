@@ -62,6 +62,22 @@ def test_doc_reader_uses_fib_text_range_when_available(monkeypatch, tmp_path):
     assert [element.text for element in doc.sections[0].elements] == ["Scoped Body", "Only this text"]
 
 
+def test_doc_reader_returns_error_when_word_document_stream_unreadable(monkeypatch, tmp_path):
+    class BadWordOle(FakeOle):
+        def openstream(self, name):
+            raise IOError("stream is unreadable")
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", BadWordOle)
+    path = tmp_path / "unreadable-word.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert doc.metadata["source_format"] == "doc"
+    assert doc.sections == []
+    assert doc.errors == ["ERR: DOC WordDocument stream read 실패: stream is unreadable"]
+
+
 def _doc_piece_table(cps, pieces):
     body = b"".join(struct.pack("<I", cp) for cp in cps)
     for fc_encoded in pieces:

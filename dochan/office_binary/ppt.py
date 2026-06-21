@@ -279,12 +279,19 @@ class PPTReader:
             doc.errors.append(f"ERR: PPT OLE 파일 열기 실패: {exc}")
             return doc
 
+        doc = Document(source_format="ppt")
         try:
             if not ole.exists("PowerPoint Document"):
-                doc = Document(source_format="ppt")
                 doc.errors.append("ERR: PPT PowerPoint Document stream not found")
                 return doc
-            ppt_data = ole.openstream("PowerPoint Document").read()
+            try:
+                ppt_data = ole.openstream("PowerPoint Document").read()
+            except Exception as exc:
+                doc.errors.append(f"ERR: PPT PowerPoint Document stream read 실패: {exc}")
+                return doc
             return parse_ppt_document_stream(ppt_data)
+        except Exception as exc:
+            doc.errors.append(f"ERR: PPT 파싱 중 오류: {exc}")
+            return doc
         finally:
             ole.close()

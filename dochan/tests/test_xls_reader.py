@@ -1618,6 +1618,34 @@ def test_xls_reader_reads_workbook_stream(monkeypatch, tmp_path):
     assert to_markdown(doc) == "| Name | Value |\n| --- | --- |\n| A | 10 |"
 
 
+def test_xls_reader_returns_error_when_workbook_stream_unreadable(monkeypatch, tmp_path):
+    class BadWorkbookOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name == "Workbook"
+
+        def openstream(self, name):
+            if name == "Workbook":
+                raise IOError("stream is unreadable")
+            raise KeyError(name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", BadWorkbookOle)
+
+    path = tmp_path / "broken.xls"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = XLSReader().read(str(path))
+
+    assert doc.metadata["source_format"] == "xls"
+    assert doc.sections == []
+    assert doc.errors == ["ERR: XLS Workbook stream read 실패: stream is unreadable"]
+
+
 def test_xls_reader_reads_legacy_book_stream(monkeypatch, tmp_path):
     class BookOle:
         def __init__(self, path):

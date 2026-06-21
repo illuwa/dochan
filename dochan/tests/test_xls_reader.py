@@ -801,6 +801,27 @@ def test_parse_biff_workbook_restores_basic_formula_tokens():
     assert table.rows[1][2].text == "30 (=A2+B2)"
 
 
+def test_parse_biff_workbook_preserves_unknown_fixed_formula_functions():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "A")
+        + _label(0, 1, "B")
+        + _label(1, 0, "Score")
+        + _formula_with_tokens(1, 1, 0, _ptg_ref(1, 0) + _ptg_int(10) + _ptg_func(250))
+        + _formula_with_tokens(1, 2, 0, _ptg_ref(1, 0) + _ptg_ref(1, 1) + _ptg_str("note") + _ptg_func_var(3, 251))
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "FormulaUnknown"))
+    workbook = globals_part + _boundsheet(offset, "FormulaUnknown") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.rows[1][1].text == "0 (=F250(A2,10))"
+    assert table.rows[1][2].text == '0 (=F251(A2,B2,"note"))'
+
+
 def test_parse_biff_workbook_restores_cross_sheet_formula_references():
     globals_part = _bof() + _externsheet([(0, 0, 0)])
     data_sheet = (

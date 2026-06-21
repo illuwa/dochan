@@ -595,6 +595,24 @@ def test_doc_reader_normalizes_legacy_bullet_markers(monkeypatch, tmp_path):
     assert markdown == "- Revenue grew\n\n- Costs fell\n\n- Risks tracked"
 
 
+def test_doc_reader_normalizes_legacy_mid_dot_bullet_markers(monkeypatch, tmp_path):
+    class BulletOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return "・ Revenue grew\n・ Costs fell".encode("utf-16-le")
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", BulletOle)
+    path = tmp_path / "mid-dot-bullets.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    markdown = to_markdown(DOCReader().read(str(path)))
+
+    assert markdown == "- Revenue grew\n\n- Costs fell"
+
+
 def test_doc_reader_normalizes_legacy_numbered_list_markers(monkeypatch, tmp_path):
     class NumberedOle(FakeOle):
         def openstream(self, name):

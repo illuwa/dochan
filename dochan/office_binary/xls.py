@@ -879,22 +879,21 @@ def _decode_formula_token_stream(
         elif token == 0x22 and offset + 3 <= len(tokens):  # ptgFuncVar
             argument_count = tokens[offset]
             function_index = struct.unpack_from("<H", tokens, offset + 1)[0]
-            if len(stack) < argument_count:
+            function_name, _ = _formula_function_name(function_index)
+            available_args = min(len(stack), argument_count)
+            if available_args == 0:
                 return ""
-            args = stack[-argument_count:]
-            del stack[-argument_count:]
-            function_name = _formula_function_name(function_index)
-            if not function_name:
-                return ""
+            args = stack[-available_args:]
+            del stack[-available_args:]
             stack.append(f"{function_name}({','.join(args)})")
             offset += 3
         elif token == 0x21 and offset + 2 <= len(tokens):  # ptgFunc
             function_index = struct.unpack_from("<H", tokens, offset)[0]
             argument_count = _fixed_function_arg_count(function_index)
+            function_name, is_known = _formula_function_name(function_index)
+            if not is_known and len(stack) > 0:
+                argument_count = len(stack)
             if len(stack) < argument_count:
-                return ""
-            function_name = _formula_function_name(function_index)
-            if not function_name:
                 return ""
             args = stack[-argument_count:]
             del stack[-argument_count:]
@@ -1028,8 +1027,8 @@ def _formula_operator(token: int) -> str:
     }.get(token, "")
 
 
-def _formula_function_name(function_index: int) -> str:
-    return {
+def _formula_function_name(function_index: int) -> tuple[str, bool]:
+    known_functions = {
         0: "COUNT",
         1: "IF",
         4: "SUM",
@@ -1045,7 +1044,10 @@ def _formula_function_name(function_index: int) -> str:
         37: "OR",
         38: "NOT",
         39: "MOD",
-    }.get(function_index, "")
+    }
+    if function_index in known_functions:
+        return known_functions[function_index], True
+    return f"F{function_index}", False
 
 
 def _fixed_function_arg_count(function_index: int) -> int:

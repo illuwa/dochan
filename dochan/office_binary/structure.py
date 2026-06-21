@@ -171,7 +171,7 @@ def _normalize_list_marker(line: str) -> str:
     match = re.match(r"^\s*\[\s*\]\s*(.+)$", line)
     if match:
         return f"- [ ] {match.group(1).strip()}"
-    match = re.match(r"^\s*[•◦‣]\s*(.+)$", line)
+    match = re.match(r"^\s*[•◦‣・]\s*(.+)$", line)
     if match:
         return f"- {match.group(1).strip()}"
     match = re.match(r"^\s*(\d{1,3})\)\s*(.+)$", line)

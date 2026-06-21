@@ -596,6 +596,24 @@ def test_ppt_reader_preserves_legacy_soft_line_breaks(monkeypatch, tmp_path):
     assert [element.text for element in doc.sections[0].elements] == ["Title", "Subtitle", "Footer"]
 
 
+def test_ppt_reader_normalizes_legacy_mid_dot_bullet_markers(monkeypatch, tmp_path):
+    class BulletOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return _ppt_container(1006, _ppt_record(4000, "・ Revenue grew\n・ Costs fell".encode("utf-16-le")))
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", BulletOle)
+    path = tmp_path / "mid-dot-bullets.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["- Revenue grew", "- Costs fell"]
+
+
 def test_ppt_reader_restores_hyperlink_field_result(monkeypatch, tmp_path):
     class HyperlinkOle(FakeOle):
         def openstream(self, name):

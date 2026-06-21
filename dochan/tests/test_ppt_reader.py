@@ -73,6 +73,88 @@ def test_ppt_reader_returns_error_when_powerpoint_stream_unreadable(monkeypatch,
     assert doc.errors == ["ERR: PPT PowerPoint Document stream read 실패: stream is unreadable"]
 
 
+def test_ppt_reader_falls_back_to_contents_when_powerpoint_stream_unreadable(monkeypatch, tmp_path):
+    class ContentsFallbackOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name in {"PowerPoint Document", "Contents"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            if name == "PowerPoint Document":
+                raise IOError("stream is unreadable")
+            if name == "Contents":
+                return Stream(_ppt_document_stream())
+            raise KeyError(name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", ContentsFallbackOle)
+    path = tmp_path / "contents-fallback.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert doc.metadata["source_format"] == "ppt"
+    assert doc.sections[0].elements[0].text == "Title Slide"
+    assert doc.sections[0].elements[1].text == "Latin note"
+    assert doc.sections[0].provenance.path == "Contents#slide1"
+    assert doc.errors == ["ERR: PPT PowerPoint Document stream read 실패: stream is unreadable"]
+
+
+def test_ppt_reader_prefers_best_stream_structure(monkeypatch, tmp_path):
+    class MultiStreamOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name in {"PowerPoint Document", "Contents"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            slide1 = (
+                _ppt_record(4000, "# Rich Overview".encode("utf-16-le"))
+                + _ppt_record(4008, b"- Primary item")
+            )
+            slide2 = _ppt_record(4000, "# Backup".encode("utf-16-le"))
+            if name == "PowerPoint Document":
+                return Stream(_ppt_record(4000, "Fallback Title".encode("utf-16-le")))
+            if name == "Contents":
+                return Stream(_ppt_container(1006, slide1) + _ppt_container(1006, slide2))
+            raise KeyError(name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", MultiStreamOle)
+    path = tmp_path / "best-stream.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert len(doc.sections) == 2
+    assert doc.sections[0].provenance.path == "Contents#slide1"
+    assert doc.sections[0].elements[0].text == "Rich Overview"
+    assert doc.sections[0].elements[0].heading_level == 1
+    assert doc.sections[0].elements[1].text == "- Primary item"
+    assert doc.sections[1].provenance.path == "Contents#slide2"
+
+
 def test_ppt_reader_preserves_cp1252_punctuation_in_byte_text_records(monkeypatch, tmp_path):
     class Cp1252Ole(FakeOle):
         def openstream(self, name):

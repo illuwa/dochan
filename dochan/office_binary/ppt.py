@@ -210,7 +210,7 @@ def _fallback_text_lines(data: bytes) -> List[str]:
     return lines
 
 
-def parse_ppt_document_stream(data: bytes) -> Document:
+def parse_ppt_document_stream(data: bytes, stream_name: str = "PowerPoint Document") -> Document:
     doc = Document(source_format="ppt")
     slide_lines = _extract_slide_and_notes_records(data)
     if not slide_lines:
@@ -219,7 +219,7 @@ def parse_ppt_document_stream(data: bytes) -> Document:
         slide_lines = [_extract_ppt_text_records(data) or _fallback_text_lines(data)]
 
     for slide_index, lines in enumerate(slide_lines, start=1):
-        slide_path = f"PowerPoint Document#slide{slide_index}"
+        slide_path = f"{stream_name}#slide{slide_index}"
         doc.sections.append(
             build_structured_section(
                 lines,
@@ -231,6 +231,17 @@ def parse_ppt_document_stream(data: bytes) -> Document:
         )
         _apply_supplemental_block_paths(doc.sections[-1], slide_path)
     return doc
+
+
+def _score_ppt_document(document: Document) -> tuple[int, int]:
+    return (
+        len(document.sections),
+        sum(len(section.elements) for section in document.sections),
+    )
+
+
+def _ppt_stream_names(ole) -> list[str]:
+    return [name for name in ("PowerPoint Document", "Contents") if ole.exists(name)]
 
 
 def _apply_supplemental_block_paths(section, base_path: str) -> None:
@@ -281,15 +292,40 @@ class PPTReader:
 
         doc = Document(source_format="ppt")
         try:
-            if not ole.exists("PowerPoint Document"):
+            stream_names = _ppt_stream_names(ole)
+            if not stream_names:
                 doc.errors.append("ERR: PPT PowerPoint Document stream not found")
                 return doc
-            try:
-                ppt_data = ole.openstream("PowerPoint Document").read()
-            except Exception as exc:
-                doc.errors.append(f"ERR: PPT PowerPoint Document stream read 실패: {exc}")
-                return doc
-            return parse_ppt_document_stream(ppt_data)
+
+            best_document = None
+            best_score = None
+            for stream_name in stream_names:
+                try:
+                    ppt_data = ole.openstream(stream_name).read()
+                except Exception as exc:
+                    doc.errors.append(f"ERR: PPT {stream_name} stream read 실패: {exc}")
+                    continue
+
+                try:
+                    candidate = parse_ppt_document_stream(ppt_data, stream_name)
+                except Exception as exc:
+                    doc.errors.append(f"ERR: PPT {stream_name} stream 파싱 실패: {exc}")
+                    continue
+
+                score = _score_ppt_document(candidate)
+                if best_document is None or score > best_score:
+                    best_document = candidate
+                    best_score = score
+
+            if best_document is not None:
+                if doc.errors:
+                    best_document.errors.extend(doc.errors)
+                return best_document
+
+            if not doc.errors:
+                doc.errors.append("ERR: PPT 파서를 사용할 수 있는 유효한 스트림이 없습니다")
+
+            return doc
         except Exception as exc:
             doc.errors.append(f"ERR: PPT 파싱 중 오류: {exc}")
             return doc

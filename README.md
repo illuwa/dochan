@@ -12,6 +12,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
     <a href="https://github.com/illuwa/dochan/stargazers"><img src="https://img.shields.io/github/stars/illuwa/dochan?style=social" alt="GitHub Stars"></a>
   </p>
+  <p align="center"><strong>Current stable version: 1.0.0</strong></p>
 </p>
 
 ---
@@ -253,7 +254,7 @@ dochan은 신뢰할 수 없는 문서도 안전하게 처리합니다:
 git clone https://github.com/illuwa/dochan.git
 cd dochan
 pip install -e ".[dev]"
-python -m pytest dochan/tests/
+python -m pytest tests/
 ```
 
 ## Acknowledgments

@@ -268,8 +268,15 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
     if not sheets:
         sheets.append(_SheetInfo(name="Sheet1", offset=0))
 
-    sorted_sheets = sorted(sheets, key=lambda sheet: sheet.offset)
-    sheet_names = [sheet.name for sheet in sheets]
+    unique_sheets = []
+    seen_offsets = set()
+    for sheet in sheets:
+        if sheet.offset not in seen_offsets:
+            seen_offsets.add(sheet.offset)
+            unique_sheets.append(sheet)
+
+    sorted_sheets = sorted(unique_sheets, key=lambda sheet: sheet.offset)
+    sheet_names = [sheet.name for sheet in sorted_sheets]
     defined_names = [defined_name.name for defined_name in defined_name_records]
     defined_name_elements = _defined_name_elements(
         defined_name_records,

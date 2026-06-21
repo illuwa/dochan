@@ -1660,6 +1660,21 @@ def test_xls_reader_skips_invalid_boundsheet_offsets():
     assert table.rows[1][0].text == "42"
 
 
+def test_parse_biff_workbook_deduplicates_duplicate_boundsheet_offsets():
+    globals_part = _bof()
+    valid_sheet = _bof() + _label(0, 0, "Revenue") + _number(1, 0, 99) + _eof()
+    boundsheet_1 = _boundsheet(len(globals_part) + 2 * len(_boundsheet(0, "A")), "A")
+    boundsheet_2 = _boundsheet(len(globals_part) + 2 * len(_boundsheet(0, "A")), "A_Duplicate")
+    workbook = globals_part + boundsheet_1 + boundsheet_2 + valid_sheet
+
+    doc = parse_biff_workbook(workbook)
+
+    assert len(doc.sections) == 1
+    assert doc.sections[0].provenance.path == "Workbook#A"
+    table = doc.sections[0].elements[0]
+    assert table.rows[1][0].text == "99"
+
+
 def test_dochan_routes_xls_to_native_reader(monkeypatch, tmp_path):
     class FakeOle:
         def __init__(self, path):

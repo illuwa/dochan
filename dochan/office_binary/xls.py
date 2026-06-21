@@ -63,10 +63,10 @@ def _format_biff_error(value: int) -> str:
     return _BIFF_ERROR_NAMES.get(value, f"#ERR{value}")
 
 
-def _format_number_with_format(value: float, format_string: str = "") -> str:
+def _format_number_with_format(value: float, format_string: str = "", date_1904: bool = False) -> str:
     normalized = format_string.lower()
     if _is_date_format(normalized):
-        return _excel_serial_to_date(value)
+        return _excel_serial_to_date(value, date_1904=date_1904)
     if "%" in normalized:
         formatted = _format_number(value * 100)
         return f"{formatted}%"
@@ -98,10 +98,12 @@ def _is_date_format(normalized: str) -> bool:
     return any(marker in normalized for marker in ("m/d", "d/m", "yyyy", "yy")) and not any(token in normalized for token in ("h", "s"))
 
 
-def _excel_serial_to_date(value: float) -> str:
+def _excel_serial_to_date(value: float, date_1904: bool = False) -> str:
     serial = int(value)
     if serial >= 60:
         serial -= 1
+    if date_1904:
+        return (date(1904, 1, 1) + timedelta(days=serial)).isoformat()
     return (date(1899, 12, 31) + timedelta(days=serial)).isoformat()
 
 
@@ -191,6 +193,7 @@ def parse_biff_workbook(data: bytes) -> Document:
     xf_formats: List[int] = []
     external_sheets: List[Tuple[int, int]] = []
     defined_name_records: List[_DefinedName] = []
+    date_1904 = False
 
     records = list(_iter_records(data))
     index = 0
@@ -211,6 +214,8 @@ def parse_biff_workbook(data: bytes) -> Document:
             defined_name = _read_name_record(record_data)
             if defined_name.name:
                 defined_name_records.append(defined_name)
+        elif record_type == 0x0022 and len(record_data) >= 2:  # DATEMODE
+            date_1904 = bool(struct.unpack_from("<H", record_data, 0)[0])
         elif record_type == 0x041E and len(record_data) >= 5:  # FORMAT
             format_index = struct.unpack_from("<H", record_data, 0)[0]
             formats[format_index] = _read_biff8_label_text(record_data, 2)
@@ -236,6 +241,7 @@ def parse_biff_workbook(data: bytes) -> Document:
             external_sheets,
             sheet_names,
             defined_names,
+            date_1904,
         )
 
     for sheet_index, sheet in enumerate(sorted_sheets):
@@ -463,6 +469,7 @@ def _parse_sheet_records(
     external_sheets: List[Tuple[int, int]],
     sheet_names: List[str],
     defined_names: List[str],
+    date_1904: bool = False,
 ):
     pending_formula_cell: Optional[Tuple[int, int]] = None
     pending_formula_text = ""
@@ -535,18 +542,30 @@ def _parse_sheet_records(
             pending_shared_formula_anchor = None
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
             value = struct.unpack_from("<d", record_data, 6)[0]
-            sheet.cells[(row, col)] = _format_number_with_format(value, _format_for_xf(xf_index, formats, xf_formats))
+            sheet.cells[(row, col)] = _format_number_with_format(
+                value,
+                _format_for_xf(xf_index, formats, xf_formats),
+                date_1904=date_1904,
+            )
         elif record_type == 0x0002 and len(record_data) >= 8:  # INTEGER
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, xf_index, value = struct.unpack_from("<HHHH", record_data, 0)
-            sheet.cells[(row, col)] = _format_number_with_format(float(value), _format_for_xf(xf_index, formats, xf_formats))
+            sheet.cells[(row, col)] = _format_number_with_format(
+                float(value),
+                _format_for_xf(xf_index, formats, xf_formats),
+                date_1904=date_1904,
+            )
         elif record_type == 0x027E and len(record_data) >= 10:  # RK
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, xf_index, raw = struct.unpack_from("<HHHI", record_data, 0)
             value = _decode_rk(raw)
-            sheet.cells[(row, col)] = _format_number_with_format(value, _format_for_xf(xf_index, formats, xf_formats))
+            sheet.cells[(row, col)] = _format_number_with_format(
+                value,
+                _format_for_xf(xf_index, formats, xf_formats),
+                date_1904=date_1904,
+            )
         elif record_type == 0x00BD and len(record_data) >= 10:  # MULRK
             pending_formula_cell = None
             pending_shared_formula_anchor = None
@@ -558,7 +577,11 @@ def _parse_sheet_records(
                     break
                 xf_index, raw = struct.unpack_from("<HI", record_data, offset)
                 value = _decode_rk(raw)
-                sheet.cells[(row, col)] = _format_number_with_format(value, _format_for_xf(xf_index, formats, xf_formats))
+                sheet.cells[(row, col)] = _format_number_with_format(
+                    value,
+                    _format_for_xf(xf_index, formats, xf_formats),
+                    date_1904=date_1904,
+                )
                 offset += 6
         elif record_type in (0x0205, 0x0005) and len(record_data) >= 8:  # BOOLERR
             pending_formula_cell = None
@@ -828,7 +851,7 @@ def _decode_formula_token_stream(
             stack.append(f"{function_name}({','.join(args)})")
             offset += 2
         elif token == 0x1E and offset + 2 <= len(tokens):  # ptgInt
-            stack.append(str(struct.unpack_from("<H", tokens, offset)[0]))
+            stack.append(str(struct.unpack_from("<h", tokens, offset)[0]))
             offset += 2
         elif token == 0x1F and offset + 8 <= len(tokens):  # ptgNum
             stack.append(_format_number(struct.unpack_from("<d", tokens, offset)[0]))

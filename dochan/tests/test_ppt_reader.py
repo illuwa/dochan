@@ -651,6 +651,9 @@ def test_ppt_reader_restores_notes_container_text(monkeypatch, tmp_path):
     assert doc.sections[0].elements[1].provenance.path == "PowerPoint Document#slide1#notes"
     assert doc.sections[0].elements[2].provenance.path == "PowerPoint Document#slide1#notes"
     assert doc.sections[0].elements[3].provenance.path == "PowerPoint Document#slide1#notes"
+    assert doc.sections[0].elements[1].runs[0].provenance.path == "PowerPoint Document#slide1#notes"
+    assert doc.sections[0].elements[2].runs[0].provenance.path == "PowerPoint Document#slide1#notes"
+    assert doc.sections[0].elements[3].runs[0].provenance.path == "PowerPoint Document#slide1#notes"
 
 
 def test_ppt_reader_attaches_nested_notes_to_previous_slide(monkeypatch, tmp_path):
@@ -677,6 +680,7 @@ def test_ppt_reader_attaches_nested_notes_to_previous_slide(monkeypatch, tmp_pat
         "Nested speaker note",
     ]
     assert doc.sections[0].elements[2].provenance.path == "PowerPoint Document#slide1#notes"
+    assert doc.sections[0].elements[2].runs[0].provenance.path == "PowerPoint Document#slide1#notes"
 
 
 def test_ppt_reader_restores_comments_container_text(monkeypatch, tmp_path):
@@ -704,6 +708,8 @@ def test_ppt_reader_restores_comments_container_text(monkeypatch, tmp_path):
     assert doc.sections[0].elements[1].heading_level == 2
     assert doc.sections[0].elements[1].provenance.path == "PowerPoint Document#slide1#comments"
     assert doc.sections[0].elements[2].provenance.path == "PowerPoint Document#slide1#comments"
+    assert doc.sections[0].elements[1].runs[0].provenance.path == "PowerPoint Document#slide1#comments"
+    assert doc.sections[0].elements[2].runs[0].provenance.path == "PowerPoint Document#slide1#comments"
 
 
 def test_dochan_routes_ppt_to_native_reader(monkeypatch, tmp_path):

@@ -721,6 +721,7 @@ def test_reads_pptx_speaker_notes_from_slide_relationship(tmp_path):
 
     assert [elem.text for elem in section.elements] == ["Slide title", "Speaker note detail"]
     assert section.elements[1].provenance.path == "ppt/notesSlides/notesSlide1.xml"
+    assert section.elements[1].runs[0].provenance.path == "ppt/notesSlides/notesSlide1.xml"
 
 
 def test_reads_pptx_slide_comments_from_relationship(tmp_path):
@@ -765,6 +766,7 @@ def test_reads_pptx_slide_comments_from_relationship(tmp_path):
 
     assert [elem.text for elem in section.elements] == ["Slide title", "[comment: Reviewer: Needs review]"]
     assert section.elements[1].provenance.path == "ppt/comments/comment1.xml"
+    assert section.elements[1].runs[0].provenance.path == "ppt/comments/comment1.xml"
     assert "[comment: Reviewer: Needs review]" in markdown
 
 

@@ -1393,6 +1393,7 @@ def test_parse_biff_workbook_restores_note_comment_authors():
     table = doc.sections[0].elements[0]
 
     assert table.rows[1][0].text == "Revenue [comment: Reviewer]"
+    assert table.rows[1][0].paragraphs[0].runs[0].provenance.path == "Workbook#Notes"
 
 
 def test_parse_biff_workbook_restores_sheet_headers_and_footers():

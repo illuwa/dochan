@@ -134,6 +134,7 @@ def _extract_piece_table_lines(word_data: bytes, table_data: Optional[bytes]) ->
 
 def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
     offset = 0
+    pcdt_segments: List[bytes] = []
     while offset < len(clx):
         marker = clx[offset]
         offset += 1
@@ -147,8 +148,13 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
             return ""
         size = struct.unpack_from("<I", clx, offset)[0]
         offset += 4
-        return _extract_piece_table_text(word_data, clx[offset:offset + size])
-    return ""
+        segment = clx[offset:offset + size]
+        if len(segment) < size:
+            return ""
+        pcdt_segments.append(segment)
+        offset += size
+
+    return "".join(_extract_piece_table_text(word_data, segment) for segment in pcdt_segments)
 
 
 def _extract_piece_table_text(word_data: bytes, pcdt: bytes) -> str:

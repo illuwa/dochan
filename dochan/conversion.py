@@ -15,6 +15,8 @@ class Provenance:
     section: Optional[int] = None
     paragraph: Optional[int] = None
     path: str = ""
+    visibility: int = 0
+    hidden: bool = False
 
 
 @dataclass

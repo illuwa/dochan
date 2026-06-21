@@ -69,6 +69,10 @@ def _doc_piece_table(cps, pieces):
     return b"\x02" + struct.pack("<I", len(body)) + body
 
 
+def _doc_piece_table_segments(segments):
+    return b"".join(_doc_piece_table(cps, pieces) for cps, pieces in segments)
+
+
 def test_doc_reader_uses_clx_piece_table_from_table_stream(monkeypatch, tmp_path):
     class PieceTableOle(FakeOle):
         def exists(self, name):
@@ -99,6 +103,45 @@ def test_doc_reader_uses_clx_piece_table_from_table_stream(monkeypatch, tmp_path
 
     monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
     path = tmp_path / "piece-table.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["First line", "Second line"]
+
+
+def test_doc_reader_joins_multiple_clx_piece_segments(monkeypatch, tmp_path):
+    class MultiSegmentClxOle(FakeOle):
+        def exists(self, name):
+            return name in {"WordDocument", "0Table"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            word_data = bytearray(b"\x00" * 512)
+            first = "First line\n".encode("utf-16-le")
+            second = "Second line".encode("utf-16-le")
+            word_data[128:128 + len(first)] = first
+            word_data[200:200 + len(second)] = second
+            clx = _doc_piece_table_segments(
+                [
+                    ([0, len(first)], [128]),
+                    ([0, len(second)], [200]),
+                ]
+            )
+            if name == "WordDocument":
+                struct.pack_into("<I", word_data, 0x01A2, 0)
+                struct.pack_into("<I", word_data, 0x01A6, len(clx))
+                return Stream(bytes(word_data))
+            return Stream(clx)
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", MultiSegmentClxOle)
+    path = tmp_path / "multi-clx.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
     doc = DOCReader().read(str(path))

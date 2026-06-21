@@ -16,6 +16,7 @@ from ..model.table import Cell, Table
 class _SheetInfo:
     name: str
     offset: int
+    visibility: int = 0
     cells: Dict[Tuple[int, int], str] = field(default_factory=dict)
     hyperlinks: Dict[Tuple[int, int], str] = field(default_factory=dict)
     comments: Dict[Tuple[int, int], str] = field(default_factory=dict)
@@ -175,6 +176,12 @@ def _read_boundsheet_name(data: bytes) -> str:
     return raw[:name_len].decode("cp1252", errors="replace")
 
 
+def _read_boundsheet_visibility(data: bytes) -> int:
+    if len(data) < 6:
+        return 0
+    return struct.unpack_from("<H", data, 4)[0] & 0x0003
+
+
 def _iter_records(data: bytes):
     offset = 0
     while offset + 4 <= len(data):
@@ -201,7 +208,13 @@ def parse_biff_workbook(data: bytes) -> Document:
         offset, record_type, record_data = records[index]
         if record_type == 0x0085 and len(record_data) >= 8:  # BOUNDSHEET
             sheet_offset = struct.unpack_from("<I", record_data, 0)[0]
-            sheets.append(_SheetInfo(name=_read_boundsheet_name(record_data), offset=sheet_offset))
+            sheets.append(
+                _SheetInfo(
+                    name=_read_boundsheet_name(record_data),
+                    offset=sheet_offset,
+                    visibility=_read_boundsheet_visibility(record_data),
+                )
+            )
         elif record_type == 0x00FC and len(record_data) >= 8:  # SST
             sst_segments = [record_data]
             while index + 1 < len(records) and records[index + 1][1] == 0x003C:  # CONTINUE
@@ -246,7 +259,12 @@ def parse_biff_workbook(data: bytes) -> Document:
 
     for sheet_index, sheet in enumerate(sorted_sheets):
         section = Section(
-            provenance=Provenance(source_format="xls", sheet=sheet.name)
+            provenance=Provenance(
+                source_format="xls",
+                sheet=sheet.name,
+                visibility=sheet.visibility,
+                hidden=sheet.visibility in {1, 2},
+            )
         )
         if sheet_index == 0:
             section.elements.extend(defined_name_elements)

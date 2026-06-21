@@ -30,6 +30,11 @@ def _boundsheet(offset, name):
     return _record(0x0085, struct.pack("<IBBBB", offset, 0, 0, len(name), 0) + name.encode("latin1"))
 
 
+def _boundsheet_with_flags(offset, name, flags):
+    name_bytes = name.encode("latin1")
+    return _record(0x0085, struct.pack("<I", offset) + struct.pack("<H", flags) + struct.pack("<BB", len(name), 0) + name_bytes)
+
+
 def _externsheet(entries):
     body = struct.pack("<H", len(entries))
     for supbook_index, first_sheet, last_sheet in entries:
@@ -454,6 +459,35 @@ def test_parse_biff_workbook_reads_sst_continue_split_inside_string_data():
     table = doc.sections[0].elements[0]
 
     assert table.rows[0][0].text == "LongValue"
+
+
+def test_parse_biff_workbook_tracks_hidden_sheet_visibility():
+    globals_part = _bof()
+    visible_sheet = _bof() + _labelsst(0, 0, 0) + _eof()
+    hidden_sheet = _bof() + _labelsst(0, 0, 1) + _eof()
+    visible_boundsheet = _boundsheet_with_flags(0, "Visible", 0x0000)
+    hidden_boundsheet = _boundsheet_with_flags(0, "Hidden", 0x0001)
+    visible_offset = len(globals_part) + len(visible_boundsheet) + len(hidden_boundsheet)
+    hidden_offset = visible_offset + len(visible_sheet)
+    visible_boundsheet = _boundsheet_with_flags(visible_offset, "Visible", 0x0000)
+    hidden_boundsheet = _boundsheet_with_flags(hidden_offset, "Hidden", 0x0001)
+    workbook = (
+        globals_part
+        + visible_boundsheet
+        + hidden_boundsheet
+        + visible_sheet
+        + hidden_sheet
+    )
+
+    doc = parse_biff_workbook(workbook)
+
+    assert len(doc.sections) == 2
+    assert doc.sections[0].provenance.sheet == "Visible"
+    assert doc.sections[0].provenance.hidden is False
+    assert doc.sections[1].provenance.sheet == "Hidden"
+    assert doc.sections[1].provenance.hidden is True
+    assert doc.sections[0].elements[0].rows[0][0].text == ""
+    assert doc.sections[1].elements[0].rows[0][0].text == ""
 
 
 def test_parse_biff_workbook_preserves_cp1252_punctuation_in_shared_strings():

@@ -1,12 +1,14 @@
 """Table/Cell model — 표 및 셀 (병합 지원)"""
 from dataclasses import dataclass, field
-from typing import List, Any
+from typing import List, Any, Optional
 
 
 @dataclass
 class Cell:
     """표의 셀 하나"""
     paragraphs: list = field(default_factory=list)
+    row: Optional[int] = None
+    col: Optional[int] = None
     row_span: int = 1
     col_span: int = 1
     provenance: Any = None

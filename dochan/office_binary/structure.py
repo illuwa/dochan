@@ -129,6 +129,10 @@ def _heading_label_match(line: str):
     return None
 
 
+def _legacy_cell_ref(row: int, col: int) -> str:
+    return f"R{row + 1}C{col + 1}"
+
+
 def _normalize_list_marker(line: str) -> str:
     match = re.match(r"^\s*[□☐]\s*(.+)$", line)
     if match:
@@ -180,6 +184,7 @@ def _table_from_rows(rows_parts: List[List[str]], source_format: str, section_in
                 source_format=source_format,
                 section=section_index,
                 slide=slide or None,
+                cell=_legacy_cell_ref(row_idx, col_idx),
             )
             paragraph = Paragraph(runs=[TextRun(text=text, provenance=provenance)], provenance=provenance)
             row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))

@@ -105,6 +105,9 @@ def test_ppt_reader_restores_slide_sections_and_tables(monkeypatch, tmp_path):
     assert table.rows[0][1].col == 1
     assert table.rows[1][0].row == 1
     assert table.rows[1][0].col == 0
+    assert table.rows[0][0].provenance.cell == "R1C1"
+    assert table.rows[0][1].provenance.cell == "R1C2"
+    assert table.rows[1][0].provenance.cell == "R2C1"
     assert markdown == (
         "## Slide 1\n\n"
         "# Sales Update\n\n"

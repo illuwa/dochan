@@ -713,6 +713,9 @@ def test_doc_reader_restores_word_table_cell_markers(monkeypatch, tmp_path):
     assert table.rows[0][1].col == 1
     assert table.rows[1][0].row == 1
     assert table.rows[1][0].col == 0
+    assert table.rows[0][0].provenance.cell == "R1C1"
+    assert table.rows[0][1].provenance.cell == "R1C2"
+    assert table.rows[1][0].provenance.cell == "R2C1"
     assert markdown == (
         "| Name | Value |\n"
         "| --- | --- |\n"

@@ -183,6 +183,76 @@ def test_doc_reader_recovers_from_truncated_piece_table_segments(monkeypatch, tm
     assert [element.text for element in doc.sections[0].elements] == ["First line"]
 
 
+def test_doc_reader_recovers_from_truncated_clx_piece_marker(monkeypatch, tmp_path):
+    class PieceTableOle(FakeOle):
+        def exists(self, name):
+            return name in {"WordDocument", "0Table"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            word_data = bytearray(b"\x00" * 512)
+            text = "Recovered"
+            encoded = text.encode("utf-16-le")
+            word_data[128:128 + len(encoded)] = encoded
+            clx = b"\x01" + struct.pack("<H", 0xFFFF) + b"\x00" + _doc_piece_table([0, len(text)], [128])
+            if name == "WordDocument":
+                struct.pack_into("<I", word_data, 0x01A2, 0)
+                struct.pack_into("<I", word_data, 0x01A6, len(clx))
+                return Stream(bytes(word_data))
+            return Stream(clx)
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    path = tmp_path / "piece-table-resync.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["Recovered"]
+
+
+def test_doc_reader_skips_unreadable_table_streams(monkeypatch, tmp_path):
+    class FailingTableOle:
+        def __init__(self, path):
+            self.path = path
+
+        def close(self):
+            return None
+
+        def exists(self, name):
+            return name in {"WordDocument", "0Table", "1Table"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            if name == "WordDocument":
+                return Stream("Primary table preferred".encode("utf-16-le"))
+            if name == "0Table":
+                raise IOError("corrupt table stream")
+            if name == "1Table":
+                clx = _doc_piece_table([0, len("Fallback from secondary")], [0])
+                return Stream(clx)
+            raise KeyError(name)
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FailingTableOle)
+    path = tmp_path / "doc-with-failing-table.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["Primary table preferred"]
+
+
 def test_doc_reader_falls_back_to_secondary_table_stream(monkeypatch, tmp_path):
     class TwoTableOle:
         def __init__(self, path):

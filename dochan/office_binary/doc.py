@@ -146,7 +146,14 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
             if offset + 2 > len(clx):
                 break
             size = struct.unpack_from("<H", clx, offset)[0]
-            offset += 2 + size
+            offset += 2
+            if offset + size > len(clx):
+                next_marker = _find_next_clx_marker(clx, offset)
+                if next_marker is None:
+                    break
+                offset = next_marker
+                continue
+            offset += size
             continue
         if marker != 0x02:
             continue
@@ -163,6 +170,13 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
         offset += len(segment)
 
     return "".join(_extract_piece_table_text(word_data, segment) for segment in pcdt_segments)
+
+
+def _find_next_clx_marker(clx: bytes, start: int) -> int | None:
+    for index in range(start, len(clx)):
+        if clx[index] == 0x02:
+            return index
+    return None
 
 
 def _extract_piece_table_text(word_data: bytes, pcdt: bytes) -> str:
@@ -281,7 +295,10 @@ class DOCReader:
                 return (element_count, 1 if piece_lines else 0, line_quality)
 
             for table_name in self._table_stream_names(ole, word_data):
-                candidate = ole.openstream(table_name).read()
+                try:
+                    candidate = ole.openstream(table_name).read()
+                except Exception:
+                    continue
                 piece_lines = _extract_piece_table_lines(word_data, candidate)
                 document = parse_doc_word_stream(word_data, candidate)
                 score = _score_document(document, piece_lines)

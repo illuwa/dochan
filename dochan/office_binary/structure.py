@@ -182,6 +182,6 @@ def _table_from_rows(rows_parts: List[List[str]], source_format: str, section_in
                 slide=slide or None,
             )
             paragraph = Paragraph(runs=[TextRun(text=text, provenance=provenance)], provenance=provenance)
-            row.append(Cell(paragraphs=[paragraph], provenance=provenance))
+            row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))
         rows.append(row)
     return Table(rows=rows)

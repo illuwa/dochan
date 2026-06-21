@@ -1058,7 +1058,7 @@ def _sheet_to_table(sheet: _SheetInfo) -> Table:
                 runs=[TextRun(text=text)],
                 provenance=provenance,
             )
-            row.append(Cell(paragraphs=[paragraph], provenance=provenance))
+            row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))
         rows.append(row)
     _apply_merged_ranges(rows, sheet.merged_ranges)
     return Table(rows=rows)

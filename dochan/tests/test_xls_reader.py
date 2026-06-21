@@ -391,6 +391,12 @@ def test_parse_biff_workbook_reads_labels_and_numbers():
     assert table.rows[1][0].text == "A"
     assert table.rows[1][1].text == "10"
     assert table.rows[1][1].provenance.cell == "B2"
+    assert table.rows[0][0].row == 0
+    assert table.rows[0][0].col == 0
+    assert table.rows[0][1].row == 0
+    assert table.rows[0][1].col == 1
+    assert table.rows[1][1].row == 1
+    assert table.rows[1][1].col == 1
 
 
 def test_parse_biff_workbook_reads_rich_text_shared_strings_without_offset_drift():

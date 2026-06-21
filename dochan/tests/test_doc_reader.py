@@ -706,6 +706,13 @@ def test_doc_reader_restores_word_table_cell_markers(monkeypatch, tmp_path):
     markdown = to_markdown(doc)
 
     assert doc.find_all("table")[0].row_count == 2
+    table = doc.find_all("table")[0]
+    assert table.rows[0][0].row == 0
+    assert table.rows[0][0].col == 0
+    assert table.rows[0][1].row == 0
+    assert table.rows[0][1].col == 1
+    assert table.rows[1][0].row == 1
+    assert table.rows[1][0].col == 0
     assert markdown == (
         "| Name | Value |\n"
         "| --- | --- |\n"

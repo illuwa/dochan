@@ -105,6 +105,8 @@ def test_json_output_preserves_provenance_and_rich_structure():
                         rows=[
                             [
                                 Cell(
+                                    row=1,
+                                    col=1,
                                     paragraphs=[Paragraph(runs=[TextRun(text="Cell")])],
                                     row_span=2,
                                     col_span=3,
@@ -138,6 +140,8 @@ def test_json_output_preserves_provenance_and_rich_structure():
     cell = section["elements"][1]["rows"][0][0]
     assert cell["row_span"] == 2
     assert cell["col_span"] == 3
+    assert cell["row"] == 1
+    assert cell["col"] == 1
     assert cell["provenance"]["cell"] == "B2"
 
 

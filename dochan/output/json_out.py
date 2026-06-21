@@ -140,6 +140,10 @@ def _cell_to_dict(cell) -> dict:
             for paragraph in cell.paragraphs
         ],
     }
+    if cell.row is not None:
+        result['row'] = cell.row
+    if cell.col is not None:
+        result['col'] = cell.col
     provenance = _provenance_to_dict(getattr(cell, 'provenance', None))
     if provenance:
         result['provenance'] = provenance

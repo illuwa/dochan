@@ -140,17 +140,21 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
         offset += 1
         if marker == 0x01:
             if offset + 2 > len(clx):
-                return ""
+                break
             size = struct.unpack_from("<H", clx, offset)[0]
             offset += 2 + size
             continue
-        if marker != 0x02 or offset + 4 > len(clx):
-            return ""
+        if marker != 0x02:
+            continue
+        if offset + 4 > len(clx):
+            break
         size = struct.unpack_from("<I", clx, offset)[0]
         offset += 4
+        if size <= 0:
+            continue
         segment = clx[offset:offset + size]
         if len(segment) < size:
-            return ""
+            break
         pcdt_segments.append(segment)
         offset += size
 
@@ -158,9 +162,11 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
 
 
 def _extract_piece_table_text(word_data: bytes, pcdt: bytes) -> str:
-    if len(pcdt) < 16 or (len(pcdt) - 4) % 12:
+    if len(pcdt) < 16:
         return ""
     piece_count = (len(pcdt) - 4) // 12
+    if piece_count <= 0:
+        return ""
     cp_count = piece_count + 1
     cp_end = cp_count * 4
     if cp_end + piece_count * 8 > len(pcdt):

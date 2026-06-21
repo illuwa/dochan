@@ -110,6 +110,79 @@ def test_doc_reader_uses_clx_piece_table_from_table_stream(monkeypatch, tmp_path
     assert [element.text for element in doc.sections[0].elements] == ["First line", "Second line"]
 
 
+def test_doc_reader_ignores_unknown_clx_markers_when_extracting_piece_table(monkeypatch, tmp_path):
+    class PieceTableOle(FakeOle):
+        def exists(self, name):
+            return name in {"WordDocument", "0Table"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            word_data = bytearray(b"\x00" * 512)
+            first = "First line\n".encode("utf-16-le")
+            second = b"Second line"
+            word_data[128:128 + len(first)] = first
+            word_data[200:200 + len(second)] = second
+            clx = b"\x00" + _doc_piece_table(
+                [0, len("First line\n"), len("First line\nSecond line")],
+                [128, (200 << 1) | 1],
+            )
+            if name == "WordDocument":
+                struct.pack_into("<I", word_data, 0x01A2, 0)
+                struct.pack_into("<I", word_data, 0x01A6, len(clx))
+                return Stream(bytes(word_data))
+            return Stream(clx)
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    path = tmp_path / "piece-table-unknown-marker.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["First line", "Second line"]
+
+
+def test_doc_reader_recovers_from_truncated_piece_table_segments(monkeypatch, tmp_path):
+    class PieceTableOle(FakeOle):
+        def exists(self, name):
+            return name in {"WordDocument", "0Table"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            word_data = bytearray(b"\x00" * 512)
+            first = "First line\n".encode("utf-16-le")
+            second = "Second line".encode("utf-16-le")
+            word_data[128:128 + len(first)] = first
+            word_data[200:200 + len(second)] = second
+            first_segment = _doc_piece_table([0, len("First line\n")], [128])
+            second_segment = _doc_piece_table([0, len("Second line")], [200])
+            clx = first_segment + second_segment[:-2]
+            if name == "WordDocument":
+                struct.pack_into("<I", word_data, 0x01A2, 0)
+                struct.pack_into("<I", word_data, 0x01A6, len(clx))
+                return Stream(bytes(word_data))
+            return Stream(clx)
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    path = tmp_path / "piece-table-truncated.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["First line"]
+
+
 def test_doc_reader_joins_multiple_clx_piece_segments(monkeypatch, tmp_path):
     class MultiSegmentClxOle(FakeOle):
         def exists(self, name):

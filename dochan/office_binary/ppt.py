@@ -69,6 +69,17 @@ def _looks_like_record_stream(data: bytes) -> bool:
     return size <= len(data) - 8
 
 
+def _find_next_record_offset(data: bytes, start: int) -> int | None:
+    if start >= len(data) - 7:
+        return None
+
+    for candidate in range(start, len(data) - 7):
+        _, _, size = struct.unpack_from("<HHI", data, candidate)
+        if candidate + 8 + size <= len(data):
+            return candidate
+    return None
+
+
 def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
     if depth > 20:
         return []
@@ -81,7 +92,8 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
         payload_start = offset + 8
         payload_end = payload_start + size
         if payload_end > len(data):
-            payload_end = len(data)
+            next_offset = _find_next_record_offset(data, payload_start + 1)
+            payload_end = next_offset if next_offset is not None else len(data)
         payload = data[payload_start:payload_end]
 
         if record_type == TEXT_HEADER_ATOM and len(payload) >= 4:
@@ -89,11 +101,17 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
         elif record_type in (TEXT_CHARS_ATOM, CSTRING_ATOM):
             _append_clean_lines(lines, payload.decode("utf-16-le", errors="ignore"), _heading_level_for_text_type(pending_text_type))
             pending_text_type = None
+        elif record_type in (SLIDE_CONTAINER, NOTES_CONTAINER, COMMENTS_CONTAINER):
+            lines.extend(_extract_ppt_text_records(payload, depth + 1))
+            pending_text_type = None
         elif record_type == TEXT_BYTES_ATOM:
             _append_clean_lines(lines, payload.decode("cp1252", errors="replace"), _heading_level_for_text_type(pending_text_type))
             pending_text_type = None
         elif rec_options & 0x000F == 0x000F or _looks_like_record_stream(payload):
             lines.extend(_extract_ppt_text_records(payload, depth + 1))
+            pending_text_type = None
+        else:
+            pending_text_type = None
 
         offset = payload_end
 
@@ -115,13 +133,18 @@ def _extract_slide_text_records(data: bytes, depth: int = 0) -> List[List[str]]:
         payload_start = offset + 8
         payload_end = payload_start + size
         if payload_end > len(data):
-            payload_end = len(data)
+            next_offset = _find_next_record_offset(data, payload_start + 1)
+            payload_end = next_offset if next_offset is not None else len(data)
         payload = data[payload_start:payload_end]
 
         if record_type == SLIDE_CONTAINER:
             lines = _extract_ppt_text_records(payload, depth + 1)
             if lines:
                 slides.append(lines)
+        elif record_type in {NOTES_CONTAINER, COMMENTS_CONTAINER}:
+            nested = _extract_slide_text_records(payload, depth + 1)
+            if nested:
+                slides.extend(nested)
         elif rec_options & 0x000F == 0x000F or _looks_like_record_stream(payload):
             slides.extend(_extract_slide_text_records(payload, depth + 1))
 
@@ -141,7 +164,8 @@ def _extract_slide_and_notes_records(data: bytes, depth: int = 0) -> List[List[s
         payload_start = offset + 8
         payload_end = payload_start + size
         if payload_end > len(data):
-            payload_end = len(data)
+            next_offset = _find_next_record_offset(data, payload_start + 1)
+            payload_end = next_offset if next_offset is not None else len(data)
         payload = data[payload_start:payload_end]
 
         if record_type == SLIDE_CONTAINER:

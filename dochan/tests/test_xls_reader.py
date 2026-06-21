@@ -844,6 +844,25 @@ def test_parse_biff_workbook_recovers_partial_formula_without_disrupting_followi
     assert table.rows[1][1].text == "18"
 
 
+def test_parse_biff_workbook_recovers_cells_after_corrupt_record_size():
+    globals_part = _bof()
+    corrupted_record = struct.pack("<HHI", 0x00FD, 9999, 0)
+    worksheet = (
+        _bof()
+        + _label(0, 0, "A")
+        + corrupted_record
+        + _number(1, 0, 18)
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "CorruptTail"))
+    workbook = globals_part + _boundsheet(offset, "CorruptTail") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.rows[1][0].text == "18"
+
+
 def test_parse_biff_workbook_restores_formula_with_attribute_tokens():
     globals_part = _bof()
     worksheet = (
@@ -1625,6 +1644,20 @@ def test_xls_reader_reads_legacy_book_stream(monkeypatch, tmp_path):
     doc = XLSReader().read(str(path))
 
     assert doc.sections[0].provenance.path == "Book#Sheet1"
+
+
+def test_xls_reader_skips_invalid_boundsheet_offsets():
+    globals_part = _bof()
+    valid_sheet = _bof() + _label(0, 0, "Revenue") + _number(1, 0, 42) + _eof()
+    boundsheet_invalid = _boundsheet(9999999, "Corrupt")
+    boundsheet_valid = _boundsheet(len(globals_part) + len(boundsheet_invalid), "Valid")
+    workbook = globals_part + boundsheet_invalid + boundsheet_valid + valid_sheet
+
+    doc = parse_biff_workbook(workbook)
+
+    assert len(doc.sections) == 1
+    table = doc.sections[0].elements[0]
+    assert table.rows[1][0].text == "42"
 
 
 def test_dochan_routes_xls_to_native_reader(monkeypatch, tmp_path):

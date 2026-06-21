@@ -190,10 +190,30 @@ def _iter_records(data: bytes):
         payload_end = payload_start + size
         if payload_end > len(data):
             payload_end = len(data)
+            next_offset = _recover_next_record_offset(data, payload_start + 1)
+            if next_offset is not None and next_offset <= payload_end:
+                yield offset, record_type, data[payload_start:next_offset]
+                offset = next_offset
+                continue
             yield offset, record_type, data[payload_start:payload_end]
             break
         yield offset, record_type, data[payload_start:payload_end]
         offset = payload_end
+
+
+def _recover_next_record_offset(data: bytes, start: int) -> int | None:
+    if start >= len(data) - 3:
+        return None
+
+    for candidate in range(start, len(data) - 3):
+        if candidate + 4 > len(data):
+            return None
+        next_record_type, next_size = struct.unpack_from("<HH", data, candidate)
+        if next_record_type == 0:
+            continue
+        if candidate + 4 + next_size <= len(data):
+            return candidate
+    return None
 
 
 def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Document:
@@ -244,6 +264,10 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
     if not sheets:
         sheets.append(_SheetInfo(name="Sheet1", offset=0))
 
+    sheets = [sheet for sheet in sheets if 0 <= sheet.offset < len(data)]
+    if not sheets:
+        sheets.append(_SheetInfo(name="Sheet1", offset=0))
+
     sorted_sheets = sorted(sheets, key=lambda sheet: sheet.offset)
     sheet_names = [sheet.name for sheet in sheets]
     defined_names = [defined_name.name for defined_name in defined_name_records]
@@ -255,9 +279,14 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
         path=normalized_stream,
     )
     for index, sheet in enumerate(sorted_sheets):
-        end = sorted_sheets[index + 1].offset if index + 1 < len(sorted_sheets) else len(data)
+        start = sheet.offset
+        end = len(data)
+        for next_sheet in sorted_sheets[index + 1 :]:
+            if next_sheet.offset > start:
+                end = next_sheet.offset
+                break
         _parse_sheet_records(
-            data[sheet.offset:end],
+            data[start:end],
             sheet,
             shared_strings,
             formats,

@@ -157,43 +157,55 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
         if size <= 0:
             continue
         segment = clx[offset:offset + size]
-        if len(segment) < size:
+        if not segment:
             break
-        pcdt_segments.append(segment)
-        offset += size
+        pcdt_segments.append(segment[:size])
+        offset += len(segment)
 
     return "".join(_extract_piece_table_text(word_data, segment) for segment in pcdt_segments)
 
 
 def _extract_piece_table_text(word_data: bytes, pcdt: bytes) -> str:
-    if len(pcdt) < 16:
+    if len(pcdt) < 4:
         return ""
-    piece_count = (len(pcdt) - 4) // 12
+    cp_entry_count = len(pcdt) // 4
+    if cp_entry_count < 2:
+        return ""
+    piece_count = cp_entry_count - 1
+    while piece_count > 0:
+        cp_end = (piece_count + 1) * 4
+        if cp_end + piece_count * 8 <= len(pcdt):
+            break
+        piece_count -= 1
     if piece_count <= 0:
         return ""
-    cp_count = piece_count + 1
-    cp_end = cp_count * 4
-    if cp_end + piece_count * 8 > len(pcdt):
-        return ""
-    cps = [struct.unpack_from("<I", pcdt, index * 4)[0] for index in range(cp_count)]
+    cp_end = (piece_count + 1) * 4
+    cps = [struct.unpack_from("<I", pcdt, index * 4)[0] for index in range(cp_end // 4)]
     text_parts = []
     for index in range(piece_count):
         char_count = cps[index + 1] - cps[index]
         if char_count <= 0:
             continue
         pcd_offset = cp_end + index * 8
+        if pcd_offset + 6 > len(pcdt):
+            break
         fc_encoded = struct.unpack_from("<I", pcdt, pcd_offset + 2)[0]
+        byte_count = char_count if (fc_encoded & 0x40000000 or (fc_encoded & 0x01)) else char_count * 2
+        if byte_count < 0:
+            continue
         if fc_encoded & 0x40000000:
             file_offset = (fc_encoded & 0x3FFFFFFF) >> 1
-            raw = word_data[file_offset:file_offset + char_count]
+            raw = word_data[file_offset : file_offset + byte_count]
             text_parts.append(raw.decode("cp1252", errors="replace"))
         elif fc_encoded & 0x01:
             file_offset = fc_encoded >> 1
-            raw = word_data[file_offset:file_offset + char_count]
+            raw = word_data[file_offset : file_offset + byte_count]
             text_parts.append(raw.decode("cp1252", errors="replace"))
         else:
             file_offset = fc_encoded
-            raw = word_data[file_offset:file_offset + char_count * 2]
+            if byte_count == 0:
+                continue
+            raw = word_data[file_offset : file_offset + byte_count]
             text_parts.append(raw.decode("utf-16-le", errors="replace"))
     return "".join(text_parts)
 

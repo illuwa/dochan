@@ -1677,7 +1677,48 @@ def test_xls_reader_falls_back_to_book_when_workbook_stream_unreadable(monkeypat
 
     assert doc.sections[0].provenance.path == "Book#Sheet1"
     assert to_markdown(doc) == "| Name | Value |\n| --- | --- |\n| A | 10 |"
-    assert doc.errors == []
+    assert doc.errors == ["ERR: XLS Workbook stream 처리 실패: stream is unreadable"]
+
+
+def test_xls_reader_prefers_best_workbook_stream(monkeypatch, tmp_path):
+    global_part = _bof()
+    sparse_sheet = _bof() + _number(0, 0, 1) + _eof()
+    sparse_offset = len(global_part) + len(_boundsheet(0, "Sparse"))
+    sparse_workbook = global_part + _boundsheet(sparse_offset, "Sparse") + sparse_sheet
+
+    class BestStreamOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name in {"Workbook", "Book"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            if name == "Workbook":
+                return Stream(sparse_workbook)
+            if name == "Book":
+                return Stream(_minimal_biff_workbook())
+            raise KeyError(name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", BestStreamOle)
+
+    path = tmp_path / "best-stream.xls"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = XLSReader().read(str(path))
+
+    assert doc.sections[0].provenance.path == "Book#Sheet1"
+    assert to_markdown(doc) == "| Name | Value |\n| --- | --- |\n| A | 10 |"
 
 
 def test_xls_reader_reads_legacy_book_stream(monkeypatch, tmp_path):

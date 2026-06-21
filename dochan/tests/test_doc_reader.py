@@ -267,6 +267,7 @@ def test_doc_reader_skips_unreadable_table_streams(monkeypatch, tmp_path):
     doc = DOCReader().read(str(path))
 
     assert [element.text for element in doc.sections[0].elements] == ["Primary table preferred"]
+    assert doc.errors == ["ERR: DOC 0Table stream read 실패: corrupt table stream"]
 
 
 def test_doc_reader_falls_back_to_secondary_table_stream(monkeypatch, tmp_path):

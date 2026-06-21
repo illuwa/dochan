@@ -1163,6 +1163,20 @@ def _apply_merged_ranges(rows: List[List[Cell]], merged_ranges: List[Tuple[int, 
                 rows[row_idx][col_idx].col_span = 0
 
 
+def _score_biff_document(document: Document) -> tuple[int, int, int]:
+    section_count = len(document.sections)
+    table_cells = 0
+    text_elements = 0
+    for section in document.sections:
+        for element in section.elements:
+            if hasattr(element, "rows"):
+                for row in element.rows:
+                    table_cells += len(row)
+            elif hasattr(element, "runs"):
+                text_elements += 1
+    return (section_count, table_cells, text_elements)
+
+
 class XLSReader:
     format_name = "xls"
     extensions = (".xls",)
@@ -1181,13 +1195,24 @@ class XLSReader:
             if not stream_names:
                 doc.errors.append("ERR: XLS Workbook stream not found")
                 return doc
+
+            best_document = None
+            best_score = None
             for stream_name in stream_names:
                 try:
                     workbook_data = ole.openstream(stream_name).read()
-                    return parse_biff_workbook(workbook_data, workbook_stream=stream_name)
+                    candidate = parse_biff_workbook(workbook_data, workbook_stream=stream_name)
+                    score = _score_biff_document(candidate)
+                    if best_document is None or score > best_score:
+                        best_document = candidate
+                        best_score = score
                 except Exception as exc:
                     doc.errors.append(f"ERR: XLS {stream_name} stream 처리 실패: {exc}")
                     continue
+            if best_document is not None:
+                if doc.errors:
+                    best_document.errors.extend(doc.errors)
+                return best_document
             return doc
         except Exception as exc:
             doc.errors.append(f"ERR: XLS 파싱 중 오류: {exc}")

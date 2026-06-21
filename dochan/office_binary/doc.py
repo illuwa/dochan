@@ -301,7 +301,8 @@ class DOCReader:
             for table_name in self._table_stream_names(ole, word_data):
                 try:
                     candidate = ole.openstream(table_name).read()
-                except Exception:
+                except Exception as exc:
+                    doc.errors.append(f"ERR: DOC {table_name} stream read 실패: {exc}")
                     continue
                 piece_lines = _extract_piece_table_lines(word_data, candidate)
                 document = parse_doc_word_stream(word_data, candidate)
@@ -311,7 +312,12 @@ class DOCReader:
                     best_score = score
 
             if best_document is None:
-                return parse_doc_word_stream(word_data)
+                fallback_document = parse_doc_word_stream(word_data)
+                if doc.errors:
+                    fallback_document.errors.extend(doc.errors)
+                return fallback_document
+            if doc.errors:
+                best_document.errors.extend(doc.errors)
             return best_document
         except Exception as exc:
             doc.errors.append(f"ERR: DOC 파싱 중 오류: {exc}")

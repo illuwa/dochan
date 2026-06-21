@@ -707,12 +707,34 @@ def _format_for_xf(xf_index: int, formats: Dict[int, str], xf_formats: List[int]
 
 
 def _extract_hlink_url(record_data: bytes) -> str:
-    decoded = record_data[8:].decode("utf-16-le", errors="ignore")
-    match = re.search(r"(?:https?|mailto|ftp)://[^\x00]+", decoded)
-    if match:
-        return match.group(0).strip("\x00")
-    mailto = re.search(r"mailto:[^\x00]+", decoded)
-    return mailto.group(0).strip("\x00") if mailto else ""
+    payload = record_data[8:]
+    decoded_payloads = {
+        payload.decode("utf-16-le", errors="ignore"),
+        payload.decode("cp1252", errors="replace"),
+    }
+
+    url_patterns = [
+        re.compile(r"(?:https?|ftp)://[^\s\"'<>]+", re.IGNORECASE),
+        re.compile(r"mailto:[^\s\"'<>]+", re.IGNORECASE),
+        re.compile(r"file://[^\s\"'<>]+", re.IGNORECASE),
+        re.compile(r"[A-Za-z]:[\\/][^\s\"'<>]+", re.IGNORECASE),
+        re.compile(r"\\\\[^\s\"'<>]+\\\\[^\s\"'<>]+", re.IGNORECASE),
+        re.compile(r"www\.[^\s\"'<>]+", re.IGNORECASE),
+    ]
+
+    best_match = ""
+    for decoded in decoded_payloads:
+        for pattern in url_patterns:
+            match = pattern.search(decoded)
+            if not match:
+                continue
+            candidate = re.sub(r"[\x00\n\r]+", "", match.group(0)).strip()
+            if len(candidate) <= 0:
+                continue
+            if len(candidate) > len(best_match):
+                best_match = candidate
+
+    return best_match
 
 
 def _extract_note_author(record_data: bytes) -> str:

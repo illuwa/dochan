@@ -649,6 +649,24 @@ def test_doc_reader_normalizes_parenthesized_numbered_list_markers(monkeypatch, 
     assert markdown == "1. Revenue grew\n\n2. Costs fell"
 
 
+def test_doc_reader_normalizes_spaced_and_circled_numbered_list_markers(monkeypatch, tmp_path):
+    class NumberedOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return "1 ) Revenue grew\n2 ) Costs fell\n④ Risks tracked".encode("utf-16-le")
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
+    path = tmp_path / "numbered-list.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    markdown = to_markdown(DOCReader().read(str(path)))
+
+    assert markdown == "1. Revenue grew\n\n2. Costs fell\n\n- Risks tracked"
+
+
 def test_doc_reader_normalizes_legacy_alpha_and_roman_outline_markers(monkeypatch, tmp_path):
     class OutlineOle(FakeOle):
         def openstream(self, name):

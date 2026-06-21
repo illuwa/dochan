@@ -96,12 +96,17 @@ def _is_key_value_line(line: str) -> bool:
 def _key_value_parts(line: str):
     if _heading_label_match(line):
         return None
-    match = re.match(r"^\s*([^:：=＝\t|]{1,40})\s*[:：=＝]\s*(\S.*)$", line)
+    match = re.match(r"^\s*([^:：=＝\t|]{1,80})\s*[:：=＝]\s*(\S.*)$", line)
     if not match:
         return None
     key = match.group(1).strip()
     value = match.group(2).strip()
     if not key or not value:
+        return None
+    # 방어: URL 라벨이 붙은 링크/문장으로 오탐되는 케이스를 완화
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", key):
+        return None
+    if re.search(r"\bhttps?://", value):
         return None
     return [key, value]
 
@@ -178,7 +183,16 @@ def _normalize_list_marker(line: str) -> str:
     match = re.match(r"^\s*\((\d{1,3})\)\s*(.+)$", line)
     if match:
         return f"{match.group(1)}. {match.group(2).strip()}"
+    match = re.match(r"^\s*(\d{1,3})\s*\)\s*(.+)$", line)
+    if match:
+        return f"{match.group(1)}. {match.group(2).strip()}"
+    match = re.match(r"^\s*(\d{1,3})\s*:\s*(.+)$", line)
+    if match:
+        return f"{match.group(1)}. {match.group(2).strip()}"
     match = re.match(r"^\s*(?:[A-Za-z]|[ivxlcdmIVXLCDM]{2,8})[\.)]\s+(.+)$", line)
+    if match:
+        return f"- {match.group(1).strip()}"
+    match = re.match(r"^\s*[①②③④⑤⑥⑦⑧⑨⑩]\s*(.+)$", line)
     if match:
         return f"- {match.group(1).strip()}"
     return line

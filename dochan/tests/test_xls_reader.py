@@ -353,11 +353,15 @@ def _merged_cells(ranges):
 
 
 def _hlink(first_row, last_row, first_col, last_col, url):
+    return _hlink_bytes(first_row, last_row, first_col, last_col, url, encoding="utf-16-le")
+
+
+def _hlink_bytes(first_row, last_row, first_col, last_col, url, encoding="utf-16-le"):
     return _record(
         0x01B8,
         struct.pack("<HHHH", first_row, last_row, first_col, last_col)
         + b"\x00" * 24
-        + url.encode("utf-16-le")
+        + url.encode(encoding)
         + b"\x00\x00",
     )
 
@@ -1375,6 +1379,26 @@ def test_parse_biff_workbook_restores_hyperlink_urls():
     table = doc.sections[0].elements[0]
 
     assert table.rows[0][0].text == "Site <https://example.com/report>"
+
+
+def test_parse_biff_workbook_restores_file_hyperlink_urls():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "Doc")
+        + _hlink(0, 0, 0, 0, r"file:///C:/Reports/Quarterly.xlsx")
+        + _label(1, 0, "Download")
+        + _hlink_bytes(1, 1, 0, 0, "ftp://cdn.example.com/report.csv", encoding="cp1252")
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "Links"))
+    workbook = globals_part + _boundsheet(offset, "Links") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.rows[0][0].text == "Doc <file:///C:/Reports/Quarterly.xlsx>"
+    assert table.rows[1][0].text == "Download <ftp://cdn.example.com/report.csv>"
 
 
 def test_parse_biff_workbook_restores_note_comment_authors():

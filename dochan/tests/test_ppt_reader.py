@@ -385,6 +385,25 @@ def test_ppt_reader_normalizes_parenthesized_numbered_list_markers(monkeypatch, 
     assert markdown == "1. Pipeline up\n\n2. Costs down"
 
 
+def test_ppt_reader_normalizes_spaced_and_circled_numbered_list_markers(monkeypatch, tmp_path):
+    class NumberedOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    text = "1 ) Pipeline up\n2 ) Costs down\n④ Risks tracked".encode("utf-16-le")
+                    return _ppt_record(4000, text)
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
+    path = tmp_path / "numbered-list.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    markdown = to_markdown(PPTReader().read(str(path)))
+
+    assert markdown == "1. Pipeline up\n\n2. Costs down\n\n- Risks tracked"
+
+
 def test_ppt_reader_normalizes_legacy_alpha_and_roman_outline_markers(monkeypatch, tmp_path):
     class OutlineOle(FakeOle):
         def openstream(self, name):

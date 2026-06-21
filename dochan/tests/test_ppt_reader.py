@@ -779,6 +779,31 @@ def test_ppt_reader_recovers_truncated_notes_container_text(monkeypatch, tmp_pat
     assert [element.text for element in doc.sections[0].elements] == ["Slide title", "Notes", "N"]
 
 
+def test_ppt_reader_recovers_notes_after_truncated_payload_record(monkeypatch, tmp_path):
+    class MixedOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    slide = _ppt_record(4000, "Slide title".encode("utf-16-le"))
+                    truncated = struct.pack("<HHI", 0x4000, 9999, 0) + b"X"
+                    note_text = _ppt_record(4008, b"Recovered note")
+                    return _ppt_container(1006, slide + truncated) + _ppt_container(1008, note_text)
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", MixedOle)
+    path = tmp_path / "mixed-corrupt.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == [
+        "Slide title",
+        "Notes",
+        "Recovered note",
+    ]
+
+
 def test_ppt_reader_attaches_nested_notes_to_previous_slide(monkeypatch, tmp_path):
     class NestedNotesOle(FakeOle):
         def openstream(self, name):

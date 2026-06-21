@@ -286,6 +286,33 @@ def test_ppt_reader_restores_fullwidth_colon_key_value_lines_as_table(monkeypatc
     )
 
 
+def test_ppt_reader_restores_equal_sign_key_value_lines_as_table(monkeypatch, tmp_path):
+    class KeyValueOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    text = "Owner = Finance\nDue Date = 2026-07-01\nStatus = Approved\nClosing note".encode("utf-16-le")
+                    return _ppt_record(4000, text)
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", KeyValueOle)
+    path = tmp_path / "equal-key-value-form.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+    markdown = to_markdown(doc)
+
+    assert doc.find_all("table")[0].row_count == 3
+    assert markdown == (
+        "| Owner | Finance |\n"
+        "| --- | --- |\n"
+        "| Due Date | 2026-07-01 |\n"
+        "| Status | Approved |\n\n"
+        "Closing note"
+    )
+
+
 def test_ppt_reader_normalizes_legacy_bullet_markers(monkeypatch, tmp_path):
     class BulletOle(FakeOle):
         def openstream(self, name):
@@ -315,6 +342,24 @@ def test_ppt_reader_normalizes_legacy_numbered_list_markers(monkeypatch, tmp_pat
 
     monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
     path = tmp_path / "numbered-list.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    markdown = to_markdown(PPTReader().read(str(path)))
+
+    assert markdown == "1. Pipeline up\n\n2. Costs down"
+
+
+def test_ppt_reader_normalizes_legacy_dotted_numbered_list_markers(monkeypatch, tmp_path):
+    class NumberedOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return _ppt_record(4000, "1. Pipeline up\n2. Costs down".encode("utf-16-le"))
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
+    path = tmp_path / "dotted-numbered-list.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
     markdown = to_markdown(PPTReader().read(str(path)))

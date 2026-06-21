@@ -96,7 +96,7 @@ def _is_key_value_line(line: str) -> bool:
 def _key_value_parts(line: str):
     if _heading_label_match(line):
         return None
-    match = re.match(r"^\s*([^:：\t|]{1,40})\s*[:：]\s*(\S.*)$", line)
+    match = re.match(r"^\s*([^:：=＝\t|]{1,40})\s*[:：=＝]\s*(\S.*)$", line)
     if not match:
         return None
     key = match.group(1).strip()
@@ -170,6 +170,9 @@ def _normalize_list_marker(line: str) -> str:
     if match:
         return f"- {match.group(1).strip()}"
     match = re.match(r"^\s*(\d{1,3})\)\s*(.+)$", line)
+    if match:
+        return f"{match.group(1)}. {match.group(2).strip()}"
+    match = re.match(r"^\s*(\d{1,3})\.\s*(.+)$", line)
     if match:
         return f"{match.group(1)}. {match.group(2).strip()}"
     match = re.match(r"^\s*\((\d{1,3})\)\s*(.+)$", line)

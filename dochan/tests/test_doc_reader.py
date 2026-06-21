@@ -551,6 +551,32 @@ def test_doc_reader_restores_fullwidth_colon_key_value_lines_as_table(monkeypatc
     )
 
 
+def test_doc_reader_restores_equal_sign_key_value_lines_as_table(monkeypatch, tmp_path):
+    class KeyValueOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return "Owner = Finance\nDue Date = 2026-07-01\nStatus = Approved\nClosing note".encode("utf-16-le")
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", KeyValueOle)
+    path = tmp_path / "equal-key-value-form.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+    markdown = to_markdown(doc)
+
+    assert doc.find_all("table")[0].row_count == 3
+    assert markdown == (
+        "| Owner | Finance |\n"
+        "| --- | --- |\n"
+        "| Due Date | 2026-07-01 |\n"
+        "| Status | Approved |\n\n"
+        "Closing note"
+    )
+
+
 def test_doc_reader_normalizes_legacy_bullet_markers(monkeypatch, tmp_path):
     class BulletOle(FakeOle):
         def openstream(self, name):
@@ -580,6 +606,24 @@ def test_doc_reader_normalizes_legacy_numbered_list_markers(monkeypatch, tmp_pat
 
     monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
     path = tmp_path / "numbered-list.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    markdown = to_markdown(DOCReader().read(str(path)))
+
+    assert markdown == "1. Revenue grew\n\n2. Costs fell"
+
+
+def test_doc_reader_normalizes_legacy_dotted_numbered_list_markers(monkeypatch, tmp_path):
+    class NumberedOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return "1. Revenue grew\n2. Costs fell".encode("utf-16-le")
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
+    path = tmp_path / "dotted-numbered-list.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
     markdown = to_markdown(DOCReader().read(str(path)))

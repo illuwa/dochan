@@ -194,7 +194,15 @@ def parse_ppt_document_stream(data: bytes) -> Document:
         slide_lines = [_extract_ppt_text_records(data) or _fallback_text_lines(data)]
 
     for slide_index, lines in enumerate(slide_lines, start=1):
-        doc.sections.append(build_structured_section(lines, "ppt", section_index=slide_index - 1, slide=slide_index))
+        doc.sections.append(
+            build_structured_section(
+                lines,
+                "ppt",
+                section_index=slide_index - 1,
+                slide=slide_index,
+                path=f"PowerPoint Document#slide{slide_index}",
+            )
+        )
     return doc
 
 

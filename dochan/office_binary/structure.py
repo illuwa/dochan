@@ -7,8 +7,19 @@ from ..model.document import Paragraph, Section, TextRun
 from ..model.table import Cell, Table
 
 
-def build_structured_section(lines: Iterable[str], source_format: str, section_index: int = 0, slide: int = 0) -> Section:
-    provenance = Provenance(source_format=source_format, section=section_index, slide=slide or None)
+def build_structured_section(
+    lines: Iterable[str],
+    source_format: str,
+    section_index: int = 0,
+    slide: int = 0,
+    path: str = None,
+) -> Section:
+    provenance = Provenance(
+        source_format=source_format,
+        section=section_index,
+        slide=slide or None,
+        path=path,
+    )
     section = Section(provenance=provenance)
     normalized = [line.strip() for line in lines if line and line.strip()]
     index = 0
@@ -18,14 +29,15 @@ def build_structured_section(lines: Iterable[str], source_format: str, section_i
         if index + 1 < len(normalized) and _is_heading_underline(normalized[index + 1]):
             heading_level = 1 if normalized[index + 1].startswith("=") else 2
             section.elements.append(
-                _paragraph_from_line(
-                    f"{'#' * heading_level} {line}",
-                    source_format,
-                    section_index,
-                    slide,
-                    paragraph_index,
+                    _paragraph_from_line(
+                        f"{'#' * heading_level} {line}",
+                        source_format,
+                        section_index,
+                        slide,
+                        path,
+                        paragraph_index,
+                    )
                 )
-            )
             paragraph_index += 1
             index += 2
             continue
@@ -34,7 +46,7 @@ def build_structured_section(lines: Iterable[str], source_format: str, section_i
             while index < len(normalized) and _is_table_line(normalized[index]):
                 table_lines.append(normalized[index])
                 index += 1
-            section.elements.append(_table_from_lines(table_lines, source_format, section_index, slide))
+            section.elements.append(_table_from_lines(table_lines, source_format, section_index, slide, path))
             continue
         if _is_key_value_line(line):
             key_value_lines = []
@@ -42,11 +54,11 @@ def build_structured_section(lines: Iterable[str], source_format: str, section_i
                 key_value_lines.append(normalized[index])
                 index += 1
             if len(key_value_lines) > 1:
-                section.elements.append(_table_from_key_value_lines(key_value_lines, source_format, section_index, slide))
+                section.elements.append(_table_from_key_value_lines(key_value_lines, source_format, section_index, slide, path))
                 continue
             index -= len(key_value_lines)
 
-        paragraph = _paragraph_from_line(line, source_format, section_index, slide, paragraph_index)
+        paragraph = _paragraph_from_line(line, source_format, section_index, slide, path, paragraph_index)
         section.elements.append(paragraph)
         paragraph_index += 1
         index += 1
@@ -94,7 +106,14 @@ def _key_value_parts(line: str):
     return [key, value]
 
 
-def _paragraph_from_line(line: str, source_format: str, section_index: int, slide: int, paragraph_index: int) -> Paragraph:
+def _paragraph_from_line(
+    line: str,
+    source_format: str,
+    section_index: int,
+    slide: int,
+    path: str,
+    paragraph_index: int,
+) -> Paragraph:
     heading_level = 0
     text = _normalize_list_marker(line)
     if line.startswith("#"):
@@ -111,6 +130,7 @@ def _paragraph_from_line(line: str, source_format: str, section_index: int, slid
         section=section_index,
         slide=slide or None,
         paragraph=paragraph_index,
+        path=path,
     )
     return Paragraph(
         runs=[TextRun(text=text, provenance=provenance)],
@@ -161,19 +181,31 @@ def _normalize_list_marker(line: str) -> str:
     return line
 
 
-def _table_from_lines(lines: List[str], source_format: str, section_index: int, slide: int) -> Table:
+def _table_from_lines(lines: List[str], source_format: str, section_index: int, slide: int, path: str) -> Table:
     rows_parts = [parts for parts in (_table_parts(line) for line in lines) if not _is_table_separator(parts)]
     if not rows_parts:
         return Table()
-    return _table_from_rows(rows_parts, source_format, section_index, slide)
+    return _table_from_rows(rows_parts, source_format, section_index, slide, path)
 
 
-def _table_from_key_value_lines(lines: List[str], source_format: str, section_index: int, slide: int) -> Table:
+def _table_from_key_value_lines(
+    lines: List[str],
+    source_format: str,
+    section_index: int,
+    slide: int,
+    path: str,
+) -> Table:
     rows_parts = [parts for parts in (_key_value_parts(line) for line in lines) if parts]
-    return _table_from_rows(rows_parts, source_format, section_index, slide)
+    return _table_from_rows(rows_parts, source_format, section_index, slide, path)
 
 
-def _table_from_rows(rows_parts: List[List[str]], source_format: str, section_index: int, slide: int) -> Table:
+def _table_from_rows(
+    rows_parts: List[List[str]],
+    source_format: str,
+    section_index: int,
+    slide: int,
+    path: str,
+) -> Table:
     width = max(len(parts) for parts in rows_parts)
     rows = []
     for row_idx, parts in enumerate(rows_parts):
@@ -185,6 +217,7 @@ def _table_from_rows(rows_parts: List[List[str]], source_format: str, section_in
                 section=section_index,
                 slide=slide or None,
                 cell=_legacy_cell_ref(row_idx, col_idx),
+                path=path,
             )
             paragraph = Paragraph(runs=[TextRun(text=text, provenance=provenance)], provenance=provenance)
             row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))

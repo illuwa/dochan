@@ -376,6 +376,7 @@ def test_doc_reader_restores_headings_lists_and_tables(monkeypatch, tmp_path):
     doc = DOCReader().read(str(path))
     markdown = to_markdown(doc)
 
+    assert doc.sections[0].provenance.path == "WordDocument"
     assert doc.sections[0].elements[0].heading_level == 1
     assert doc.find_all("table")[0].row_count == 3
     assert markdown == (

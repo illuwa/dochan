@@ -209,7 +209,14 @@ def parse_doc_word_stream(data: bytes, table_data: Optional[bytes] = None) -> Do
             lines = utf16_lines if _line_quality(utf16_lines) >= _line_quality(latin_lines) else latin_lines
 
     for section_index, section_lines in enumerate(_split_sections(lines)):
-        doc.sections.append(build_structured_section(section_lines, "doc", section_index=section_index))
+        doc.sections.append(
+            build_structured_section(
+                section_lines,
+                "doc",
+                section_index=section_index,
+                path="WordDocument",
+            )
+        )
     return doc
 
 

@@ -96,6 +96,8 @@ def test_ppt_reader_restores_slide_sections_and_tables(monkeypatch, tmp_path):
 
     assert len(doc.sections) == 2
     assert [section.provenance.slide for section in doc.sections] == [1, 2]
+    assert doc.sections[0].provenance.path == "PowerPoint Document#slide1"
+    assert doc.sections[1].provenance.path == "PowerPoint Document#slide2"
     assert doc.sections[0].elements[0].heading_level == 1
     table = doc.find_all("table")[0]
     assert table.row_count == 2

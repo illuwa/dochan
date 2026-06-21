@@ -628,6 +628,18 @@ def test_parse_biff_workbook_restores_unicode_labels_blanks_and_merged_cells():
     assert table.rows[0][1].is_merged_away
     assert table.rows[1][0].text == "10"
     assert table.rows[1][1].text == "20"
+    assert table.rows[0][0].row == 0
+    assert table.rows[0][0].col == 0
+    assert table.rows[0][1].row == 0
+    assert table.rows[0][1].col == 1
+    assert table.rows[1][0].row == 1
+    assert table.rows[1][0].col == 0
+    assert table.rows[1][1].row == 1
+    assert table.rows[1][1].col == 1
+    assert table.rows[0][0].provenance.cell == "A1"
+    assert table.rows[0][1].provenance.cell == "B1"
+    assert table.rows[1][0].provenance.cell == "A2"
+    assert table.rows[1][1].provenance.cell == "B2"
     assert to_markdown(doc) == "## Report\n\n| 분기 |  |\n| --- | --- |\n| 10 | 20 |"
 
 
@@ -648,6 +660,12 @@ def test_parse_biff_workbook_preserves_mulblank_cell_coordinates():
     assert table.row_count == 1
     assert table.col_count == 3
     assert [cell.text for cell in table.rows[0]] == ["10", "", ""]
+    assert table.rows[0][0].row == 0
+    assert table.rows[0][0].col == 0
+    assert table.rows[0][1].row == 0
+    assert table.rows[0][1].col == 1
+    assert table.rows[0][2].row == 0
+    assert table.rows[0][2].col == 2
 
 
 def test_parse_biff_workbook_preserves_row_and_colinfo_extents():

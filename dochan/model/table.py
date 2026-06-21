@@ -9,6 +9,7 @@ class Cell:
     paragraphs: list = field(default_factory=list)
     row_span: int = 1
     col_span: int = 1
+    provenance: Any = None
 
     @property
     def text(self) -> str:

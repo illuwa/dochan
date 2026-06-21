@@ -15,6 +15,7 @@ class TextRun:
     superscript: bool = False
     subscript: bool = False
     font_size_pt: float = 10.0
+    provenance: Any = None
 
 
 @dataclass
@@ -24,6 +25,7 @@ class Paragraph:
     para_shape_id: int = -1
     style_id: int = -1
     heading_level: int = 0  # 0=not heading, 1-6=heading level
+    provenance: Any = None
 
     @property
     def text(self) -> str:
@@ -38,6 +40,7 @@ class Paragraph:
 class Section:
     """섹션 (BodyText/SectionN 하나)"""
     elements: List[Any] = field(default_factory=list)
+    provenance: Any = None
 
 
 @dataclass
@@ -49,8 +52,11 @@ class Document:
     styles: list = field(default_factory=list)
     face_names: list = field(default_factory=list)
     bin_data_list: list = field(default_factory=list)
+    assets: list = field(default_factory=list)
     file_header: Any = None
     errors: List[str] = field(default_factory=list)
+    source_format: str = ""
+    provenance: Any = None
 
     def find_all(self, element_type: str):
         """타입별 요소 검색 (table, equation, image 등)"""
@@ -87,11 +93,15 @@ class Document:
 
     @property
     def metadata(self) -> dict:
-        return {
+        metadata = {
             'sections': len(self.sections),
             'char_shapes': len(self.char_shapes),
             'para_shapes': len(self.para_shapes),
             'styles': len(self.styles),
             'face_names': len(self.face_names),
+            'assets': len(self.assets),
             'errors': self.errors,
         }
+        if self.source_format:
+            metadata['source_format'] = self.source_format
+        return metadata

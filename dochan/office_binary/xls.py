@@ -201,7 +201,7 @@ def _iter_records(data: bytes):
         offset = payload_end
 
 
-def _recover_next_record_offset(data: bytes, start: int) -> int | None:
+def _recover_next_record_offset(data: bytes, start: int) -> Optional[int]:
     if start >= len(data) - 3:
         return None
 

@@ -2,7 +2,7 @@
 import re
 import struct
 from dataclasses import replace
-from typing import List
+from typing import List, Optional
 
 import olefile
 
@@ -69,7 +69,7 @@ def _looks_like_record_stream(data: bytes) -> bool:
     return size <= len(data) - 8
 
 
-def _find_next_record_offset(data: bytes, start: int) -> int | None:
+def _find_next_record_offset(data: bytes, start: int) -> Optional[int]:
     if start >= len(data) - 7:
         return None
 

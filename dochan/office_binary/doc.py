@@ -172,7 +172,7 @@ def _extract_clx_text(word_data: bytes, clx: bytes) -> str:
     return "".join(_extract_piece_table_text(word_data, segment) for segment in pcdt_segments)
 
 
-def _find_next_clx_marker(clx: bytes, start: int) -> int | None:
+def _find_next_clx_marker(clx: bytes, start: int) -> Optional[int]:
     for index in range(start, len(clx)):
         if clx[index] == 0x02:
             return index

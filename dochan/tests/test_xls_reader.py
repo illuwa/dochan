@@ -409,6 +409,8 @@ def test_parse_biff_workbook_tracks_sheet_and_cell_provenance_paths():
     assert table.rows[1][1].provenance.path == "LegacyWorkbook#Sheet1"
     assert table.rows[0][0].provenance.sheet == "Sheet1"
     assert table.rows[1][1].provenance.sheet == "Sheet1"
+    assert table.rows[0][0].paragraphs[0].runs[0].provenance.path == "LegacyWorkbook#Sheet1"
+    assert table.rows[0][0].paragraphs[0].runs[0].provenance.cell == "A1"
 
 
 def test_parse_biff_workbook_tracks_defined_name_provenance_path():
@@ -1458,7 +1460,36 @@ def test_xls_reader_reads_workbook_stream(monkeypatch, tmp_path):
     doc = XLSReader().read(str(path))
 
     assert doc.metadata["source_format"] == "xls"
+    assert doc.sections[0].provenance.path == "Workbook#Sheet1"
     assert to_markdown(doc) == "| Name | Value |\n| --- | --- |\n| A | 10 |"
+
+
+def test_xls_reader_reads_legacy_book_stream(monkeypatch, tmp_path):
+    class BookOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name == "Book"
+
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    return _minimal_biff_workbook()
+
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", BookOle)
+
+    path = tmp_path / "legacy.xls"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = XLSReader().read(str(path))
+
+    assert doc.sections[0].provenance.path == "Book#Sheet1"
 
 
 def test_dochan_routes_xls_to_native_reader(monkeypatch, tmp_path):

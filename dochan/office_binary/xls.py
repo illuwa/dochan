@@ -1066,7 +1066,7 @@ def _sheet_to_table(sheet: _SheetInfo, path: str) -> Table:
                 path=path,
             )
             paragraph = Paragraph(
-                runs=[TextRun(text=text)],
+                runs=[TextRun(text=text, provenance=provenance)],
                 provenance=provenance,
             )
             row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))

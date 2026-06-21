@@ -1,6 +1,7 @@
 """Native legacy PPT reader."""
 import re
 import struct
+from dataclasses import replace
 from typing import List
 
 import olefile
@@ -194,16 +195,52 @@ def parse_ppt_document_stream(data: bytes) -> Document:
         slide_lines = [_extract_ppt_text_records(data) or _fallback_text_lines(data)]
 
     for slide_index, lines in enumerate(slide_lines, start=1):
+        slide_path = f"PowerPoint Document#slide{slide_index}"
         doc.sections.append(
             build_structured_section(
                 lines,
                 "ppt",
                 section_index=slide_index - 1,
                 slide=slide_index,
-                path=f"PowerPoint Document#slide{slide_index}",
+                path=slide_path,
             )
         )
+        _apply_supplemental_block_paths(doc.sections[-1], slide_path)
     return doc
+
+
+def _apply_supplemental_block_paths(section, base_path: str) -> None:
+    current_path = base_path
+    supplemental_marker = {2: f"{base_path}#notes", 3: f"{base_path}#comments"}
+
+    for element in section.elements:
+        if getattr(element, "heading_level", 0) == 2:
+            heading = element.text.strip()
+            if heading == "Notes":
+                current_path = supplemental_marker[2]
+            elif heading == "Comments":
+                current_path = supplemental_marker[3]
+        _set_element_path(element, current_path)
+
+
+def _set_element_path(element, path: str) -> None:
+    if getattr(element, "provenance", None) is not None:
+        element.provenance = replace(element.provenance, path=path)
+    if hasattr(element, "runs"):
+        for run in getattr(element, "runs"):
+            if getattr(run, "provenance", None) is not None:
+                run.provenance = replace(run.provenance, path=path)
+    if hasattr(element, "paragraphs"):
+        for child in getattr(element, "paragraphs"):
+            _set_element_path(child, path)
+    if hasattr(element, "rows"):
+        for row in getattr(element, "rows"):
+            for cell in row:
+                if hasattr(cell, "provenance") and getattr(cell, "provenance", None) is not None:
+                    cell.provenance = replace(cell.provenance, path=path)
+                if hasattr(cell, "paragraphs"):
+                    for child in getattr(cell, "paragraphs"):
+                        _set_element_path(child, path)
 
 
 class PPTReader:

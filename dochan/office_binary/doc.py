@@ -125,8 +125,12 @@ def _extract_piece_table_lines(word_data: bytes, table_data: Optional[bytes]) ->
         return []
     fc_clx = struct.unpack_from("<I", word_data, FC_CLX_OFFSET)[0]
     lcb_clx = struct.unpack_from("<I", word_data, LCB_CLX_OFFSET)[0]
-    if lcb_clx <= 0 or fc_clx + lcb_clx > len(table_data):
+    if fc_clx >= len(table_data):
         return []
+    if lcb_clx <= 0 or fc_clx + lcb_clx > len(table_data):
+        lcb_clx = len(table_data) - fc_clx
+        if lcb_clx <= 0:
+            return []
     text = _extract_clx_text(word_data, table_data[fc_clx:fc_clx + lcb_clx])
     lines = _clean_text_lines(text)
     return [line for line in lines if _should_keep_line(line)]
@@ -254,10 +258,27 @@ class DOCReader:
                 doc.errors.append("ERR: DOC WordDocument stream not found")
                 return doc
             word_data = ole.openstream("WordDocument").read()
-            table_data = None
+            best_document = None
+            best_score = None
+
+            def _score_document(document: Document, piece_lines: List[str]):
+                element_count = sum(len(section.elements) for section in document.sections)
+                if not document.sections:
+                    return (-1, 0, 0)
+                line_quality = sum(_line_quality([element.text for element in section.elements]) for section in document.sections)
+                return (element_count, 1 if piece_lines else 0, line_quality)
+
             for table_name in self._table_stream_names(ole, word_data):
-                table_data = ole.openstream(table_name).read()
-                break
-            return parse_doc_word_stream(word_data, table_data)
+                candidate = ole.openstream(table_name).read()
+                piece_lines = _extract_piece_table_lines(word_data, candidate)
+                document = parse_doc_word_stream(word_data, candidate)
+                score = _score_document(document, piece_lines)
+                if best_score is None or score > best_score:
+                    best_document = document
+                    best_score = score
+
+            if best_document is None:
+                return parse_doc_word_stream(word_data)
+            return best_document
         finally:
             ole.close()

@@ -824,6 +824,26 @@ def test_parse_biff_workbook_recovers_partial_formula_tokens():
     assert table.rows[1][1].text == "30 (=A2)"
 
 
+def test_parse_biff_workbook_recovers_partial_formula_without_disrupting_following_cells():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "A")
+        + _label(0, 1, "Score")
+        + _formula_with_tokens(1, 0, 12, _ptg_ref(1, 0) + _ptg_add())
+        + _number(1, 1, 18)
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "FormulaPartialFollowup"))
+    workbook = globals_part + _boundsheet(offset, "FormulaPartialFollowup") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.rows[1][0].text == "12 (=A2)"
+    assert table.rows[1][1].text == "18"
+
+
 def test_parse_biff_workbook_restores_formula_with_attribute_tokens():
     globals_part = _bof()
     worksheet = (

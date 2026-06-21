@@ -183,6 +183,55 @@ def test_doc_reader_recovers_from_truncated_piece_table_segments(monkeypatch, tm
     assert [element.text for element in doc.sections[0].elements] == ["First line"]
 
 
+def test_doc_reader_falls_back_to_secondary_table_stream(monkeypatch, tmp_path):
+    class TwoTableOle:
+        def __init__(self, path):
+            self.path = path
+
+        def exists(self, name):
+            return name in {"WordDocument", "0Table", "1Table"}
+
+        def openstream(self, name):
+            class Stream:
+                def __init__(self, data):
+                    self.data = data
+
+                def read(self):
+                    return self.data
+
+            word_data = bytearray(b"\x00" * 512)
+            second = "Recovered via backup".encode("utf-16-le")
+
+            if name == "WordDocument":
+                struct.pack_into("<I", word_data, 0x01A2, 0)
+                word_data[200:200 + len(second)] = second
+                return Stream(bytes(word_data))
+
+            if name == "0Table":
+                return Stream(b"invalid")
+
+            clx = _doc_piece_table(
+                [0, len("Recovered via backup")],
+                [200],
+            )
+            word_data[200:200 + len(second)] = second
+            if name == "1Table":
+                struct.pack_into("<I", word_data, 0x01A6, len(clx))
+                return Stream(clx)
+            raise KeyError(name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", TwoTableOle)
+    path = tmp_path / "fallback-table.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = DOCReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["Recovered via backup"]
+
+
 def test_doc_reader_joins_multiple_clx_piece_segments(monkeypatch, tmp_path):
     class MultiSegmentClxOle(FakeOle):
         def exists(self, name):

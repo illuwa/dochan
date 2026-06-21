@@ -376,7 +376,7 @@ def test_doc_reader_restores_headings_lists_and_tables(monkeypatch, tmp_path):
     doc = DOCReader().read(str(path))
     markdown = to_markdown(doc)
 
-    assert doc.sections[0].provenance.path == "WordDocument"
+    assert doc.sections[0].provenance.path == "WordDocument#section1"
     assert doc.sections[0].elements[0].heading_level == 1
     assert doc.find_all("table")[0].row_count == 3
     assert markdown == (
@@ -741,7 +741,9 @@ def test_doc_reader_restores_section_breaks(monkeypatch, tmp_path):
     doc = DOCReader().read(str(path))
 
     assert len(doc.sections) == 2
+    assert doc.sections[0].provenance.path == "WordDocument#section1"
     assert [element.text for element in doc.sections[0].elements] == ["First section"]
+    assert doc.sections[1].provenance.path == "WordDocument#section2"
     assert [element.text for element in doc.sections[1].elements] == ["Second section", "Tail"]
     assert doc.sections[1].provenance.section == 1
 

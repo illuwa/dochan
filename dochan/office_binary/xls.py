@@ -192,8 +192,9 @@ def _iter_records(data: bytes):
         offset += size
 
 
-def parse_biff_workbook(data: bytes) -> Document:
+def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Document:
     doc = Document(source_format="xls")
+    normalized_stream = workbook_stream or "Workbook"
     sheets: List[_SheetInfo] = []
     shared_strings: List[str] = []
     formats: Dict[int, str] = {}
@@ -242,7 +243,13 @@ def parse_biff_workbook(data: bytes) -> Document:
     sorted_sheets = sorted(sheets, key=lambda sheet: sheet.offset)
     sheet_names = [sheet.name for sheet in sheets]
     defined_names = [defined_name.name for defined_name in defined_name_records]
-    defined_name_elements = _defined_name_elements(defined_name_records, external_sheets, sheet_names, defined_names)
+    defined_name_elements = _defined_name_elements(
+        defined_name_records,
+        external_sheets,
+        sheet_names,
+        defined_names,
+        path=normalized_stream,
+    )
     for index, sheet in enumerate(sorted_sheets):
         end = sorted_sheets[index + 1].offset if index + 1 < len(sorted_sheets) else len(data)
         _parse_sheet_records(
@@ -258,19 +265,21 @@ def parse_biff_workbook(data: bytes) -> Document:
         )
 
     for sheet_index, sheet in enumerate(sorted_sheets):
+        sheet_path = f"{normalized_stream}#{sheet.name}"
         section = Section(
             provenance=Provenance(
                 source_format="xls",
                 sheet=sheet.name,
+                path=sheet_path,
                 visibility=sheet.visibility,
                 hidden=sheet.visibility in {1, 2},
             )
         )
         if sheet_index == 0:
             section.elements.extend(defined_name_elements)
-        for paragraph in _sheet_header_footer_elements(sheet):
+        for paragraph in _sheet_header_footer_elements(sheet, path=sheet_path):
             section.elements.append(paragraph)
-        table = _sheet_to_table(sheet)
+        table = _sheet_to_table(sheet, path=sheet_path)
         if table.rows:
             section.elements.append(table)
         doc.sections.append(section)
@@ -319,6 +328,7 @@ def _defined_name_elements(
     external_sheets: List[Tuple[int, int]],
     sheet_names: List[str],
     name_labels: List[str],
+    path: str,
 ) -> List[Paragraph]:
     elements = []
     for defined_name in defined_names:
@@ -332,7 +342,7 @@ def _defined_name_elements(
         )
         if not target:
             continue
-        provenance = Provenance(source_format="xls")
+        provenance = Provenance(source_format="xls", path=path)
         elements.append(
             Paragraph(
                 runs=[TextRun(text=f"Defined name: {_defined_name_label(defined_name.name)} = {target}", provenance=provenance)],
@@ -348,9 +358,9 @@ def _defined_name_label(name: str) -> str:
     return name
 
 
-def _sheet_header_footer_elements(sheet: _SheetInfo) -> List[Paragraph]:
+def _sheet_header_footer_elements(sheet: _SheetInfo, path: str) -> List[Paragraph]:
     elements = []
-    provenance = Provenance(source_format="xls", sheet=sheet.name)
+    provenance = Provenance(source_format="xls", sheet=sheet.name, path=path)
     header = _decode_header_footer_text(sheet.header)
     footer = _decode_header_footer_text(sheet.footer)
     if header:
@@ -1025,7 +1035,7 @@ def _fixed_function_arg_count(function_index: int) -> int:
     }.get(function_index, 1)
 
 
-def _sheet_to_table(sheet: _SheetInfo) -> Table:
+def _sheet_to_table(sheet: _SheetInfo, path: str) -> Table:
     if not sheet.cells and not sheet.row_indices and not sheet.col_indices:
         return Table()
 
@@ -1053,6 +1063,7 @@ def _sheet_to_table(sheet: _SheetInfo) -> Table:
                 source_format="xls",
                 sheet=sheet.name,
                 cell=cell_ref,
+                path=path,
             )
             paragraph = Paragraph(
                 runs=[TextRun(text=text)],
@@ -1098,6 +1109,6 @@ class XLSReader:
                 doc.errors.append("ERR: XLS Workbook stream not found")
                 return doc
             workbook_data = ole.openstream(stream_name).read()
-            return parse_biff_workbook(workbook_data)
+            return parse_biff_workbook(workbook_data, workbook_stream=stream_name)
         finally:
             ole.close()

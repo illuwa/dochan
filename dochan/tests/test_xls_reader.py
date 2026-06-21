@@ -399,6 +399,38 @@ def test_parse_biff_workbook_reads_labels_and_numbers():
     assert table.rows[1][1].col == 1
 
 
+def test_parse_biff_workbook_tracks_sheet_and_cell_provenance_paths():
+    doc = parse_biff_workbook(_minimal_biff_workbook(), "LegacyWorkbook")
+    table = doc.sections[0].elements[0]
+
+    assert doc.sections[0].provenance.path == "LegacyWorkbook#Sheet1"
+    assert doc.sections[0].provenance.sheet == "Sheet1"
+    assert table.rows[0][0].provenance.path == "LegacyWorkbook#Sheet1"
+    assert table.rows[1][1].provenance.path == "LegacyWorkbook#Sheet1"
+    assert table.rows[0][0].provenance.sheet == "Sheet1"
+    assert table.rows[1][1].provenance.sheet == "Sheet1"
+
+
+def test_parse_biff_workbook_tracks_defined_name_provenance_path():
+    globals_part = _bof() + _externsheet([(0, 0, 0)]) + _name_record("SalesRange", _ptg_area3d(0, 1, 2, 0, 0))
+    worksheet = (
+        _bof()
+        + _label(0, 0, "Metric")
+        + _number(1, 0, 10)
+        + _number(2, 0, 20)
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "Summary"))
+    workbook = globals_part + _boundsheet(offset, "Summary") + worksheet
+
+    doc = parse_biff_workbook(workbook, "Book")
+
+    assert doc.sections[0].provenance.path == "Book#Summary"
+    assert doc.sections[0].elements[0].text == "Defined name: SalesRange = Summary!A2:A3"
+    assert doc.sections[0].elements[0].provenance.path == "Book"
+    assert doc.sections[0].elements[1].rows[0][0].provenance.path == "Book#Summary"
+
+
 def test_parse_biff_workbook_reads_rich_text_shared_strings_without_offset_drift():
     globals_part = _bof()
     worksheet = _bof() + _labelsst(0, 0, 0) + _labelsst(0, 1, 1) + _labelsst(1, 0, 2) + _eof()

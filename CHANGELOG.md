@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.2] - 2026-06-21
+
+- PyPI publish workflow switched to token-based authentication (`PYPI_API_TOKEN`) to avoid trusted-publisher env dependency.
+- Prepared release retry path for corrected publishing configuration.
+
 ## [1.0.1] - 2026-06-21
 
 - Python 3.9 호환성 회귀 수정: `int | None` 타입 힌트를 `Optional[int]`로 교체

@@ -98,8 +98,12 @@ def test_ppt_reader_restores_slide_sections_and_tables(monkeypatch, tmp_path):
     assert [section.provenance.slide for section in doc.sections] == [1, 2]
     assert doc.sections[0].provenance.path == "PowerPoint Document#slide1"
     assert doc.sections[1].provenance.path == "PowerPoint Document#slide2"
-    assert doc.sections[0].elements[0].heading_level == 1
     table = doc.find_all("table")[0]
+    assert table.rows[0][0].provenance.path == "PowerPoint Document#slide2"
+    assert table.rows[0][0].provenance.cell == "R1C1"
+    assert table.rows[0][0].paragraphs[0].runs[0].provenance.path == "PowerPoint Document#slide2"
+    assert table.rows[0][0].paragraphs[0].runs[0].provenance.cell == "R1C1"
+    assert doc.sections[0].elements[0].heading_level == 1
     assert table.row_count == 2
     assert table.rows[0][0].row == 0
     assert table.rows[0][0].col == 0

@@ -805,6 +805,25 @@ def test_parse_biff_workbook_restores_basic_formula_tokens():
     assert table.rows[1][2].text == "30 (=A2+B2)"
 
 
+def test_parse_biff_workbook_recovers_partial_formula_tokens():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "A")
+        + _label(0, 1, "B")
+        + _label(1, 0, "Score")
+        + _formula_with_tokens(1, 1, 30, _ptg_ref(1, 0) + _ptg_add())
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "FormulaPartial"))
+    workbook = globals_part + _boundsheet(offset, "FormulaPartial") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.rows[1][1].text == "30 (=A2)"
+
+
 def test_parse_biff_workbook_restores_formula_with_attribute_tokens():
     globals_part = _bof()
     worksheet = (

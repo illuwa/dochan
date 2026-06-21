@@ -81,7 +81,7 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
         payload_start = offset + 8
         payload_end = payload_start + size
         if payload_end > len(data):
-            break
+            payload_end = len(data)
         payload = data[payload_start:payload_end]
 
         if record_type == TEXT_HEADER_ATOM and len(payload) >= 4:
@@ -115,7 +115,7 @@ def _extract_slide_text_records(data: bytes, depth: int = 0) -> List[List[str]]:
         payload_start = offset + 8
         payload_end = payload_start + size
         if payload_end > len(data):
-            break
+            payload_end = len(data)
         payload = data[payload_start:payload_end]
 
         if record_type == SLIDE_CONTAINER:
@@ -141,7 +141,7 @@ def _extract_slide_and_notes_records(data: bytes, depth: int = 0) -> List[List[s
         payload_start = offset + 8
         payload_end = payload_start + size
         if payload_end > len(data):
-            break
+            payload_end = len(data)
         payload = data[payload_start:payload_end]
 
         if record_type == SLIDE_CONTAINER:

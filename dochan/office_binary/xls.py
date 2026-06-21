@@ -186,10 +186,14 @@ def _iter_records(data: bytes):
     offset = 0
     while offset + 4 <= len(data):
         record_type, size = struct.unpack_from("<HH", data, offset)
-        offset += 4
-        record_data = data[offset:offset + size]
-        yield offset - 4, record_type, record_data
-        offset += size
+        payload_start = offset + 4
+        payload_end = payload_start + size
+        if payload_end > len(data):
+            payload_end = len(data)
+            yield offset, record_type, data[payload_start:payload_end]
+            break
+        yield offset, record_type, data[payload_start:payload_end]
+        offset = payload_end
 
 
 def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Document:
@@ -876,13 +880,15 @@ def _decode_formula_token_stream(
             right = stack.pop()
             left = stack.pop()
             stack.append(f"{left}{_formula_operator(token)}{right}")
+        elif token in {0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E}:
+            break
         elif token == 0x22 and offset + 3 <= len(tokens):  # ptgFuncVar
             argument_count = tokens[offset]
             function_index = struct.unpack_from("<H", tokens, offset + 1)[0]
             function_name, _ = _formula_function_name(function_index)
             available_args = min(len(stack), argument_count)
             if available_args == 0:
-                return ""
+                break
             args = stack[-available_args:]
             del stack[-available_args:]
             stack.append(f"{function_name}({','.join(args)})")
@@ -894,7 +900,7 @@ def _decode_formula_token_stream(
             if not is_known and len(stack) > 0:
                 argument_count = len(stack)
             if len(stack) < argument_count:
-                return ""
+                break
             args = stack[-argument_count:]
             del stack[-argument_count:]
             stack.append(f"{function_name}({','.join(args)})")
@@ -911,7 +917,7 @@ def _decode_formula_token_stream(
             offset += 2
             byte_count = char_count * (2 if flags & 0x01 else 1)
             if offset + byte_count > len(tokens):
-                return ""
+                break
             raw = tokens[offset:offset + byte_count]
             text = raw.decode("utf-16-le" if flags & 0x01 else "cp1252", errors="replace")
             stack.append(_quote_formula_string(text))
@@ -924,11 +930,11 @@ def _decode_formula_token_stream(
             offset += 1
         elif token == 0x19:  # ptgAttr: skip attribute metadata
             if offset >= len(tokens):
-                return ""
+                break
             if offset + 1 < len(tokens):
                 offset += 2
             else:
-                return ""
+                break
         elif token == 0x12 and stack:  # ptgUplus
             stack[-1] = f"+{stack[-1]}"
         elif token == 0x13 and stack:  # ptgUminus
@@ -938,7 +944,7 @@ def _decode_formula_token_stream(
         elif token == 0x15 and stack:  # ptgParen
             stack[-1] = f"({stack[-1]})"
         else:
-            return ""
+            break
     return stack[-1] if stack else ""
 
 

@@ -738,6 +738,47 @@ def test_ppt_reader_restores_notes_container_text(monkeypatch, tmp_path):
     assert doc.sections[0].elements[3].runs[0].provenance.path == "PowerPoint Document#slide1#notes"
 
 
+def test_ppt_reader_recovers_from_truncated_text_record_in_slide_container(monkeypatch, tmp_path):
+    class TruncatedTextOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    full = _ppt_record(4000, "Slide body".encode("utf-16-le"))
+                    truncated_record = struct.pack("<HHI", 0, 4000, 10) + "N".encode("utf-16-le")[:2]
+                    return _ppt_container(1006, full + truncated_record)
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", TruncatedTextOle)
+    path = tmp_path / "truncated-ppt-text.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["Slide body", "N"]
+
+
+def test_ppt_reader_recovers_truncated_notes_container_text(monkeypatch, tmp_path):
+    class TruncatedNotesOle(FakeOle):
+        def openstream(self, name):
+            class Stream:
+                def read(self):
+                    slide = _ppt_container(1006, _ppt_record(4000, "Slide title".encode("utf-16-le")))
+                    nested_notes = struct.pack("<HHI", 0, 4008, 2) + b"N"
+                    truncated_notes = struct.pack("<HHI", 0, 1008, len(nested_notes)) + nested_notes
+                    return slide + truncated_notes
+
+            return Stream()
+
+    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", TruncatedNotesOle)
+    path = tmp_path / "truncated-ppt-notes.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+
+    doc = PPTReader().read(str(path))
+
+    assert [element.text for element in doc.sections[0].elements] == ["Slide title", "Notes", "N"]
+
+
 def test_ppt_reader_attaches_nested_notes_to_previous_slide(monkeypatch, tmp_path):
     class NestedNotesOle(FakeOle):
         def openstream(self, name):

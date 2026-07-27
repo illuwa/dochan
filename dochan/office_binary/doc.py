@@ -6,9 +6,11 @@ from typing import List, Optional
 import olefile
 
 from ..model.document import Document
-from .structure import build_structured_section
+from .structure import build_structured_section, is_encrypted_container
 
 SECTION_BREAK = "\u241c"
+# FIB 시그니처(wIdent) — Word 6/7/8. 이 값일 때만 FIB 플래그를 신뢰한다.
+_FIB_IDENTS = frozenset({0xA5DB, 0xA5DC, 0xA5EC})
 FC_CLX_OFFSET = 0x01A2
 LCB_CLX_OFFSET = 0x01A6
 
@@ -270,6 +272,20 @@ class DOCReader:
         names = [preferred, "1Table" if preferred == "0Table" else "0Table"]
         return [name for name in names if ole.exists(name)]
 
+    @staticmethod
+    def _is_encrypted_fib(word_data: bytes) -> bool:
+        """FIB 의 fEncrypted 비트. 레거시 DOC 는 OLE 컨테이너가 아니라 여기로 암호화를 알린다.
+
+        FIB 시그니처(wIdent)가 확인될 때만 플래그를 신뢰한다.
+        아무 바이트나 읽으면 평범한 문서를 암호화로 오판한다.
+        """
+        if len(word_data) < 0x0C:
+            return False
+        if struct.unpack_from("<H", word_data, 0)[0] not in _FIB_IDENTS:
+            return False
+        flags = struct.unpack_from("<H", word_data, 0x0A)[0]
+        return bool(flags & 0x0100)
+
     def read(self, file_path: str) -> Document:
         try:
             ole = olefile.OleFileIO(file_path)
@@ -280,6 +296,9 @@ class DOCReader:
 
         doc = Document(source_format="doc")
         try:
+            if is_encrypted_container(ole):
+                doc.errors.append("ERR: DOC 암호로 보호된 문서입니다")
+                return doc
             if not ole.exists("WordDocument"):
                 doc.errors.append("ERR: DOC WordDocument stream not found")
                 return doc
@@ -287,6 +306,10 @@ class DOCReader:
                 word_data = ole.openstream("WordDocument").read()
             except Exception as exc:
                 doc.errors.append(f"ERR: DOC WordDocument stream read 실패: {exc}")
+                return doc
+            if self._is_encrypted_fib(word_data):
+                # 암호문을 본문 텍스트라고 내보내면 안 된다.
+                doc.errors.append("ERR: DOC 암호로 보호된 문서입니다 (FIB fEncrypted)")
                 return doc
             best_document = None
             best_score = None
@@ -307,20 +330,34 @@ class DOCReader:
                 except Exception as exc:
                     doc.errors.append(f"ERR: DOC {table_name} stream read 실패: {exc}")
                     continue
-                piece_lines = _extract_piece_table_lines(word_data, candidate)
-                document = parse_doc_word_stream(word_data, candidate)
-                score = _score_document(document, piece_lines)
+                # 후보 하나의 파싱이 실패해도 다른 후보와 폴백을 시도할 수 있어야 한다.
+                # 보호 없이 두면 테이블 스트림 하나가 문서 전체를 잃게 만든다.
+                try:
+                    piece_lines = _extract_piece_table_lines(word_data, candidate)
+                    document = parse_doc_word_stream(word_data, candidate)
+                    score = _score_document(document, piece_lines)
+                except Exception as exc:
+                    doc.errors.append(f"ERR: DOC {table_name} stream 파싱 실패: {exc}")
+                    continue
                 if best_score is None or score > best_score:
                     best_document = document
                     best_score = score
 
             if best_document is None:
-                fallback_document = parse_doc_word_stream(word_data)
+                try:
+                    fallback_document = parse_doc_word_stream(word_data)
+                except Exception as exc:
+                    doc.errors.append(f"ERR: DOC 본문 스트림 파싱 실패: {exc}")
+                    return doc
                 if doc.errors:
                     fallback_document.errors.extend(doc.errors)
                 return fallback_document
             if doc.errors:
                 best_document.errors.extend(doc.errors)
+            if not any(section.elements for section in best_document.sections):
+                # 빈 결과가 왜 나왔는지 알 수 있어야 한다. 조용히 빈 문서를 돌려주면
+                # 파일이 비어 있는 것인지 파서가 못 읽은 것인지 구분할 수 없다.
+                best_document.errors.append("WARN: DOC 본문 텍스트가 비어 있습니다")
             return best_document
         except Exception as exc:
             doc.errors.append(f"ERR: DOC 파싱 중 오류: {exc}")

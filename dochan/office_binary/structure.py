@@ -240,3 +240,21 @@ def _table_from_rows(
             row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))
         rows.append(row)
     return Table(rows=rows)
+
+
+_ENCRYPTED_CONTAINER_STREAMS = ("EncryptedPackage", "EncryptionInfo")
+
+
+def is_encrypted_container(ole) -> bool:
+    """OLE 컨테이너 자체가 암호화되어 있는지 판별한다.
+
+    본문 스트림이 EncryptedPackage 안에 들어가 있어 평소 스트림명으로는 찾을 수 없다.
+    '스트림 없음'으로 보고하면 원인을 오해하게 되므로 따로 구분한다.
+    """
+    for name in _ENCRYPTED_CONTAINER_STREAMS:
+        try:
+            if ole.exists(name):
+                return True
+        except Exception:
+            continue
+    return False

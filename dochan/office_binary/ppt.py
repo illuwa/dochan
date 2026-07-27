@@ -7,7 +7,7 @@ from typing import List, Optional
 import olefile
 
 from ..model.document import Document
-from .structure import build_structured_section
+from .structure import build_structured_section, is_encrypted_container
 
 SLIDE_CONTAINER = 1006
 NOTES_CONTAINER = 1008
@@ -292,6 +292,9 @@ class PPTReader:
 
         doc = Document(source_format="ppt")
         try:
+            if is_encrypted_container(ole):
+                doc.errors.append("ERR: PPT 암호로 보호된 문서입니다")
+                return doc
             stream_names = _ppt_stream_names(ole)
             if not stream_names:
                 doc.errors.append("ERR: PPT PowerPoint Document stream not found")

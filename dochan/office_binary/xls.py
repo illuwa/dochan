@@ -7,9 +7,23 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import olefile
 
+from .structure import is_encrypted_container
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
+
+# BIFF 의 DIMENSION/ROW 레코드는 생성기가 주장하는 값이라 신뢰할 수 없다.
+# 그대로 믿으면 1KB 파일로 수천만 셀을 만들게 된다. 다만 실제 셀이 뒷받침하는 격자는
+# 정당한 데이터이므로(실측: 27만 셀이 빽빽이 찬 시트가 존재한다) 두 기준을 나눠 쓴다.
+# 상한은 파싱 속도가 아니라 출력 직렬화 비용이 결정한다. 실측상 셀 45만 개면
+# to_json 하나에 26초가 걸린다(셀마다 dict 를 만들기 때문). 30만을 절대 상한으로 둔다.
+MAX_SHEET_CELLS = 300_000
+SPARSE_GRID_FACTOR = 4           # 격자가 내용 있는 셀 수의 이 배를 넘으면 대부분이 빈 칸이다
+MAX_SPARSE_GRID_CELLS = 30_000   # 내용이 넓게 흩어진 격자는 더 공격적으로 자른다
+MAX_WORKBOOK_CELLS = 600_000     # 워크북 전체 총량. 시트를 여럿 두는 우회를 막는다
+MAX_SHEET_COLS = 256          # BIFF8 의 열 상한
+MAX_RANGE_FILL_CELLS = 100_000  # MERGEDCELLS/HLINK 가 선언한 범위로 채울 수 있는 총 셀 수
+MAX_EMPTY_GRID_CELLS = 1_000     # 내용 없는 격자를 표로 만들 최대 크기
 
 
 @dataclass
@@ -100,12 +114,24 @@ def _is_date_format(normalized: str) -> bool:
 
 
 def _excel_serial_to_date(value: float, date_1904: bool = False) -> str:
-    serial = int(value)
+    # NaN/inf 는 int() 에서 ValueError/OverflowError 가 나고, 지나치게 큰 값은
+    # timedelta 에서 OverflowError 가 난다. 어느 쪽이든 원본 숫자를 그대로 돌려준다.
+    if value != value or value in (float("inf"), float("-inf")):
+        return _format_number(value)
+    try:
+        serial = int(value)
+    except (ValueError, OverflowError):
+        return _format_number(value)
     if serial >= 60:
         serial -= 1
-    if date_1904:
-        return (date(1904, 1, 1) + timedelta(days=serial)).isoformat()
-    return (date(1899, 12, 31) + timedelta(days=serial)).isoformat()
+    # date + timedelta 의 실제 한계는 상수로 가늠하지 말고 예외로 잡는다.
+    # 셀 하나가 워크북 전체를 날리면 안 된다.
+    try:
+        if date_1904:
+            return (date(1904, 1, 1) + timedelta(days=serial)).isoformat()
+        return (date(1899, 12, 31) + timedelta(days=serial)).isoformat()
+    except (OverflowError, ValueError):
+        return _format_number(value)
 
 
 def _read_short_string(data: bytes, offset: int = 0) -> Tuple[str, int]:
@@ -304,6 +330,10 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
             date_1904,
         )
 
+    # 워크북 전체가 실체화할 수 있는 셀 총량. 시트별 상한만으로는 시트를 여럿 두는
+    # 우회를 막을 수 없다(실측: 10.7KB 스트림으로 1,920만 셀을 만들 수 있었다).
+    workbook_budget = [MAX_WORKBOOK_CELLS]
+
     for sheet_index, sheet in enumerate(sorted_sheets):
         sheet_path = f"{normalized_stream}#{sheet.name}"
         section = Section(
@@ -319,7 +349,7 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
             section.elements.extend(defined_name_elements)
         for paragraph in _sheet_header_footer_elements(sheet, path=sheet_path):
             section.elements.append(paragraph)
-        table = _sheet_to_table(sheet, path=sheet_path)
+        table = _sheet_to_table(sheet, path=sheet_path, errors=doc.errors, budget=workbook_budget)
         if table.rows:
             section.elements.append(table)
         doc.sections.append(section)
@@ -543,6 +573,9 @@ def _parse_sheet_records(
     pending_formula_text = ""
     pending_shared_formula_anchor: Optional[Tuple[int, int]] = None
     shared_formula_cells: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
+    # MERGEDCELLS/HLINK 는 좌표 범위를 선언할 뿐인데 그 범위를 전부 채우면
+    # 기형 파일 하나가 65536x256 번 반복하게 만든다. 채울 수 있는 총량을 제한한다.
+    range_fill_budget = MAX_RANGE_FILL_CELLS
     shared_formula_templates: Dict[Tuple[int, int], bytes] = {}
     for _, record_type, record_data in _iter_records(data):
         if record_type == 0x00FD and len(record_data) >= 10:  # LABELSST
@@ -591,10 +624,14 @@ def _parse_sheet_records(
             first_col, last_col = struct.unpack_from("<HH", record_data, 0)
             for col in range(first_col, last_col + 1):
                 sheet.col_indices.add(col)
-        elif record_type == 0x0200 and len(record_data) >= 10:  # DIMENSION
+        elif record_type == 0x0200 and len(record_data) >= 8:  # DIMENSION
             pending_formula_cell = None
             pending_shared_formula_anchor = None
-            first_row, last_row, first_col, last_col = struct.unpack_from("<IIHH", record_data, 0)
+            # BIFF5+ 는 행을 UINT32 로 쓰고(12바이트), BIFF2/3/4 는 UINT16 이다(8바이트).
+            if len(record_data) >= 12:
+                first_row, last_row, first_col, last_col = struct.unpack_from("<IIHH", record_data, 0)
+            else:
+                first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", record_data, 0)
             if first_row < last_row and first_col < last_col:
                 sheet.dimension = (first_row, last_row, first_col, last_col)
         elif record_type == 0x0014:  # HEADER
@@ -716,9 +753,9 @@ def _parse_sheet_records(
                     break
                 first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", record_data, offset)
                 sheet.merged_ranges.append((first_row, last_row, first_col, last_col))
-                for row_idx in range(first_row, last_row + 1):
-                    for col_idx in range(first_col, last_col + 1):
-                        sheet.cells.setdefault((row_idx, col_idx), "")
+                range_fill_budget = _fill_cell_range(
+                    sheet, first_row, last_row, first_col, last_col, range_fill_budget
+                )
                 offset += 8
         elif record_type == 0x01B8 and len(record_data) >= 8:  # HLINK
             pending_formula_cell = None
@@ -726,10 +763,17 @@ def _parse_sheet_records(
             first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", record_data, 0)
             url = _extract_hlink_url(record_data)
             if url:
-                for row_idx in range(first_row, last_row + 1):
-                    for col_idx in range(first_col, last_col + 1):
-                        sheet.hyperlinks[(row_idx, col_idx)] = url
-                        sheet.cells.setdefault((row_idx, col_idx), "")
+                span = _range_span(first_row, last_row, first_col, last_col)
+                if 0 < span <= range_fill_budget:
+                    range_fill_budget -= span
+                    for row_idx in range(first_row, last_row + 1):
+                        for col_idx in range(first_col, last_col + 1):
+                            sheet.hyperlinks[(row_idx, col_idx)] = url
+                            sheet.cells.setdefault((row_idx, col_idx), "")
+                elif span > 0:
+                    # 범위가 예산을 넘으면 앵커 한 칸에만 링크를 붙인다
+                    sheet.hyperlinks[(first_row, first_col)] = url
+                    sheet.cells.setdefault((first_row, first_col), "")
         elif record_type == 0x001C and len(record_data) >= 11:  # NOTE
             pending_formula_cell = None
             pending_shared_formula_anchor = None
@@ -738,6 +782,66 @@ def _parse_sheet_records(
             if author:
                 sheet.comments[(row, col)] = author
                 sheet.cells.setdefault((row, col), "")
+
+
+def has_filepass_record(data: bytes, scan_limit: int = 4096) -> bool:
+    """BIFF FILEPASS(0x002F) 레코드 유무 — 암호로 보호된 워크북인지 판별한다.
+
+    FILEPASS 이후의 레코드는 암호화되어 있어 그대로 해석하면 쓰레기 좌표가 나오고,
+    그 좌표로 격자를 만들려다 시간과 메모리가 폭주한다.
+    """
+    offset = 0
+    seen = 0
+    while offset + 4 <= len(data) and seen < scan_limit:
+        record_type, size = struct.unpack_from("<HH", data, offset)
+        if record_type == 0x002F:
+            return True
+        offset += 4 + size
+        seen += 1
+    return False
+
+
+def _warn_truncated(errors: Optional[List[str]], sheet: _SheetInfo, max_row: int, max_col: int) -> None:
+    """격자를 잘랐다는 사실을 남긴다. 조용히 데이터를 버리면 안 된다."""
+    if errors is None:
+        return
+    message = (
+        f"WARN: XLS 시트 '{sheet.name}' 격자가 상한을 넘어 "
+        f"{max_row + 1}행 x {max_col + 1}열로 잘렸습니다"
+    )
+    if message not in errors:
+        errors.append(message)
+
+
+def _range_span(first_row: int, last_row: int, first_col: int, last_col: int) -> int:
+    if last_row < first_row or last_col < first_col:
+        return 0
+    return (last_row - first_row + 1) * (last_col - first_col + 1)
+
+
+def _fill_cell_range(
+    sheet: _SheetInfo,
+    first_row: int,
+    last_row: int,
+    first_col: int,
+    last_col: int,
+    budget: int,
+) -> int:
+    """선언된 좌표 범위를 빈 셀로 채운다. 남은 예산을 돌려준다.
+
+    예산을 넘는 범위는 앵커 한 칸만 남긴다 — 병합 정보 자체는
+    sheet.merged_ranges 에 이미 있으므로 격자 복원에 필요한 정보는 잃지 않는다.
+    """
+    span = _range_span(first_row, last_row, first_col, last_col)
+    if span <= 0:
+        return budget
+    if span > budget:
+        sheet.cells.setdefault((first_row, first_col), "")
+        return budget
+    for row_idx in range(first_row, last_row + 1):
+        for col_idx in range(first_col, last_col + 1):
+            sheet.cells.setdefault((row_idx, col_idx), "")
+    return budget - span
 
 
 def _format_for_xf(xf_index: int, formats: Dict[int, str], xf_formats: List[int]) -> str:
@@ -1108,18 +1212,81 @@ def _fixed_function_arg_count(function_index: int) -> int:
     }.get(function_index, 1)
 
 
-def _sheet_to_table(sheet: _SheetInfo, path: str) -> Table:
+def _sheet_to_table(
+    sheet: _SheetInfo,
+    path: str,
+    errors: Optional[List[str]] = None,
+    budget: Optional[List[int]] = None,
+) -> Table:
     if not sheet.cells and not sheet.row_indices and not sheet.col_indices:
         return Table()
 
+    # 경계는 '내용이 있는 좌표' 로 잡아야 한다. MULBLANK/BLANK 가 만든 빈 자리표시자까지
+    # 세면 실제로는 30열짜리 표가 108열로 잡혀 상한에 걸리고 본문이 잘린다.
+    content_keys = [key for key, value in sheet.cells.items() if value]
+    content_keys.extend(sheet.hyperlinks.keys())
+    content_keys.extend(sheet.comments.keys())
+    content_rows = {row for row, _ in content_keys}
+    content_cols = {col for _, col in content_keys}
+
     cell_rows = {row for row, _ in sheet.cells.keys()}
     cell_cols = {col for _, col in sheet.cells.keys()}
+
+    max_row = max(cell_rows | sheet.row_indices, default=-1)
+    max_col = max(cell_cols | sheet.col_indices, default=-1)
+
+    # DIMENSION 은 생성기가 주장하는 값이라 실제 데이터 범위보다 훨씬 클 수 있다.
+    # 경계값만 반영한다. range() 로 집합에 풀면 65536개 정수를 채우게 된다.
     if sheet.dimension:
         first_row, last_row, first_col, last_col = sheet.dimension
-        sheet.row_indices.update(range(first_row, last_row))
-        sheet.col_indices.update(range(first_col, last_col))
-    max_row = max(cell_rows | sheet.row_indices)
-    max_col = max(cell_cols | sheet.col_indices)
+        if last_row > first_row:
+            max_row = max(max_row, last_row - 1)
+        if last_col > first_col:
+            max_col = max(max_col, last_col - 1)
+
+    if max_row < 0 or max_col < 0:
+        return Table()
+
+    # 내용이 하나도 없는 큰 격자는 탭만 수십만 개인 표가 되어 출력 가치가 없다.
+    # 작은 격자는 빈 좌표 보존을 위해 그대로 둔다.
+    has_content = any(sheet.cells.values()) or sheet.hyperlinks or sheet.comments
+    if not has_content and (max_row + 1) * (max_col + 1) > MAX_EMPTY_GRID_CELLS:
+        return Table()
+
+    # 선언된 격자를 그대로 실체화하면 셀마다 Provenance/Paragraph/TextRun/Cell 네 객체가
+    # 생겨 시간과 메모리가 폭주한다(XLS 최대 65536x256 = 1677만 셀).
+    # 실제 셀 수에 비해 격자가 지나치게 큰 경우만 선언값으로 부풀려진 것으로 보고 되돌린다.
+    def _is_sparse(size: int) -> bool:
+        return size > MAX_SHEET_CELLS and size > len(content_keys) * SPARSE_GRID_FACTOR
+
+    grid_size = (max_row + 1) * (max_col + 1)
+    if _is_sparse(grid_size):
+        # 선언값과 빈 자리표시자로 부풀려진 격자를 내용이 있는 범위로 되돌린다.
+        max_row = max(content_rows, default=-1)
+        max_col = max(content_cols, default=-1)
+        if max_row < 0 or max_col < 0:
+            return Table()
+        grid_size = (max_row + 1) * (max_col + 1)
+        if _is_sparse(grid_size):
+            # 되돌려도 희소하면 내용이 넓게 흩어진 것이다. 대부분 빈 칸이므로 잘라낸다.
+            max_col = min(max_col, MAX_SHEET_COLS - 1)
+            max_row = min(max_row, max(0, MAX_SPARSE_GRID_CELLS // (max_col + 1) - 1))
+            grid_size = (max_row + 1) * (max_col + 1)
+            _warn_truncated(errors, sheet, max_row, max_col)
+
+    # 내용이 빽빽이 뒷받침하더라도 절대 상한은 넘지 않는다.
+    # 워크북 전체 예산도 함께 본다 — 시트별 상한만으로는 시트를 여럿 두는 우회를 못 막는다.
+    cap = MAX_SHEET_CELLS if budget is None else min(MAX_SHEET_CELLS, max(0, budget[0]))
+    if grid_size > cap:
+        max_col = min(max_col, MAX_SHEET_COLS - 1)
+        max_row = min(max_row, max(0, cap // (max_col + 1) - 1))
+        grid_size = (max_row + 1) * (max_col + 1)
+        _warn_truncated(errors, sheet, max_row, max_col)
+    if max_row < 0 or max_col < 0:
+        return Table()
+    if budget is not None:
+        budget[0] -= grid_size
+
     rows = []
     for row_idx in range(max_row + 1):
         row = []
@@ -1153,8 +1320,9 @@ def _apply_merged_ranges(rows: List[List[Cell]], merged_ranges: List[Tuple[int, 
         if first_row >= len(rows) or first_col >= len(rows[first_row]):
             continue
         anchor = rows[first_row][first_col]
-        anchor.row_span = max(1, last_row - first_row + 1)
-        anchor.col_span = max(1, last_col - first_col + 1)
+        # 격자가 잘렸을 수 있으므로 span 이 표 밖을 가리키지 않게 한다.
+        anchor.row_span = max(1, min(last_row, len(rows) - 1) - first_row + 1)
+        anchor.col_span = max(1, min(last_col, len(rows[first_row]) - 1) - first_col + 1)
         for row_idx in range(first_row, min(last_row + 1, len(rows))):
             for col_idx in range(first_col, min(last_col + 1, len(rows[row_idx]))):
                 if row_idx == first_row and col_idx == first_col:
@@ -1191,6 +1359,9 @@ class XLSReader:
 
         doc = Document(source_format="xls")
         try:
+            if is_encrypted_container(ole):
+                doc.errors.append("ERR: XLS 암호로 보호된 문서입니다")
+                return doc
             stream_names = [name for name in ("Workbook", "Book") if ole.exists(name)]
             if not stream_names:
                 doc.errors.append("ERR: XLS Workbook stream not found")
@@ -1201,6 +1372,11 @@ class XLSReader:
             for stream_name in stream_names:
                 try:
                     workbook_data = ole.openstream(stream_name).read()
+                    if has_filepass_record(workbook_data):
+                        doc.errors.append(
+                            f"ERR: XLS {stream_name} 은 암호로 보호되어 있습니다 (FILEPASS)"
+                        )
+                        continue
                     candidate = parse_biff_workbook(workbook_data, workbook_stream=stream_name)
                     score = _score_biff_document(candidate)
                     if best_document is None or score > best_score:

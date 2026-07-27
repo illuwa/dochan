@@ -30,3 +30,6 @@ htmlcov/
 test_pairs/
 test_output.md
 gt_pdf_text.txt
+corpus/
+corpus-output/
+/*.hwp-corpus-outputs/

@@ -8,6 +8,8 @@ __pycache__/
 dist/
 build/
 *.so
+.venv/
+uv.lock
 
 # IDE
 .vscode/

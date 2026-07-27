@@ -2,6 +2,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
+from .table import flatten_block_texts
+
 
 @dataclass
 class HeaderFooter:
@@ -11,15 +13,16 @@ class HeaderFooter:
 
     @property
     def text(self) -> str:
-        return '\n'.join(p.text for p in self.paragraphs if hasattr(p, 'text'))
+        return '\n'.join(flatten_block_texts(self.paragraphs))
 
 
 @dataclass
 class Footnote:
-    """각주/미주"""
-    type: str = "footnote"  # "footnote" or "endnote"
+    """각주/미주/주석"""
+    type: str = "footnote"  # "footnote" | "endnote" | "comment"
     paragraphs: list = field(default_factory=list)
+    number: int = 0  # 파서가 부여한 참조 번호 (0이면 렌더러가 자체 부여)
 
     @property
     def text(self) -> str:
-        return '\n'.join(p.text for p in self.paragraphs if hasattr(p, 'text'))
+        return '\n'.join(flatten_block_texts(self.paragraphs))

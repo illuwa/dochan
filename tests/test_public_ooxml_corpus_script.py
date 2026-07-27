@@ -134,7 +134,7 @@ def test_public_ooxml_expectations_cover_selected_semantic_fixtures():
     assert "[nested table omitted: depth limit exceeded]" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-deep-table-cell.docx"]["expected_markdown"]
     assert "A square shape with text inside" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-shapes-with-text.docx"]["expected_text"]
     assert "A square shape with text inside\nAn ellipse with text inside" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-shapes-with-text.docx"]["expected_markdown"][0]
-    assert "[^미주]: XXX" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-endnotes.docx"]["expected_markdown"]
+    assert "[^1]: XXX" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-endnotes.docx"]["expected_markdown"]
     assert "### Third paragraph" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-heading123.docx"]["expected_markdown"]
     assert "This is a simple header, with a € euro symbol in it." in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-header-footer-unicode.docx"]["expected_text"]
     assert "Let me see what happens if I insert a worksheet." in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-embedded-document.docx"]["expected_text"]

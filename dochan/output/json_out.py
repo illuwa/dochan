@@ -59,7 +59,7 @@ def _element_to_dict(elem) -> dict:
     if isinstance(elem, Paragraph):
         return _paragraph_to_dict(elem)
     elif isinstance(elem, Table):
-        return {
+        result = {
             'type': 'table',
             'row_count': elem.row_count,
             'col_count': elem.col_count,
@@ -71,29 +71,53 @@ def _element_to_dict(elem) -> dict:
                 for row in elem.rows
             ],
         }
+        _add_caption(result, elem)
+        return result
     elif isinstance(elem, Equation):
         return {
             'type': 'equation',
             'script': elem.script,
         }
     elif isinstance(elem, Image):
-        return {
+        result = {
             'type': 'image',
             'bin_id': elem.bin_id,
             'filename': elem.filename,
         }
+        if getattr(elem, 'alt_text', ''):
+            result['alt_text'] = elem.alt_text
+        if getattr(elem, 'ocr_text', ''):
+            result['ocr_text'] = elem.ocr_text
+        _add_caption(result, elem)
+        return result
     elif isinstance(elem, HeaderFooter):
-        return {
-            'type': elem.type,
-            'text': elem.text,
-        }
-    elif isinstance(elem, Footnote):
         return {
             'type': elem.type,
             'text': elem.text,
             'elements': [_element_to_dict(item) for item in elem.paragraphs],
         }
+    elif isinstance(elem, Footnote):
+        result = {
+            'type': elem.type,
+            'text': elem.text,
+            'elements': [_element_to_dict(item) for item in elem.paragraphs],
+        }
+        if getattr(elem, 'number', 0):
+            result['number'] = elem.number
+        return result
     return {'type': 'unknown'}
+
+
+def _add_caption(result: dict, elem) -> None:
+    """캡션이 있을 때만 키를 추가한다 (기존 JSON 형태를 보존하기 위해 조건부)."""
+    caption = getattr(elem, 'caption_text', '')
+    if not caption:
+        return
+    result['caption'] = {
+        'side': getattr(elem, 'caption_side', 'BOTTOM'),
+        'text': caption,
+        'elements': [_element_to_dict(item) for item in getattr(elem, 'caption', [])],
+    }
 
 
 def _paragraph_to_dict(para) -> dict:
@@ -124,6 +148,10 @@ def _run_to_dict(run) -> dict:
         'subscript': run.subscript,
         'font_size_pt': run.font_size_pt,
     }
+    if getattr(run, 'link', ''):
+        result['link'] = run.link
+    if getattr(run, 'note_ref', 0):
+        result['note_ref'] = run.note_ref
     provenance = _provenance_to_dict(getattr(run, 'provenance', None))
     if provenance:
         result['provenance'] = provenance
@@ -140,6 +168,8 @@ def _cell_to_dict(cell) -> dict:
             for paragraph in cell.paragraphs
         ],
     }
+    if cell.is_merged_away:
+        result['merged_away'] = True
     if cell.row is not None:
         result['row'] = cell.row
     if cell.col is not None:

@@ -238,14 +238,41 @@ they are also password-protected (same root cause as the encryption
 warnings, just surfacing as an XML parse error instead — not finding 4's
 single-stray-control-character shape), 1 legitimate oversized-image rejection
 (working as intended, `MAX_FILE_SIZE` still applies above the raised ratio
-threshold), and **2 files sharing one newly surfaced, out-of-scope issue**:
-`zipfile.BadZipFile: File is not a zip file` even though both start with a
-valid `PK\x03\x04` local-file-header signature — the central directory looks
-truncated or non-standard. One of the two (`ministry-[별표 3]...hwp`) is
-useful evidence the finding-3 fix is working correctly even here: its
-extension is `.hwp` but content is ZIP, so before the fix it failed at the
-OLE layer (`OLE 파일 열기 실패`); after the fix it correctly routes to the
-HWPX parser and fails with the more accurate `BadZipFile` message instead —
-better diagnostics, same underlying (different, unfixed) corrupt-archive
-issue as the other file. Not investigated further this round; noted here for
-a future loop rather than expanding scope mid-fix.
+threshold), and 2 files sharing `zipfile.BadZipFile: File is not a zip file`
+even though both start with a valid `PK\x03\x04` local-file-header signature.
+One of the two (`ministry-[별표 3]...hwp`) is useful evidence the finding-3
+fix is working correctly even here: its extension is `.hwp` but content is
+ZIP, so before the fix it failed at the OLE layer (`OLE 파일 열기 실패`);
+after the fix it correctly routes to the HWPX parser and fails with the more
+accurate `BadZipFile` message instead.
+
+**Follow-up investigation (same day): not a dochan bug — the source files
+are corrupted at rest.** Re-fetched both URLs directly from `nts.go.kr` and
+`mois.go.kr` independently of the bulk-download run; both came back
+byte-identical to the cached corpus copies, with the server's own
+`Content-Length` matching exactly — ruling out truncation during collection.
+Independent verification with Info-ZIP's `unzip -t` (not just Python's
+`zipfile`) gives the same `End-of-central-directory signature not found` on
+both. Manually walking local file headers (bypassing the need for a central
+directory) shows the corruption goes deeper than a missing directory:
+
+- `nts-20250512...hwpx`: the declared compressed sizes of `BinData/image3.jpg`
+  and `BinData/image4.jpg` alone sum to more than the entire 8.6MB file —
+  the local header fields themselves are internally inconsistent, not just
+  the trailing directory missing.
+- `ministry-[별표 3]...hwp`: `Contents/header.xml` recovers perfectly (exact
+  declared 64,306-byte size, well-formed XML) by reading straight from its
+  local header — but `Contents/section0.xml`, the actual document body,
+  stops 3,763 bytes short of its declared size when decompressed to its
+  declared boundary, and decompressing past that boundary produces garbled,
+  non-XML output rather than the missing tail. The compressed stream itself
+  is damaged mid-way, not just under-declared.
+
+Given real government documents are involved (not synthetic fuzz fixtures),
+a best-effort "recover via local headers" fallback was tempting, but the
+evidence above shows it would silently return corrupted or fabricated-looking
+text for these two files rather than a clean failure — worse for an
+AI-pipeline tool than the current explicit `유효하지 않은 HWPX 파일` error.
+No dochan change made. At 2/6,977 (0.03%) this reads as isolated storage or
+upload-pipeline corruption on the source servers, not a pattern worth
+building general recovery machinery around.

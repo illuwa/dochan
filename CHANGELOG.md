@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.2.1] - 2026-07-27
+
+공개 HWP/HWPX 6,977개 코퍼스(`docs/benchmarks/hwp-corpus-fixtures.json`, 법제처·국세청 등
+정부 서식·보도자료 + hwplib/pyhwp 등 오픈소스 픽스처)로 회귀 스캔 후 발견한 4건 수정.
+`succeeded_with_internal_errors`가 79건에서 8건(전부 암호화 문서로 사양상 제한적 파싱)으로
+줄었다. 자세한 내용은 `docs/benchmarks/2026-07-27-hwp-corpus-collection-and-quality-scan.md`.
+
+### 수정
+
+- **배포용(distribution-copy) HWP 문서 본문 소실**: `ViewText/SectionN` 스트림이 압축 전
+  AES-128-ECB로 암호화되어 있는데 그대로 zlib 해제를 시도해 크래시 없이 빈 결과만 냈다.
+  DistributeDocData 256바이트 블록을 LCG 기반 XOR로 역스크램블해 AES 키를 뽑아낸 뒤
+  복호화하고 나서 압축을 해제하도록 고쳤다 (`dochan/hwp/distdoc.py`, `dochan/utils/aes.py`
+  — 순정 AES-128 구현, 신규 의존성 없음). 국세청 전자신고 매뉴얼, 통계청 사회조사 결과 등
+  실제 공공 배포 문서에서 재현·검증.
+- **HWPX 이미지 압축률 가드 오탐**: 단색 영역이 넓은 BMP 이미지는 실사용 문서에서도
+  100배 넘게 압축되는 일이 흔한데(실측: 기상청 보도자료 7.85MB BMP → 101.1배), zip bomb
+  방어용 `MAX_COMPRESSION_RATIO=100`이 이를 걸러 이미지를 조용히 누락시켰다. 실질적 방어는
+  절대 크기 상한(`MAX_FILE_SIZE=100MB`)이 담당하므로 비율 상한을 2000으로 올렸다.
+- **확장자/실제 포맷 불일치 시 파싱 실패**: 공개 출처 중 일부는 파일명 확장자와 실제
+  바이트가 어긋난 채 배포한다(`.hwp` 확장자인데 실제로는 ZIP/HWPX, 또는 그 반대). 이제
+  확장자가 `.hwp`/`.hwpx`면 매직바이트를 먼저 확인해 실제 포맷에 맞는 파서로 보정한다.
+- **HWPX 문서 내 무효 XML 제어문자로 섹션 전체 파싱 중단**: XML 1.0에서 금지된 C0
+  제어문자(탭/개행/CR 제외) 하나 때문에 `header.xml`/섹션 XML/`content.hpf` 전체가
+  파싱 실패했다. 해당 문자만 제거하고 한 번 더 시도하도록 `_parse_xml_tolerant()`를
+  추가했다.
+
 ## [1.2.0] - 2026-07-27
 
 레거시 오피스(DOC/XLS/PPT) 견고성 수정. Apache POI 테스트 코퍼스 720개(DOC 160, XLS 415,

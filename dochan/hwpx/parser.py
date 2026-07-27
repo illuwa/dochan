@@ -27,7 +27,17 @@ from ..hwp.records.char_shape import CharShape
 
 # Zip bomb protection constants
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_COMPRESSION_RATIO = 100
+# 단일 deflate 스트림의 압축률만으로는 zip bomb 여부를 판단하지 않는다.
+# BMP 등 비압축 픽셀 포맷은 단색 영역이 넓은 실사용 이미지에서도 흔히 100배를
+# 넘긴다 (실측: 기상청 보도자료의 7.85MB BMP 차트가 101.1배). 실질적 방어는
+# 절대 해제 크기 상한(MAX_FILE_SIZE)이 담당하므로, 여기서는 그 상한 근처까지
+# 도달하고도 원본이 비정상적으로 작은 명백한 이상치만 걸러낸다.
+MAX_COMPRESSION_RATIO = 2000
+
+
+def _compression_ratio_exceeded(file_size: int, compress_size: int) -> bool:
+    """zip 항목의 압축 해제 비율이 이상치로 볼 만큼 큰지 판단."""
+    return compress_size > 0 and file_size / compress_size > MAX_COMPRESSION_RATIO
 
 # 표/도형 폭주 방어
 MAX_TABLE_CELLS = 1_000_000          # 표 하나가 주장할 수 있는 최대 격자 크기
@@ -48,6 +58,27 @@ MAX_OUTLINE_HEADING_LEVEL = 3
 
 # Safe XML parser (XXE protection)
 _safe_xml_parser = etree.XMLParser(resolve_entities=False, no_network=True)
+
+# XML 1.0 Char 생산 규칙에 없는 C0 제어문자 (탭/개행/캐리지리턴은 허용됨).
+# UTF-8 에서는 0x00-0x1F 범위가 항상 단독 바이트로만 나타나므로(멀티바이트
+# 시퀀스의 후행 바이트는 절대 0x80 미만일 수 없다) 디코딩 전에 바이트 단위로
+# 제거해도 안전하다.
+_INVALID_XML_CHAR_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _parse_xml_tolerant(data: bytes):
+    """일부 실제 문서에는 XML 1.0에서 금지된 제어문자가 하나씩 섞여 있어
+    lxml이 전체를 못 읽는 경우가 있다. 그런 경우 무효 문자만 제거하고
+    한 번 더 시도한다 — 그래도 안 되면(다른 종류의 오류) 원래 예외를
+    그대로 올려 호출자의 기존 처리 로직을 그대로 탄다.
+    """
+    try:
+        return etree.fromstring(data, parser=_safe_xml_parser)
+    except etree.XMLSyntaxError:
+        cleaned = _INVALID_XML_CHAR_RE.sub(b"", data)
+        if cleaned == data:
+            raise
+        return etree.fromstring(cleaned, parser=_safe_xml_parser)
 
 # OWPML 네임스페이스
 NS = {
@@ -128,7 +159,7 @@ class HWPXParser:
                         if info.file_size > MAX_FILE_SIZE:
                             self.errors.append(f"섹션 {sf} 크기 초과: {info.file_size} bytes")
                             continue
-                        if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+                        if _compression_ratio_exceeded(info.file_size, info.compress_size):
                             self.errors.append(f"섹션 {sf} 압축률 초과")
                             continue
                         xml_data = zf.read(sf)
@@ -167,7 +198,7 @@ class HWPXParser:
             if data is None:
                 break
             try:
-                root = etree.fromstring(data, parser=_safe_xml_parser)
+                root = _parse_xml_tolerant(data)
             except Exception as e:
                 self.errors.append(f"content.hpf 파싱 실패: {e}")
                 break
@@ -205,7 +236,7 @@ class HWPXParser:
         if info.file_size > MAX_META_FILE_SIZE:
             self.errors.append(f"{name} 크기 초과: {info.file_size} bytes")
             return None
-        if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+        if _compression_ratio_exceeded(info.file_size, info.compress_size):
             self.errors.append(f"{name} 압축률 초과")
             return None
         try:
@@ -251,7 +282,7 @@ class HWPXParser:
                 break
             # 서식은 부가 정보다. 여기서 무슨 일이 나든 본문 파싱을 막아서는 안 된다.
             try:
-                root = etree.fromstring(data, parser=_safe_xml_parser)
+                root = _parse_xml_tolerant(data)
                 for elem in root.iter():
                     tag = _local_tag(elem.tag)
                     if tag == 'charPr' and elem.get('id') is not None:
@@ -387,7 +418,7 @@ class HWPXParser:
     def _parse_section_xml(self, xml_data: bytes) -> Section:
         """섹션 XML → Section 모델"""
         section = Section()
-        root = etree.fromstring(xml_data, parser=_safe_xml_parser)
+        root = _parse_xml_tolerant(xml_data)
 
         # ★ 최상위 <p>만 처리 (직접 자식)
         #   표 셀 안의 <p>는 _parse_table_cell에서 재귀 처리되므로
@@ -878,7 +909,7 @@ class HWPXParser:
             if info.file_size > MAX_FILE_SIZE:
                 self.errors.append(f"이미지 {zip_name} 크기 초과: {info.file_size} bytes")
                 continue
-            if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+            if _compression_ratio_exceeded(info.file_size, info.compress_size):
                 self.errors.append(f"이미지 {zip_name} 압축률 초과")
                 continue
             try:

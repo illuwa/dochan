@@ -12,6 +12,7 @@ import olefile
 from .model.document import Document
 from .hwp.header import FileHeader
 from .hwp.doc_info import DocInfoParser
+from .hwp.distdoc import decode_distribution_section
 from .hwp.section import SectionParser
 from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
 from .hwpx.parser import HWPXParser
@@ -46,10 +47,8 @@ class Dochan:
     def _parse(self):
         ext = os.path.splitext(self.file_path)[1].lower()
 
-        if ext == '.hwpx':
-            self._parse_hwpx()
-        elif ext == '.hwp':
-            self._parse_hwp()
+        if ext in ('.hwpx', '.hwp'):
+            self._parse_hwp_family(ext)
         elif ext == '.doc':
             self._parse_doc()
         elif ext == '.ppt':
@@ -82,6 +81,34 @@ class Dochan:
                     self._parse_hwpx()
             else:
                 self.doc.errors.append(f"ERR: 알 수 없는 파일 형식: {self.file_path}")
+
+    def _parse_hwp_family(self, ext: str):
+        """확장자가 .hwp/.hwpx 인 파일을 파싱.
+
+        일부 공개 출처는 파일명 확장자와 실제 내용이 어긋난 채로 배포한다
+        (예: 파일명은 .hwp인데 실제로는 ZIP/HWPX 패키지, 또는 그 반대).
+        확장자만 믿고 파서를 고정하면 실제로는 멀쩡한 문서도 그대로
+        실패하므로, 매직바이트를 먼저 확인해 실제 포맷에 맞는 파서로
+        보정한다. 매직바이트가 둘 다 아니면(잘린 파일 등) 확장자를
+        그대로 신뢰해 기존과 동일하게 동작한다.
+        """
+        try:
+            with open(self.file_path, 'rb') as f:
+                magic = f.read(8)
+        except OSError:
+            magic = b''
+
+        if magic[:4] == b'\xd0\xcf\x11\xe0':
+            actual_format = 'hwp'
+        elif magic[:2] == b'PK':
+            actual_format = 'hwpx'
+        else:
+            actual_format = ext.lstrip('.')
+
+        if actual_format == 'hwpx':
+            self._parse_hwpx()
+        else:
+            self._parse_hwp()
 
     def _parse_hwp(self):
         """HWP (OLE 바이너리) 파싱"""
@@ -137,6 +164,8 @@ class Dochan:
 
                 try:
                     stream_data = ole.openstream(stream_name).read()
+                    if file_header.is_distribution:
+                        stream_data = decode_distribution_section(stream_data)
                     section = section_parser.parse_stream(stream_data, file_header.is_compressed)
                     self.doc.sections.append(section)
                 except Exception as e:

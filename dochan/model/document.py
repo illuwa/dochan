@@ -15,6 +15,9 @@ class TextRun:
     superscript: bool = False
     subscript: bool = False
     font_size_pt: float = 10.0
+    # 신규 필드는 반드시 뒤에 붙일 것 — ooxml/core.py 가 TextRun(text) 위치 인자로 생성한다.
+    link: str = ""        # 하이퍼링크 대상 URL (없으면 빈 문자열)
+    note_ref: int = 0     # 이 런이 각주/미주 참조 마커면 그 번호 (0=마커 아님)
     provenance: Any = None
 
 
@@ -79,8 +82,10 @@ class Document:
             self._find_recursive(section.elements, cls, results)
         return results
 
-    def _find_recursive(self, elements, cls, results):
-        """재귀적으로 모든 요소 검색 (표 셀 내부 포함)"""
+    def _find_recursive(self, elements, cls, results, _depth: int = 0):
+        """재귀적으로 모든 요소 검색 (표 셀 · 머리글/바닥글 · 각주 내부 포함)"""
+        if _depth > 32:
+            return
         from .table import Table
         for elem in elements:
             if isinstance(elem, cls):
@@ -89,7 +94,11 @@ class Document:
             if isinstance(elem, Table):
                 for row in elem.rows:
                     for cell in row:
-                        self._find_recursive(cell.paragraphs, cls, results)
+                        self._find_recursive(cell.paragraphs, cls, results, _depth + 1)
+                self._find_recursive(elem.caption, cls, results, _depth + 1)
+            # 머리글/바닥글/각주 내부도 검색 — 여기 있는 이미지가 통째로 누락되고 있었다
+            elif hasattr(elem, 'paragraphs'):
+                self._find_recursive(elem.paragraphs, cls, results, _depth + 1)
 
     @property
     def metadata(self) -> dict:

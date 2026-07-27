@@ -429,7 +429,7 @@ PUBLIC_OOXML_EXPECTATIONS = {
             "snoska",
         ],
         "expected_markdown": [
-            "[^각주]: snoska",
+            "[^1]: snoska",
         ],
     },
     "docx/apache-poi-bookmarks.docx": {
@@ -488,7 +488,7 @@ PUBLIC_OOXML_EXPECTATIONS = {
             "Apache Tika is a subproject of the Lucene",
         ],
         "expected_markdown": [
-            "[^미주]: XXX",
+            "[^1]: XXX",
         ],
     },
     "docx/apache-poi-heading123.docx": {

@@ -1086,7 +1086,7 @@ class DOCXReader:
         if not comment:
             return ""
         for paragraph in comment.paragraphs:
-            text = (paragraph.text or "").strip()
+            text = (getattr(paragraph, "text", "") or "").strip()
             if text:
                 return text
         return ""

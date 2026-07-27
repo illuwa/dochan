@@ -295,7 +295,10 @@ class DOCReader:
                 element_count = sum(len(section.elements) for section in document.sections)
                 if not document.sections:
                     return (-1, 0, 0)
-                line_quality = sum(_line_quality([element.text for element in section.elements]) for section in document.sections)
+                line_quality = sum(
+                    _line_quality([getattr(element, "text", "") for element in section.elements])
+                    for section in document.sections
+                )
                 return (element_count, 1 if piece_lines else 0, line_quality)
 
             for table_name in self._table_stream_names(ole, word_data):

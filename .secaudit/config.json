@@ -1,0 +1,20 @@
+{
+  "fail_on_severity": "high",
+  "exclude": [
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    ".venv",
+    "venv",
+    "target",
+    "third_party",
+    "testdata",
+    "fixtures"
+  ],
+  "enable": {
+    "semgrep": true,
+    "gitleaks": true,
+    "osv": true
+  }
+}

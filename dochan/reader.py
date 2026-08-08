@@ -63,7 +63,7 @@ class Dochan:
         elif ext == '.xlsx':
             self._parse_xlsx()
         elif ext == '.pdf':
-            self._parse_pdf()
+            self._parse_pdf_family()
         else:
             # 매직 바이트로 판별
             with open(self.file_path, 'rb') as f:
@@ -222,6 +222,34 @@ class Dochan:
     def _parse_pdf(self):
         """PDF (네이티브 파서) 파싱"""
         self.doc = PDFReader().read(self.file_path)
+
+    def _parse_pdf_family(self):
+        """확장자가 .pdf 인 파일 파싱.
+
+        _parse_hwp_family 와 같은 이유 — 일부 출처는 확장자와 실제 내용이
+        어긋난 채로 배포하므로 매직바이트를 먼저 확인해 실제 포맷에 맞는
+        파서로 보정한다. 어느 매직도 아니면 PDF 파서가 헤더 오류를 보고한다.
+        """
+        try:
+            with open(self.file_path, 'rb') as f:
+                magic = f.read(8)
+        except OSError:
+            magic = b''
+
+        if magic[:4] == b'\xd0\xcf\x11\xe0':
+            self._parse_hwp()
+        elif magic[:2] == b'PK':
+            ooxml_format = detect_ooxml_format(self.file_path)
+            if ooxml_format == 'docx':
+                self._parse_docx()
+            elif ooxml_format == 'pptx':
+                self._parse_pptx()
+            elif ooxml_format == 'xlsx':
+                self._parse_xlsx()
+            else:
+                self._parse_hwpx()
+        else:
+            self._parse_pdf()
 
     def _run_ocr(self):
         """모든 이미지에 OCR 실행 (표 셀 안 이미지 포함)"""

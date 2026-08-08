@@ -13,6 +13,9 @@ _HEX_RE = re.compile(rb"<([0-9A-Fa-f]+)>")
 _TOKEN_RE = re.compile(rb"<([0-9A-Fa-f]+)>|(\[)|(\])")
 
 _MAX_RANGE = 65536
+# 누적 매핑 총량 상한 — 개별 bfrange 만 제한하면 압축 1KB 짜리 CMap 으로
+# 수 GB 매핑을 강제할 수 있다 (감수 2차 C1)
+MAX_MAPPING_ENTRIES = 100_000
 
 
 class ToUnicodeCMap:
@@ -20,10 +23,19 @@ class ToUnicodeCMap:
         # (코드 바이트 길이, 코드값) → 유니코드 문자열
         self.mapping: Dict[Tuple[int, int], str] = {}
         self.code_lengths: Set[int] = set()
+        self.truncated = False
+
+    def _mapping_full(self) -> bool:
+        if len(self.mapping) >= MAX_MAPPING_ENTRIES:
+            self.truncated = True
+            return True
+        return False
 
     def decode(self, data: bytes) -> str:
-        sizes = sorted(s for s in self.code_lengths if s > 0) or [1]
-        default = max(sizes)
+        # 긴 코드 우선 — 1/2바이트 혼재 CMap 에서 2바이트 코드가
+        # 1바이트로 오매칭되는 것을 막는다 (감수 2차 M3)
+        sizes = sorted((s for s in self.code_lengths if s > 0), reverse=True) or [1]
+        min_size = sizes[-1]
         out = []
         i = 0
         n = len(data)
@@ -39,9 +51,9 @@ class ToUnicodeCMap:
                     matched = True
                     break
             if not matched:
-                step = min(default, n - i)
+                # 최소 길이만 전진 — 최대 길이만큼 건너뛰면 뒤 문자를 삼킨다 (감수 2차 M2)
                 out.append("�")
-                i += max(step, 1)
+                i += max(min(min_size, n - i), 1)
         return "".join(out)
 
     def _parse_bfrange_block(self, block: bytes) -> None:
@@ -73,7 +85,7 @@ class ToUnicodeCMap:
                 j = i + 3
                 code = lo
                 while j < n and tokens[j] != b"]":
-                    if code <= hi:
+                    if code <= hi and not self._mapping_full():
                         self.mapping[(length, code)] = _hex_to_text(tokens[j])
                     code += 1
                     j += 1
@@ -82,11 +94,13 @@ class ToUnicodeCMap:
                 base = int(tokens[i + 2], 16)
                 digits = len(tokens[i + 2])
                 for k in range(hi - lo + 1):
+                    if self._mapping_full():
+                        break
                     self.mapping[(length, lo + k)] = _int_to_text(base + k, digits)
                 i += 3
 
 
-def parse_tounicode(data: bytes) -> ToUnicodeCMap:
+def parse_tounicode(data: bytes, warnings=None) -> ToUnicodeCMap:
     cmap = ToUnicodeCMap()
     for block in _CODESPACE_RE.findall(data):
         for hex_tok in _HEX_RE.findall(block):
@@ -94,6 +108,8 @@ def parse_tounicode(data: bytes) -> ToUnicodeCMap:
     for block in _BF_CHAR_RE.findall(data):
         toks = _HEX_RE.findall(block)
         for i in range(0, len(toks) - 1, 2):
+            if cmap._mapping_full():
+                break
             src, dst = toks[i], toks[i + 1]
             length = max(len(src) // 2, 1)
             cmap.code_lengths.add(length)
@@ -103,6 +119,10 @@ def parse_tounicode(data: bytes) -> ToUnicodeCMap:
             cmap._parse_bfrange_block(block)
         except (ValueError, OverflowError):
             continue  # 손상된 블록 하나가 문서 전체를 막으면 안 된다
+    if cmap.truncated and warnings is not None:
+        warnings.append(
+            f"WARN: ToUnicode CMap 매핑 수가 한도({MAX_MAPPING_ENTRIES})를 초과 — 일부만 사용"
+        )
     if not cmap.code_lengths:
         cmap.code_lengths.add(1)
     return cmap

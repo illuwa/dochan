@@ -344,8 +344,10 @@ PDF is the hardest format in this roadmap. It still must be native-only. The fir
 
 Phase 1 implementation status (updated 2026-08-08):
 
-- Completed for classic xref table/trailer chain parsing with `N G obj` scan fallback, indirect object resolution with cycle guards, page tree traversal with inherited resources, FlateDecode/ASCIIHexDecode/ASCII85Decode stream filters, text operator interpretation (Tj/TJ/'/"/Td/TD/Tm/T*), ToUnicode CMap decoding (Korean CID text), page-number provenance, encrypted/xref-stream/scanned-page warnings, `Dochan("file.pdf")` routing (extension + `%PDF-` magic), CLI, and batch `.pdf` collection.
-- Not yet completed for xref streams (PDF 1.5+), object streams, encrypted PDFs, LZW/Predictor filters, layout-aware reading order, table reconstruction, image extraction, and OCR.
+- Completed for classic xref table/trailer chain parsing with `N G obj` scan fallback and free-entry tombstones, indirect object resolution with cycle guards, page tree traversal with inherited resources, FlateDecode/ASCIIHexDecode/ASCII85Decode stream filters, text operator interpretation (Tj/TJ/'/"/Td/TD/Tm/T* with leftward-return line breaks), ToUnicode CMap decoding (Korean CID text, longest-code-first matching), page-number provenance, encrypted/xref-stream/ObjStm/scanned-page/no-ToUnicode-CID warnings, magic-sniffed `.pdf` routing (extension mismatch tolerant, same policy as HWP), CLI, and batch `.pdf` collection.
+- Security limits in place (2026-08-08 감수 2회 반영): per-stream decode cap 50MB, per-document cumulative decode budget 200MB with stream result caching, CMap mapping total cap 100k entries, parser nesting depth 64, resolve depth 32, object count 500k, page count 10k, per-page content stream count 256, collection width 100k, file size 500MB; defensive exception handling downgrades parser failures to `doc.errors`.
+- Not yet completed for xref streams (PDF 1.5+), object streams, encrypted PDFs, LZW/Predictor filters, glyph-width-aware spacing (Tm/Td spacing is heuristic), layout-aware reading order, table reconstruction, image extraction, and OCR.
+- Real-document validation (2026-08-08): 80 same-document HWP/HWPX/PDF pairs — 0 crashes, 0 empty outputs, 0 control-character leaks; HWPX↔PDF text similarity mean 0.868, all 79 comparable pairs ≥ 0.73. Downloads 실문서 34건 — 0 crashes; 4 empty outputs all with correct warnings (encrypted 1, scanned 2, no-ToUnicode CID 1).
 
 Implementation targets:
 

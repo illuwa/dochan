@@ -64,5 +64,20 @@ def test_inline_image_is_skipped():
     assert _extract(content) == ["before", "after"]
 
 
+def test_binary_ei_lookalike_inside_inline_image_is_not_terminator():
+    # 2차 감수: 이진 데이터 속 우연한 'EI' 는 공백으로 구분되지 않으면 종결자가 아니다
+    content = b"BT (a) Tj ET BI /W 1 ID xxEIyy EI BT (b) Tj ET"
+    assert _extract(content) == ["a", "b"]
+
+
+def test_leftward_tm_same_y_starts_new_line():
+    # 2차 감수 M5: 같은 기준선이라도 왼쪽 되돌림(2단 조판·표 열)은 병합하면 안 된다
+    content = (
+        b"BT 1 0 0 1 300 700 Tm (right-col) Tj "
+        b"1 0 0 1 72 700 Tm (left-col) Tj ET"
+    )
+    assert _extract(content) == ["right-col", "left-col"]
+
+
 def test_default_decoder_cp1252():
     assert default_byte_decoder(b"caf\xe9") == "caf\xe9"

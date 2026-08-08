@@ -62,3 +62,36 @@ def test_unmapped_code_becomes_replacement_char():
 def test_empty_cmap_defaults_to_single_byte():
     cmap = parse_tounicode(b"nothing here")
     assert cmap.code_lengths == {1}
+
+
+def test_unmapped_code_advances_min_size_preserving_next_char():
+    # 2차 감수 M2: max(sizes) 만큼 전진하면 미매핑 1바이트가 뒤 문자를 삼킨다
+    data = b"""
+    2 begincodespacerange
+    <00> <80>
+    <8100> <FFFF>
+    endcodespacerange
+    2 beginbfchar
+    <41> <0041>
+    <42> <0042>
+    endbfchar
+    """
+    cmap = parse_tounicode(data)
+    assert cmap.decode(b"\x41\x99\x42") == "A�B"  # 'B' 가 살아남아야 한다
+
+
+def test_longest_code_length_matched_first():
+    # 2차 감수 M3: 짧은 코드 우선 매칭이면 2바이트 코드가 1바이트로 오매칭된다
+    data = b"""
+    2 begincodespacerange
+    <00> <FF>
+    <0000> <FFFF>
+    endcodespacerange
+    2 beginbfchar
+    <81> <0058>
+    <8140> <D55C>
+    endbfchar
+    """
+    cmap = parse_tounicode(data)
+    assert cmap.decode(b"\x81\x40") == "한"
+    assert cmap.decode(b"\x81") == "X"

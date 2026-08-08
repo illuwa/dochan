@@ -5,7 +5,7 @@
 """
 from typing import Callable, Dict, List, Optional
 
-from .objects import PDFLexer, PDFName, PDFSyntaxError
+from .objects import DELIMITERS, WHITESPACE, PDFLexer, PDFName, PDFSyntaxError
 
 # TJ 배열에서 이보다 작은(더 음수인) 조정값은 단어 간격으로 본다 (1/1000 em 단위)
 _SPACE_ADJUST_THRESHOLD = -180.0
@@ -28,6 +28,7 @@ class ContentTextExtractor:
         self._decoders = font_decoders
         self._decoder: Optional[Callable[[bytes], str]] = None
         self._last_y: Optional[float] = None
+        self._last_x: Optional[float] = None
 
     def extract(self, content: bytes) -> List[str]:
         lexer = PDFLexer(content)
@@ -69,6 +70,7 @@ class ContentTextExtractor:
         elif op == b"T*":
             self._flush(lines, current)
             self._last_y = None  # leading 만큼 이동 — 절대 y 를 모르므로 리셋
+            self._last_x = None
         elif op in (b"Td", b"TD"):
             tx = operands[-2] if len(operands) >= 2 and isinstance(operands[-2], (int, float)) else 0
             ty = operands[-1] if len(operands) >= 2 and isinstance(operands[-1], (int, float)) else 0
@@ -76,21 +78,29 @@ class ContentTextExtractor:
                 self._flush(lines, current)
                 if self._last_y is not None:
                     self._last_y += ty
+                self._last_x = None  # 상대 이동 — 절대 x 를 알 수 없다
             elif tx > 0:
                 self._append_space(current)
         elif op == b"Tm" and len(operands) >= 6:
             y = operands[-1] if isinstance(operands[-1], (int, float)) else None
-            if self._last_y is not None and y is not None and abs(y - self._last_y) <= 0.5:
-                self._append_space(current)  # 같은 기준선 — 단어 간 이동으로 본다
+            x = operands[-2] if isinstance(operands[-2], (int, float)) else None
+            same_y = self._last_y is not None and y is not None and abs(y - self._last_y) <= 0.5
+            if same_y and x is not None and self._last_x is not None and x < self._last_x:
+                # 같은 기준선이라도 왼쪽 되돌림은 2단 조판·표의 열 이동이다
+                self._flush(lines, current)
+            elif same_y:
+                self._append_space(current)  # 같은 기준선 전진 — 단어 간 이동으로 본다
             else:
                 self._flush(lines, current)
             self._last_y = y
+            self._last_x = x
         elif op == b"Tj":
             if operands:
                 self._show(operands[-1], current)
         elif op in (b"'", b'"'):
             self._flush(lines, current)
             self._last_y = None
+            self._last_x = None
             if operands:
                 self._show(operands[-1], current)
         elif op == b"TJ":
@@ -103,11 +113,11 @@ class ContentTextExtractor:
                             current.append(" ")
         elif op == b"BI":
             # 인라인 이미지 — 텍스트 흐름을 끊고, 이진 데이터를 렉서가
-            # 오해하지 않도록 EI 까지 건너뜀
+            # 오해하지 않도록 공백으로 구분된 진짜 EI 까지 건너뜀
             self._flush(lines, current)
             self._last_y = None
-            end = lexer.data.find(b"EI", lexer.pos)
-            lexer.pos = len(lexer.data) if end < 0 else end + 2
+            self._last_x = None
+            lexer.pos = self._skip_inline_image(lexer.data, lexer.pos)
 
     def _show(self, raw, current) -> None:
         if not isinstance(raw, bytes):
@@ -119,6 +129,21 @@ class ContentTextExtractor:
     def _append_space(current) -> None:
         if current and not current[-1].endswith(" "):
             current.append(" ")
+
+    @staticmethod
+    def _skip_inline_image(data: bytes, pos: int) -> int:
+        """이진 데이터 속 우연한 'EI' 를 피해 공백 구분된 종결자를 찾는다."""
+        n = len(data)
+        while True:
+            end = data.find(b"EI", pos)
+            if end < 0:
+                return n
+            before_ok = end == 0 or data[end - 1] in WHITESPACE
+            after = data[end + 2:end + 3]
+            after_ok = not after or after[0] in WHITESPACE or after[0] in DELIMITERS
+            if before_ok and after_ok:
+                return end + 2
+            pos = end + 1
 
     @staticmethod
     def _flush(lines, current) -> None:

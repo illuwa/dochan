@@ -44,8 +44,9 @@ def test_corrupt_flate_warns_and_returns_empty():
     assert any("FlateDecode" in w for w in warnings)
 
 
-def test_predictor_warns():
+def test_predictor_warns_and_drops_corrupted_data():
     warnings = []
     raw = zlib.compress(b"x")
-    decode_stream({"Filter": "FlateDecode", "DecodeParms": {"Predictor": 12}}, raw, warnings)
+    result = decode_stream({"Filter": "FlateDecode", "DecodeParms": {"Predictor": 12}}, raw, warnings)
+    assert result == b""  # Predictor 미해제 데이터는 깨진 텍스트 — 내보내지 않는다
     assert any("Predictor" in w for w in warnings)

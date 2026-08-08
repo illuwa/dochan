@@ -23,7 +23,10 @@ def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str]) -> bytes:
     parms = stream_dict.get("DecodeParms") or stream_dict.get("DP")
     if isinstance(parms, dict) and isinstance(parms.get("Predictor"), int) \
             and parms["Predictor"] > 1:
-        warnings.append("WARN: PDF Predictor 인코딩은 아직 지원하지 않음 — 텍스트가 손상될 수 있음")
+        # Predictor 미해제 데이터는 바이트 단위로 깨져 있다 — 조용히 깨진
+        # 텍스트를 내보내느니 스트림을 건너뛴다
+        warnings.append("WARN: PDF Predictor 인코딩은 아직 지원하지 않음 — 해당 스트림 건너뜀")
+        return b""
 
     data = raw
     for filt in filters:

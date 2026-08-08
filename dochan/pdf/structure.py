@@ -6,7 +6,8 @@ xref 스트림(PDF 1.5+)과 객체 스트림은 이번 마일스톤에서 지원
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from .objects import PDFLexer, PDFRef, PDFSyntaxError, parse_indirect_object
+from .filters import decode_stream
+from .objects import PDFLexer, PDFRef, PDFStream, PDFSyntaxError, parse_indirect_object
 
 MAX_XREF_SECTIONS = 32
 MAX_OBJECTS = 500_000
@@ -14,6 +15,9 @@ MAX_PAGES = 10_000
 MAX_RESOLVE_DEPTH = 32
 MAX_TREE_DEPTH = 64
 _SCAN_ROOT_LIMIT = 10_000
+# 문서 단위 누적 해제 예산 — 스트림 1개당 한도만으로는 같은 폭탄 스트림을
+# 반복 참조하는 40KB PDF 가 수 GB 를 강제할 수 있다 (감수 2차 C2)
+MAX_TOTAL_DECODED = 200 * 1024 * 1024
 
 _OBJ_RE = re.compile(rb"(?<!\d)(\d{1,10})\s+(\d{1,5})\s+obj\b")
 _ENCRYPT_RE = re.compile(rb"/Encrypt\s+\d+\s+\d+\s+R")
@@ -26,10 +30,12 @@ class PDFFile:
         self.data = data
         self.warnings: List[str] = []
         self.trailer: Dict[str, Any] = {}
-        self.xref: Dict[int, int] = {}  # 객체 번호 → 파일 오프셋
+        self.xref: Dict[int, Optional[int]] = {}  # 객체 번호 → 오프셋 (None=삭제됨)
         self.encrypted = False
         self._cache: Dict[int, Any] = {}
         self._rescanned = False
+        self._decoded_cache: Dict[int, bytes] = {}
+        self._decode_budget = MAX_TOTAL_DECODED
         self._parse_structure()
 
     # ── 구조 파싱 ──
@@ -81,6 +87,10 @@ class PDFFile:
                 self.trailer.setdefault(key, value)  # 최신 trailer 우선
             prev = trailer.get("Prev")
             current = prev if isinstance(prev, int) else None
+        if current is not None and current not in seen:
+            self.warnings.append(
+                f"WARN: xref 섹션 수가 한도({MAX_XREF_SECTIONS})를 초과 — 오래된 리비전은 무시됨"
+            )
         return True
 
     def _parse_xref_table(self, lexer: PDFLexer) -> Optional[dict]:
@@ -115,8 +125,10 @@ class PDFFile:
                     self.warnings.append("WARN: xref 항목 손상 — 객체 스캔으로 대체")
                     return None
                 obj_num = start_num + i
-                if kind == b"n" and obj_num not in self.xref:
-                    self.xref[obj_num] = int(off_tok)
+                if obj_num not in self.xref:
+                    # free(f) 엔트리도 tombstone 으로 기록 — 안 하면 증분 갱신에서
+                    # 삭제 표시된 객체가 이전 리비전 내용으로 부활한다
+                    self.xref[obj_num] = int(off_tok) if kind == b"n" else None
 
     def _scan_objects(self) -> None:
         self.xref = {}
@@ -205,6 +217,28 @@ class PDFFile:
             obj = self.get_object(obj)
             depth += 1
         return obj
+
+    def decode_stream_bytes(self, stream: PDFStream) -> bytes:
+        """스트림을 해제하되 문서 단위 누적 예산과 결과 캐시를 적용한다.
+
+        같은 스트림 객체는 한 번만 해제하고(반복 참조 증폭 방지),
+        문서 전체 해제 총량이 MAX_TOTAL_DECODED 를 넘으면 중단한다.
+        """
+        key = id(stream)
+        if key in self._decoded_cache:
+            return self._decoded_cache[key]
+        if self._decode_budget <= 0:
+            msg = "WARN: 문서 스트림 해제 총량 한도 초과 — 이후 스트림은 건너뜀"
+            if msg not in self.warnings:
+                self.warnings.append(msg)
+            return b""
+        out = decode_stream(stream.dictionary, stream.raw, self.warnings)
+        if len(out) > self._decode_budget:
+            out = out[:self._decode_budget]
+            self.warnings.append("WARN: 스트림이 문서 해제 총량 한도에 걸려 잘림")
+        self._decode_budget -= len(out)
+        self._decoded_cache[key] = out
+        return out
 
     # ── 페이지 트리 ──
 

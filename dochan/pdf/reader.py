@@ -11,11 +11,11 @@ from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from .content import ContentTextExtractor, default_byte_decoder
 from .cmap import parse_tounicode
-from .filters import decode_stream
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
+MAX_CONTENT_PARTS = 256  # 페이지당 콘텐츠 스트림 수 — 반복 참조 CPU 증폭 방지
 
 
 def _drop_decoder(raw: bytes) -> str:
@@ -83,17 +83,27 @@ class PDFReader:
                 pdf.warnings.append(f"WARN: {page_number}페이지 파싱 실패: {e!r}")
             doc.sections.append(section)
 
-        doc.errors.extend(pdf.warnings)
+        # 같은 경고가 페이지 수만큼 중복 누적되지 않게 순서 보존 dedup
+        seen = set()
+        for warning in pdf.warnings:
+            if warning not in seen:
+                seen.add(warning)
+                doc.errors.append(warning)
         return doc
 
     def _page_content_parts(self, pdf: PDFFile, page: dict) -> list:
         contents = pdf.resolve(page.get("Contents"))
         streams = contents if isinstance(contents, list) else [contents]
+        if len(streams) > MAX_CONTENT_PARTS:
+            pdf.warnings.append(
+                f"WARN: 페이지 콘텐츠 스트림 수가 한도({MAX_CONTENT_PARTS})를 초과 — 일부만 파싱"
+            )
+            streams = streams[:MAX_CONTENT_PARTS]
         parts = []
         for item in streams:
             stream = pdf.resolve(item)
             if isinstance(stream, PDFStream):
-                decoded = decode_stream(stream.dictionary, stream.raw, pdf.warnings)
+                decoded = pdf.decode_stream_bytes(stream)
                 if decoded:
                     parts.append(decoded)
         return parts
@@ -124,9 +134,9 @@ class PDFReader:
     def _build_font_decoder(self, pdf: PDFFile, name: str, font: dict) -> Callable[[bytes], str]:
         to_unicode = pdf.resolve(font.get("ToUnicode"))
         if isinstance(to_unicode, PDFStream):
-            cmap_data = decode_stream(to_unicode.dictionary, to_unicode.raw, pdf.warnings)
+            cmap_data = pdf.decode_stream_bytes(to_unicode)
             if cmap_data:
-                cmap = parse_tounicode(cmap_data)
+                cmap = parse_tounicode(cmap_data, pdf.warnings)
                 if cmap.mapping:
                     return cmap.decode
         # ToUnicode 없는 CID 폰트를 cp1252 로 해석하면 NUL 등 제어문자가

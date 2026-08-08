@@ -1711,3 +1711,64 @@ def test_cli_info_reports_docx_format(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert '"format": "docx"' in out
+
+
+def test_reads_docx_omml_equations_as_latex(tmp_path):
+    path = tmp_path / "equations.docx"
+    _write_docx(path, """
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+      xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+      <w:body>
+        <w:p><w:r><w:t>Before equation</w:t></w:r></w:p>
+        <m:oMathPara>
+          <m:oMath>
+            <m:f>
+              <m:num><m:r><m:t>a</m:t></m:r></m:num>
+              <m:den><m:r><m:t>b</m:t></m:r></m:den>
+            </m:f>
+          </m:oMath>
+        </m:oMathPara>
+        <w:p>
+          <w:r><w:t>Inline: </w:t></w:r>
+          <m:oMath>
+            <m:sSup>
+              <m:e><m:r><m:t>x</m:t></m:r></m:e>
+              <m:sup><m:r><m:t>2</m:t></m:r></m:sup>
+            </m:sSup>
+          </m:oMath>
+        </w:p>
+        <m:oMathPara>
+          <m:oMath>
+            <m:rad>
+              <m:deg/>
+              <m:e><m:r><m:t>y</m:t></m:r></m:e>
+            </m:rad>
+          </m:oMath>
+        </m:oMathPara>
+        <m:oMathPara>
+          <m:oMath>
+            <m:nary>
+              <m:naryPr><m:chr m:val="∑"/></m:naryPr>
+              <m:sub><m:r><m:t>i=1</m:t></m:r></m:sub>
+              <m:sup><m:r><m:t>n</m:t></m:r></m:sup>
+              <m:e><m:r><m:t>i</m:t></m:r></m:e>
+            </m:nary>
+          </m:oMath>
+        </m:oMathPara>
+      </w:body>
+    </w:document>
+    """)
+
+    doc = DOCXReader().read(str(path))
+    equations = [e for section in [doc.sections[0]] for e in section.elements
+                 if type(e).__name__ == "Equation"]
+
+    assert len(equations) == 4
+    assert equations[0].latex == r"\frac{a}{b}"
+    assert equations[1].latex == "{x}^{2}"
+    assert equations[2].latex == r"\sqrt{y}"
+    assert equations[3].latex == r"\sum_{i=1}^{n} i"
+
+    markdown = to_markdown(doc)
+    assert r"\frac{a}{b}" in markdown
+    assert "Inline: " in markdown

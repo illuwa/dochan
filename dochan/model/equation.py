@@ -5,12 +5,16 @@ from dataclasses import dataclass
 
 @dataclass
 class Equation:
-    """한글 수식 (EQEDIT)"""
+    """수식 — HWP(EQEDIT 스크립트) 또는 타 포맷(사전 변환 LaTeX)"""
     script: str = ""
+    # OMML 등 비-HWP 소스가 직접 변환한 LaTeX. 설정되면 script 변환 대신 사용.
+    latex_override: str = ""
 
     @property
     def latex(self) -> str:
-        """HWP 수식 스크립트 → LaTeX 변환"""
+        """HWP 수식 스크립트 → LaTeX 변환 (override 우선)"""
+        if self.latex_override:
+            return self.latex_override
         if not self.script:
             return ""
         return _hwp_to_latex(self.script)

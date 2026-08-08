@@ -123,6 +123,7 @@ class XLSXReader:
         doc = Document(source_format="xlsx")
         self._image_asset_ids = set()
         self._assets = []
+        self._xf_fonts = []
         with OOXMLPackage(file_path) as package:
             self._package = package
             core_elements = core_property_elements(read_core_properties(package), "xlsx")
@@ -214,14 +215,45 @@ class XLSXReader:
                 continue
             custom_formats[num_fmt_id] = num_fmt.get("formatCode", "")
 
+        # fonts: (bold, italic, underline, strikeout) — cellXfs fontId 로 셀 서식 결정
+        fonts = []
+        for font in root.findall("s:fonts/s:font", namespaces=_namespaces(root)):
+            ns = _namespaces(root)
+            fonts.append((
+                font.find("s:b", namespaces=ns) is not None,
+                font.find("s:i", namespaces=ns) is not None,
+                font.find("s:u", namespaces=ns) is not None,
+                font.find("s:strike", namespaces=ns) is not None,
+            ))
+
         styles = []
+        self._xf_fonts = []
         for xf in root.findall("s:cellXfs/s:xf", namespaces=_namespaces(root)):
             try:
                 num_fmt_id = int(xf.get("numFmtId", "0"))
             except ValueError:
                 num_fmt_id = 0
             styles.append(custom_formats.get(num_fmt_id, BUILTIN_NUM_FORMATS.get(num_fmt_id, "")))
+            try:
+                font_id = int(xf.get("fontId", "0"))
+            except ValueError:
+                font_id = 0
+            self._xf_fonts.append(
+                fonts[font_id] if 0 <= font_id < len(fonts) else (False, False, False, False)
+            )
         return styles
+
+    def _cell_run(self, cell_elem, text: str, provenance) -> TextRun:
+        """셀 텍스트 런 생성 — cellXfs fontId 기반 bold/italic 서식 적용."""
+        run = TextRun(text=text, provenance=provenance)
+        try:
+            style_index = int(cell_elem.get("s", ""))
+        except ValueError:
+            return run
+        xf_fonts = getattr(self, "_xf_fonts", [])
+        if 0 <= style_index < len(xf_fonts):
+            run.bold, run.italic, run.underline, run.strikeout = xf_fonts[style_index]
+        return run
 
     def _read_workbook_relationships(self, package: OOXMLPackage) -> Dict[str, str]:
         if not package.exists("xl/_rels/workbook.xml.rels"):
@@ -372,7 +404,7 @@ class XLSXReader:
                 cell = Cell(
                     paragraphs=[
                         Paragraph(
-                            runs=[TextRun(text=cell_text, provenance=provenance)],
+                            runs=[self._cell_run(cell_elem, cell_text, provenance)],
                             provenance=provenance,
                         )
                     ],
@@ -445,7 +477,7 @@ class XLSXReader:
                     row_cells[col_idx] = Cell(
                         paragraphs=[
                             Paragraph(
-                                runs=[TextRun(text=cell_text, provenance=provenance)],
+                                runs=[self._cell_run(cell_elem, cell_text, provenance)],
                                 provenance=provenance,
                             )
                         ],

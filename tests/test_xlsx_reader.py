@@ -2126,3 +2126,56 @@ def test_cli_info_reports_xlsx_format(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert '"format": "xlsx"' in out
+
+
+def test_reads_cell_font_bold_italic_from_styles(tmp_path):
+    path = tmp_path / "font-style.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="S1" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData>
+                <row r="1">
+                  <c r="A1" t="inlineStr" s="1"><is><t>BoldCell</t></is></c>
+                  <c r="B1" t="inlineStr" s="2"><is><t>ItalicCell</t></is></c>
+                  <c r="C1" t="inlineStr" s="0"><is><t>PlainCell</t></is></c>
+                </row>
+              </sheetData>
+            </worksheet>
+            """,
+        },
+        styles_xml="""
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="3">
+            <font/>
+            <font><b/></font>
+            <font><i/><u/></font>
+          </fonts>
+          <cellXfs count="3">
+            <xf numFmtId="0" fontId="0"/>
+            <xf numFmtId="0" fontId="1"/>
+            <xf numFmtId="0" fontId="2"/>
+          </cellXfs>
+        </styleSheet>
+        """,
+    )
+
+    doc = XLSXReader().read(str(path))
+    table = doc.sections[0].elements[0]
+    runs = {}
+    for row in table.rows:
+        for cell in row:
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    runs[run.text] = run
+
+    assert runs["BoldCell"].bold and not runs["BoldCell"].italic
+    assert runs["ItalicCell"].italic and runs["ItalicCell"].underline
+    assert not (runs["PlainCell"].bold or runs["PlainCell"].italic)

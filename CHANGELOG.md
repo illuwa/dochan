@@ -42,6 +42,13 @@
 - 방어 회귀 테스트 10건 추가 (총 535개 테스트)
 - 실문서 검증: 동일 문서 HWP/HWPX/PDF 쌍 80세트 크래시·유출 0건, HWPX↔PDF 유사도 평균 0.868
 
+### 검증
+
+- 공개 HWP/HWPX 코퍼스 7,188개(5.4GB) 재다운로드 후 전수 재스캔 — PDF Phase 1
+  작업과 라우팅 변경이 기존 경로에 회귀를 일으키지 않음을 확인 (크래시·내부
+  오류가 7월 기준선과 파일/카테고리 단위로 일치, 신규 이상 클러스터 0건).
+  자세한 내용은 `docs/benchmarks/2026-08-09-hwp-corpus-rescan-after-pdf-phase1.md`
+
 공개 HWP/HWPX 6,977개 코퍼스(`docs/benchmarks/hwp-corpus-fixtures.json`, 법제처·국세청 등
 정부 서식·보도자료 + hwplib/pyhwp 등 오픈소스 픽스처)로 회귀 스캔 후 발견한 4건 수정.
 `succeeded_with_internal_errors`가 79건에서 8건(전부 암호화 문서로 사양상 제한적 파싱)으로

@@ -10,6 +10,7 @@ WHITESPACE = b"\x00\t\n\x0c\r "
 DELIMITERS = b"()<>[]{}/%"
 
 MAX_COLLECTION_ITEMS = 100_000
+MAX_NESTING_DEPTH = 64
 
 
 class PDFSyntaxError(ValueError):
@@ -40,6 +41,7 @@ class PDFLexer:
     def __init__(self, data: bytes, pos: int = 0):
         self.data = data
         self.pos = pos
+        self._depth = 0
 
     def _peek(self) -> int:
         if self.pos >= len(self.data):
@@ -202,32 +204,44 @@ class PDFLexer:
 
     def _parse_array(self) -> list:
         self.pos += 1  # '['
-        items = []
-        while True:
-            self.skip_whitespace()
-            if self._peek() == 0x5D:
-                self.pos += 1
-                return items
-            if self._peek() < 0:
-                raise PDFSyntaxError("닫히지 않은 배열")
-            if len(items) >= MAX_COLLECTION_ITEMS:
-                raise PDFSyntaxError("배열 항목 수가 한도를 초과")
-            items.append(self.parse_object())
+        self._depth += 1
+        try:
+            if self._depth > MAX_NESTING_DEPTH:
+                raise PDFSyntaxError("중첩 깊이가 한도를 초과")
+            items = []
+            while True:
+                self.skip_whitespace()
+                if self._peek() == 0x5D:
+                    self.pos += 1
+                    return items
+                if self._peek() < 0:
+                    raise PDFSyntaxError("닫히지 않은 배열")
+                if len(items) >= MAX_COLLECTION_ITEMS:
+                    raise PDFSyntaxError("배열 항목 수가 한도를 초과")
+                items.append(self.parse_object())
+        finally:
+            self._depth -= 1
 
     def _parse_dict(self) -> dict:
         self.pos += 2  # '<<'
-        result = {}
-        while True:
-            self.skip_whitespace()
-            if self.data[self.pos:self.pos + 2] == b">>":
-                self.pos += 2
-                return result
-            if self._peek() != 0x2F:
-                raise PDFSyntaxError("사전 키는 이름이어야 함")
-            if len(result) >= MAX_COLLECTION_ITEMS:
-                raise PDFSyntaxError("사전 항목 수가 한도를 초과")
-            key = self._parse_name()
-            result[str(key)] = self.parse_object()
+        self._depth += 1
+        try:
+            if self._depth > MAX_NESTING_DEPTH:
+                raise PDFSyntaxError("중첩 깊이가 한도를 초과")
+            result = {}
+            while True:
+                self.skip_whitespace()
+                if self.data[self.pos:self.pos + 2] == b">>":
+                    self.pos += 2
+                    return result
+                if self._peek() != 0x2F:
+                    raise PDFSyntaxError("사전 키는 이름이어야 함")
+                if len(result) >= MAX_COLLECTION_ITEMS:
+                    raise PDFSyntaxError("사전 항목 수가 한도를 초과")
+                key = self._parse_name()
+                result[str(key)] = self.parse_object()
+        finally:
+            self._depth -= 1
 
 
 def parse_indirect_object(
@@ -272,7 +286,13 @@ def parse_indirect_object(
             end = data.find(b"endstream", start)
             if end < 0:
                 raise PDFSyntaxError("endstream 누락")
-            raw = data[start:end].rstrip(b"\r\n")
+            raw = data[start:end]
+            # 스트림 끝의 EOL 은 구분자 하나만 제거 — 전부 지우면 0x0A 로 끝나는
+            # 이진 payload 가 손상된다
+            if raw.endswith(b"\r\n"):
+                raw = raw[:-2]
+            elif raw.endswith((b"\n", b"\r")):
+                raw = raw[:-1]
         return int(num_tok), int(gen_tok), PDFStream(obj, raw)
     lexer.pos = keyword_pos
     return int(num_tok), int(gen_tok), obj

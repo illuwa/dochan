@@ -22,7 +22,7 @@ class ToUnicodeCMap:
         self.code_lengths: Set[int] = set()
 
     def decode(self, data: bytes) -> str:
-        sizes = sorted(self.code_lengths)
+        sizes = sorted(s for s in self.code_lengths if s > 0) or [1]
         default = max(sizes)
         out = []
         i = 0
@@ -60,9 +60,12 @@ class ToUnicodeCMap:
             if lo_tok in (b"[", b"]") or hi_tok in (b"[", b"]"):
                 i += 1
                 continue
-            length = len(lo_tok) // 2
+            length = max(len(lo_tok) // 2, 1)  # 홀수 한 자리 토큰이 길이 0 이 되면 decode 가 멈추지 못한다
             lo, hi = int(lo_tok, 16), int(hi_tok, 16)
             if hi < lo or hi - lo >= _MAX_RANGE:
+                i += 3
+                continue
+            if tokens[i + 2] == b"]":  # 손상된 CMap — 목적지 없는 범위는 건너뜀
                 i += 3
                 continue
             self.code_lengths.add(length)
@@ -96,7 +99,10 @@ def parse_tounicode(data: bytes) -> ToUnicodeCMap:
             cmap.code_lengths.add(length)
             cmap.mapping[(length, int(src, 16))] = _hex_to_text(dst)
     for block in _BF_RANGE_RE.findall(data):
-        cmap._parse_bfrange_block(block)
+        try:
+            cmap._parse_bfrange_block(block)
+        except (ValueError, OverflowError):
+            continue  # 손상된 블록 하나가 문서 전체를 막으면 안 된다
     if not cmap.code_lengths:
         cmap.code_lengths.add(1)
     return cmap

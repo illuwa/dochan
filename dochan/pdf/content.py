@@ -45,6 +45,8 @@ class ContentTextExtractor:
                     operands.append(lexer.parse_object())
                 except PDFSyntaxError:
                     lexer.pos += 1
+                if len(operands) > 64:  # 연산자 없는 피연산자 나열 폭주 방지
+                    del operands[:-8]
                 continue
             token = lexer.read_token()
             if not token:
@@ -56,9 +58,10 @@ class ContentTextExtractor:
         return lines
 
     def _apply_operator(self, op, operands, lines, current, lexer) -> None:
+        # PDF 연산자는 스택 뒤쪽 n개를 취한다 — 앞쪽 인덱싱은 잉여 피연산자에 취약
         if op == b"Tf":
-            if len(operands) >= 2 and isinstance(operands[0], PDFName):
-                self._decoder = self._decoders.get(str(operands[0]))
+            if len(operands) >= 2 and isinstance(operands[-2], PDFName):
+                self._decoder = self._decoders.get(str(operands[-2]))
         elif op in (b"BT", b"ET"):
             # 텍스트 블록 경계 자체는 줄바꿈이 아니다 — HWP→PDF 내보내기처럼
             # 단어(어절)마다 BT/ET 를 쓰는 생성기가 많아 y 좌표 변화로만 판단한다
@@ -67,8 +70,8 @@ class ContentTextExtractor:
             self._flush(lines, current)
             self._last_y = None  # leading 만큼 이동 — 절대 y 를 모르므로 리셋
         elif op in (b"Td", b"TD"):
-            tx = operands[0] if len(operands) >= 2 and isinstance(operands[0], (int, float)) else 0
-            ty = operands[1] if len(operands) >= 2 and isinstance(operands[1], (int, float)) else 0
+            tx = operands[-2] if len(operands) >= 2 and isinstance(operands[-2], (int, float)) else 0
+            ty = operands[-1] if len(operands) >= 2 and isinstance(operands[-1], (int, float)) else 0
             if ty != 0:
                 self._flush(lines, current)
                 if self._last_y is not None:
@@ -76,7 +79,7 @@ class ContentTextExtractor:
             elif tx > 0:
                 self._append_space(current)
         elif op == b"Tm" and len(operands) >= 6:
-            y = operands[5] if isinstance(operands[5], (int, float)) else None
+            y = operands[-1] if isinstance(operands[-1], (int, float)) else None
             if self._last_y is not None and y is not None and abs(y - self._last_y) <= 0.5:
                 self._append_space(current)  # 같은 기준선 — 단어 간 이동으로 본다
             else:

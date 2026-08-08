@@ -16,6 +16,7 @@ MAX_TREE_DEPTH = 64
 _SCAN_ROOT_LIMIT = 10_000
 
 _OBJ_RE = re.compile(rb"(?<!\d)(\d{1,10})\s+(\d{1,5})\s+obj\b")
+_ENCRYPT_RE = re.compile(rb"/Encrypt\s+\d+\s+\d+\s+R")
 
 
 class PDFFile:
@@ -128,8 +129,39 @@ class PDFFile:
             if count > MAX_OBJECTS:
                 self.warnings.append("WARN: 객체 수가 한도를 초과 — 일부만 파싱")
                 break
+        self._recover_trailers()
+        objstm_warning = "WARN: 객체 스트림(/ObjStm, PDF 1.5+)은 아직 지원하지 않음 — 일부 객체가 누락될 수 있음"
+        if b"/ObjStm" in self.data and objstm_warning not in self.warnings:
+            self.warnings.append(objstm_warning)
         if "Root" not in self.trailer:
             self._find_root_by_scan()
+
+    def _recover_trailers(self) -> None:
+        """스캔 폴백에서 trailer 사전을 복구한다.
+
+        xref 재구성만 하고 trailer 를 버리면 /Encrypt 를 영영 보지 못해
+        암호화 PDF 를 평문처럼 파싱하는 구멍이 생긴다 (감수 M3).
+        파일 뒤쪽(최신)부터 복구하고, trailer 키워드가 없는 xref 스트림
+        PDF 는 /Encrypt 참조 패턴으로 보수적으로 감지한다.
+        """
+        pos = len(self.data)
+        count = 0
+        while count < MAX_XREF_SECTIONS:
+            pos = self.data.rfind(b"trailer", 0, pos)
+            if pos < 0:
+                break
+            count += 1
+            lexer = PDFLexer(self.data, pos + len(b"trailer"))
+            try:
+                lexer.skip_whitespace()
+                obj = lexer.parse_object()
+            except PDFSyntaxError:
+                continue
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    self.trailer.setdefault(key, value)
+        if "Encrypt" not in self.trailer and _ENCRYPT_RE.search(self.data):
+            self.trailer["Encrypt"] = True
 
     def _find_root_by_scan(self) -> None:
         for num in sorted(self.xref)[:_SCAN_ROOT_LIMIT]:
@@ -190,6 +222,8 @@ class PDFFile:
         self._walk_pages(pages_root, {}, result, set(), 0)
         if not result:
             self.warnings.append("WARN: 페이지를 찾지 못함")
+        elif len(result) >= MAX_PAGES:
+            self.warnings.append(f"WARN: 페이지 수가 한도({MAX_PAGES})를 초과 — 일부만 파싱")
         return result
 
     def _walk_pages(self, node: dict, inherited: dict, result, visited, depth) -> None:

@@ -29,6 +29,7 @@ def test_ascii_hex_decode_ignores_whitespace():
 def test_image_filter_returns_empty_without_warning_spam():
     warnings = []
     assert decode_stream({"Filter": "DCTDecode"}, b"\xff\xd8jpeg", warnings) == b""
+    assert warnings == []
 
 
 def test_unknown_filter_warns():

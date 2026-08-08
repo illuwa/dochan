@@ -1374,3 +1374,44 @@ def test_cli_info_reports_pptx_format(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert '"format": "pptx"' in out
+
+
+def test_reads_pptx_run_formatting_flags(tmp_path):
+    # README 비교표 검증용 — a:rPr 의 b/i/u/strike 가 TextRun 플래그로 매핑되는지
+    path = tmp_path / "run-format.pptx"
+    _write_pptx(
+        path,
+        """
+        <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+        </p:presentation>
+        """,
+        {
+            "ppt/slides/slide1.xml": """
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <p:cSld><p:spTree>
+                <p:sp><p:txBody>
+                  <a:p>
+                    <a:r><a:rPr b="1"/><a:t>BoldRun</a:t></a:r>
+                    <a:r><a:rPr i="1"/><a:t>ItalicRun</a:t></a:r>
+                    <a:r><a:rPr u="sng"/><a:t>UnderRun</a:t></a:r>
+                    <a:r><a:rPr strike="sngStrike"/><a:t>StrikeRun</a:t></a:r>
+                    <a:r><a:t>PlainRun</a:t></a:r>
+                  </a:p>
+                </p:txBody></p:sp>
+              </p:spTree></p:cSld>
+            </p:sld>
+            """,
+        },
+    )
+
+    doc = PPTXReader().read(str(path))
+    runs = {r.text: r for p in doc.sections[0].elements for r in getattr(p, "runs", [])}
+
+    assert runs["BoldRun"].bold and not runs["BoldRun"].italic
+    assert runs["ItalicRun"].italic and not runs["ItalicRun"].bold
+    assert runs["UnderRun"].underline
+    assert runs["StrikeRun"].strikeout
+    assert not (runs["PlainRun"].bold or runs["PlainRun"].italic)

@@ -1,6 +1,21 @@
 # Changelog
 
-## [1.2.1] - 2026-07-27
+## [Unreleased]
+
+### 추가
+
+- **네이티브 PDF 리더 Phase 1** (`dochan/pdf/`): 외부 엔진 없이 표준 라이브러리만으로
+  단순 디지털 PDF 의 페이지 텍스트를 추출한다.
+  - PDF 객체 문법 파서 (사전·배열·문자열·이름·간접 참조·스트림)
+  - 고전 xref 테이블·trailer 체인 파싱 + 손상 시 `N G obj` 스캔 폴백
+  - FlateDecode / ASCIIHexDecode / ASCII85Decode 필터 해제
+  - 텍스트 연산자(Tj/TJ/'/"/Td/TD/Tm/T*) 해석으로 줄 단위 텍스트 재구성
+  - ToUnicode CMap 디코딩 — 한글(Identity-H CID) PDF 텍스트 지원
+  - 페이지 번호 provenance (`Provenance(page=N)`) 를 섹션·문단에 기록
+  - 암호화·xref 스트림(PDF 1.5+)·객체 스트림·스캔 전용 페이지는 경고로 보고
+  - `Dochan("file.pdf")` 라우팅 (확장자 + `%PDF-` 매직), CLI, 배치 `.pdf` 수집
+- 보안 한도: 파일 500MB, 스트림 해제 50MB, 객체 50만 개, 페이지 1만 개,
+  참조 해석 깊이 32, 페이지 트리 순환 가드
 
 공개 HWP/HWPX 6,977개 코퍼스(`docs/benchmarks/hwp-corpus-fixtures.json`, 법제처·국세청 등
 정부 서식·보도자료 + hwplib/pyhwp 등 오픈소스 픽스처)로 회귀 스캔 후 발견한 4건 수정.

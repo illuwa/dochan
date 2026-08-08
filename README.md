@@ -4,7 +4,7 @@
     <strong>독한 native 문서 파서 — AI/LLM 최적 Markdown 변환</strong>
   </p>
   <p align="center">
-    The toughest Korean document parser. HWP/HWPX/Office → Markdown, JSON, Plain Text.
+    The toughest Korean document parser. HWP/HWPX/Office/PDF → Markdown, JSON, Plain Text.
   </p>
   <p align="center">
     <a href="https://pypi.org/project/dochan/"><img src="https://img.shields.io/pypi/v/dochan?color=blue&cacheSeconds=60" alt="PyPI"></a>
@@ -22,7 +22,7 @@
 **dochan**(독한)은 한글(HWP/HWPX)과 Office 문서를 native로 파싱하여 AI/LLM이 바로 사용할 수 있는 Markdown으로 변환하는 Python 파서입니다.
 
 - `doc` (문서) + `한` (韓, 한국) = **dochan** — "독한 파서"라는 더블 미닝
-- HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary 1차 지원
+- HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary + PDF(텍스트) 1차 지원
 - 155개 실문서로 검증, 평균 96.5점, 공개가능한 문서로 계속 학습시켜 개선할 예정
 
 ```python
@@ -36,7 +36,8 @@ print(doc.to_markdown())
 
 | 기능 | 설명 |
 |------|------|
-| **HWP + HWPX + Office** | HWP/HWPX, Office OOXML(.docx/.pptx/.xlsx), legacy Office(.doc/.ppt/.xls)를 native parser로 파싱 |
+| **HWP + HWPX + Office + PDF** | HWP/HWPX, Office OOXML(.docx/.pptx/.xlsx), legacy Office(.doc/.ppt/.xls), PDF(.pdf)를 native parser로 파싱 |
+| **PDF 텍스트 추출** | 단순 디지털 PDF 의 페이지 텍스트 + 페이지 번호 provenance (한글 ToUnicode 지원). 암호화·스캔·레이아웃 재구성은 미지원(경고 처리) |
 | **Markdown 출력** | 제목, 표, 서식(bold/italic), 수식까지 AI가 바로 쓸 수 있는 Markdown |
 | **표 파싱** | 셀 병합, 중첩 표, 좌표 배치 지원 |
 | **서식 보존** | CharShape 기반 bold/italic/글자크기 → TextRun 연결 |
@@ -67,7 +68,7 @@ brew install tesseract tesseract-lang  # macOS
 ```python
 from dochan import Dochan
 
-# HWP, HWPX, DOC, PPT, XLS, DOCX, PPTX, XLSX
+# HWP, HWPX, DOC, PPT, XLS, DOCX, PPTX, XLSX, PDF
 doc = Dochan("보고서.hwp")
 
 # AI/LLM용 Markdown
@@ -120,6 +121,9 @@ dochan convert 표.xlsx
 # Legacy Excel XLS 변환
 dochan convert 표.xls
 
+# PDF 텍스트 추출
+dochan convert 문서.pdf
+
 # 디렉토리 일괄 변환
 dochan batch input_dir/ output_dir/ --format markdown --workers 4
 
@@ -156,33 +160,34 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 
 ## Supported Elements
 
-| 요소 | HWP | HWPX | DOC | PPT | XLS | DOCX | PPTX | XLSX |
-|------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| 텍스트 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 표 (단순) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 표 (셀 병합) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ |
-| 표 (중첩 텍스트) | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ⬜ | — |
-| 서식 (bold/italic) | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | ⬜ |
-| 제목 감지 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — |
-| 스타일 상속 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — |
-| 수식 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ |
-| 공유 수식 | — | — | — | — | ✅ | — | — | ✅ |
-| 이미지 참조 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| 이미지 대체 텍스트 | ⬜ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — |
-| 표/그림 캡션 | ⬜ | ✅ | ⬜ | ⬜ | — | ⬜ | ⬜ | — |
-| 이미지 OCR | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| 머리글/바닥글 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — |
-| 각주/미주 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — |
-| 주석/코멘트 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | ✅ |
-| 변경 추적 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — |
-| 컨트롤/스마트 태그 텍스트 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — |
-| 텍스트박스/도형 텍스트 | ⬜ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — |
-| 필드 결과 텍스트 | ⬜ | ⬜ | ✅ | ✅ | — | ✅ | — | — |
-| 여러 슬라이드 | — | — | — | ✅ | — | — | ✅ | — |
-| 레이아웃 상속 텍스트 | — | — | — | ⬜ | — | — | ✅ | — |
-| 발표자 노트 | — | — | — | ⬜ | — | — | ✅ | — |
-| 읽기 순서 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ✅ | — |
-| 그룹 도형 | — | — | — | ⬜ | — | — | ✅ | — |
+| 요소 | HWP | HWPX | DOC | PPT | XLS | DOCX | PPTX | XLSX | PDF |
+|------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| 텍스트 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 표 (단순) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| 표 (셀 병합) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| 표 (중첩 텍스트) | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ⬜ | — | — |
+| 서식 (bold/italic) | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | ⬜ | ⬜ |
+| 제목 감지 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | ⬜ |
+| 스타일 상속 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |
+| 수식 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ |
+| 공유 수식 | — | — | — | — | ✅ | — | — | ✅ | — |
+| 이미지 참조 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| 이미지 대체 텍스트 | ⬜ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — | — |
+| 표/그림 캡션 | ⬜ | ✅ | ⬜ | ⬜ | — | ⬜ | ⬜ | — | — |
+| 이미지 OCR | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
+| 머리글/바닥글 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ⬜ |
+| 각주/미주 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ⬜ |
+| 주석/코멘트 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | ✅ | ⬜ |
+| 변경 추적 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |
+| 컨트롤/스마트 태그 텍스트 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |
+| 텍스트박스/도형 텍스트 | ⬜ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — | — |
+| 필드 결과 텍스트 | ⬜ | ⬜ | ✅ | ✅ | — | ✅ | — | — | — |
+| 여러 슬라이드 | — | — | — | ✅ | — | — | ✅ | — | — |
+| 레이아웃 상속 텍스트 | — | — | — | ⬜ | — | — | ✅ | — | — |
+| 발표자 노트 | — | — | — | ⬜ | — | — | ✅ | — | — |
+| 읽기 순서 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ✅ | — | ⬜ |
+| 그룹 도형 | — | — | — | ⬜ | — | — | ✅ | — | — |
+| 페이지 번호 provenance | — | — | — | — | — | — | — | — | ✅ |
 | 차트 제목/데이터 | — | — | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ |
 | 여러 시트 | — | — | — | — | ✅ | — | — | ✅ |
 | sharedStrings | — | — | — | — | ✅ | — | — | ✅ |

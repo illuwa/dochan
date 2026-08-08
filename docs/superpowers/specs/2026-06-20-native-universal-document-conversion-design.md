@@ -205,10 +205,10 @@ Tasks:
 
 Goal: parse common Word documents without external conversion engines.
 
-Phase 1 implementation status:
+Phase 1 implementation status (updated 2026-08-08):
 
-- Completed for simple paragraphs, heading styles, bold/italic/underline/strike runs, simple tables, `Dochan("file.docx")` routing, and batch `.docx` collection.
-- Not yet completed for DOCX images, footnotes/endnotes, numbering, style inheritance, merged cells, and equations.
+- Completed for paragraphs, heading styles, bold/italic/underline/strike runs, tables (merged cells, nested text), numbering, style inheritance, footnotes/endnotes, comments, tracked changes, control/smart-tag text, field results, headers/footers, image references and alt text, `Dochan("file.docx")` routing, and batch `.docx` collection.
+- Not yet completed for DOCX equations, image binary extraction, and table/figure captions.
 
 Implementation targets:
 
@@ -246,10 +246,10 @@ Success criteria:
 
 Goal: extract slide text, tables, images, and speaker notes.
 
-Phase 1 implementation status:
+Phase 1 implementation status (updated 2026-08-08):
 
-- Completed for presentation relationship parsing, slide order, slide-level provenance, text box extraction, simple DrawingML tables, `Dochan("file.pptx")` routing, CLI info, and batch `.pptx` collection.
-- Not yet completed for speaker notes, images, grouped shapes, comments, slide layouts/masters, shape geometry ordering, rich text formatting, charts, SmartArt, and embedded media.
+- Completed for presentation relationship parsing, slide order, slide-level provenance, text box extraction, simple DrawingML tables, speaker notes, image references and alt text, grouped shapes, comments, slide layout inheritance text, shape reading order, `Dochan("file.pptx")` routing, CLI info, and batch `.pptx` collection.
+- Not yet completed for rich text formatting (bold/italic), charts, SmartArt, and embedded media.
 
 Implementation targets:
 
@@ -280,10 +280,10 @@ Success criteria:
 
 Goal: extract workbook data in a Markdown and JSON shape suitable for LLM/RAG use.
 
-Phase 1 implementation status:
+Phase 1 implementation status (updated 2026-08-08):
 
-- Completed for workbook sheet ordering, workbook relationships, shared strings, inline strings, numeric cell values, simple rectangular table output, sheet provenance, cell provenance, `Dochan("file.xlsx")` routing, CLI info, and batch `.xlsx` collection.
-- Not yet completed for style-aware formatting, formulas as separate metadata, merged cells, date/number format interpretation, charts, images, tables metadata, hidden sheets, and encrypted workbooks.
+- Completed for workbook sheet ordering, workbook relationships, shared strings, inline strings, numeric cell values, formulas (including shared formulas), date/number format interpretation, merged cells, comments, simple rectangular table output, sheet provenance, cell provenance, `Dochan("file.xlsx")` routing, CLI info, and batch `.xlsx` collection.
+- Not yet completed for style-aware formatting (bold/italic), charts, images, hidden sheets, and encrypted workbooks.
 
 Implementation targets:
 
@@ -313,14 +313,14 @@ Success criteria:
 
 Goal: provide native first-pass support for `.doc`, `.ppt`, and `.xls` without invoking LibreOffice, MarkItDown, antiword, catdoc, or other runtime converters.
 
-Phase 1 implementation status:
+Phase 1 implementation status (updated 2026-08-08):
 
-- Completed for `.doc` OLE `WordDocument` text extraction into paragraphs, `Dochan("file.doc")` routing, CLI info, and batch `.doc` collection.
-- Completed for `.ppt` OLE `PowerPoint Document` text atom extraction into paragraphs, `Dochan("file.ppt")` routing, CLI info, and batch `.ppt` collection.
-- Completed for `.xls` OLE `Workbook`/`Book` BIFF parsing of `BOUNDSHEET`, `SST`, `LABELSST`, and `NUMBER` records into sheet tables, `Dochan("file.xls")` routing, CLI info, and batch `.xls` collection.
-- Not yet completed for `.doc` piece table fidelity, paragraph formatting, tables, images, footnotes, tracked changes, encrypted documents, or complex code pages.
-- Not yet completed for `.ppt` slide boundary fidelity, shape ordering, rich text formatting, speaker notes, images, charts, SmartArt, embedded media, or encrypted documents.
-- Not yet completed for `.xls` formulas, dates, styles, merged cells, RK/BOOL/FORMULA/LABEL/CONTINUE records, charts, images, macros, hidden sheets, or encrypted workbooks.
+- Completed for `.doc` FIB validation, piece-table text extraction, field result/hyperlink text restoration, simple tables, heading detection, `Dochan("file.doc")` routing, CLI info, and batch `.doc` collection.
+- Completed for `.ppt` slide text record extraction with slide boundaries, text-type-based heading detection, simple tables, field results, `Dochan("file.ppt")` routing, CLI info, and batch `.ppt` collection.
+- Completed for `.xls` BIFF parsing of `BOUNDSHEET`/`SST`/`CONTINUE`/`LABELSST`/`LABEL`/`RSTRING`/`NUMBER`/`RK`/`MULRK`/`BOOLERR`/`FORMULA`(cached)/`SHRFMLA` records, merged cells, `DATEMODE`/`FORMAT`/`XF` date interpretation, headers/footers, `Dochan("file.xls")` routing, CLI info, and batch `.xls` collection.
+- Not yet completed for `.doc` paragraph formatting, merged-cell tables, images, footnotes, tracked changes, encrypted documents, or complex code pages.
+- Not yet completed for `.ppt` rich text formatting, speaker notes, images, charts, SmartArt, embedded media, or encrypted documents.
+- Not yet completed for `.xls` style formatting, charts, images, macros, hidden sheets, or encrypted workbooks.
 
 Implementation targets:
 
@@ -341,6 +341,11 @@ Success criteria:
 Goal: provide a safe first-party PDF path without AGPL/GPL/runtime backend dependencies.
 
 PDF is the hardest format in this roadmap. It still must be native-only. The first milestone should be deliberately limited, but it should establish dochan's own PDF parser foundation rather than delegating to an external converter.
+
+Phase 1 implementation status (updated 2026-08-08):
+
+- Completed for classic xref table/trailer chain parsing with `N G obj` scan fallback, indirect object resolution with cycle guards, page tree traversal with inherited resources, FlateDecode/ASCIIHexDecode/ASCII85Decode stream filters, text operator interpretation (Tj/TJ/'/"/Td/TD/Tm/T*), ToUnicode CMap decoding (Korean CID text), page-number provenance, encrypted/xref-stream/scanned-page warnings, `Dochan("file.pdf")` routing (extension + `%PDF-` magic), CLI, and batch `.pdf` collection.
+- Not yet completed for xref streams (PDF 1.5+), object streams, encrypted PDFs, LZW/Predictor filters, layout-aware reading order, table reconstruction, image extraction, and OCR.
 
 Implementation targets:
 

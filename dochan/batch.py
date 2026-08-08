@@ -81,7 +81,7 @@ def batch_convert(
     output_dir: str,
     output_format: str = 'markdown',
     max_workers: int = 4,
-    extensions: tuple = ('.hwp', '.hwpx', '.doc', '.ppt', '.xls', '.docx', '.pptx', '.xlsx'),
+    extensions: tuple = ('.hwp', '.hwpx', '.doc', '.ppt', '.xls', '.docx', '.pptx', '.xlsx', '.pdf'),
 ) -> BatchSummary:
     """
     디렉토리 내 HWP 파일 일괄 변환

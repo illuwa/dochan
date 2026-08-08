@@ -23,6 +23,7 @@ from .ooxml.docx import DOCXReader
 from .ooxml.package import detect_ooxml_format
 from .ooxml.pptx import PPTXReader
 from .ooxml.xlsx import XLSXReader
+from .pdf.reader import PDFReader
 from .output.markdown import to_markdown
 from .output.json_out import to_json, to_dict
 from .output.plain_text import to_plain_text
@@ -61,6 +62,8 @@ class Dochan:
             self._parse_pptx()
         elif ext == '.xlsx':
             self._parse_xlsx()
+        elif ext == '.pdf':
+            self._parse_pdf()
         else:
             # 매직 바이트로 판별
             with open(self.file_path, 'rb') as f:
@@ -79,6 +82,8 @@ class Dochan:
                     self.doc.errors.append(f"ERR: 아직 지원하지 않는 OOXML 형식: {ooxml_format}")
                 else:
                     self._parse_hwpx()
+            elif magic[:5] == b'%PDF-':
+                self._parse_pdf()
             else:
                 self.doc.errors.append(f"ERR: 알 수 없는 파일 형식: {self.file_path}")
 
@@ -213,6 +218,10 @@ class Dochan:
     def _parse_xlsx(self):
         """XLSX (Office Open XML) 파싱"""
         self.doc = XLSXReader().read(self.file_path)
+
+    def _parse_pdf(self):
+        """PDF (네이티브 파서) 파싱"""
+        self.doc = PDFReader().read(self.file_path)
 
     def _run_ocr(self):
         """모든 이미지에 OCR 실행 (표 셀 안 이미지 포함)"""

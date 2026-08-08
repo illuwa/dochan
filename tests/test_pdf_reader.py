@@ -132,3 +132,44 @@ def test_non_pdf_file_reports_error(tmp_path):
 
     assert any("%PDF-" in e for e in doc.errors)
     assert doc.sections == []
+
+
+def test_dochan_routes_pdf_extension(tmp_path):
+    from dochan import Dochan
+
+    content = b"BT (Routed) Tj ET"
+    path = _write(tmp_path, "route.pdf", _build_pdf(_minimal_objects(content)))
+
+    doc = Dochan(path)
+
+    assert doc.metadata["source_format"] == "pdf"
+    assert doc.to_markdown() == "Routed"
+
+
+def test_dochan_routes_pdf_magic_without_extension(tmp_path):
+    from dochan import Dochan
+
+    content = b"BT (MagicRouted) Tj ET"
+    path = _write(tmp_path, "mystery.bin", _build_pdf(_minimal_objects(content)))
+
+    doc = Dochan(path)
+
+    assert doc.metadata["source_format"] == "pdf"
+    assert doc.to_markdown() == "MagicRouted"
+
+
+def test_batch_convert_includes_pdf_by_default(tmp_path):
+    from dochan.batch import batch_convert
+
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    content = b"BT (Batch PDF) Tj ET"
+    (input_dir / "doc.pdf").write_bytes(_build_pdf(_minimal_objects(content)))
+
+    summary = batch_convert(str(input_dir), str(output_dir),
+                            output_format="markdown", max_workers=1)
+
+    assert summary.total == 1
+    assert summary.success == 1
+    assert (output_dir / "doc.md").read_text(encoding="utf-8") == "Batch PDF"

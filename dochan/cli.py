@@ -5,6 +5,7 @@
   dochan convert 문서.hwp -o output.md       # → 파일로 저장
   dochan convert 문서.hwp --format json      # → JSON 출력
   dochan convert 문서.hwpx --format text     # → Plain text
+  dochan convert 문서.pdf --format text      # → PDF 텍스트 추출
   dochan batch input_dir/ output_dir/        # → 디렉토리 일괄 변환
   dochan info 문서.hwp                       # → 문서 메타데이터
 """

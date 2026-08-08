@@ -47,11 +47,12 @@ class PDFReader:
             section = Section(
                 provenance=Provenance(source_format="pdf", page=page_number)
             )
-            content = self._page_content(pdf, page)
+            content_parts = self._page_content_parts(pdf, page)
             lines = []
-            if content:
-                decoders = self._font_decoders(pdf, resources)
-                lines = ContentTextExtractor(decoders).extract(content)
+            if content_parts:
+                extractor = ContentTextExtractor(self._font_decoders(pdf, resources))
+                for part in content_parts:
+                    lines.extend(extractor.extract(part))
             if not lines and self._page_has_images(pdf, resources):
                 pdf.warnings.append(
                     f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (OCR 미지원)"
@@ -68,7 +69,7 @@ class PDFReader:
         doc.errors.extend(pdf.warnings)
         return doc
 
-    def _page_content(self, pdf: PDFFile, page: dict) -> bytes:
+    def _page_content_parts(self, pdf: PDFFile, page: dict) -> list:
         contents = pdf.resolve(page.get("Contents"))
         streams = contents if isinstance(contents, list) else [contents]
         parts = []
@@ -78,7 +79,7 @@ class PDFReader:
                 decoded = decode_stream(stream.dictionary, stream.raw, pdf.warnings)
                 if decoded:
                     parts.append(decoded)
-        return b"\n".join(parts)
+        return parts
 
     def _font_decoders(self, pdf: PDFFile, resources) -> Dict[str, Callable[[bytes], str]]:
         decoders: Dict[str, Callable[[bytes], str]] = {}

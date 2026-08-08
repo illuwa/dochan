@@ -10,9 +10,9 @@ def test_tj_and_td_produce_lines():
     assert _extract(content) == ["Line one", "Line two"]
 
 
-def test_horizontal_td_stays_on_same_line():
+def test_horizontal_td_stays_on_same_line_with_word_space():
     content = b"BT (Left) Tj 100 0 Td (Right) Tj ET"
-    assert _extract(content) == ["LeftRight"]
+    assert _extract(content) == ["Left Right"]
 
 
 def test_tj_array_inserts_space_on_large_adjustment():
@@ -35,7 +35,17 @@ def test_tm_same_y_keeps_line_different_y_breaks():
         b"BT 1 0 0 1 72 700 Tm (Left) Tj 1 0 0 1 200 700 Tm (Right) Tj "
         b"1 0 0 1 72 680 Tm (Below) Tj ET"
     )
-    assert _extract(content) == ["LeftRight", "Below"]
+    assert _extract(content) == ["Left Right", "Below"]
+
+
+def test_words_split_across_bt_blocks_join_with_space():
+    # HWP→PDF 내보내기가 흔히 쓰는 패턴: 단어(어절)마다 BT...ET 블록 분리
+    content = (
+        b"BT 1 0 0 1 72 700 Tm (Hello) Tj ET "
+        b"BT 1 0 0 1 120 700 Tm (world) Tj ET "
+        b"BT 1 0 0 1 72 680 Tm (Next) Tj ET"
+    )
+    assert _extract(content) == ["Hello world", "Next"]
 
 
 def test_font_decoder_selected_by_tf():

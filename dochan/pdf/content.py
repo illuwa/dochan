@@ -59,17 +59,27 @@ class ContentTextExtractor:
         if op == b"Tf":
             if len(operands) >= 2 and isinstance(operands[0], PDFName):
                 self._decoder = self._decoders.get(str(operands[0]))
-        elif op in (b"BT", b"ET", b"T*"):
+        elif op in (b"BT", b"ET"):
+            # 텍스트 블록 경계 자체는 줄바꿈이 아니다 — HWP→PDF 내보내기처럼
+            # 단어(어절)마다 BT/ET 를 쓰는 생성기가 많아 y 좌표 변화로만 판단한다
+            pass
+        elif op == b"T*":
             self._flush(lines, current)
-            if op == b"BT":
-                self._last_y = None
+            self._last_y = None  # leading 만큼 이동 — 절대 y 를 모르므로 리셋
         elif op in (b"Td", b"TD"):
+            tx = operands[0] if len(operands) >= 2 and isinstance(operands[0], (int, float)) else 0
             ty = operands[1] if len(operands) >= 2 and isinstance(operands[1], (int, float)) else 0
             if ty != 0:
                 self._flush(lines, current)
+                if self._last_y is not None:
+                    self._last_y += ty
+            elif tx > 0:
+                self._append_space(current)
         elif op == b"Tm" and len(operands) >= 6:
             y = operands[5] if isinstance(operands[5], (int, float)) else None
-            if self._last_y is None or y is None or abs(y - self._last_y) > 0.5:
+            if self._last_y is not None and y is not None and abs(y - self._last_y) <= 0.5:
+                self._append_space(current)  # 같은 기준선 — 단어 간 이동으로 본다
+            else:
                 self._flush(lines, current)
             self._last_y = y
         elif op == b"Tj":
@@ -77,6 +87,7 @@ class ContentTextExtractor:
                 self._show(operands[-1], current)
         elif op in (b"'", b'"'):
             self._flush(lines, current)
+            self._last_y = None
             if operands:
                 self._show(operands[-1], current)
         elif op == b"TJ":
@@ -88,7 +99,10 @@ class ContentTextExtractor:
                         if current and not current[-1].endswith(" "):
                             current.append(" ")
         elif op == b"BI":
-            # 인라인 이미지 — 이진 데이터를 렉서가 오해하지 않도록 EI 까지 건너뜀
+            # 인라인 이미지 — 텍스트 흐름을 끊고, 이진 데이터를 렉서가
+            # 오해하지 않도록 EI 까지 건너뜀
+            self._flush(lines, current)
+            self._last_y = None
             end = lexer.data.find(b"EI", lexer.pos)
             lexer.pos = len(lexer.data) if end < 0 else end + 2
 
@@ -97,6 +111,11 @@ class ContentTextExtractor:
             return
         decoder = self._decoder or default_byte_decoder
         current.append(decoder(raw))
+
+    @staticmethod
+    def _append_space(current) -> None:
+        if current and not current[-1].endswith(" "):
+            current.append(" ")
 
     @staticmethod
     def _flush(lines, current) -> None:

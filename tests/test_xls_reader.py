@@ -1871,3 +1871,54 @@ def test_cli_info_reports_xls_format(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert '"format": "xls"' in out
+
+
+def _font(bold=False, italic=False, underline=False, strikeout=False):
+    grbit = (0x0002 if italic else 0) | (0x0008 if strikeout else 0)
+    bls = 700 if bold else 400
+    uls = 1 if underline else 0
+    body = struct.pack("<HHHHHBBBB", 200, grbit, 0x7FFF, bls, 0, uls, 0, 0, 0) + _xl_unicode("Arial")
+    return _record(0x0031, body)
+
+
+def _xf_with_font(ifnt, ifmt=0):
+    return _record(0x00E0, struct.pack("<HH", ifnt, ifmt) + b"\x00" * 16)
+
+
+def _labelsst_xf(row, col, ixfe, sst_index):
+    return _record(0x00FD, struct.pack("<HHHI", row, col, ixfe, sst_index))
+
+
+def test_parse_biff_font_bold_italic_with_index4_quirk():
+    # FONT 인덱스 4 는 BIFF 사양상 존재하지 않는다 — 5번째 레코드가 ifnt=5
+    fonts = (
+        _font()                      # ifnt 0: 일반
+        + _font(bold=True)           # ifnt 1: 굵게
+        + _font()                    # ifnt 2
+        + _font()                    # ifnt 3
+        + _font(italic=True, underline=True)  # ifnt 5 (레코드 5번째)
+    )
+    xfs = _xf_with_font(0) + _xf_with_font(1) + _xf_with_font(5)  # xf0=일반, xf1=굵게, xf2=이탤릭+밑줄
+    globals_part = _bof() + fonts + xfs
+    worksheet = (
+        _bof()
+        + _labelsst_xf(0, 0, 1, 0)   # xf1 → bold
+        + _labelsst_xf(0, 1, 2, 1)   # xf2 → italic+underline
+        + _labelsst_xf(0, 2, 0, 2)   # xf0 → plain
+        + _eof()
+    )
+    sst = _sst(["BoldCell", "ItalicCell", "PlainCell"])
+    offset = len(globals_part) + len(_boundsheet(0, "Sheet1")) + len(sst)
+    doc = parse_biff_workbook(globals_part + _boundsheet(offset, "Sheet1") + sst + worksheet)
+
+    table = doc.sections[0].elements[0]
+    runs = {}
+    for row in table.rows:
+        for cell in row:
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    runs[run.text] = run
+
+    assert runs["BoldCell"].bold and not runs["BoldCell"].italic
+    assert runs["ItalicCell"].italic and runs["ItalicCell"].underline and not runs["ItalicCell"].bold
+    assert not (runs["PlainCell"].bold or runs["PlainCell"].italic)

@@ -32,6 +32,7 @@ class _SheetInfo:
     offset: int
     visibility: int = 0
     cells: Dict[Tuple[int, int], str] = field(default_factory=dict)
+    cell_fonts: Dict[Tuple[int, int], Tuple[bool, bool, bool, bool]] = field(default_factory=dict)
     hyperlinks: Dict[Tuple[int, int], str] = field(default_factory=dict)
     comments: Dict[Tuple[int, int], str] = field(default_factory=dict)
     header: str = ""
@@ -249,6 +250,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
     shared_strings: List[str] = []
     formats: Dict[int, str] = {}
     xf_formats: List[int] = []
+    fonts: List[Tuple[bool, bool, bool, bool]] = []
+    xf_fonts: List[int] = []
     external_sheets: List[Tuple[int, int]] = []
     defined_name_records: List[_DefinedName] = []
     date_1904 = False
@@ -283,8 +286,19 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
         elif record_type == 0x041E and len(record_data) >= 5:  # FORMAT
             format_index = struct.unpack_from("<H", record_data, 0)[0]
             formats[format_index] = _read_biff8_label_text(record_data, 2)
+        elif record_type == 0x0031 and len(record_data) >= 11:  # FONT
+            grbit = struct.unpack_from("<H", record_data, 2)[0]
+            bls = struct.unpack_from("<H", record_data, 6)[0]
+            uls = record_data[10]
+            fonts.append((
+                bls >= 600,              # 굵기 400=일반, 700=굵게
+                bool(grbit & 0x0002),    # 이탤릭
+                uls != 0,                # 밑줄
+                bool(grbit & 0x0008),    # 취소선
+            ))
         elif record_type == 0x00E0 and len(record_data) >= 4:  # XF
             xf_formats.append(struct.unpack_from("<H", record_data, 2)[0])
+            xf_fonts.append(struct.unpack_from("<H", record_data, 0)[0])
         index += 1
 
     if not sheets:
@@ -328,6 +342,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
             sheet_names,
             defined_names,
             date_1904,
+            fonts=fonts,
+            xf_fonts=xf_fonts,
         )
 
     # 워크북 전체가 실체화할 수 있는 셀 총량. 시트별 상한만으로는 시트를 여럿 두는
@@ -568,7 +584,14 @@ def _parse_sheet_records(
     sheet_names: List[str],
     defined_names: List[str],
     date_1904: bool = False,
+    fonts: Optional[List[Tuple[bool, bool, bool, bool]]] = None,
+    xf_fonts: Optional[List[int]] = None,
 ):
+    def _capture_font(row: int, col: int, xf_index: int) -> None:
+        flags = _font_flags_for_xf(xf_index, xf_fonts or [], fonts or [])
+        if any(flags):
+            sheet.cell_fonts[(row, col)] = flags
+
     pending_formula_cell: Optional[Tuple[int, int]] = None
     pending_formula_text = ""
     pending_shared_formula_anchor: Optional[Tuple[int, int]] = None
@@ -581,7 +604,8 @@ def _parse_sheet_records(
         if record_type == 0x00FD and len(record_data) >= 10:  # LABELSST
             pending_formula_cell = None
             pending_shared_formula_anchor = None
-            row, col, _, sst_index = struct.unpack_from("<HHHI", record_data, 0)
+            row, col, ixfe, sst_index = struct.unpack_from("<HHHI", record_data, 0)
+            _capture_font(row, col, ixfe)
             try:
                 sheet.cells[(row, col)] = shared_strings[sst_index]
             except IndexError:
@@ -589,7 +613,8 @@ def _parse_sheet_records(
         elif record_type == 0x0204 and len(record_data) >= 8:  # LABEL
             pending_formula_cell = None
             pending_shared_formula_anchor = None
-            row, col, _ = struct.unpack_from("<HHH", record_data, 0)
+            row, col, ixfe = struct.unpack_from("<HHH", record_data, 0)
+            _capture_font(row, col, ixfe)
             sheet.cells[(row, col)] = _read_biff8_label_text(record_data, 6)
         elif record_type == 0x0004 and len(record_data) >= 7:  # BIFF2/3/4 LABEL
             pending_formula_cell = None
@@ -599,7 +624,8 @@ def _parse_sheet_records(
         elif record_type == 0x00D6 and len(record_data) >= 9:  # RSTRING
             pending_formula_cell = None
             pending_shared_formula_anchor = None
-            row, col, _ = struct.unpack_from("<HHH", record_data, 0)
+            row, col, ixfe = struct.unpack_from("<HHH", record_data, 0)
+            _capture_font(row, col, ixfe)
             sheet.cells[(row, col)] = _read_biff8_label_text(record_data, 6)
         elif record_type in (0x0201, 0x0001) and len(record_data) >= 6:  # BLANK
             pending_formula_cell = None
@@ -646,6 +672,7 @@ def _parse_sheet_records(
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
+            _capture_font(row, col, xf_index)
             value = struct.unpack_from("<d", record_data, 6)[0]
             sheet.cells[(row, col)] = _format_number_with_format(
                 value,
@@ -848,6 +875,25 @@ def _format_for_xf(xf_index: int, formats: Dict[int, str], xf_formats: List[int]
     if xf_index < 0 or xf_index >= len(xf_formats):
         return ""
     return formats.get(xf_formats[xf_index], "")
+
+
+def _font_flags_for_xf(
+    xf_index: int,
+    xf_fonts: List[int],
+    fonts: List[Tuple[bool, bool, bool, bool]],
+) -> Tuple[bool, bool, bool, bool]:
+    """XF 의 폰트 인덱스로 (bold, italic, underline, strikeout) 플래그를 해석.
+
+    BIFF 사양상 폰트 인덱스 4 는 존재하지 않는다 — 레코드 순서상 5번째
+    FONT 레코드의 인덱스가 5 이므로, ifnt >= 5 는 리스트 위치 ifnt-1 이다.
+    """
+    if xf_index < 0 or xf_index >= len(xf_fonts):
+        return (False, False, False, False)
+    ifnt = xf_fonts[xf_index]
+    font_idx = ifnt if ifnt < 4 else ifnt - 1
+    if 0 <= font_idx < len(fonts):
+        return fonts[font_idx]
+    return (False, False, False, False)
 
 
 def _extract_hlink_url(record_data: bytes) -> str:
@@ -1305,8 +1351,12 @@ def _sheet_to_table(
                 cell=cell_ref,
                 path=path,
             )
+            run = TextRun(text=text, provenance=provenance)
+            font_flags = sheet.cell_fonts.get((row_idx, col_idx))
+            if font_flags:
+                run.bold, run.italic, run.underline, run.strikeout = font_flags
             paragraph = Paragraph(
-                runs=[TextRun(text=text, provenance=provenance)],
+                runs=[run],
                 provenance=provenance,
             )
             row.append(Cell(paragraphs=[paragraph], row=row_idx, col=col_idx, provenance=provenance))

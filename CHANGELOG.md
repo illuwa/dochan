@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### 추가 (2순위 — 비교표 커버리지 확대)
+
+- **XLSX 셀 서식**: `xl/styles.xml` fonts + cellXfs fontId 기반 bold/italic/underline/strike
+- **XLS 셀 서식**: BIFF `FONT`(0x0031)/`XF` 레코드 기반 서식 (폰트 인덱스 4 부재 quirk 보정)
+- **DOCX 수식**: OMML → LaTeX 변환 (분수·첨자·근호·∑∫∏·구분자·함수·극한),
+  블록/인라인 수식 모두 문서 흐름에 배치
+- PPTX 서식(b/i/u/strike)·DOCX/PPTX 이미지 참조는 기구현 확인 후 검증 테스트 추가로 비교표 ✅ 반영
+- 날짜/숫자 서식 행의 DOC/PPT/DOCX/PPTX 는 "해당 없음(—)"으로 정정 —
+  렌더된 텍스트 포맷에는 서식 해석할 원시 값이 없다
+
 ### 추가
 
 - **네이티브 PDF 리더 Phase 1** (`dochan/pdf/`): 외부 엔진 없이 표준 라이브러리만으로

@@ -364,6 +364,56 @@ def test_hwpx_hyperlink_command_only_bookmark_and_script_are_dropped(tmp_path):
         assert all(not r.link for r in elem.runs)
 
 
+def test_hwpx_hidden_comment_becomes_comment_footnote(tmp_path):
+    """<hp:hiddenComment>(HWP 바이너리의 tcmt 대응 — 실측 hwp2hwpx-from_18.hwpx)
+    가 Footnote(type='comment') 로 나온다."""
+    from dochan.model.header_footer import Footnote
+
+    hidden = (
+        '<hp:ctrl><hp:hiddenComment>'
+        + _sub_list(_para(_run('<hp:t>이것은 숨은 설명입니다.</hp:t>')))
+        + '</hp:hiddenComment></hp:ctrl>'
+    )
+    path = tmp_path / "hidden-comment.hwpx"
+    _write_hwpx(path, _section(_para(_run('<hp:t>본문</hp:t>' + hidden))))
+
+    doc = HWPXParser().parse(str(path))
+    comments = [e for e in doc.sections[0].elements
+                if isinstance(e, Footnote) and e.type == 'comment']
+
+    assert len(comments) == 1
+    assert comments[0].text == "이것은 숨은 설명입니다."
+    assert "[^comment-1]: 이것은 숨은 설명입니다." in to_markdown(doc)
+
+
+def test_hwpx_memogroup_memos_become_comment_footnotes(tmp_path):
+    """섹션 루트의 <hp:memogroup>/<hp:memo>(실측 leap-source.hwpx 구조)가
+    Footnote(type='comment') 로 나온다."""
+    from dochan.model.header_footer import Footnote
+
+    memos = (
+        '<hp:memogroup>'
+        '<hp:memo id="memo-0"><hp:paraList>'
+        + _para(_run('<hp:t>첫 번째 메모</hp:t>'))
+        + '</hp:paraList></hp:memo>'
+        '<hp:memo id="memo-1"><hp:paraList>'
+        + _para(_run('<hp:t>두 번째 메모</hp:t>'))
+        + '</hp:paraList></hp:memo>'
+        '</hp:memogroup>'
+    )
+    path = tmp_path / "memogroup.hwpx"
+    _write_hwpx(path, _section(_para(_run('<hp:t>본문</hp:t>')) + memos))
+
+    doc = HWPXParser().parse(str(path))
+    comments = [e for e in doc.sections[0].elements
+                if isinstance(e, Footnote) and e.type == 'comment']
+
+    assert [c.text for c in comments] == ["첫 번째 메모", "두 번째 메모"]
+    md = to_markdown(doc)
+    assert "[^comment-1]: 첫 번째 메모" in md
+    assert "[^comment-2]: 두 번째 메모" in md
+
+
 # ── 5. 표 캡션 ──
 
 

@@ -392,6 +392,10 @@ class SectionParser:
             return self._parse_header_footer(ctrl_node, ctrl_type)
         elif ctrl_type in ('footnote', 'endnote'):
             return self._parse_footnote(ctrl_node, ctrl_type)
+        elif ctrl_type == 'memo':
+            # 숨은 설명/메모(tcmt) — DOCX 주석과 같은 Footnote(type='comment') 규약.
+            # 실측 구조(han_grammar.hwp): CTRL_HEADER → LIST_HEADER → PARA_HEADER들
+            return self._parse_footnote(ctrl_node, 'comment')
         else:
             return None
 

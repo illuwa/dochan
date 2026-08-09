@@ -429,8 +429,29 @@ class HWPXParser:
             if tag == 'p':
                 elements = self._parse_paragraph_elem(child)
                 section.elements.extend(elements)
+            elif tag == 'memogroup':
+                # 메모(주석)는 섹션 루트의 <hp:memogroup>/<hp:memo> 로 온다
+                # (실측 leap-source.hwpx). DOCX 주석과 같은 comment 규약.
+                section.elements.extend(self._parse_memogroup(child))
 
         return section
+
+    def _parse_memogroup(self, memogroup_elem) -> list:
+        """<hp:memogroup> → Footnote(type='comment') 목록"""
+        comments = []
+        for memo in memogroup_elem:
+            if _local_tag(memo.tag) != 'memo':
+                continue
+            paragraphs = []
+            for para_list in memo:
+                if _local_tag(para_list.tag) != 'paraList':
+                    continue
+                for p_elem in para_list:
+                    if _local_tag(p_elem.tag) == 'p':
+                        paragraphs.extend(self._parse_paragraph_elem(p_elem))
+            if paragraphs:
+                comments.append(Footnote(type='comment', paragraphs=paragraphs))
+        return comments
 
     @staticmethod
     def _detect_heading_level_by_font(runs) -> int:
@@ -641,7 +662,11 @@ class HWPXParser:
                 ctrl_result = self._parse_ctrl(child)
                 if ctrl_result is not None:
                     flush()
-                    if isinstance(ctrl_result, Footnote):
+                    if isinstance(ctrl_result, Footnote) and \
+                            ctrl_result.type in ('footnote', 'endnote'):
+                        # 주석(comment)은 여기서 번호를 매기지 않는다 — 마커는
+                        # 각주 카운터([^N])인데 정의 라벨은 comment-N 이라
+                        # 서로 어긋난 채 정의가 문서 끝으로 밀려 사라진다.
                         # 각주/미주는 본문에 참조 마커를 남긴다. 마커 없는 정의만 남으면
                         # Markdown 렌더러가 각주를 통째로 버린다.
                         # 마커는 반드시 별도 런이어야 한다 — 앞 텍스트와 합쳐지면
@@ -677,6 +702,10 @@ class HWPXParser:
                 return self._parse_footnote_elem(child, 'footnote')
             elif tag == 'endNote':
                 return self._parse_footnote_elem(child, 'endnote')
+            elif tag == 'hiddenComment':
+                # 숨은 설명 — HWP 바이너리 tcmt 대응 (실측 hwp2hwpx-from_18.hwpx).
+                # DOCX 주석과 같은 Footnote(type='comment') 규약.
+                return self._parse_footnote_elem(child, 'comment')
 
         return None
 

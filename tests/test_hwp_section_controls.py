@@ -424,3 +424,45 @@ def test_gso_truncated_common_properties_is_safe():
     images = [e for e in section.elements if isinstance(e, Image)]
     assert len(images) == 1
     assert images[0].alt_text == ""
+
+
+# ── Task 4: 주석(메모, tcmt) ──
+
+def test_memo_control_becomes_comment_footnote():
+    """CTRL_HEADER('tcmt') → LIST_HEADER → PARA_HEADER 구조(han_grammar.hwp
+    실측)가 Footnote(type='comment') 로 나온다."""
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("본문 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"tmct") +
+        rec(HWPTAG_LIST_HEADER, 2, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("메모 첫 문단")) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("메모 둘째 문단"))
+    )
+    section = parse_section(data)
+
+    comments = [e for e in section.elements
+                if isinstance(e, Footnote) and e.type == 'comment']
+    assert len(comments) == 1
+    assert comments[0].text == "메모 첫 문단\n메모 둘째 문단"
+
+
+def test_memo_renders_as_comment_definition_in_markdown():
+    """마크다운에서 comment-N 라벨 정의로 렌더된다 (DOCX 주석과 같은 규약)."""
+    from dochan.model.document import Document, Section
+    from dochan.output.markdown import to_markdown
+
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("본문")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"tmct") +
+        rec(HWPTAG_LIST_HEADER, 2, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("검토 의견입니다"))
+    )
+    section = parse_section(data)
+    md = to_markdown(Document(sections=[section]))
+
+    assert "[^comment-1]: 검토 의견입니다" in md

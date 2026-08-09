@@ -39,6 +39,8 @@ CTRL_POLYGON     = _make_4chid('$', 'p', 'o', 'l')
 CTRL_CURVE       = _make_4chid('$', 'c', 'u', 'r')
 CTRL_OLE         = _make_4chid('$', 'o', 'l', 'e')
 CTRL_CONTAINER   = _make_4chid('$', 'c', 'o', 'n')
+# 책갈피(앵커) — 필드가 아니라 'bokm' 컨트롤. 이름은 CTRL_DATA(파라미터셋)에 있다.
+CTRL_BOOKMARK    = _make_4chid('b', 'o', 'k', 'm')   # b'mkob'
 
 # 필드 컨트롤 (ctrlId 가 '%' 로 시작 — LE 저장 시 바이트 3이 '%')
 CTRL_FIELD_HYPERLINK = _make_4chid('%', 'h', 'l', 'k')   # b'klh%'

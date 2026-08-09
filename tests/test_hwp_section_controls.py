@@ -450,6 +450,53 @@ def test_formula_field_result_text_is_captured():
     assert all(not r.link for r in paras[0].runs)
 
 
+# ── 내부 북마크 (bokm 컨트롤 + CTRL_DATA) ──
+
+def bokm_ctrl_data(name: str) -> bytes:
+    """책갈피 CTRL_DATA(tag 87) — 실측(143E '참조' / 전략물자 'wrapper' hexdump):
+    sig(0x021b) + cnt(UINT32) + item(00 40 01 00) + 이름 길이(UINT16, off10)
+    + UTF-16LE 이름(off12)."""
+    nb = name.encode("utf-16-le")
+    return (b"\x1b\x02" + struct.pack("<I", 1) + b"\x00\x40\x01\x00" +
+            struct.pack("<H", len(name)) + nb)
+
+
+def test_bookmark_control_becomes_marker():
+    """책갈피(bokm 컨트롤 + CTRL_DATA)의 이름이 [bookmark: NAME] 마커로 나온다.
+    (내부 북마크) — 실측 143E433F503322BD33 '참조', 전략물자 종합교육 'wrapper'."""
+    from dochan.constants import HWPTAG_CTRL_DATA
+
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("이 지침은")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"mkob") +          # 'bokm' (LE)
+        rec(HWPTAG_CTRL_DATA, 2, bokm_ctrl_data("wrapper"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    assert len(paras) == 1
+    assert "[bookmark: wrapper]" in paras[0].text
+    assert "이 지침은" in paras[0].text
+
+
+def test_bookmark_underscore_name_is_ignored():
+    """_GoBack 등 밑줄로 시작하는 자동 책갈피는 마커로 내보내지 않는다 (DOCX 규약)."""
+    from dochan.constants import HWPTAG_CTRL_DATA
+
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("본문")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"mkob") +
+        rec(HWPTAG_CTRL_DATA, 2, bokm_ctrl_data("_GoBack"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    assert paras[0].text == "본문"
+    assert "bookmark" not in paras[0].text
+
+
 # ── Task 3: 이미지 대체 텍스트 (개체 설명문) ──
 
 def test_gso_description_becomes_image_alt_text():

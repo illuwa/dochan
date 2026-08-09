@@ -21,6 +21,7 @@ from ..constants import (
     HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT, HWPTAG_PARA_CHAR_SHAPE,
     HWPTAG_CTRL_HEADER, HWPTAG_LIST_HEADER, HWPTAG_TABLE,
     HWPTAG_EQEDIT, HWPTAG_SHAPE_COMP_PICTURE, HWPTAG_SHAPE_COMPONENT,
+    HWPTAG_CTRL_DATA,
 )
 from ..model.document import Section, Paragraph, TextRun
 from ..model.table import Table, Cell
@@ -30,6 +31,7 @@ from ..model.header_footer import HeaderFooter, Footnote
 from .records.ctrl_header import (
     parse_ctrl_id, identify_control,
     is_field_ctrl_id, parse_field_command_url, CTRL_FIELD_HYPERLINK,
+    CTRL_BOOKMARK,
 )
 from .records.para_text import parse_para_text
 from .records.para_char_shape import parse_para_char_shape
@@ -230,6 +232,7 @@ class SectionParser:
         text_result = None
         char_shape_data = None
         ctrl_nodes = []
+        bookmark_markers = []
 
         for child in para_node['children']:
             crec = child['record']
@@ -238,7 +241,14 @@ class SectionParser:
             elif crec.tag_id == HWPTAG_PARA_CHAR_SHAPE:
                 char_shape_data = crec.data
             elif crec.tag_id == HWPTAG_CTRL_HEADER:
-                ctrl_nodes.append(child)
+                # 책갈피(bokm)는 필드가 아니라 별도 컨트롤 — 이름을 마커로 뽑고
+                # 컨트롤 목록에서는 제외한다 (뒤 루프에서 요소로 만들지 않음).
+                if parse_ctrl_id(crec.data) == CTRL_BOOKMARK:
+                    name = self._bookmark_name(child)
+                    if name and not name.startswith('_'):
+                        bookmark_markers.append(TextRun(text=f"[bookmark: {name}] "))
+                else:
+                    ctrl_nodes.append(child)
 
         # 텍스트 문단 생성
         if text_result and text_result['text'].strip():
@@ -281,10 +291,17 @@ class SectionParser:
             if len(para_rec.data) >= 11:
                 para.style_id = para_rec.data[10]
 
+            # 책갈피 마커는 문단 앞에 붙인다 (문서 내 앵커 — DOCX 규약과 동일)
+            if bookmark_markers:
+                para.runs = bookmark_markers + para.runs
+
             # 제목 감지
             para.heading_level = self._detect_heading_level(para)
 
             elements.append(para)
+        elif bookmark_markers:
+            # 텍스트 없는 책갈피(영역 앵커 등)도 마커로 남긴다
+            elements.append(Paragraph(runs=list(bookmark_markers)))
 
         # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
         for ctrl_node in ctrl_nodes:
@@ -295,6 +312,26 @@ class SectionParser:
                 elements.append(ctrl_elem)
 
         return elements
+
+    @staticmethod
+    def _bookmark_name(ctrl_node) -> str:
+        """책갈피(bokm) 컨트롤의 CTRL_DATA(파라미터셋)에서 이름을 읽는다.
+
+        실측(143E '참조' / 전략물자 'wrapper' hexdump): CTRL_DATA 레이아웃은
+        sig(2) + cnt(4) + item(4) + 이름 길이(UINT16, offset 10) + UTF-16LE(offset 12).
+        """
+        for child in ctrl_node['children']:
+            if child['record'].tag_id != HWPTAG_CTRL_DATA:
+                continue
+            data = child['record'].data
+            if len(data) < 12:
+                continue
+            length = struct.unpack_from("<H", data, 10)[0]
+            end = 12 + length * 2
+            if length == 0 or end > len(data):
+                continue
+            return data[12:end].decode('utf-16-le', errors='replace').strip('\x00').strip()
+        return ""
 
     def _hyperlink_ranges(self, text_result, ctrl_nodes) -> list:
         """필드 마크(텍스트 스트림의 컨트롤 3/4)와 %hlk CTRL_HEADER 를 짝지어

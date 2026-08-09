@@ -396,6 +396,34 @@ def test_hwpx_field_result_text_is_captured(tmp_path):
         assert all(not r.link for r in elem.runs)
 
 
+def test_hwpx_bookmark_becomes_marker(tmp_path):
+    """<hp:bookmark name="참조"/> 가 [bookmark: 참조] 마커로 나온다.
+    (내부 북마크) — 실측 143E433F503322BD33 '참조', 전략물자 종합교육 'wrapper'."""
+    path = tmp_path / "bookmark.hwpx"
+    _write_hwpx(path, _section(_para(_run(
+        '<hp:ctrl><hp:bookmark name="참조"/></hp:ctrl>'
+        + '<hp:t>국민연금 보험료</hp:t>'
+    ))))
+
+    doc = HWPXParser().parse(str(path))
+    para = doc.sections[0].elements[0]
+    assert "[bookmark: 참조]" in para.text
+    assert "국민연금 보험료" in para.text
+
+
+def test_hwpx_bookmark_underscore_name_is_ignored(tmp_path):
+    """_GoBack 등 밑줄로 시작하는 자동 책갈피는 마커로 내보내지 않는다 (DOCX 규약)."""
+    path = tmp_path / "bookmark-goback.hwpx"
+    _write_hwpx(path, _section(_para(_run(
+        '<hp:ctrl><hp:bookmark name="_GoBack"/></hp:ctrl>'
+        + '<hp:t>본문</hp:t>'
+    ))))
+
+    doc = HWPXParser().parse(str(path))
+    para = doc.sections[0].elements[0]
+    assert para.text == "본문"
+
+
 def test_hwpx_hidden_comment_becomes_comment_footnote(tmp_path):
     """<hp:hiddenComment>(HWP 바이너리의 tcmt 대응 — 실측 hwp2hwpx-from_18.hwpx)
     가 Footnote(type='comment') 로 나온다."""

@@ -648,6 +648,13 @@ class HWPXParser:
                     flush()
                     results.extend(drawn)
             elif tag == 'ctrl':
+                bookmark = _bookmark_marker(child)
+                if bookmark:
+                    # 문서 내 책갈피(앵커) — DOCX 규약과 같은 [bookmark: NAME] 마커.
+                    flush()
+                    results.append(TextRun(text=bookmark, font_size_pt=font_size_pt))
+                    continue
+
                 action = _field_action(child)
                 if action is not None:
                     # 하이퍼링크 필드 경계 — 링크가 걸린 범위를 정확히 자른다
@@ -1061,6 +1068,23 @@ def _string_param(field_elem, name: str) -> str:
             continue
         if node.get('name') == name:
             return (node.text or '').strip()
+    return ""
+
+
+def _bookmark_marker(ctrl_elem) -> str:
+    """<hp:ctrl> 안에 <hp:bookmark name="..."> 가 있으면 [bookmark: NAME] 마커를,
+    아니면 '' 를 돌려준다.
+
+    문서 내 책갈피(앵커)다. DOCX 리더와 같은 규약을 쓴다: 밑줄로 시작하는 자동
+    생성 책갈피(_GoBack, _Toc... 등)는 본문 노이즈라 내보내지 않는다.
+    """
+    for child in ctrl_elem:
+        if _local_tag(child.tag) != 'bookmark':
+            continue
+        name = (child.get('name') or '').strip()
+        if not name or name.startswith('_'):
+            return ""
+        return f"[bookmark: {name}] "
     return ""
 
 

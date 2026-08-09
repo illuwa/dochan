@@ -396,6 +396,60 @@ def test_internal_hyperlink_to_bookmark_renders_as_anchor():
     assert to_markdown(Document(sections=[section])) == "[내부참조](#참조)"
 
 
+# ── 필드 결과 텍스트 + 컨트롤/스마트 태그 텍스트 ──
+
+def field_ctrl_payload(ctrl_id_le: bytes, command: str) -> bytes:
+    """임의 필드 CTRL_HEADER — %hlk 와 동일 레이아웃(ctrlId 만 다름)."""
+    cmd = command.encode("utf-16-le")
+    return (ctrl_id_le + struct.pack("<I", 0x800) + b"\x00" +
+            struct.pack("<H", len(command)) + cmd + bytes(8))
+
+
+def test_click_here_field_result_text_is_captured():
+    """누름틀(%clk, CLICK_HERE) — HWP 의 콘텐츠 컨트롤 — 의 결과(표시) 텍스트가
+    본문에 그대로 남고 하이퍼링크는 걸리지 않는다.
+    (컨트롤/스마트 태그 텍스트 + 필드 결과 텍스트) — 실측 문서관리규칙 '공개'."""
+    text_payload = (
+        "구분: ".encode("utf-16-le") +
+        field_start_block(b"klc%") +          # %clk (LE)
+        "공개".encode("utf-16-le") +
+        field_end_block() +
+        struct.pack("<H", 13)
+    )
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, text_payload) +
+        rec(HWPTAG_CTRL_HEADER, 1, field_ctrl_payload(b"klc%", "publication;"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    assert paras[0].text == "구분: 공개"
+    assert all(not r.link for r in paras[0].runs)
+
+
+def test_formula_field_result_text_is_captured():
+    """계산식(%fmu, FORMULA) 필드의 결과 텍스트가 본문에 남는다.
+    (필드 결과 텍스트) — 실측 사내벤처 창업 및 운영지침 '100'."""
+    text_payload = (
+        "합계 ".encode("utf-16-le") +
+        field_start_block(b"umf%") +          # %fmu (LE)
+        "100".encode("utf-16-le") +
+        field_end_block() +
+        struct.pack("<H", 13)
+    )
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, text_payload) +
+        rec(HWPTAG_CTRL_HEADER, 1, field_ctrl_payload(b"umf%", "=SUM(?4:?18)??%g,;;100"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    assert paras[0].text == "합계 100"
+    assert all(not r.link for r in paras[0].runs)
+
+
 # ── Task 3: 이미지 대체 텍스트 (개체 설명문) ──
 
 def test_gso_description_becomes_image_alt_text():

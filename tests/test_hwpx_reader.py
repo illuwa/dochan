@@ -369,6 +369,33 @@ def test_hwpx_hyperlink_command_only_internal_bookmark_and_script(tmp_path):
     assert to_markdown(doc).splitlines()[0] == "[내부참조](#참조)"
 
 
+def test_hwpx_field_result_text_is_captured(tmp_path):
+    """필드(누름틀 CLICK_HERE / 계산식 FORMULA)의 결과 텍스트가 본문에 그대로
+    남고 하이퍼링크는 걸리지 않는다.
+    (필드 결과 텍스트 + 컨트롤/스마트 태그 텍스트) — 실측 문서관리규칙 '공개',
+    사내벤처 창업 및 운영지침 '100'."""
+    def field(ftype, result):
+        return (
+            ('<hp:ctrl><hp:fieldBegin id="1" type="%s" name="" editable="1">'
+             '<hp:parameters cnt="0" name=""/></hp:fieldBegin></hp:ctrl>' % ftype)
+            + ('<hp:t>%s</hp:t>' % result)
+            + '<hp:ctrl><hp:fieldEnd beginIDRef="1" fieldid="1"/></hp:ctrl>'
+        )
+
+    path = tmp_path / "field-result.hwpx"
+    _write_hwpx(path, _section(
+        _para(_run('<hp:t>구분: </hp:t>' + field("CLICK_HERE", "공개")))
+        + _para(_run('<hp:t>합계 </hp:t>' + field("FORMULA", "100")))
+    ))
+
+    doc = HWPXParser().parse(str(path))
+    elements = doc.sections[0].elements
+    assert elements[0].text == "구분: 공개"
+    assert elements[1].text == "합계 100"
+    for elem in elements:
+        assert all(not r.link for r in elem.runs)
+
+
 def test_hwpx_hidden_comment_becomes_comment_footnote(tmp_path):
     """<hp:hiddenComment>(HWP 바이너리의 tcmt 대응 — 실측 hwp2hwpx-from_18.hwpx)
     가 Footnote(type='comment') 로 나온다."""

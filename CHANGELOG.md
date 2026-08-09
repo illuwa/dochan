@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### 추가 (1순위 — HWP 바이너리 열 완성)
+
+- **HWP 텍스트박스/도형 텍스트**: GSO SHAPE_COMPONENT 서브트리의 문단을 문서 흐름으로
+  배치 (HWPX drawText 와 동등 — 실문서 쌍에서 43건 전부 일치)
+- **HWP 하이퍼링크**: `%hlk` 필드 Command 에서 URL 추출, TextRun.link 연결
+  (레이아웃을 실물 hexdump 로 실증, HWP↔HWPX 쌍 URL 집합 일치)
+- **HWP 이미지 대체 텍스트**: 개체 공통 속성 설명문 → `Image.alt_text`
+  (HWPX shapeComment 와 값 일치 확인)
+- **HWP·HWPX 주석**: `tcmt` 숨은설명(HWP)과 hiddenComment/memogroup(HWPX) 추출,
+  DOCX 와 동일한 `[^comment-N]` 규약으로 렌더
+- 검증 중 발견한 기존 버그 3건 수정: 머리말/꼬리말 ctrlId 오류('hdr '/'ftr ' →
+  실측 'head'/'foot')로 실문서 머리말이 전부 무시되던 문제, 이미지 binItem
+  0-based 오프셋으로 엉뚱한 BinData 에 연결되던 문제, HWPX Path-부재 하이퍼링크 누락
+- 회귀 검증: 전체 574개 테스트, 코퍼스 7,190개 재스캔 무회귀
+  (empty_output 324→244 — 도형 텍스트·머리말이 새로 추출된 개선)
+
 ### 추가 (3순위 — PDF Phase 2)
 
 - **현대 PDF(1.5+) 구조**: xref 스트림·객체 스트림(ObjStm) 네이티브 파싱 + PNG

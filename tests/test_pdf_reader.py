@@ -173,3 +173,45 @@ def test_batch_convert_includes_pdf_by_default(tmp_path):
     assert summary.total == 1
     assert summary.success == 1
     assert (output_dir / "doc.md").read_text(encoding="utf-8") == "Batch PDF"
+
+
+def test_outline_bookmarks_extracted_with_page_numbers(tmp_path):
+    c1 = b"BT (Chapter one body) Tj ET"
+    c2 = b"BT (Chapter two body) Tj ET"
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R >>",
+        2: "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        3: "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+        4: "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>",
+        5: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(c1), c1),
+        6: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(c2), c2),
+        7: "<< /Type /Outlines /First 8 0 R /Last 9 0 R /Count 2 >>",
+        8: "<< /Title (First chapter) /Parent 7 0 R /Next 9 0 R "
+           "/Dest [3 0 R /XYZ 0 792 0] /First 10 0 R /Last 10 0 R >>",
+        9: "<< /Title (Second chapter) /Parent 7 0 R /Dest [4 0 R /Fit] >>",
+        10: "<< /Title (Nested section) /Parent 8 0 R /Dest [3 0 R /Fit] >>",
+    }
+    path = _write(tmp_path, "outline.pdf", _build_pdf(objects))
+
+    doc = PDFReader().read(path)
+    markdown = __import__("dochan.output.markdown", fromlist=["to_markdown"]).to_markdown(doc)
+
+    assert "First chapter" in markdown
+    assert "Second chapter" in markdown
+    assert "Nested section" in markdown
+    # 페이지 번호 매핑
+    assert "(p.1)" in markdown and "(p.2)" in markdown
+    # 본문은 그대로
+    assert "Chapter one body" in markdown
+
+
+def test_circular_outline_terminates(tmp_path):
+    objects = _minimal_objects()
+    objects[1] = "<< /Type /Catalog /Pages 2 0 R /Outlines 7 0 R >>"
+    objects[7] = "<< /Type /Outlines /First 8 0 R >>"
+    objects[8] = "<< /Title (Loop) /Next 8 0 R /First 8 0 R >>"  # 자기 참조
+    path = _write(tmp_path, "loop-outline.pdf", _build_pdf(objects))
+
+    doc = PDFReader().read(path)  # 무한 루프 없이 반환
+
+    assert doc.source_format == "pdf"

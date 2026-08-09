@@ -5,7 +5,7 @@ Phase 1 범위: 고전 xref 테이블, Flate/ASCIIHex/ASCII85 필터,
 스캔 전용 페이지는 명확한 경고로 보고한다.
 """
 import os
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
@@ -16,10 +16,21 @@ from .structure import PDFFile
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 MAX_CONTENT_PARTS = 256  # 페이지당 콘텐츠 스트림 수 — 반복 참조 CPU 증폭 방지
+MAX_OUTLINE_ITEMS = 1000
+MAX_OUTLINE_DEPTH = 32
 
 
 def _drop_decoder(raw: bytes) -> str:
     return ""
+
+
+def _pdf_text_string(value) -> str:
+    """PDF 텍스트 문자열 디코드 — UTF-16BE BOM 또는 PDFDocEncoding(≈cp1252)."""
+    if not isinstance(value, bytes):
+        return ""
+    if value[:2] == b"\xfe\xff":
+        return value[2:].decode("utf-16-be", errors="replace")
+    return default_byte_decoder(value)
 
 
 class PDFReader:
@@ -53,6 +64,10 @@ class PDFReader:
         except Exception as e:
             doc.errors.append(f"ERR: PDF 구조 파싱 실패: {e!r}")
             return doc
+
+        outline_section = self._outline_section(pdf, pages)
+        if outline_section is not None:
+            doc.sections.append(outline_section)
 
         font_cache = {}
         for page_number, (page, resources) in enumerate(pages, start=1):
@@ -90,6 +105,63 @@ class PDFReader:
                 seen.add(warning)
                 doc.errors.append(warning)
         return doc
+
+    def _outline_section(self, pdf: PDFFile, pages) -> Optional[Section]:
+        """카탈로그 /Outlines 북마크 트리를 목차 섹션으로 변환."""
+        root = pdf.resolve(pdf.trailer.get("Root"))
+        if not isinstance(root, dict):
+            return None
+        outlines = pdf.resolve(root.get("Outlines"))
+        if not isinstance(outlines, dict):
+            return None
+        page_numbers = {
+            id(page): number for number, (page, _res) in enumerate(pages, start=1)
+        }
+        paragraphs = []
+        self._walk_outline(pdf, outlines.get("First"), 0, page_numbers, paragraphs, set())
+        if not paragraphs:
+            return None
+        return Section(
+            elements=paragraphs,
+            provenance=Provenance(source_format="pdf", path="outline"),
+        )
+
+    def _walk_outline(self, pdf, item_ref, depth, page_numbers, out, visited) -> None:
+        while item_ref is not None:
+            if depth > MAX_OUTLINE_DEPTH or len(out) >= MAX_OUTLINE_ITEMS:
+                return
+            key = item_ref.num if isinstance(item_ref, PDFRef) else id(item_ref)
+            if key in visited:
+                return
+            visited.add(key)
+            item = pdf.resolve(item_ref)
+            if not isinstance(item, dict):
+                return
+            title = _pdf_text_string(item.get("Title")).strip()
+            if title:
+                page_no = self._outline_page_number(pdf, item, page_numbers)
+                suffix = f" (p.{page_no})" if page_no else ""
+                indent = "  " * depth
+                out.append(
+                    Paragraph(
+                        runs=[TextRun(text=f"{indent}- {title}{suffix}")],
+                        provenance=Provenance(source_format="pdf", path="outline", page=page_no),
+                    )
+                )
+            self._walk_outline(pdf, item.get("First"), depth + 1, page_numbers, out, visited)
+            item_ref = item.get("Next")
+
+    def _outline_page_number(self, pdf, item, page_numbers):
+        dest = pdf.resolve(item.get("Dest"))
+        if dest is None:
+            action = pdf.resolve(item.get("A"))
+            if isinstance(action, dict):
+                dest = pdf.resolve(action.get("D"))
+        if isinstance(dest, list) and dest:
+            page = pdf.resolve(dest[0])
+            if isinstance(page, dict):
+                return page_numbers.get(id(page))
+        return None
 
     def _page_content_parts(self, pdf: PDFFile, page: dict) -> list:
         contents = pdf.resolve(page.get("Contents"))

@@ -36,6 +36,9 @@ class PDFFile:
         self._rescanned = False
         self._decoded_cache: Dict[int, bytes] = {}
         self._decode_budget = MAX_TOTAL_DECODED
+        # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
+        self._compressed: Dict[int, Tuple[int, int]] = {}
+        self._objstm_cache: Dict[int, Tuple[list, Optional[bytes], int]] = {}
         self._parse_structure()
 
     # ── 구조 파싱 ──
@@ -75,14 +78,15 @@ class PDFFile:
             seen.add(current)
             lexer = PDFLexer(self.data, current)
             lexer.skip_whitespace()
-            if lexer.read_token() != b"xref":
-                self.warnings.append(
-                    "WARN: xref 스트림(PDF 1.5+)은 아직 지원하지 않음 — 객체 스캔으로 대체"
-                )
-                return False
-            trailer = self._parse_xref_table(lexer)
-            if trailer is None:
-                return False
+            if lexer.read_token() == b"xref":
+                trailer = self._parse_xref_table(lexer)
+                if trailer is None:
+                    return False
+            else:
+                trailer = self._parse_xref_stream_at(current)
+                if trailer is None:
+                    self.warnings.append("WARN: xref 스트림 파싱 실패 — 객체 스캔으로 대체")
+                    return False
             for key, value in trailer.items():
                 self.trailer.setdefault(key, value)  # 최신 trailer 우선
             prev = trailer.get("Prev")
@@ -130,9 +134,61 @@ class PDFFile:
                     # 삭제 표시된 객체가 이전 리비전 내용으로 부활한다
                     self.xref[obj_num] = int(off_tok) if kind == b"n" else None
 
+    def _parse_xref_stream_at(self, offset: int) -> Optional[dict]:
+        """`/Type /XRef` 스트림 객체를 파싱해 스트림 사전(trailer 역할)을 반환."""
+        try:
+            _num, _gen, obj = parse_indirect_object(self.data, offset, resolve=None)
+        except PDFSyntaxError:
+            return None
+        if not isinstance(obj, PDFStream) or str(obj.dictionary.get("Type", "")) != "XRef":
+            return None
+        stream_dict = obj.dictionary
+        data = self.decode_stream_bytes(obj)
+        if not data:
+            return None
+        w = stream_dict.get("W")
+        if not (isinstance(w, list) and 1 <= len(w) <= 3
+                and all(isinstance(x, int) and 0 <= x <= 8 for x in w)):
+            return None
+        widths = list(w) + [0] * (3 - len(w))
+        entry_width = sum(widths)
+        if entry_width <= 0:
+            return None
+        size = stream_dict.get("Size")
+        size = size if isinstance(size, int) and size >= 0 else 0
+        index = stream_dict.get("Index")
+        if not (isinstance(index, list) and index and len(index) % 2 == 0
+                and all(isinstance(x, int) and x >= 0 for x in index)):
+            index = [0, size]
+        pos = 0
+        for pair_idx in range(0, len(index), 2):
+            start, count = index[pair_idx], index[pair_idx + 1]
+            if count > MAX_OBJECTS:
+                return None
+            for i in range(count):
+                if pos + entry_width > len(data):
+                    break
+                fields = []
+                for width in widths:
+                    fields.append(int.from_bytes(data[pos:pos + width], "big") if width else None)
+                    pos += width
+                entry_type = fields[0] if widths[0] else 1
+                obj_num = start + i
+                if obj_num in self.xref or obj_num in self._compressed:
+                    continue  # 최신 섹션 우선
+                if entry_type == 1 and fields[1] is not None:
+                    self.xref[obj_num] = fields[1]
+                elif entry_type == 2 and fields[1] is not None:
+                    self._compressed[obj_num] = (fields[1], fields[2] or 0)
+                elif entry_type == 0:
+                    self.xref[obj_num] = None  # free — tombstone
+        return stream_dict
+
     def _scan_objects(self) -> None:
         self.xref = {}
         self._cache = {}
+        self._compressed = {}
+        self._objstm_cache = {}
         count = 0
         for match in _OBJ_RE.finditer(self.data):
             # 파일 뒤쪽 정의가 최신(증분 갱신)이므로 덮어쓴다
@@ -191,7 +247,11 @@ class PDFFile:
         if ref.num in self._cache:
             return self._cache[ref.num]
         offset = self.xref.get(ref.num)
-        if offset is None or offset >= len(self.data):
+        if offset is None:
+            if ref.num in self._compressed:
+                return self._load_compressed(ref.num)
+            return None
+        if offset >= len(self.data):
             return None
         self._cache[ref.num] = None  # 순환 참조 가드
         try:
@@ -217,6 +277,61 @@ class PDFFile:
             obj = self.get_object(obj)
             depth += 1
         return obj
+
+    def _load_compressed(self, num: int) -> Any:
+        """ObjStm(객체 스트림)에 압축 저장된 객체를 로드."""
+        self._cache[num] = None  # 순환 참조 가드
+        objstm_num, idx = self._compressed[num]
+        pairs, data, first = self._objstm_contents(objstm_num)
+        if data is None:
+            return None
+        offset = None
+        for pair_obj, pair_off in pairs:
+            if pair_obj == num:
+                offset = pair_off
+                break
+        if offset is None and 0 <= idx < len(pairs):
+            offset = pairs[idx][1]
+        if offset is None or first + offset >= len(data):
+            self.warnings.append(f"WARN: ObjStm {objstm_num} 에서 객체 {num} 을 찾지 못함")
+            return None
+        lexer = PDFLexer(data, first + offset)
+        try:
+            obj = lexer.parse_object()
+        except PDFSyntaxError as e:
+            self.warnings.append(f"WARN: ObjStm 내 객체 {num} 파싱 실패: {e}")
+            return None
+        self._cache[num] = obj
+        return obj
+
+    def _objstm_contents(self, objstm_num: int) -> Tuple[list, Optional[bytes], int]:
+        cached = self._objstm_cache.get(objstm_num)
+        if cached is not None:
+            return cached
+        empty: Tuple[list, Optional[bytes], int] = ([], None, 0)
+        self._objstm_cache[objstm_num] = empty  # 순환 가드 겸 실패 캐시
+        stm = self.get_object(PDFRef(objstm_num, 0))
+        if not isinstance(stm, PDFStream) or str(stm.dictionary.get("Type", "")) != "ObjStm":
+            return empty
+        data = self.decode_stream_bytes(stm)
+        n = stm.dictionary.get("N")
+        first = stm.dictionary.get("First")
+        if not data or not isinstance(n, int) or not isinstance(first, int) \
+                or n < 0 or n > MAX_OBJECTS or first < 0:
+            return empty
+        lexer = PDFLexer(data)
+        pairs = []
+        for _ in range(n):
+            lexer.skip_whitespace()
+            obj_tok = lexer.read_token()
+            lexer.skip_whitespace()
+            off_tok = lexer.read_token()
+            if not obj_tok.isdigit() or not off_tok.isdigit():
+                break
+            pairs.append((int(obj_tok), int(off_tok)))
+        result = (pairs, data, first)
+        self._objstm_cache[objstm_num] = result
+        return result
 
     def decode_stream_bytes(self, stream: PDFStream) -> bytes:
         """스트림을 해제하되 문서 단위 누적 예산과 결과 캐시를 적용한다.

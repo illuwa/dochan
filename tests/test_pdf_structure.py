@@ -108,3 +108,89 @@ def test_circular_page_tree_terminates():
     }
     pdf = PDFFile(_build_pdf(objects))
     assert pdf.pages() == []
+
+
+# ── PDF 1.5+ xref 스트림 / 객체 스트림 ──
+
+def _build_pdf_with_xref_stream(encrypt=False):
+    """xref 스트림 + ObjStm 을 쓰는 현대식 PDF 를 수동 조립.
+
+    객체 6(폰트)은 ObjStm(객체 4) 안에 압축 저장 — type-2 엔트리 검증용.
+    """
+    import zlib as _zlib
+
+    out = bytearray(b"%PDF-1.5\n")
+    offsets = {}
+
+    def _add(num, body):
+        offsets[num] = len(out)
+        out.extend(b"%d 0 obj\n" % num)
+        out.extend(body if isinstance(body, bytes) else body.encode("latin-1"))
+        out.extend(b"\nendobj\n")
+
+    content = b"BT (Modern) Tj ET"
+    _add(1, "<< /Type /Catalog /Pages 2 0 R >>")
+    _add(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    _add(3, "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 6 0 R >> >> "
+            "/Contents 5 0 R >>")
+    _add(5, b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content))
+
+    # ObjStm: 객체 6 을 내장
+    inner = b"<< /Type /Font /Subtype /Type0 /BaseFont /Batang >>"
+    header = b"6 0 "
+    objstm_payload = header + inner
+    objstm_raw = _zlib.compress(objstm_payload)
+    _add(4, b"<< /Type /ObjStm /N 1 /First %d /Length %d /Filter /FlateDecode >>"
+            b"\nstream\n%s\nendstream" % (len(header), len(objstm_raw), objstm_raw))
+
+    # XRef 스트림 (객체 7): W [1 2 1]
+    xref_pos = len(out)
+    max_obj = 7
+
+    def _entry(t, f2, f3):
+        return bytes([t]) + f2.to_bytes(2, "big") + bytes([f3])
+
+    rows = b"".join([
+        _entry(0, 0, 255),                 # obj 0: free
+        _entry(1, offsets[1], 0),          # obj 1
+        _entry(1, offsets[2], 0),          # obj 2
+        _entry(1, offsets[3], 0),          # obj 3
+        _entry(1, offsets[4], 0),          # obj 4 (ObjStm)
+        _entry(1, offsets[5], 0),          # obj 5
+        _entry(2, 4, 0),                   # obj 6: ObjStm 4 의 0번째
+        _entry(1, xref_pos, 0),            # obj 7: XRef 자신
+    ])
+    xref_raw = _zlib.compress(rows)
+    encrypt_part = " /Encrypt 5 0 R" if encrypt else ""
+    _add(7, b"<< /Type /XRef /Size %d /W [1 2 1] /Root 1 0 R%s /Length %d "
+            b"/Filter /FlateDecode >>\nstream\n%s\nendstream"
+            % (max_obj + 1, encrypt_part.encode("ascii"), len(xref_raw), xref_raw))
+
+    out.extend(b"startxref\n%d\n%%%%EOF\n" % xref_pos)
+    return bytes(out)
+
+
+def test_xref_stream_resolves_objects_without_scan_fallback():
+    pdf = PDFFile(_build_pdf_with_xref_stream())
+
+    assert not any("스캔" in w for w in pdf.warnings)
+    catalog = pdf.resolve(pdf.trailer["Root"])
+    assert catalog["Type"] == "Catalog"
+    assert len(pdf.pages()) == 1
+
+
+def test_object_stream_compressed_object_loads():
+    pdf = PDFFile(_build_pdf_with_xref_stream())
+
+    font = pdf.resolve(PDFRef(6, 0))
+
+    assert isinstance(font, dict)
+    assert font["Type"] == "Font"
+    assert font["BaseFont"] == "Batang"
+
+
+def test_xref_stream_trailer_encrypt_detected():
+    pdf = PDFFile(_build_pdf_with_xref_stream(encrypt=True))
+
+    assert pdf.encrypted
+    assert any("암호화" in w for w in pdf.warnings)

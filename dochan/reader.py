@@ -46,6 +46,14 @@ class Dochan:
             self._run_ocr()
 
     def _parse(self):
+        # 손상/악성 문서는 정상 흐름이다 — 어떤 파서 예외도 라이브러리
+        # 호출자에게 전파하지 않고 doc.errors 로 강등한다
+        try:
+            self._parse_dispatch()
+        except Exception as e:
+            self.doc.errors.append(f"ERR: 문서 파싱 실패: {e!r}")
+
+    def _parse_dispatch(self):
         ext = os.path.splitext(self.file_path)[1].lower()
 
         if ext in ('.hwpx', '.hwp'):

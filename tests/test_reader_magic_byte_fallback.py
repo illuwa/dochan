@@ -82,3 +82,22 @@ def test_dochan_falls_back_to_hwp_when_hwpx_extension_holds_ole_content(monkeypa
 
     assert "확장자는 hwpx지만 실제로는 HWP" in doc.to_plain_text()
     assert not any("유효하지 않은 HWPX 파일" in err for err in doc.errors)
+
+
+def test_corrupt_documents_report_errors_instead_of_raising(tmp_path):
+    # POI 퍼저 픽스처 스윕에서 발견 — 손상 파일이 예외로 전파되면 안 된다
+    from dochan import Dochan
+
+    samples = {
+        "bad.docx": b"PK\x03\x04 not a real zip",
+        "bad.xlsx": b"PK\x03\x04 truncated central dir",
+        "bad.pptx": b"PK\x03\x04 nope",
+        "bad.doc": b"\xd0\xcf\x11\xe0 broken ole",
+        "bad.xls": b"\xd0\xcf\x11\xe0 broken ole",
+        "bad.ppt": b"\xd0\xcf\x11\xe0 broken ole",
+    }
+    for name, data in samples.items():
+        path = tmp_path / name
+        path.write_bytes(data)
+        doc = Dochan(str(path))  # 예외 없이 반환되어야 한다
+        assert doc.errors, name

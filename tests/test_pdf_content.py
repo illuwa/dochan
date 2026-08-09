@@ -81,3 +81,12 @@ def test_leftward_tm_same_y_starts_new_line():
 
 def test_default_decoder_cp1252():
     assert default_byte_decoder(b"caf\xe9") == "caf\xe9"
+
+
+def test_extract_sized_reports_line_font_sizes():
+    content = (
+        b"BT /F1 24 Tf 72 720 Td (Big Title) Tj "
+        b"/F1 10 Tf 0 -30 Td (Body text) Tj ET"
+    )
+    lines = ContentTextExtractor({}).extract_sized(content)
+    assert [(t, s) for t, s in lines] == [("Big Title", 24.0), ("Body text", 10.0)]

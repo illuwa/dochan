@@ -3,7 +3,7 @@
 그래픽 연산자는 무시하고 BT/ET 블록의 텍스트 배치 연산자
 (Tf, Td, TD, Tm, T*, Tj, TJ, ', ")로 줄 단위 텍스트를 재구성한다.
 """
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .objects import DELIMITERS, WHITESPACE, PDFLexer, PDFName, PDFSyntaxError
 
@@ -29,10 +29,16 @@ class ContentTextExtractor:
         self._decoder: Optional[Callable[[bytes], str]] = None
         self._last_y: Optional[float] = None
         self._last_x: Optional[float] = None
+        self._font_size: float = 0.0
+        self._line_max_size: float = 0.0
 
     def extract(self, content: bytes) -> List[str]:
+        return [text for text, _size in self.extract_sized(content)]
+
+    def extract_sized(self, content: bytes) -> List[Tuple[str, float]]:
+        """줄 텍스트와 그 줄의 최대 폰트 크기를 함께 반환 — 제목 감지용."""
         lexer = PDFLexer(content)
-        lines: List[str] = []
+        lines: List[Tuple[str, float]] = []
         current: List[str] = []
         operands: List[object] = []
         n = len(content)
@@ -63,6 +69,8 @@ class ContentTextExtractor:
         if op == b"Tf":
             if len(operands) >= 2 and isinstance(operands[-2], PDFName):
                 self._decoder = self._decoders.get(str(operands[-2]))
+            if len(operands) >= 1 and isinstance(operands[-1], (int, float)):
+                self._font_size = float(operands[-1])
         elif op in (b"BT", b"ET"):
             # 텍스트 블록 경계 자체는 줄바꿈이 아니다 — HWP→PDF 내보내기처럼
             # 단어(어절)마다 BT/ET 를 쓰는 생성기가 많아 y 좌표 변화로만 판단한다
@@ -124,6 +132,7 @@ class ContentTextExtractor:
             return
         decoder = self._decoder or default_byte_decoder
         current.append(decoder(raw))
+        self._line_max_size = max(self._line_max_size, self._font_size)
 
     @staticmethod
     def _append_space(current) -> None:
@@ -145,10 +154,10 @@ class ContentTextExtractor:
                 return end + 2
             pos = end + 1
 
-    @staticmethod
-    def _flush(lines, current) -> None:
+    def _flush(self, lines, current) -> None:
         if current:
             text = "".join(current).strip()
             if text:
-                lines.append(text)
+                lines.append((text, self._line_max_size))
             current.clear()
+        self._line_max_size = 0.0

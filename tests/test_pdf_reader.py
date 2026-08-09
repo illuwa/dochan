@@ -240,3 +240,32 @@ def test_link_annotation_urls_extracted(tmp_path):
     link_paras = [p for p in doc.sections[0].elements
                   if "example.com/docs" in getattr(p, "text", "")]
     assert link_paras and link_paras[0].provenance.page == 1
+
+
+def test_font_size_based_heading_detection(tmp_path):
+    content = (
+        b"BT /F1 24 Tf 72 720 Td (Document Title) Tj "
+        b"/F1 10 Tf 0 -30 Td (First body line) Tj "
+        b"0 -14 Td (Second body line) Tj "
+        b"0 -14 Td (Third body line) Tj ET"
+    )
+    path = _write(tmp_path, "headed.pdf", _build_pdf(_minimal_objects(content)))
+
+    doc = PDFReader().read(path)
+    paras = doc.sections[0].elements
+
+    assert paras[0].text == "Document Title"
+    assert paras[0].heading_level >= 1
+    assert all(p.heading_level == 0 for p in paras[1:])
+
+
+def test_uniform_font_size_produces_no_headings(tmp_path):
+    content = (
+        b"BT /F1 12 Tf 72 720 Td (Line A) Tj "
+        b"0 -14 Td (Line B) Tj 0 -14 Td (Line C) Tj ET"
+    )
+    path = _write(tmp_path, "flat.pdf", _build_pdf(_minimal_objects(content)))
+
+    doc = PDFReader().read(path)
+
+    assert all(p.heading_level == 0 for p in doc.sections[0].elements)

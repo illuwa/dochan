@@ -24,6 +24,24 @@ def _drop_decoder(raw: bytes) -> str:
     return ""
 
 
+def _median_font_size(sized_lines) -> float:
+    sizes = sorted(size for _text, size in sized_lines if size > 0)
+    if not sizes:
+        return 0.0
+    return sizes[len(sizes) // 2]
+
+
+def _heading_level_for_size(text: str, size: float, median: float) -> int:
+    """페이지 본문 중앙값 대비 폰트 크기로 제목 레벨 판정."""
+    if median <= 0 or size <= 0 or len(text) > 120:
+        return 0
+    if size >= median * 1.5:
+        return 1
+    if size >= median * 1.25:
+        return 2
+    return 0
+
+
 def _pdf_text_string(value) -> str:
     """PDF 텍스트 문자열 디코드 — UTF-16BE BOM 또는 PDFDocEncoding(≈cp1252)."""
     if not isinstance(value, bytes):
@@ -76,21 +94,23 @@ class PDFReader:
             )
             try:
                 content_parts = self._page_content_parts(pdf, page)
-                lines = []
+                sized_lines = []
                 if content_parts:
                     extractor = ContentTextExtractor(
                         self._font_decoders(pdf, resources, font_cache)
                     )
                     for part in content_parts:
-                        lines.extend(extractor.extract(part))
-                if not lines and self._page_has_images(pdf, resources):
+                        sized_lines.extend(extractor.extract_sized(part))
+                if not sized_lines and self._page_has_images(pdf, resources):
                     pdf.warnings.append(
                         f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (OCR 미지원)"
                     )
-                for line in lines:
+                median_size = _median_font_size(sized_lines)
+                for line, size in sized_lines:
                     section.elements.append(
                         Paragraph(
                             runs=[TextRun(line)],
+                            heading_level=_heading_level_for_size(line, size, median_size),
                             provenance=Provenance(source_format="pdf", page=page_number),
                         )
                     )

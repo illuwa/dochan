@@ -44,6 +44,8 @@ class PPTXReader:
         doc = Document(source_format="pptx")
         self._image_asset_ids = set()
         self._assets = []
+        self._slide_images = {}
+        self._image_bytes_total = 0
         with OOXMLPackage(file_path) as package:
             self._package = package
             self._comment_authors = self._read_comment_authors(package)
@@ -88,6 +90,7 @@ class PPTXReader:
                         )
                     for comments_path in self._read_slide_comment_paths(package, slide_path):
                         section.elements.extend(self._read_slide_comments(package, comments_path, index))
+                    section.elements.extend(self._slide_images.get(index, []))
                 else:
                     doc.errors.append(f"ERR: PPTX slide part not found: {slide_path}")
                 if index == 1 and core_elements:
@@ -351,9 +354,37 @@ class PPTXReader:
             return ""
         label = self._shape_label(pic_elem)
         source_path = target.lstrip("#")
-        if target.startswith("#"):
+        if target.startswith("#"):  # 내부(임베드) 이미지 — 바이트 추출 + 자산 기록
             self._record_image_asset(rel_id, source_path, label, slide_number)
+            self._extract_image_element(source_path, label, slide_number)
         return f"![{label or 'image'}]({source_path})"
+
+    def _extract_image_element(self, target: str, label: str, slide_number: int):
+        """임베드 이미지 바이트를 읽어 슬라이드별 Image 요소로 보관 (OCR 용)."""
+        from ..model.image import Image
+        _MAX_IMAGE_BYTES_TOTAL = 100 * 1024 * 1024
+        if self._image_bytes_total >= _MAX_IMAGE_BYTES_TOTAL:
+            return
+        package = getattr(self, "_package", None)
+        if package is None:
+            return
+        try:
+            data = package.read_part(target)
+        except Exception:
+            return
+        if not data:
+            return
+        self._image_bytes_total += len(data)
+        ext = posixpath.splitext(target)[1].lstrip(".").lower()
+        self._slide_images.setdefault(slide_number, []).append(
+            Image(
+                filename=posixpath.basename(target),
+                image_data=data,
+                alt_text=label,
+                image_format=ext,
+                provenance=Provenance(source_format="pptx", slide=slide_number, path=target),
+            )
+        )
 
     def _record_image_asset(self, rel_id: str, target: str, label: str, slide_number: int):
         if not rel_id or not target:

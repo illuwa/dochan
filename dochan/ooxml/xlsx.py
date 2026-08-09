@@ -122,6 +122,8 @@ class XLSXReader:
     def read(self, file_path: str) -> Document:
         doc = Document(source_format="xlsx")
         self._image_asset_ids = set()
+        self._image_bytes_total = 0
+        self._pending_images = []
         self._assets = []
         self._xf_fonts = []
         with OOXMLPackage(file_path) as package:
@@ -521,6 +523,10 @@ class XLSXReader:
             seen.add(vml_path)
             elements.extend(self._read_vml_drawing_part(package, vml_path, sheet_name))
         self._record_sheet_embedded_assets(package, sheet_root, sheet_path, sheet_name)
+        pending = getattr(self, "_pending_images", None)
+        if pending:
+            elements.extend(pending)
+            self._pending_images = []
         return elements
 
     def _read_vml_drawing_part(self, package: OOXMLPackage, vml_path: str, sheet_name: str) -> List[Paragraph]:
@@ -657,6 +663,36 @@ class XLSXReader:
                 filename=posixpath.basename(target),
                 content_type=self._image_content_type(target),
                 metadata={"label": label, "source_format": "xlsx", "sheet": sheet_name},
+            )
+        )
+        self._extract_image_element(target, label, sheet_name)
+
+    def _extract_image_element(self, target: str, label: str, sheet_name: str):
+        """임베드 이미지 바이트를 읽어 Image 요소로 대기열에 넣는다 (OCR 용)."""
+        from ..model.image import Image
+        max_total = 100 * 1024 * 1024
+        if getattr(self, "_image_bytes_total", 0) >= max_total:
+            return
+        package = getattr(self, "_package", None)
+        if package is None:
+            return
+        try:
+            data = package.read_part(target)
+        except Exception:
+            return
+        if not data:
+            return
+        self._image_bytes_total = getattr(self, "_image_bytes_total", 0) + len(data)
+        ext = posixpath.splitext(target)[1].lstrip(".").lower()
+        if not hasattr(self, "_pending_images"):
+            self._pending_images = []
+        self._pending_images.append(
+            Image(
+                filename=posixpath.basename(target),
+                image_data=data,
+                alt_text=label,
+                image_format=ext,
+                provenance=Provenance(source_format="xlsx", sheet=sheet_name, path=target),
             )
         )
 

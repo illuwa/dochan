@@ -349,7 +349,8 @@ Phase 1 implementation status (updated 2026-08-08):
 - Security limits in place (2026-08-08 감수 2회 반영): per-stream decode cap 50MB, per-document cumulative decode budget 200MB with stream result caching, CMap mapping total cap 100k entries, parser nesting depth 64, resolve depth 32, object count 500k, page count 10k, per-page content stream count 256, collection width 100k, file size 500MB; defensive exception handling downgrades parser failures to `doc.errors`.
 - Phase 2 completed (2026-08-09): xref streams + object streams (PNG predictors Sub/Up/Average/Paeth 포함 — 실물 검증: qpdf 변환 xref 스트림 PDF 에서 클래식 원본과 바이트 단위 동일 추출), outline bookmarks (목차 섹션 + 페이지 번호 매핑, 순환 가드), link annotation URI 추출(TextRun.link), font-size 기반 제목 감지(페이지 중앙값 대비 1.5×/1.25× 임계 — 별표19 실문서에서 실제 제목 감지 확인).
 - Table reconstruction deliberately deferred: HWP→PDF 내보내기는 셀이 아닌 어절 단위로 좌표를 찍으므로(별표19 실측) 글리프 폭 메트릭 없는 x 클러스터링은 열 경계를 신뢰성 있게 찾지 못한다. 낮은 신뢰도 표를 내보내지 않고 Phase 3 (글리프 메트릭 도입 후) 로 이월.
-- Not yet completed for encrypted PDFs, LZW filter, TIFF predictor, glyph-width-aware spacing/tables, layout-aware reading order, image extraction, and OCR.
+- Phase 3 completed (2026-08-09): 표준 보안 핸들러 복호화 — RC4(V1/V2/V4), AESV2(AES-128-CBC), AESV3(AES-256-CBC, R6 경화 해시). 빈 사용자 암호(소유자만 잠근 문서)와 사용자 제공 암호 처리. stdlib 전용(hashlib + 순정 AES-CBC 확장). 검증: RFC 6229/NIST SP 800-38A 공인 벡터 + qpdf 생성 3종 암호화 PDF 엔드투엔드 + 실제 암호화 정부 PDF(0자→한글 1279자).
+- Not yet completed for PDF LZW filter, TIFF predictor, 진짜 사용자 암호가 필요한 문서(빈/소유자 경로로 못 여는 경우), glyph-width-aware spacing/tables, layout-aware reading order, image extraction, and OCR.
 - Real-document validation (2026-08-08): 80 same-document HWP/HWPX/PDF pairs — 0 crashes, 0 empty outputs, 0 control-character leaks; HWPX↔PDF text similarity mean 0.868, all 79 comparable pairs ≥ 0.73. Downloads 실문서 34건 — 0 crashes; 4 empty outputs all with correct warnings (encrypted 1, scanned 2, no-ToUnicode CID 1).
 
 Implementation targets:

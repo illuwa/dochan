@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### 추가 (3순위 — PDF Phase 2)
+
+- **현대 PDF(1.5+) 구조**: xref 스트림·객체 스트림(ObjStm) 네이티브 파싱 + PNG
+  Predictor(Sub/Up/Average/Paeth) 해제. 실물 검증 — qpdf 변환 xref 스트림 PDF 에서
+  클래식 원본과 바이트 단위 동일 추출
+- **Outline 북마크**: 목차 섹션 + Dest 페이지 번호 매핑 (순환 가드, 1,000개 상한)
+- **링크 주석 URL**: /Annots 의 URI 액션 추출, `TextRun.link` 연결
+- **제목 감지**: 페이지 폰트 크기 중앙값 대비 임계(1.5×→h1, 1.25×→h2) — 실문서에서
+  문서 제목 감지 확인
+- 표 재구성은 의도적 보류 — 어절 단위 좌표(실측 근거) 때문에 글리프 폭 메트릭 없이는
+  열 경계 신뢰성이 부족. 거짓 체크 대신 스펙에 이월 기록
+- **리더 견고성**: 손상 문서의 파서 예외를 doc.errors 로 강등 (Apache POI 퍼저
+  픽스처 573개 실측에서 발견한 계약 위반 47건 → 0건)
+
 ### 추가 (2순위 — 비교표 커버리지 확대)
 
 - **XLSX 셀 서식**: `xl/styles.xml` fonts + cellXfs fontId 기반 bold/italic/underline/strike

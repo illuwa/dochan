@@ -466,3 +466,78 @@ def test_memo_renders_as_comment_definition_in_markdown():
     md = to_markdown(Document(sections=[section]))
 
     assert "[^comment-1]: 검토 의견입니다" in md
+
+
+# ── 표 캡션 (실측: 캡션 LIST_HEADER 가 TABLE 레코드 앞에 온다) ──
+
+def table_caption_lh(direction: int = 2) -> bytes:
+    """표 캡션 LIST_HEADER — 실측(Trade and Security / 정보보안 hexdump):
+    paraCount(UINT32)=1 + attr(UINT32)=0 + 위치(UINT32; 0=L,1=R,2=T,3=B) + 나머지.
+    셀 LIST_HEADER(47바이트)와 달리 TABLE 레코드보다 먼저 등장한다."""
+    return struct.pack("<I", 1) + struct.pack("<I", 0) + struct.pack("<I", direction) + bytes(18)
+
+
+def test_table_caption_is_attached_and_dimensions_survive():
+    """캡션이 있는 표에서 (1) 캡션이 Table.caption 으로 분리되고
+    (2) 캡션 LIST_HEADER 가 셀로 오염되지 않아 표 차원이 보존돼야 한다.
+
+    실측 레코드 순서 (Trade and Security 학술지 운영지침.hwp):
+      CTRL_HEADER('tbl ') → LIST_HEADER(캡션) → PARA_HEADER(캡션문단)
+      → TABLE → LIST_HEADER(셀) → PARA_HEADER(셀문단)
+    캡션 LH 는 TABLE 레코드를 트리 보정으로 자식으로 흡수한다."""
+    from dochan.constants import HWPTAG_TABLE
+    from dochan.model.table import Table
+
+    table_payload = bytes(4) + struct.pack("<HH", 1, 1)  # 1x1
+    cell_lh = bytes(8) + struct.pack("<HHHH", 0, 0, 1, 1)  # col,row,colspan,rowspan
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("표 앞 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b" lbt" + bytes(4)) +
+        rec(HWPTAG_LIST_HEADER, 2, table_caption_lh(direction=2)) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("< 표 1. 캡션 >")) +
+        rec(HWPTAG_TABLE, 2, table_payload) +
+        rec(HWPTAG_LIST_HEADER, 2, cell_lh) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("셀 텍스트"))
+    )
+    section = parse_section(data)
+
+    tables = [e for e in section.elements if isinstance(e, Table)]
+    assert len(tables) == 1
+    table = tables[0]
+    # 캡션이 별도 슬롯으로 분리됨
+    assert table.caption_text == "< 표 1. 캡션 >"
+    assert table.caption_side == "TOP"
+    # 차원 보존: 캡션이 셀로 오염되면 1x1 이 무너진다
+    assert table.row_count == 1
+    assert table.col_count == 1
+    assert table.rows[0][0].text == "셀 텍스트"
+    # 캡션 텍스트가 셀 안으로 새지 않았다
+    assert "캡션" not in table.rows[0][0].text
+
+
+def test_table_without_caption_still_parses():
+    """캡션 없는 표(TABLE 이 CTRL_HEADER 직속 첫 자식)는 기존과 동일해야 한다."""
+    from dochan.constants import HWPTAG_TABLE
+    from dochan.model.table import Table
+
+    table_payload = bytes(4) + struct.pack("<HH", 1, 1)
+    cell_lh = bytes(8) + struct.pack("<HHHH", 0, 0, 1, 1)
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("표 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b" lbt" + bytes(4)) +
+        rec(HWPTAG_TABLE, 2, table_payload) +
+        rec(HWPTAG_LIST_HEADER, 2, cell_lh) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("셀만"))
+    )
+    section = parse_section(data)
+
+    tables = [e for e in section.elements if isinstance(e, Table)]
+    assert len(tables) == 1
+    assert tables[0].caption_text == ""
+    assert tables[0].row_count == 1
+    assert tables[0].rows[0][0].text == "셀만"

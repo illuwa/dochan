@@ -401,18 +401,45 @@ class SectionParser:
 
     MAX_TABLE_CELLS = 1_000_000  # 1M cells max
 
+    # 표 캡션 위치 코드(개체 공통 속성 표 76) → caption_side 문자열
+    _CAPTION_SIDE = {0: 'LEFT', 1: 'RIGHT', 2: 'TOP', 3: 'BOTTOM'}
+
     def _parse_table(self, ctrl_node):
-        """표 파싱 (셀 병합 대응, LIST_HEADER(72)+TABLE(77) 수집)"""
+        """표 파싱 (셀 병합 대응, LIST_HEADER(72)+TABLE(77) 수집)
+
+        ★ 캡션 처리: 표 캡션은 TABLE 레코드보다 먼저 오는 LIST_HEADER 다
+          (실측: Trade and Security / 정보보안 hexdump). _build_tree 의 LIST_HEADER
+          자식 흡수 규칙 때문에 이 캡션 LH 가 뒤따르는 TABLE 레코드를 자식으로
+          삼킨다. 그래서 TABLE 을 못 찾으면 표 차원이 0이 되고 캡션 LH 가 셀로
+          오인돼 표가 통째로 무너진다. TABLE 을 만나기 전의 LIST_HEADER(및 그 안에
+          흡수된 TABLE)를 캡션으로 분리한다.
+        """
         table = Table()
         table_rec = None
+        caption_nodes = []
         list_header_nodes = []
 
         for child in ctrl_node['children']:
             crec = child['record']
             if crec.tag_id == HWPTAG_TABLE:
-                table_rec = crec
+                if table_rec is None:
+                    table_rec = crec
             elif crec.tag_id == HWPTAG_LIST_HEADER:
-                list_header_nodes.append(child)
+                if table_rec is None:
+                    # TABLE 을 아직 못 만났다 → 이 LH 는 캡션 영역이다.
+                    # 트리 보정으로 TABLE 이 이 LH 자식으로 흡수됐을 수 있다.
+                    nested_table = next(
+                        (g['record'] for g in child['children']
+                         if g['record'].tag_id == HWPTAG_TABLE), None)
+                    if nested_table is not None:
+                        table_rec = nested_table
+                    caption_nodes.append(child)
+                else:
+                    list_header_nodes.append(child)
+
+        caption = self._parse_table_caption(caption_nodes)
+        if caption is not None:
+            table.caption, table.caption_side = caption
 
         # TABLE 레코드에서 행/열 수 파싱
         row_count = 0
@@ -478,6 +505,30 @@ class SectionParser:
                 table.rows = [row] if row else []
 
         return table
+
+    def _parse_table_caption(self, caption_nodes):
+        """캡션 LIST_HEADER 노드들에서 (문단 목록, side) 를 만든다.
+
+        캡션 LH 는 PARA_HEADER(캡션 문단)와 (흡수된) TABLE 을 자식으로 가진다.
+        문단만 캡션으로 취하고 TABLE 은 건드리지 않는다. side 는 캡션 LH offset 8
+        의 위치 코드(0=L,1=R,2=T,3=B)에서 읽는다 (실측 direction=2=TOP)."""
+        if not caption_nodes:
+            return None
+        cap_paras = []
+        side = 'BOTTOM'
+        for cnode in caption_nodes:
+            data = cnode['record'].data
+            if len(data) >= 12:
+                direction = struct.unpack_from("<I", data, 8)[0]
+                side = self._CAPTION_SIDE.get(direction, side)
+            for sub in cnode['children']:
+                if sub['record'].tag_id == HWPTAG_PARA_HEADER:
+                    cap_paras.extend(
+                        e for e in self._parse_paragraph_group(sub)
+                        if hasattr(e, 'runs'))
+        if not cap_paras:
+            return None
+        return cap_paras, side
 
     def _parse_cell_info(self, lh_node) -> dict:
         """LIST_HEADER 노드에서 셀 위치/병합/내용 파싱"""

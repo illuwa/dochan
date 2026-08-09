@@ -6,8 +6,9 @@ xref 스트림(PDF 1.5+)과 객체 스트림은 이번 마일스톤에서 지원
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from .crypto import StandardSecurityHandler, UnsupportedEncryption
 from .filters import decode_stream
-from .objects import PDFLexer, PDFRef, PDFStream, PDFSyntaxError, parse_indirect_object
+from .objects import PDFLexer, PDFName, PDFRef, PDFStream, PDFSyntaxError, parse_indirect_object
 
 MAX_XREF_SECTIONS = 32
 MAX_OBJECTS = 500_000
@@ -32,6 +33,7 @@ class PDFFile:
         self.trailer: Dict[str, Any] = {}
         self.xref: Dict[int, Optional[int]] = {}  # 객체 번호 → 오프셋 (None=삭제됨)
         self.encrypted = False
+        self.decrypt_ok = False
         self._cache: Dict[int, Any] = {}
         self._rescanned = False
         self._decoded_cache: Dict[int, bytes] = {}
@@ -39,7 +41,10 @@ class PDFFile:
         # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
         self._compressed: Dict[int, Tuple[int, int]] = {}
         self._objstm_cache: Dict[int, Tuple[list, Optional[bytes], int]] = {}
+        self._decryptor: Optional[StandardSecurityHandler] = None
+        self._encrypt_ref_num: Optional[int] = None
         self._parse_structure()
+        self._setup_encryption()
 
     # ── 구조 파싱 ──
 
@@ -50,7 +55,6 @@ class PDFFile:
             self._scan_objects()
         if self.trailer.get("Encrypt") is not None:
             self.encrypted = True
-            self.warnings.append("WARN: 암호화된 PDF — 텍스트 추출을 지원하지 않음")
 
     def _find_startxref(self) -> Optional[int]:
         tail = self.data[-2048:]
@@ -133,6 +137,61 @@ class PDFFile:
                     # free(f) 엔트리도 tombstone 으로 기록 — 안 하면 증분 갱신에서
                     # 삭제 표시된 객체가 이전 리비전 내용으로 부활한다
                     self.xref[obj_num] = int(off_tok) if kind == b"n" else None
+
+    def _setup_encryption(self) -> None:
+        """Encrypt 사전이 있으면 표준 보안 핸들러를 빈 암호로 초기화."""
+        if not self.encrypted:
+            return
+        encrypt_ref = self.trailer.get("Encrypt")
+        if isinstance(encrypt_ref, PDFRef):
+            self._encrypt_ref_num = encrypt_ref.num
+        encrypt = self.resolve(encrypt_ref)
+        if not isinstance(encrypt, dict):
+            self.warnings.append("WARN: 암호화된 PDF — Encrypt 사전을 찾지 못함")
+            return
+        if str(encrypt.get("Filter", "")) != "Standard":
+            self.warnings.append(
+                f"WARN: 암호화된 PDF — 지원하지 않는 보안 핸들러({encrypt.get('Filter')}) — 텍스트 추출 불가"
+            )
+            return
+        doc_id = b""
+        ids = self.trailer.get("ID")
+        if isinstance(ids, list) and ids and isinstance(ids[0], bytes):
+            doc_id = ids[0]
+        try:
+            self._decryptor = StandardSecurityHandler(encrypt, doc_id, password=b"")
+            self.decrypt_ok = True
+            self._cache.clear()  # 핸들러 이전 캐시는 미복호화 상태 — 폐기
+        except UnsupportedEncryption:
+            self.warnings.append(
+                "WARN: 암호화된 PDF — 빈 암호로 열 수 없음(사용자 암호 필요) 또는 미지원 방식"
+            )
+        except Exception as e:
+            self.warnings.append(f"WARN: 암호화 처리 실패: {e!r} — 텍스트 추출 불가")
+
+    def _decrypt_object(self, num: int, gen: int, obj: Any) -> Any:
+        """indirect 객체의 문자열·스트림 바이트를 제자리 복호화."""
+        if self._decryptor is None or num == self._encrypt_ref_num:
+            return obj
+        if isinstance(obj, PDFStream):
+            obj.dictionary = self._decrypt_object(num, gen, obj.dictionary)
+            try:
+                obj.raw = self._decryptor.decrypt(num, gen, obj.raw)
+            except Exception:
+                pass
+            return obj
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                obj[key] = self._decrypt_object(num, gen, value)
+            return obj
+        if isinstance(obj, list):
+            return [self._decrypt_object(num, gen, v) for v in obj]
+        if isinstance(obj, bytes) and not isinstance(obj, PDFName):
+            try:
+                return self._decryptor.decrypt(num, gen, obj)
+            except Exception:
+                return obj
+        return obj
 
     def _parse_xref_stream_at(self, offset: int) -> Optional[dict]:
         """`/Type /XRef` 스트림 객체를 파싱해 스트림 사전(trailer 역할)을 반환."""
@@ -267,6 +326,8 @@ class PDFFile:
                 return self.get_object(ref)
             self.warnings.append(f"WARN: 객체 {ref.num} 오프셋이 {num} 을 가리킴")
             return None
+        if self._decryptor is not None:
+            obj = self._decrypt_object(ref.num, ref.gen, obj)
         self._cache[ref.num] = obj
         return obj
 

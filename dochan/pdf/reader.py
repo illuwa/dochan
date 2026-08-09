@@ -75,7 +75,7 @@ class PDFReader:
         # 손상/악성 PDF 는 정상 흐름이지 예외 상황이 아니다 (감수 M2)
         try:
             pdf = PDFFile(data)
-            if pdf.encrypted:
+            if pdf.encrypted and not pdf.decrypt_ok:
                 doc.errors.extend(pdf.warnings)
                 return doc
             pages = pdf.pages()

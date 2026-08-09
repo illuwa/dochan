@@ -47,8 +47,13 @@ _RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
 
 
 def _key_expansion(key: bytes) -> List[List[int]]:
-    """128비트 키 → 11개 라운드 키(각 4워드)."""
-    nk, nr = 4, 10
+    """128/256비트 키 → 라운드 키 워드 목록.
+
+    Nk=4(AES-128,Nr=10) 또는 Nk=8(AES-256,Nr=14). AES-256 은
+    Nk>6 전용의 추가 SubWord 단계(i % nk == 4)를 포함한다 (FIPS-197 §5.2).
+    """
+    nk = len(key) // 4
+    nr = nk + 6
     w = [list(key[4 * i:4 * i + 4]) for i in range(nk)]
     for i in range(nk, 4 * (nr + 1)):
         temp = list(w[i - 1])
@@ -56,6 +61,8 @@ def _key_expansion(key: bytes) -> List[List[int]]:
             temp = temp[1:] + temp[:1]
             temp = [SBOX[b] for b in temp]
             temp[0] ^= _RCON[i // nk - 1]
+        elif nk > 6 and i % nk == 4:
+            temp = [SBOX[b] for b in temp]
         w.append([w[i - nk][j] ^ temp[j] for j in range(4)])
     return w
 
@@ -100,10 +107,10 @@ def _inv_mix_columns(state: List[List[int]]) -> None:
         state[3][c] = _gmul(a[0], 0x0B) ^ _gmul(a[1], 0x0D) ^ _gmul(a[2], 0x09) ^ _gmul(a[3], 0x0E)
 
 
-def _decrypt_block(block: bytes, round_keys: List[List[int]]) -> bytes:
+def _decrypt_block(block: bytes, round_keys: List[List[int]], nr: int = 10) -> bytes:
     state = [[block[r + 4 * c] for c in range(4)] for r in range(4)]
-    _add_round_key(state, round_keys, 10)
-    for round_idx in range(9, 0, -1):
+    _add_round_key(state, round_keys, nr)
+    for round_idx in range(nr - 1, 0, -1):
         _inv_shift_rows(state)
         _inv_sub_bytes(state)
         _add_round_key(state, round_keys, round_idx)
@@ -111,6 +118,40 @@ def _decrypt_block(block: bytes, round_keys: List[List[int]]) -> bytes:
     _inv_shift_rows(state)
     _inv_sub_bytes(state)
     _add_round_key(state, round_keys, 0)
+    return bytes(state[r][c] for c in range(4) for r in range(4))
+
+
+def _sub_bytes(state: List[List[int]]) -> None:
+    for r in range(4):
+        for c in range(4):
+            state[r][c] = SBOX[state[r][c]]
+
+
+def _shift_rows(state: List[List[int]]) -> None:
+    for r in range(1, 4):
+        state[r] = state[r][r:] + state[r][:r]
+
+
+def _mix_columns(state: List[List[int]]) -> None:
+    for c in range(4):
+        a = [state[r][c] for r in range(4)]
+        state[0][c] = _gmul(a[0], 2) ^ _gmul(a[1], 3) ^ a[2] ^ a[3]
+        state[1][c] = a[0] ^ _gmul(a[1], 2) ^ _gmul(a[2], 3) ^ a[3]
+        state[2][c] = a[0] ^ a[1] ^ _gmul(a[2], 2) ^ _gmul(a[3], 3)
+        state[3][c] = _gmul(a[0], 3) ^ a[1] ^ a[2] ^ _gmul(a[3], 2)
+
+
+def _encrypt_block(block: bytes, round_keys: List[List[int]], nr: int) -> bytes:
+    state = [[block[r + 4 * c] for c in range(4)] for r in range(4)]
+    _add_round_key(state, round_keys, 0)
+    for round_idx in range(1, nr):
+        _sub_bytes(state)
+        _shift_rows(state)
+        _mix_columns(state)
+        _add_round_key(state, round_keys, round_idx)
+    _sub_bytes(state)
+    _shift_rows(state)
+    _add_round_key(state, round_keys, nr)
     return bytes(state[r][c] for c in range(4) for r in range(4))
 
 
@@ -126,3 +167,35 @@ def aes128_ecb_decrypt(key: bytes, data: bytes) -> bytes:
         _decrypt_block(data[i:i + 16], round_keys)
         for i in range(0, len(data), 16)
     )
+
+
+def aes_cbc_decrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:
+    """AES-128/256-CBC 복호화 (패딩 제거는 호출자 책임). PDF 암호 복호화용."""
+    if len(key) not in (16, 32) or len(iv) != 16 or len(data) % 16 != 0:
+        return b""
+    round_keys = _key_expansion(key)
+    nr = len(key) // 4 + 6
+    out = bytearray()
+    prev = iv
+    for i in range(0, len(data), 16):
+        block = data[i:i + 16]
+        dec = _decrypt_block(block, round_keys, nr)
+        out.extend(a ^ b for a, b in zip(dec, prev))
+        prev = block
+    return bytes(out)
+
+
+def aes_cbc_encrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:
+    """AES-128/256-CBC 암호화 (패딩 없음). PDF R6 경화 해시 전용."""
+    if len(key) not in (16, 32) or len(iv) != 16 or len(data) % 16 != 0:
+        return b""
+    round_keys = _key_expansion(key)
+    nr = len(key) // 4 + 6
+    out = bytearray()
+    prev = iv
+    for i in range(0, len(data), 16):
+        block = bytes(a ^ b for a, b in zip(data[i:i + 16], prev))
+        enc = _encrypt_block(block, round_keys, nr)
+        out.extend(enc)
+        prev = enc
+    return bytes(out)

@@ -80,17 +80,19 @@ def link_images_to_bin_data(doc, bin_data_items: Dict[int, BinDataItem],
     bin_data_entries: DocInfo에서 파싱한 BinDataEntry 목록
     bin_data_items: OLE에서 추출한 BinDataItem 딕셔너리
     """
-    from ..model.image import Image
+    # find_all 은 표 셀·머리글/바닥글·각주 내부까지 재귀 탐색한다 —
+    # GSO 이미지가 표 셀 안에 있는 실문서(회계규칙 등)에서 최상위 순회만으로는 놓친다.
+    for elem in doc.find_all('image'):
+        if elem.bin_id >= 1:
+            # ★ SC_PICTURE 의 binItem 은 1-based ID (실측: 정보보안 세부지침 —
+            #   BinDataEntry 12개에 bin_id 1..12. 0-based 로 읽으면 한 칸씩 밀린
+            #   엉뚱한 이미지가 연결되고 마지막 이미지는 연결되지 않는다)
+            index = elem.bin_id - 1
+            if index < len(bin_data_entries):
+                entry = bin_data_entries[index]
+                storage_id = entry.bin_data_id
 
-    for section in doc.sections:
-        for elem in section.elements:
-            if isinstance(elem, Image) and elem.bin_id >= 0:
-                # bin_id는 DocInfo의 BinDataEntry 인덱스 (0-based)
-                if elem.bin_id < len(bin_data_entries):
-                    entry = bin_data_entries[elem.bin_id]
-                    storage_id = entry.bin_data_id
-
-                    if storage_id in bin_data_items:
-                        item = bin_data_items[storage_id]
-                        elem.image_data = item.data
-                        elem.filename = item.filename
+                if storage_id in bin_data_items:
+                    item = bin_data_items[storage_id]
+                    elem.image_data = item.data
+                    elem.filename = item.filename

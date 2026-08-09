@@ -148,6 +148,86 @@ def test_gso_caption_is_attached_to_image():
     assert images[0].caption_text == "그림 1. 캡션"
 
 
+def test_header_footer_ctrl_id_is_head_foot():
+    """머리말/꼬리말 ctrlId 는 실측상 'head'/'foot' (LE 저장 b'daeh'/b'toof').
+    기존 상수 'hdr '/'ftr ' 로는 실문서 머리말이 전부 무시된다 (회계규칙 실측)."""
+    from dochan.model.header_footer import HeaderFooter
+
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("본문")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"daeh" + bytes(8)) +
+        rec(HWPTAG_LIST_HEADER, 2, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("머리말 텍스트")) +
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("본문2")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"toof" + bytes(8)) +
+        rec(HWPTAG_LIST_HEADER, 2, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("꼬리말 텍스트"))
+    )
+    section = parse_section(data)
+
+    hfs = [e for e in section.elements if isinstance(e, HeaderFooter)]
+    assert [(hf.type, hf.text) for hf in hfs] == [
+        ("header", "머리말 텍스트"), ("footer", "꼬리말 텍스트")]
+
+
+def test_header_keeps_table_and_nested_image_blocks():
+    """머리말 안 표, 그 셀 안 GSO 이미지까지 유지돼야 한다 (회계규칙 실측 구조)."""
+    from dochan.constants import HWPTAG_TABLE
+    from dochan.model.header_footer import HeaderFooter
+    from dochan.model.document import Document, Section
+
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    table_payload = bytes(4) + struct.pack("<HH", 1, 1)
+    cell_lh = bytes(8) + struct.pack("<HHHH", 0, 0, 1, 1)
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("본문")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b"daeh" + bytes(8)) +
+        rec(HWPTAG_LIST_HEADER, 2, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 3, para_text_payload("머리말 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 3, b" lbt" + bytes(4)) +
+        rec(HWPTAG_TABLE, 4, table_payload) +
+        rec(HWPTAG_LIST_HEADER, 4, cell_lh) +
+        rec(HWPTAG_PARA_HEADER, 4, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 5, para_text_payload("셀 텍스트")) +
+        rec(HWPTAG_CTRL_HEADER, 5, gso_ctrl_payload()) +
+        rec(HWPTAG_SHAPE_COMPONENT, 6, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 7, pic_payload)
+    )
+    section = parse_section(data)
+
+    hfs = [e for e in section.elements if isinstance(e, HeaderFooter)]
+    assert len(hfs) == 1
+    assert "셀 텍스트" in hfs[0].text  # 표 블록 유지
+
+    # find_all 로 머리말→표→셀 내부 이미지까지 도달해야 BinData 연결이 가능하다
+    doc = Document(sections=[section])
+    assert len(doc.find_all('image')) == 1
+
+
+def test_link_images_uses_one_based_bin_item():
+    """SC_PICTURE binItem 은 1-based (실측: 정보보안 세부지침 bin_id 1..12
+    ↔ BinDataEntry 12개). 0-based 로 읽으면 한 칸 밀리거나 연결이 빠진다."""
+    from dochan.hwp.bin_data import BinDataItem, link_images_to_bin_data
+    from dochan.hwp.doc_info import BinDataEntry
+    from dochan.model.document import Document, Section
+
+    img = Image(bin_id=1)
+    doc = Document(sections=[Section(elements=[img])])
+    entries = [BinDataEntry(bin_data_id=7)]
+    items = {7: BinDataItem(storage_id=7, data=b"PNGDATA", extension="png")}
+
+    link_images_to_bin_data(doc, items, entries)
+
+    assert img.image_data == b"PNGDATA"
+    assert img.filename == "BIN0007.png"
+
+
 def test_gso_textbox_text_inside_table_cell():
     """표 셀 안 GSO 도형 텍스트도 셀 문단으로 수집된다 (정보보안 실측 구조)."""
     from dochan.constants import HWPTAG_TABLE

@@ -21,8 +21,10 @@ CTRL_EQUATION    = _make_4chid('e', 'q', 'e', 'd')   # b'\x64\x65\x71\x65'
 CTRL_GSO         = _make_4chid('g', 's', 'o', ' ')
 CTRL_SECTION_DEF = _make_4chid('s', 'e', 'c', 'd')
 CTRL_COLUMN_DEF  = _make_4chid('c', 'o', 'l', 'd')
-CTRL_HEADER_HF   = _make_4chid('h', 'd', 'r', ' ')
-CTRL_FOOTER_HF   = _make_4chid('f', 't', 'r', ' ')
+# ★ 실파일 실측(회계규칙 등 test_pairs) + hwplib 확인: 머리말/꼬리말은
+#   'hdr '/'ftr ' 가 아니라 'head'/'foot' 다.
+CTRL_HEADER_HF   = _make_4chid('h', 'e', 'a', 'd')
+CTRL_FOOTER_HF   = _make_4chid('f', 'o', 'o', 't')
 CTRL_FOOTNOTE    = _make_4chid('f', 'n', ' ', ' ')
 CTRL_ENDNOTE     = _make_4chid('e', 'n', ' ', ' ')
 CTRL_AUTO_NUMBER = _make_4chid('a', 't', 'n', 'o')

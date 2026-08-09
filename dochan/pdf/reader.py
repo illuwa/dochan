@@ -94,6 +94,7 @@ class PDFReader:
                             provenance=Provenance(source_format="pdf", page=page_number),
                         )
                     )
+                section.elements.extend(self._link_paragraphs(pdf, page, page_number))
             except Exception as e:
                 pdf.warnings.append(f"WARN: {page_number}페이지 파싱 실패: {e!r}")
             doc.sections.append(section)
@@ -162,6 +163,34 @@ class PDFReader:
             if isinstance(page, dict):
                 return page_numbers.get(id(page))
         return None
+
+    def _link_paragraphs(self, pdf: PDFFile, page: dict, page_number: int) -> list:
+        """페이지 /Annots 의 링크 주석에서 URI 를 추출해 문단으로 반환."""
+        annots = pdf.resolve(page.get("Annots"))
+        if not isinstance(annots, list):
+            return []
+        paragraphs = []
+        seen = set()
+        for annot_ref in annots[:MAX_CONTENT_PARTS]:
+            annot = pdf.resolve(annot_ref)
+            if not isinstance(annot, dict) or str(annot.get("Subtype", "")) != "Link":
+                continue
+            action = pdf.resolve(annot.get("A"))
+            uri = None
+            if isinstance(action, dict) and str(action.get("S", "")) == "URI":
+                uri = pdf.resolve(action.get("URI"))
+            url = _pdf_text_string(uri).strip() if isinstance(uri, bytes) else ""
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            provenance = Provenance(source_format="pdf", page=page_number, path="annots")
+            paragraphs.append(
+                Paragraph(
+                    runs=[TextRun(text=f"<{url}>", link=url, provenance=provenance)],
+                    provenance=provenance,
+                )
+            )
+        return paragraphs
 
     def _page_content_parts(self, pdf: PDFFile, page: dict) -> list:
         contents = pdf.resolve(page.get("Contents"))

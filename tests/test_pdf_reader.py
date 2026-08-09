@@ -215,3 +215,28 @@ def test_circular_outline_terminates(tmp_path):
     doc = PDFReader().read(path)  # 무한 루프 없이 반환
 
     assert doc.source_format == "pdf"
+
+
+def test_link_annotation_urls_extracted(tmp_path):
+    content = b"BT (Visit our site) Tj ET"
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [6 0 R 7 0 R] >>",
+        5: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+        6: "<< /Type /Annot /Subtype /Link /Rect [0 0 100 20] "
+           "/A << /S /URI /URI (https://example.com/docs) >> >>",
+        7: "<< /Type /Annot /Subtype /Link /Rect [0 30 100 50] "
+           "/A << /S /URI /URI (mailto:hello@example.com) >> >>",
+    }
+    path = _write(tmp_path, "links.pdf", _build_pdf(objects))
+
+    doc = PDFReader().read(path)
+    markdown = __import__("dochan.output.markdown", fromlist=["to_markdown"]).to_markdown(doc)
+
+    assert "<https://example.com/docs>" in markdown
+    assert "<mailto:hello@example.com>" in markdown
+    assert "Visit our site" in markdown
+    link_paras = [p for p in doc.sections[0].elements
+                  if "example.com/docs" in getattr(p, "text", "")]
+    assert link_paras and link_paras[0].provenance.page == 1

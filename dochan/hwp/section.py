@@ -540,6 +540,7 @@ class SectionParser:
         """
         flow = []
         caption_paras = []
+        alt_text = self._parse_object_description(ctrl_node['record'].data)
 
         for child in ctrl_node['children']:
             tag = child['record'].tag_id
@@ -563,10 +564,34 @@ class SectionParser:
         if images:
             if caption_paras:
                 images[0].caption = caption_paras
+            if alt_text:
+                # 개체 설명문은 GSO 단위 속성 — HWPX shapeComment 처럼 이미지의
+                # 대체 텍스트로 쓴다 (본문 텍스트로는 흘리지 않는다)
+                images[0].alt_text = alt_text
         elif caption_paras:
             # 이미지 없는 도형의 캡션은 잃지 않도록 흐름에 남긴다
             flow.extend(caption_paras)
         return flow
+
+    @staticmethod
+    def _parse_object_description(data: bytes) -> str:
+        """개체 공통 속성(표 70) 끝의 설명문 문자열.
+
+        실측(회계규칙 GSO hexdump — HWPX shapeComment 와 대조 일치):
+        offset 44 = UINT16 길이, offset 46 부터 UTF-16LE.
+        고정 44바이트 = ctrlId(4)+속성(4)+오프셋(8)+크기(8)+z(4)+여백(8)
+        +인스턴스ID(4)+쪽나눔방지(4). HWPX 는 XML 개행 정규화로 \\r\\n 이
+        \\n 이 되므로 같은 값이 나오도록 정규화한다.
+        """
+        if len(data) < 46:
+            return ""
+        length = struct.unpack_from("<H", data, 44)[0]
+        end = 46 + length * 2
+        if length == 0 or end > len(data):
+            return ""
+        text = data[46:end].decode('utf-16-le', errors='replace')
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        return text.strip('\x00').strip()
 
     def _parse_shape_component(self, node, depth: int = 0):
         """SHAPE_COMPONENT 하위에서 이미지/도형 텍스트를 문서 순서대로 수집"""

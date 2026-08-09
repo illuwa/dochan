@@ -368,3 +368,59 @@ def test_hyperlink_renders_as_markdown_link():
     md = to_markdown(Document(sections=[section]))
 
     assert "[한컴](http://www.hancom.co.kr)" in md
+
+
+# ── Task 3: 이미지 대체 텍스트 (개체 설명문) ──
+
+def test_gso_description_becomes_image_alt_text():
+    """개체 공통 속성(표 70) 끝의 설명문이 Image.alt_text 로 들어간다.
+    실측: 회계규칙 GSO CTRL_HEADER offset 44 = UINT16 길이 + UTF-16LE,
+    내용 '그림입니다.\\r\\n원본 그림의 이름: ...' — HWPX shapeComment 와 동일."""
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    desc = "그림입니다.\r\n원본 그림의 이름: CLP0001.bmp"
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("그림 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, gso_ctrl_payload(desc)) +
+        rec(HWPTAG_SHAPE_COMPONENT, 2, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 3, pic_payload)
+    )
+    section = parse_section(data)
+
+    images = [e for e in section.elements if isinstance(e, Image)]
+    assert len(images) == 1
+    # HWPX 는 XML 개행 정규화로 \r\n 이 \n 이 된다 — HWP 쪽도 맞춘다
+    assert images[0].alt_text == "그림입니다.\n원본 그림의 이름: CLP0001.bmp"
+
+
+def test_gso_without_description_has_empty_alt_text():
+    """설명문 길이 0 이면 alt_text 는 빈 문자열 (회계규칙 두 번째 GSO 실측)."""
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("그림 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, gso_ctrl_payload()) +
+        rec(HWPTAG_SHAPE_COMPONENT, 2, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 3, pic_payload)
+    )
+    section = parse_section(data)
+
+    images = [e for e in section.elements if isinstance(e, Image)]
+    assert images[0].alt_text == ""
+
+
+def test_gso_truncated_common_properties_is_safe():
+    """설명문 필드가 아예 없는 짧은 CTRL_HEADER 도 안전해야 한다."""
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("그림 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, b" osg" + bytes(8)) +  # 44바이트 미만
+        rec(HWPTAG_SHAPE_COMPONENT, 2, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 3, pic_payload)
+    )
+    section = parse_section(data)
+
+    images = [e for e in section.elements if isinstance(e, Image)]
+    assert len(images) == 1
+    assert images[0].alt_text == ""

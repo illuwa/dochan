@@ -11,8 +11,12 @@ from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.equation import Equation
 from ..model.header_footer import Footnote, HeaderFooter
+from ..model.image import Image
 from ..model.table import Cell, Table
 from .package import OOXMLPackage
+
+# 문서당 이미지 바이너리 추출 총량 상한 (메모리 방어)
+_MAX_IMAGE_BYTES_TOTAL = 100 * 1024 * 1024
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -166,12 +170,15 @@ class DOCXReader:
         self._comment_reference_order = []
         self._image_asset_ids = set()
         self._assets = []
+        self._image_elements = []
+        self._image_bytes_total = 0
         with OOXMLPackage(file_path) as package:
             self._package = package
             root = package.read_xml_part("word/document.xml")
             self._document_relationships = self._read_document_relationships(package)
             self._active_relationships = self._document_relationships
             self._alt_chunk_data = self._read_alt_chunk_data(package, self._document_relationships)
+            self._image_data_cache = self._preload_image_bytes(package)
             self._record_embedded_relationship_assets(package)
             self._paragraph_styles = self._read_paragraph_styles(package)
             self._run_styles = self._read_run_styles(package)
@@ -209,6 +216,7 @@ class DOCXReader:
             if comment and comment.text.strip():
                 section.elements.append(comment)
 
+        section.elements.extend(getattr(self, "_image_elements", []))
         doc.assets = getattr(self, "_assets", [])
         doc.sections.append(section)
         self._package = None
@@ -1016,6 +1024,52 @@ class DOCXReader:
                 filename=posixpath.basename(target),
                 content_type=self._image_content_type(target),
                 metadata={"label": label, "source_format": "docx"},
+            )
+        )
+        self._extract_image_element(package, target, label)
+
+    def _preload_image_bytes(self, package) -> dict:
+        """패키지가 열려 있는 동안 이미지 파트 바이트를 미리 읽어 둔다.
+
+        문단 파싱은 with 블록 밖(zip 닫힌 뒤)에서 일어나므로 여기서
+        캐시하지 않으면 read_part 가 실패한다. 총량 상한으로 메모리 방어.
+        """
+        cache = {}
+        if not package.exists("word/_rels/document.xml.rels"):
+            return cache
+        try:
+            root = package.read_xml_part("word/_rels/document.xml.rels")
+        except Exception:
+            return cache
+        total = 0
+        for rel in root.findall("rel:Relationship", namespaces=NS):
+            if not rel.get("Type", "").endswith("/image"):
+                continue
+            target = _resolve_target("word", rel.get("Target", ""))
+            if not target or target in cache or total >= _MAX_IMAGE_BYTES_TOTAL:
+                continue
+            try:
+                data = package.read_part(target)
+            except Exception:
+                continue
+            if data:
+                cache[target] = data
+                total += len(data)
+        return cache
+
+    def _extract_image_element(self, package, target: str, label: str):
+        """미리 캐시한 이미지 바이트로 Image 요소를 만든다 (OCR·자산 추출용)."""
+        data = getattr(self, "_image_data_cache", {}).get(target)
+        if not data:
+            return
+        ext = posixpath.splitext(target)[1].lstrip(".").lower()
+        self._image_elements.append(
+            Image(
+                filename=posixpath.basename(target),
+                image_data=data,
+                alt_text=label,
+                image_format=ext,
+                provenance=Provenance(source_format="docx", path=target),
             )
         )
 

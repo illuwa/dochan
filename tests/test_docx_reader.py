@@ -1772,3 +1772,37 @@ def test_reads_docx_omml_equations_as_latex(tmp_path):
     markdown = to_markdown(doc)
     assert r"\frac{a}{b}" in markdown
     assert "Inline: " in markdown
+
+
+def test_docx_embedded_image_bytes_extracted_for_ocr(tmp_path):
+    import base64
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAPAAAABQCAIAAACoK28rAAAD4ElEQVR4nO3dP0gyYQDHca03JZciyMD2isJFh4gT9dRcgqAIGpuClrbALWhubirKloiIQIiwf/reYEWEiBBJjUXQkg2ZeabPOxwcR0WivPDy/vx9prvn7nxUvniPLpqFECYiFC3/+gkQ/U0MmqAwaILCoAkKgyYoDJqgMGiCwqAJCoMmKAyaoDBogsKgCQqDJigMmqAwaILCoAkKgyYoDJqgMGiCwqAJCoMmKAyaoDBogsKgCQqDJigMmqAwaILCoAkKgyYoDJqgMGhqsqBtNpvf75dlWZKkaDSqDW5sbLjd7pGREbfbvbm5qQ2urq66XC6fzzc2NnZ/f68NdnZ2Gh/NuLu2tma1Wp+enrTd9vZ2WZa/PbOuGbUn7PP5XC6XoigNvS303xK1dHR0aBuvr6+BQGBnZycej0uSlM/nhRD5fF6SpOPj46OjI1mW397ehBAHBweBQODT5V93x8fHFxYW1tfX9UMejyeZTH49s7EZs9ms0+ms+QIJSR1BCyGurq4kSQoGg2dnZ/pgKpUKhULhcPj8/FwfnJ2dVVX1h6ALhUIwGMzlcpOTk/qh09NTr9f7dd7GZqxWq11dXfW8G9RkQauq2tPT43A4isWiPlgsFh0OR29v7/v7+8+XG3f39vaWl5eFEC6Xq1Qq6Ye8Xm8ikfh0YWMzxuPxqampmi+QkPyqa33y8fHR1tZWrVY/LVrMZnOlUvn2ElVV/X6/cVfbiMVimUxmd3f38fFRUZTR0VFtfGlpaXFx0biY/naZVHPGcrmcy+Wur6/reoHUXL9yXF5eOp3OwcHBdDqtD6bT6aGhob6+vkwmo40IIWZmZrRti8Xy28BisZhMpkqlcnt7m8lkLi4uotHo/v6+/mh+v7+1tTWRSBjnbWDGVCoViUT0b7HULGp+hut38Ofn5+Hh4WQyeXh4KEnSy8uL/hXt5ORke3s7FAppa4Ctra3p6elPlxt3FUWZm5vTRgqFwsDAgPFMRVE8Ho/xwsZmTKfTExMTf+M+RkBLDu0Objaby+VyJBLR1g8PDw+yLFutVlVV5+fng8GgyWS6u7tzu93d3d12u31lZeWHx4zFYoFAQNu22Wx2u/3m5kY/6vV6LRZLqVTSR8LhcAMz9vf3Z7PZarXa0sKf25uFmf9TSEj40UVQGDRBYdAEhUETFAZNUBg0QWHQBIVBExQGTVAYNEFh0ASFQRMUBk1QGDRBYdAEhUETFAZNUBg0QWHQBIVBExQGTVAYNEFh0ASFQRMUBk1QGDRBYdAEhUETFAZNUBg0QWHQBIVBExQGTVAYNEFh0ASFQRMUBk1QGDRBYdBkQvIH10Y3pAcNfMkAAAAASUVORK5CYII="
+    )
+    path = tmp_path / "img.docx"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        zf.writestr("word/document.xml", """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+          xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <w:body><w:p><w:r><w:drawing><wp:inline>
+            <wp:docPr id="1" name="Pic"/>
+            <a:graphic><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+              <pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill>
+            </pic:pic></a:graphicData></a:graphic>
+          </wp:inline></w:drawing></w:r></w:p></w:body>
+        </w:document>
+        """)
+        zf.writestr("word/_rels/document.xml.rels", """
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>
+        </Relationships>
+        """)
+        zf.writestr("word/media/image1.png", png)
+
+    doc = DOCXReader().read(str(path))
+    images = doc.find_all("image")
+    assert images and images[0].has_data
+    assert images[0].image_data[:8] == b"\x89PNG\r\n\x1a\n"

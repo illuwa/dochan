@@ -9,10 +9,11 @@ from typing import Callable, Dict, Optional
 
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
-from .content import ContentTextExtractor, default_byte_decoder
+from .content import ContentTextExtractor, FontInfo, default_byte_decoder
 from .cmap import parse_tounicode
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
+from .widths import WidthMap
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 MAX_CONTENT_PARTS = 256  # 페이지당 콘텐츠 스트림 수 — 반복 참조 CPU 증폭 방지
@@ -96,8 +97,8 @@ class PDFReader:
                 content_parts = self._page_content_parts(pdf, page)
                 sized_lines = []
                 if content_parts:
-                    extractor = ContentTextExtractor(
-                        self._font_decoders(pdf, resources, font_cache)
+                    extractor = ContentTextExtractor.from_fonts(
+                        self._font_infos(pdf, resources, font_cache)
                     )
                     for part in content_parts:
                         sized_lines.extend(extractor.extract_sized(part))
@@ -229,28 +230,62 @@ class PDFReader:
                     parts.append(decoded)
         return parts
 
-    def _font_decoders(self, pdf: PDFFile, resources, font_cache: dict) -> Dict[str, Callable[[bytes], str]]:
-        decoders: Dict[str, Callable[[bytes], str]] = {}
+    def _font_infos(self, pdf: PDFFile, resources, font_cache: dict) -> Dict[str, FontInfo]:
+        infos: Dict[str, FontInfo] = {}
         if not isinstance(resources, dict):
-            return decoders
+            return infos
         fonts = pdf.resolve(resources.get("Font"))
         if not isinstance(fonts, dict):
-            return decoders
+            return infos
         for name, font_ref in fonts.items():
             # 같은 폰트를 페이지마다 다시 해석하지 않는다 — 수백 페이지 문서에서
-            # ToUnicode 압축 해제·CMap 파싱이 페이지 수만큼 반복되는 것을 막는다
+            # ToUnicode/폭 파싱이 페이지 수만큼 반복되는 것을 막는다
             cache_key = font_ref if isinstance(font_ref, PDFRef) else None
             if cache_key is not None and cache_key in font_cache:
-                decoders[str(name)] = font_cache[cache_key]
+                infos[str(name)] = font_cache[cache_key]
                 continue
             font = pdf.resolve(font_ref)
             if not isinstance(font, dict):
                 continue
-            decoder = self._build_font_decoder(pdf, str(name), font)
-            decoders[str(name)] = decoder
+            info = self._build_font_info(pdf, str(name), font)
+            infos[str(name)] = info
             if cache_key is not None:
-                font_cache[cache_key] = decoder
-        return decoders
+                font_cache[cache_key] = info
+        return infos
+
+    def _build_font_info(self, pdf: PDFFile, name: str, font: dict) -> FontInfo:
+        decoder = self._build_font_decoder(pdf, name, font)
+        subtype = str(font.get("Subtype", ""))
+        if subtype == "Type0":
+            code_bytes = 2  # Identity-H/V — 2바이트 CID (가장 흔한 한국어 폰트)
+            widths = self._cid_widths(pdf, font)
+        else:
+            code_bytes = 1
+            widths = self._simple_widths(pdf, font)
+        return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes)
+
+    def _simple_widths(self, pdf: PDFFile, font: dict) -> WidthMap:
+        first = pdf.resolve(font.get("FirstChar"))
+        arr = pdf.resolve(font.get("Widths"))
+        if isinstance(first, int) and isinstance(arr, list):
+            resolved = [pdf.resolve(w) for w in arr]
+            return WidthMap.simple(first, resolved, default=500.0)
+        return WidthMap({}, 500.0)
+
+    def _cid_widths(self, pdf: PDFFile, font: dict) -> WidthMap:
+        descendants = pdf.resolve(font.get("DescendantFonts"))
+        cid_font = None
+        if isinstance(descendants, list) and descendants:
+            cid_font = pdf.resolve(descendants[0])
+        if not isinstance(cid_font, dict):
+            return WidthMap({}, 1000.0)
+        dw = pdf.resolve(cid_font.get("DW"))
+        default = float(dw) if isinstance(dw, (int, float)) else 1000.0
+        w = pdf.resolve(cid_font.get("W"))
+        if isinstance(w, list):
+            resolved = [pdf.resolve(x) for x in w]
+            return WidthMap.cid(resolved, default_width=default)
+        return WidthMap({}, default)
 
     def _build_font_decoder(self, pdf: PDFFile, name: str, font: dict) -> Callable[[bytes], str]:
         to_unicode = pdf.resolve(font.get("ToUnicode"))

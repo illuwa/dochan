@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 추가 (B — 크로스 포맷 이미지 추출 + OCR)
+
+- **PDF 이미지 추출 + OCR**: 이미지 XObject 바이너리를 추출(DCTDecode/JPX 는 원본,
+  무압축·Flate raw 는 Pillow 로 PNG 재구성)해 Image 요소로 넣고 OCR 연결. 실물
+  스캔 PDF 교육수료증(이전 0자)에서 발급번호·이름 등 한글 291자 추출
+- **DOCX/PPTX/XLSX 이미지 추출 + OCR**: 임베드 이미지 바이트를 Image 요소로 넣어
+  `Dochan(ocr=True)` 동작 (네 포맷 모두 end-to-end OCR 검증). 문서당 100MB 상한
+- Image 모델에 image_format·provenance 필드 추가(가산)
+
 ### 추가 (A — PDF 글리프 폭 레이아웃 엔진)
 
 - **글리프 폭 기반 좌표 추출**: 폰트 /Widths·/W·/DW 로 WidthMap 을 만들고

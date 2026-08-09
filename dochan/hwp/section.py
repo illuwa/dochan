@@ -12,7 +12,7 @@ hwp/section.py — 섹션 파서 (트리 구축 + 컨트롤 식별)
 """
 
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from typing import List, Optional
 
 from ..utils.safe_decompress import safe_zlib_decompress
@@ -27,9 +27,39 @@ from ..model.table import Table, Cell
 from ..model.equation import Equation
 from ..model.image import Image
 from ..model.header_footer import HeaderFooter, Footnote
-from .records.ctrl_header import parse_ctrl_id, identify_control
+from .records.ctrl_header import (
+    parse_ctrl_id, identify_control,
+    is_field_ctrl_id, parse_field_command_url, CTRL_FIELD_HYPERLINK,
+)
 from .records.para_text import parse_para_text
 from .records.para_char_shape import parse_para_char_shape
+
+
+def _apply_link_ranges(runs, ranges):
+    """텍스트 오프셋 범위 [(start, end, url)] 를 런 목록에 적용한다.
+
+    범위 경계에 걸친 런은 최대 3조각으로 나누고 가운데 조각에만 링크를 건다.
+    런 서식(굵게 등)은 dataclasses.replace 로 그대로 복제된다.
+    """
+    for start, end, url in ranges:
+        new_runs = []
+        pos = 0
+        for run in runs:
+            run_len = len(run.text)
+            run_start, run_end = pos, pos + run_len
+            pos = run_end
+            if run_len == 0 or run_end <= start or run_start >= end:
+                new_runs.append(run)
+                continue
+            cut_a = max(start - run_start, 0)
+            cut_b = min(end - run_start, run_len)
+            if cut_a > 0:
+                new_runs.append(_dc_replace(run, text=run.text[:cut_a]))
+            new_runs.append(_dc_replace(run, text=run.text[cut_a:cut_b], link=url))
+            if cut_b < run_len:
+                new_runs.append(_dc_replace(run, text=run.text[cut_b:]))
+        runs = new_runs
+    return runs
 
 
 @dataclass
@@ -239,6 +269,11 @@ class SectionParser:
             else:
                 para.runs = [TextRun(text=text)]
 
+            # 하이퍼링크 필드(%hlk) 범위에 링크 부여
+            link_ranges = self._hyperlink_ranges(text_result, ctrl_nodes)
+            if link_ranges:
+                para.runs = _apply_link_ranges(para.runs, link_ranges)
+
             # 스타일 정보 연결 (PARA_HEADER에서)
             para_rec = para_node['record']
             if len(para_rec.data) >= 10:
@@ -260,6 +295,57 @@ class SectionParser:
                 elements.append(ctrl_elem)
 
         return elements
+
+    def _hyperlink_ranges(self, text_result, ctrl_nodes) -> list:
+        """필드 마크(텍스트 스트림의 컨트롤 3/4)와 %hlk CTRL_HEADER 를 짝지어
+        (start, end, url) 링크 범위 목록을 만든다.
+
+        텍스트 스트림의 필드 시작 블록에는 ctrlId 가 내장되어 있으므로(실측),
+        같은 ctrlId 의 N번째 등장 ↔ N번째 CTRL_HEADER 로 짝을 맺는다.
+        필드가 닫히지 않으면 문단 끝까지 링크가 이어진다.
+        """
+        marks = text_result.get('field_marks') or []
+        if not any(kind == 'start' for _, kind, _ in marks):
+            return []
+
+        # ctrlId 별 필드 CTRL_HEADER 대기열 (레코드 순서 = 텍스트 등장 순서)
+        queues = {}
+        for node in ctrl_nodes:
+            data = node['record'].data
+            cid = parse_ctrl_id(data)
+            if is_field_ctrl_id(cid):
+                queues.setdefault(cid, []).append(data)
+        if not queues:
+            return []
+        next_index = {cid: 0 for cid in queues}
+
+        text_len = len(text_result['text'])
+        ranges = []
+        stack = []
+        for offset, kind, cid in marks:
+            if kind == 'start':
+                url = ''
+                queue = queues.get(cid)
+                if queue is not None and next_index[cid] < len(queue):
+                    data = queue[next_index[cid]]
+                    next_index[cid] += 1
+                    if cid == CTRL_FIELD_HYPERLINK:
+                        url = parse_field_command_url(data)
+                stack.append((offset, url))
+            else:
+                if stack:
+                    start, url = stack.pop()
+                    end = min(offset, text_len)
+                    if url and end > start:
+                        ranges.append((start, end, url))
+        # 닫히지 않은 필드는 문단 끝까지
+        for start, url in stack:
+            if url and text_len > start:
+                ranges.append((start, text_len, url))
+
+        # 바깥 범위 먼저 적용 → 중첩된 안쪽 범위가 나중에 덮어쓴다
+        ranges.sort(key=lambda r: (r[0], -r[1]))
+        return ranges
 
     def _detect_heading_level(self, para) -> int:
         """Style/CharShape 기반 제목 레벨 감지"""

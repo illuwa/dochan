@@ -24,6 +24,7 @@ from ..model.image import Image
 from ..model.header_footer import HeaderFooter, Footnote
 from ..model.style import FaceName, ParaShape, StyleEntry
 from ..hwp.records.char_shape import CharShape
+from ..hwp.records.ctrl_header import field_command_to_url
 
 # Zip bomb protection constants
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
@@ -1046,7 +1047,13 @@ def _field_action(ctrl_elem):
             if (child.get('type') or '').upper() != 'HYPERLINK':
                 return ('begin', '')
             # Command 는 'http\://host;1;0;0;' 처럼 이스케이프되어 있다. Path 가 깨끗하다.
-            return ('begin', _string_param(child, 'Path'))
+            path = _string_param(child, 'Path')
+            if path:
+                return ('begin', path)
+            # 일부 생성기는 Path 없이 Command 만 싣는다 (실측: corpus
+            # 80168_regulatory_analysis.hwpx 의 law.go.kr 링크). HWP 바이너리와
+            # 같은 규칙으로 Command 에서 URL 을 복원한다.
+            return ('begin', field_command_to_url(_string_param(child, 'Command')))
         if tag == 'fieldEnd':
             return ('end', '')
     return None

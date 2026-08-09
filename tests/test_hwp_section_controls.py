@@ -55,6 +55,24 @@ def parse_section(data: bytes):
     return SectionParser().parse_stream(data, is_compressed=False)
 
 
+def field_start_block(ctrl_id_le: bytes) -> bytes:
+    """확장 컨트롤 3(필드 시작) 16바이트 — 실측: 코드(2)+ctrlId(4)+예비(8)+코드(2)"""
+    return struct.pack("<H", 3) + ctrl_id_le + bytes(8) + struct.pack("<H", 3)
+
+
+def field_end_block() -> bytes:
+    """인라인 컨트롤 4(필드 끝) 16바이트"""
+    return struct.pack("<H", 4) + b"klh" + bytes(9) + struct.pack("<H", 4)
+
+
+def hlk_ctrl_payload(command: str) -> bytes:
+    """%hlk CTRL_HEADER — 실측(수당 및 제수수료 지급규칙 hexdump):
+    ctrlId(4) + 속성(4) + 기타속성(1) + len(UINT16) + Command(UTF-16LE) + 인스턴스ID(4)"""
+    cmd = command.encode("utf-16-le")
+    return (b"klh%" + struct.pack("<I", 0x800) + b"\x00" +
+            struct.pack("<H", len(command)) + cmd + bytes(8))
+
+
 # ── Task 1: GSO 텍스트박스/도형 내부 텍스트 ──
 
 def test_gso_textbox_text_is_extracted():
@@ -256,3 +274,97 @@ def test_gso_textbox_text_inside_table_cell():
     cell_text = tables[0].rows[0][0].text
     assert "셀 텍스트" in cell_text
     assert "셀 안 도형 텍스트" in cell_text
+
+
+# ── Task 2: 하이퍼링크 필드(%hlk) ──
+
+def test_field_command_url_extraction():
+    """Command 문자열 → URL: 첫 비이스케이프 ';' 앞까지 + 백슬래시 이스케이프 해제.
+    실측 Command 표본 (corpus): 'http\\://www.hancom.co.kr;1;0;0;' 등."""
+    from dochan.hwp.records.ctrl_header import parse_field_command_url
+
+    def payload(cmd):
+        return hlk_ctrl_payload(cmd)
+
+    assert parse_field_command_url(payload("http\\://www.hancom.co.kr;1;0;0;")) == \
+        "http://www.hancom.co.kr"
+    assert parse_field_command_url(payload("www.hufscit.com;1;0;0;")) == "www.hufscit.com"
+    # HWPX 정답지(Path 파라미터 부재)와 동일하게 책갈피/스크립트 링크는 버린다
+    assert parse_field_command_url(payload("?참조;0;0;0;")) == ""
+    assert parse_field_command_url(payload("javascript\\:\\;;1;0;0;")) == ""
+    # 이스케이프된 세미콜론은 URL 의 일부다
+    assert parse_field_command_url(payload("http\\://a.kr/x\\;y;1;0;0;")) == "http://a.kr/x;y"
+
+
+def test_hyperlink_field_applies_link_to_runs():
+    """필드 시작(3)~끝(4) 사이 텍스트에 %hlk Command 의 URL 이 걸린다."""
+    text_payload = (
+        "앞 ".encode("utf-16-le") +
+        field_start_block(b"klh%") +
+        "www.hufscit.com".encode("utf-16-le") +
+        field_end_block() +
+        " 뒤".encode("utf-16-le") +
+        struct.pack("<H", 13)
+    )
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, text_payload) +
+        rec(HWPTAG_CTRL_HEADER, 1, hlk_ctrl_payload("www.hufscit.com;1;0;0;"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    assert len(paras) == 1
+    linked = [r for r in paras[0].runs if r.link]
+    assert [r.text for r in linked] == ["www.hufscit.com"]
+    assert linked[0].link == "www.hufscit.com"
+    # 링크 밖 텍스트에는 링크가 없어야 한다
+    assert all(not r.link for r in paras[0].runs if "www" not in r.text)
+    assert paras[0].text == "앞 www.hufscit.com 뒤"
+
+
+def test_hyperlink_multiple_fields_map_in_order():
+    """한 문단에 %hlk 가 여럿이면 등장 순서대로 CTRL_HEADER 와 짝을 맺는다."""
+    text_payload = (
+        field_start_block(b"klh%") +
+        "첫째".encode("utf-16-le") +
+        field_end_block() +
+        " 사이 ".encode("utf-16-le") +
+        field_start_block(b"klh%") +
+        "둘째".encode("utf-16-le") +
+        field_end_block() +
+        struct.pack("<H", 13)
+    )
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, text_payload) +
+        rec(HWPTAG_CTRL_HEADER, 1, hlk_ctrl_payload("http\\://one.kr;1;0;0;")) +
+        rec(HWPTAG_CTRL_HEADER, 1, hlk_ctrl_payload("http\\://two.kr;1;0;0;"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    links = [(r.text, r.link) for r in paras[0].runs if r.link]
+    assert links == [("첫째", "http://one.kr"), ("둘째", "http://two.kr")]
+
+
+def test_hyperlink_renders_as_markdown_link():
+    """마크다운 출력에서 [텍스트](URL) 로 렌더된다 (HWPX 와 동일 경로)."""
+    from dochan.model.document import Document, Section
+    from dochan.output.markdown import to_markdown
+
+    text_payload = (
+        field_start_block(b"klh%") +
+        "한컴".encode("utf-16-le") +
+        field_end_block() +
+        struct.pack("<H", 13)
+    )
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, text_payload) +
+        rec(HWPTAG_CTRL_HEADER, 1, hlk_ctrl_payload("http\\://www.hancom.co.kr;1;0;0;"))
+    )
+    section = parse_section(data)
+    md = to_markdown(Document(sections=[section]))
+
+    assert "[한컴](http://www.hancom.co.kr)" in md

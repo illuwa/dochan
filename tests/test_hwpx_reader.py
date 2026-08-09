@@ -321,6 +321,49 @@ def test_hwpx_hyperlink_spanning_separate_runs(tmp_path):
     assert 'link' not in run_dict[0]
 
 
+def test_hwpx_hyperlink_falls_back_to_command_when_path_missing(tmp_path):
+    """실측(corpus 80168_regulatory_analysis.hwpx): 일부 생성기는 Path 없이
+    Command 만 싣는다. Command 의 이스케이프를 풀어 URL 로 써야 한다."""
+    begin = (
+        '<hp:ctrl><hp:fieldBegin id="1" type="HYPERLINK" name="" editable="0">'
+        '<hp:parameters cnt="1" name="">'
+        '<hp:stringParam name="Command">https\\://www.law.go.kr/lsSc.do\\?query=1\\#AJAX;1;0;0;</hp:stringParam>'
+        '</hp:parameters></hp:fieldBegin></hp:ctrl>'
+    )
+    path = tmp_path / "link-command-only.hwpx"
+    _write_hwpx(path, _section(_para(
+        _run(begin + '<hp:t>조례</hp:t>' + _HYPERLINK_END)
+    )))
+
+    doc = HWPXParser().parse(str(path))
+    runs = doc.sections[0].elements[0].runs
+
+    assert [(r.text, r.link) for r in runs] == [
+        ("조례", "https://www.law.go.kr/lsSc.do?query=1#AJAX")]
+
+
+def test_hwpx_hyperlink_command_only_bookmark_and_script_are_dropped(tmp_path):
+    """책갈피형('?...')과 스크립트형('javascript...') Command 는 링크로 만들지
+    않는다 (실측: 143E433F503322BD33 / 80168 — HWP 바이너리 경로와 동일 규칙)."""
+    def begin(cmd):
+        return (
+            '<hp:ctrl><hp:fieldBegin id="1" type="HYPERLINK" name="" editable="0">'
+            '<hp:parameters cnt="1" name="">'
+            '<hp:stringParam name="Command">%s</hp:stringParam>'
+            '</hp:parameters></hp:fieldBegin></hp:ctrl>' % cmd
+        )
+
+    path = tmp_path / "link-dropped.hwpx"
+    _write_hwpx(path, _section(
+        _para(_run(begin('?참조;0;0;0;') + '<hp:t>내부참조</hp:t>' + _HYPERLINK_END))
+        + _para(_run(begin('javascript\\:\\;;1;0;0;') + '<hp:t>제1항</hp:t>' + _HYPERLINK_END))
+    ))
+
+    doc = HWPXParser().parse(str(path))
+    for elem in doc.sections[0].elements:
+        assert all(not r.link for r in elem.runs)
+
+
 # ── 5. 표 캡션 ──
 
 

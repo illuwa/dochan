@@ -9,11 +9,15 @@ from typing import Callable, Dict, Optional
 
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
+from ..model.image import Image
 from .content import ContentTextExtractor, FontInfo, default_byte_decoder
 from .cmap import parse_tounicode
+from .images import extract_image_bytes
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
 from .widths import WidthMap
+
+MAX_IMAGES_PER_PAGE = 64
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 MAX_CONTENT_PARTS = 256  # 페이지당 콘텐츠 스트림 수 — 반복 참조 CPU 증폭 방지
@@ -102,9 +106,14 @@ class PDFReader:
                     )
                     for part in content_parts:
                         lines.extend(extractor.extract_lines(part))
-                if not lines and self._page_has_images(pdf, resources):
+                image_elems = self._page_images(pdf, resources, page_number)
+                if not lines and image_elems:
                     pdf.warnings.append(
-                        f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (OCR 미지원)"
+                        f"WARN: {page_number}페이지: 텍스트 없음 — 이미지 기반(OCR 옵션으로 추출 가능)"
+                    )
+                elif not lines and self._page_has_images(pdf, resources):
+                    pdf.warnings.append(
+                        f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (이미지 추출 불가)"
                     )
                 median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
                 for ln in lines:
@@ -122,6 +131,10 @@ class PDFReader:
                         )
                     )
                 section.elements.extend(self._link_paragraphs(pdf, page, page_number))
+                section.elements.extend(image_elems)
+                for img in image_elems:
+                    if img.image_data:
+                        doc.assets.append(img)
             except Exception as e:
                 pdf.warnings.append(f"WARN: {page_number}페이지 파싱 실패: {e!r}")
             doc.sections.append(section)
@@ -339,6 +352,31 @@ class PDFReader:
             )
             return _drop_decoder
         return default_byte_decoder
+
+    def _page_images(self, pdf: PDFFile, resources, page_number: int) -> list:
+        """페이지 XObject 이미지에서 바이너리를 추출해 Image 요소로 반환."""
+        if not isinstance(resources, dict):
+            return []
+        xobjects = pdf.resolve(resources.get("XObject"))
+        if not isinstance(xobjects, dict):
+            return []
+        images = []
+        for name, ref in xobjects.items():
+            if len(images) >= MAX_IMAGES_PER_PAGE:
+                break
+            xobj = pdf.resolve(ref)
+            if not isinstance(xobj, PDFStream) \
+                    or str(xobj.dictionary.get("Subtype", "")) != "Image":
+                continue
+            data, ext = extract_image_bytes(xobj, pdf.warnings)
+            if not data:
+                continue
+            images.append(Image(
+                image_data=data,
+                image_format=ext,
+                provenance=Provenance(source_format="pdf", page=page_number, path=str(name)),
+            ))
+        return images
 
     def _page_has_images(self, pdf: PDFFile, resources) -> bool:
         if not isinstance(resources, dict):

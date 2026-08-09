@@ -122,7 +122,8 @@ def test_scanned_only_page_warns(tmp_path):
 
     doc = PDFReader().read(path)
 
-    assert any("스캔" in e for e in doc.errors)
+    # 텍스트 없는 이미지 페이지 — 추출 가능하면 OCR 안내, 아니면 스캔 경고
+    assert any("이미지" in e or "스캔" in e for e in doc.errors)
 
 
 def test_non_pdf_file_reports_error(tmp_path):

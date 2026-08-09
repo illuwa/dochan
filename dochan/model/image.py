@@ -14,6 +14,9 @@ class Image:
     alt_text: str = ""  # 그림 설명문 (HWPX shapeComment 등) — 대체 텍스트로 쓴다
     caption: list = field(default_factory=list)   # 캡션 문단 목록
     caption_side: str = "BOTTOM"                  # TOP | BOTTOM | LEFT | RIGHT
+    # 신규 필드는 반드시 뒤에 붙일 것 — 위치 인자 호환성
+    image_format: str = ""                        # png | jpg | jp2 등
+    provenance: object = None
 
     @property
     def has_data(self) -> bool:

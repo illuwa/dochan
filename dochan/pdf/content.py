@@ -30,6 +30,8 @@ class FontInfo:
     decode: Callable[[bytes], str]
     widths: WidthMap
     code_bytes: int = 1  # 1=단순 폰트, 2=Type0/Identity-H CID
+    bold: bool = False
+    italic: bool = False
 
 
 @dataclass
@@ -41,6 +43,8 @@ class Fragment:
     size: float    # 유효 폰트 크기
     text: str
     space_width: float  # 이 조각 폰트의 공백 1칸 device 폭 (간격 판정용)
+    bold: bool = False
+    italic: bool = False
 
 
 def _matmul(m1, m2):
@@ -206,6 +210,7 @@ class ContentTextExtractor:
                 x=start_tm[4], y=start_tm[5],
                 width=total_adv * scale, size=eff_size,
                 text=text, space_width=space_w,
+                bold=font.bold, italic=font.italic,
             ))
         return _matmul((1, 0, 0, 1, total_adv, 0), tm)
 
@@ -276,39 +281,32 @@ class _Line:
         self.size = max((f.size for f in frags), default=0.0)
         self.segments: List[_Segment] = []
         parts: List[str] = []
+        # 서식이 같은 인접 조각은 하나의 run 으로 묶는다 (부분 굵게 보존)
+        self.runs: List[Tuple[str, bool, bool]] = []
         prev_end: Optional[float] = None
         prev_space: float = 0.0
         for f in frags:
             gap = (f.x - prev_end) if prev_end is not None else 0.0
             threshold = max(prev_space, f.space_width) * 0.5
+            sep = ""
             if prev_end is not None and gap > threshold and parts and not parts[-1].endswith(" "):
-                parts.append(" ")
+                sep = " "
+            if sep:
+                parts.append(sep)
+                self._append_run(sep, f.bold, f.italic)
             parts.append(f.text)
+            self._append_run(f.text, f.bold, f.italic)
             self.segments.append(_Segment(f.x, f.x + f.width, f.text))
             prev_end = f.x + f.width
             prev_space = f.space_width
         self.text = "".join(parts).strip()
-        # 열 경계 판정용: 세그먼트 사이 큰 공백의 시작 x 목록
-        self.gap_starts: List[float] = []
-        for i in range(1, len(self.segments)):
-            prev = self.segments[i - 1]
-            cur = self.segments[i]
-            if cur.x0 - prev.x1 > max(prev_space, 1.0) * 2.0:
-                self.gap_starts.append(cur.x0)
 
-    def cell_texts(self, boundaries: List[float]) -> List[str]:
-        """주어진 열 경계 x 목록으로 세그먼트를 셀 텍스트로 분배."""
-        cells = [""] * (len(boundaries) + 1)
-        for seg in self.segments:
-            col = 0
-            for b in boundaries:
-                if seg.x0 >= b - 1.0:
-                    col += 1
-                else:
-                    break
-            col = min(col, len(cells) - 1)
-            cells[col] = (cells[col] + " " + seg.text).strip() if cells[col] else seg.text
-        return cells
+    def _append_run(self, text: str, bold: bool, italic: bool) -> None:
+        if self.runs and self.runs[-1][1] == bold and self.runs[-1][2] == italic:
+            prev = self.runs[-1]
+            self.runs[-1] = (prev[0] + text, bold, italic)
+        else:
+            self.runs.append((text, bold, italic))
 
 
 def _num(value) -> float:

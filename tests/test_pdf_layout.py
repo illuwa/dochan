@@ -73,3 +73,23 @@ def test_cid_two_byte_codes_advance_correctly():
     # 2글자 × (1000/1000*10) = 20 전진 후 X
     assert abs(frags[1].x - (72 + 20)) < 0.01
     assert frags[1].text == "X"
+
+
+def test_bold_italic_flags_from_font_carry_to_runs():
+    from dochan.pdf.content import ContentTextExtractor, FontInfo
+    from dochan.pdf.widths import WidthMap
+
+    plain = FontInfo(decode=lambda r: r.decode("latin-1"), widths=WidthMap({}, 500.0))
+    bold = FontInfo(decode=lambda r: r.decode("latin-1"), widths=WidthMap({}, 500.0), bold=True)
+    ital = FontInfo(decode=lambda r: r.decode("latin-1"), widths=WidthMap({}, 500.0), italic=True)
+    content = (
+        b"BT /P 10 Tf 72 700 Td (normal ) Tj "
+        b"/B 10 Tf (bold ) Tj /I 10 Tf (italic) Tj ET"
+    )
+    ex = ContentTextExtractor.from_fonts({"P": plain, "B": bold, "I": ital})
+    line = ex.extract_lines(content)[0]
+    # 서식별로 run 이 분리되어야 한다
+    flags = [(t.strip(), b, i) for t, b, i in line.runs if t.strip()]
+    assert ("normal", False, False) in flags
+    assert ("bold", True, False) in flags
+    assert ("italic", False, True) in flags

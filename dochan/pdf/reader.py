@@ -95,23 +95,29 @@ class PDFReader:
             )
             try:
                 content_parts = self._page_content_parts(pdf, page)
-                sized_lines = []
+                lines = []
                 if content_parts:
                     extractor = ContentTextExtractor.from_fonts(
                         self._font_infos(pdf, resources, font_cache)
                     )
                     for part in content_parts:
-                        sized_lines.extend(extractor.extract_sized(part))
-                if not sized_lines and self._page_has_images(pdf, resources):
+                        lines.extend(extractor.extract_lines(part))
+                if not lines and self._page_has_images(pdf, resources):
                     pdf.warnings.append(
                         f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (OCR 미지원)"
                     )
-                median_size = _median_font_size(sized_lines)
-                for line, size in sized_lines:
+                median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
+                for ln in lines:
+                    if not ln.text:
+                        continue
+                    runs = [
+                        TextRun(text=text, bold=bold, italic=italic)
+                        for text, bold, italic in ln.runs if text
+                    ] or [TextRun(text=ln.text)]
                     section.elements.append(
                         Paragraph(
-                            runs=[TextRun(line)],
-                            heading_level=_heading_level_for_size(line, size, median_size),
+                            runs=runs,
+                            heading_level=_heading_level_for_size(ln.text, ln.size, median_size),
                             provenance=Provenance(source_format="pdf", page=page_number),
                         )
                     )
@@ -259,10 +265,38 @@ class PDFReader:
         if subtype == "Type0":
             code_bytes = 2  # Identity-H/V — 2바이트 CID (가장 흔한 한국어 폰트)
             widths = self._cid_widths(pdf, font)
+            descriptor_font = self._cid_descendant(pdf, font)
         else:
             code_bytes = 1
             widths = self._simple_widths(pdf, font)
-        return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes)
+            descriptor_font = font
+        bold, italic = self._font_style_flags(pdf, font, descriptor_font)
+        return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes,
+                        bold=bold, italic=italic)
+
+    def _cid_descendant(self, pdf: PDFFile, font: dict):
+        descendants = pdf.resolve(font.get("DescendantFonts"))
+        if isinstance(descendants, list) and descendants:
+            cid = pdf.resolve(descendants[0])
+            if isinstance(cid, dict):
+                return cid
+        return font
+
+    def _font_style_flags(self, pdf: PDFFile, font: dict, descriptor_font: dict):
+        """BaseFont 이름과 FontDescriptor /Flags 로 bold/italic 판정."""
+        base = str(pdf.resolve(font.get("BaseFont")) or "").lower()
+        bold = "bold" in base
+        italic = "italic" in base or "oblique" in base
+        descriptor = pdf.resolve(descriptor_font.get("FontDescriptor"))
+        if isinstance(descriptor, dict):
+            flags = pdf.resolve(descriptor.get("Flags"))
+            if isinstance(flags, int):
+                italic = italic or bool(flags & (1 << 6))       # Italic 비트
+                bold = bold or bool(flags & (1 << 18))          # ForceBold 비트
+            weight = pdf.resolve(descriptor.get("FontWeight"))
+            if isinstance(weight, (int, float)) and weight >= 600:
+                bold = True
+        return bold, italic
 
     def _simple_widths(self, pdf: PDFFile, font: dict) -> WidthMap:
         first = pdf.resolve(font.get("FirstChar"))

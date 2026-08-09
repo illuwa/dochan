@@ -251,10 +251,12 @@ class SectionParser:
 
             elements.append(para)
 
-        # 컨트롤 파싱
+        # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
         for ctrl_node in ctrl_nodes:
             ctrl_elem = self._parse_control(ctrl_node)
-            if ctrl_elem:
+            if isinstance(ctrl_elem, list):
+                elements.extend(ctrl_elem)
+            elif ctrl_elem:
                 elements.append(ctrl_elem)
 
         return elements
@@ -406,13 +408,16 @@ class SectionParser:
             if child['record'].tag_id == HWPTAG_PARA_HEADER:
                 elems = self._parse_paragraph_group(child)
                 for e in elems:
-                    if hasattr(e, 'runs'):  # Paragraph
+                    if hasattr(e, 'runs'):  # Paragraph (도형 내부 텍스트 포함)
                         info['paragraphs'].append(e)
                     elif hasattr(e, 'rows'):  # 중첩 Table
                         # 중첩 표의 셀 텍스트를 문단으로 풀어서 추가
                         for row in e.rows:
                             for cell in row:
                                 info['paragraphs'].extend(cell.paragraphs)
+                    elif isinstance(e, Image):
+                        # 셀 안 이미지도 유지 (HWPX 와 동일 — BinData 연결 대상)
+                        info['paragraphs'].append(e)
 
         return info
 
@@ -434,39 +439,98 @@ class SectionParser:
                     return Equation(script="[수식 파싱 실패]")
         return None
 
+    MAX_SHAPE_DEPTH = 32  # 묶음 개체(SC_CONTAINER) 중첩 상한
+
     def _parse_image(self, ctrl_node):
-        """이미지 파싱 — 스펙 표 32,107 확인 완료"""
+        """GSO/그림 개체 파싱 → 요소 리스트.
+
+        실측 구조 (회계규칙/정보보안 등 test_pairs):
+          CTRL_HEADER('gso ') ─ [LIST_HEADER(캡션)] ─ SHAPE_COMPONENT
+                                  └ SC_PICTURE(이미지) 또는
+                                    LIST_HEADER → PARA_HEADER(도형 내부 텍스트)
+        SHAPE_COMPONENT 는 묶음 개체에서 중첩된다. SC_PICTURE 가
+        CTRL_HEADER 직속인 구버전 구조도 그대로 지원한다.
+        도형 내부 문단은 HWPX(drawText)와 동일하게 문서 흐름으로 내보낸다.
+        """
+        flow = []
+        caption_paras = []
+
         for child in ctrl_node['children']:
-            if child['record'].tag_id == HWPTAG_SHAPE_COMP_PICTURE:
-                data = child['record'].data
-                bin_data_id = -1
-                # Bounds check: need at least 73 bytes to read UINT16 at offset 71
-                if len(data) >= 73:
-                    bin_data_id = struct.unpack_from("<H", data, 71)[0]
-                return Image(bin_id=bin_data_id,
-                           filename=f"image_{bin_data_id}.bin")
-        return None
+            tag = child['record'].tag_id
+            if tag == HWPTAG_LIST_HEADER:
+                # GSO 직속 LIST_HEADER = 캡션 리스트.
+                # 트리 보정으로 SHAPE_COMPONENT 가 이 밑에 들어올 수 있다 (실측).
+                for sub in child['children']:
+                    stag = sub['record'].tag_id
+                    if stag == HWPTAG_PARA_HEADER:
+                        caption_paras.extend(
+                            e for e in self._parse_paragraph_group(sub)
+                            if hasattr(e, 'runs'))
+                    elif stag == HWPTAG_SHAPE_COMPONENT:
+                        flow.extend(self._parse_shape_component(sub))
+            elif tag == HWPTAG_SHAPE_COMPONENT:
+                flow.extend(self._parse_shape_component(child))
+            elif tag == HWPTAG_SHAPE_COMP_PICTURE:
+                flow.append(self._picture_to_image(child['record'].data))
+
+        images = [e for e in flow if isinstance(e, Image)]
+        if images:
+            if caption_paras:
+                images[0].caption = caption_paras
+        elif caption_paras:
+            # 이미지 없는 도형의 캡션은 잃지 않도록 흐름에 남긴다
+            flow.extend(caption_paras)
+        return flow
+
+    def _parse_shape_component(self, node, depth: int = 0):
+        """SHAPE_COMPONENT 하위에서 이미지/도형 텍스트를 문서 순서대로 수집"""
+        if depth > self.MAX_SHAPE_DEPTH:
+            return []
+        out = []
+        for child in node['children']:
+            tag = child['record'].tag_id
+            if tag == HWPTAG_SHAPE_COMP_PICTURE:
+                out.append(self._picture_to_image(child['record'].data))
+            elif tag == HWPTAG_SHAPE_COMPONENT:
+                out.extend(self._parse_shape_component(child, depth + 1))
+            elif tag == HWPTAG_LIST_HEADER:
+                # 텍스트박스 리스트 — 트리 보정으로 PARA_HEADER 가 자식으로 온다
+                for sub in child['children']:
+                    stag = sub['record'].tag_id
+                    if stag == HWPTAG_PARA_HEADER:
+                        out.extend(self._parse_paragraph_group(sub))
+                    elif stag == HWPTAG_SHAPE_COMPONENT:
+                        out.extend(self._parse_shape_component(sub, depth + 1))
+            elif tag == HWPTAG_PARA_HEADER:
+                out.extend(self._parse_paragraph_group(child))
+        return out
+
+    @staticmethod
+    def _picture_to_image(data: bytes) -> Image:
+        """SC_PICTURE 레코드 → Image (스펙 표 32,107 확인 완료)"""
+        bin_data_id = -1
+        # Bounds check: need at least 73 bytes to read UINT16 at offset 71
+        if len(data) >= 73:
+            bin_data_id = struct.unpack_from("<H", data, 71)[0]
+        return Image(bin_id=bin_data_id,
+                     filename=f"image_{bin_data_id}.bin")
+
+    def _list_blocks(self, ctrl_node) -> list:
+        """CTRL_HEADER 하위 LIST_HEADER 들의 문단/표/이미지 블록 수집.
+
+        문단만 남기면 안 된다 — 머리말 안에 표가 들고 그 표 셀에 그림이 있는
+        실문서(회계규칙)가 있고, HWPX(_sublist_paragraphs)는 전부 유지한다.
+        """
+        blocks = []
+        for child in ctrl_node['children']:
+            if child['record'].tag_id == HWPTAG_LIST_HEADER:
+                for sub in child['children']:
+                    if sub['record'].tag_id == HWPTAG_PARA_HEADER:
+                        blocks.extend(self._parse_paragraph_group(sub))
+        return blocks
 
     def _parse_header_footer(self, ctrl_node, hf_type):
-        hf = HeaderFooter(type=hf_type)
-        for child in ctrl_node['children']:
-            if child['record'].tag_id == HWPTAG_LIST_HEADER:
-                for sub in child['children']:
-                    if sub['record'].tag_id == HWPTAG_PARA_HEADER:
-                        elems = self._parse_paragraph_group(sub)
-                        for e in elems:
-                            if hasattr(e, 'runs'):
-                                hf.paragraphs.append(e)
-        return hf
+        return HeaderFooter(type=hf_type, paragraphs=self._list_blocks(ctrl_node))
 
     def _parse_footnote(self, ctrl_node, fn_type):
-        fn = Footnote(type=fn_type)
-        for child in ctrl_node['children']:
-            if child['record'].tag_id == HWPTAG_LIST_HEADER:
-                for sub in child['children']:
-                    if sub['record'].tag_id == HWPTAG_PARA_HEADER:
-                        elems = self._parse_paragraph_group(sub)
-                        for e in elems:
-                            if hasattr(e, 'runs'):
-                                fn.paragraphs.append(e)
-        return fn
+        return Footnote(type=fn_type, paragraphs=self._list_blocks(ctrl_node))

@@ -342,9 +342,10 @@ def test_hwpx_hyperlink_falls_back_to_command_when_path_missing(tmp_path):
         ("조례", "https://www.law.go.kr/lsSc.do?query=1#AJAX")]
 
 
-def test_hwpx_hyperlink_command_only_bookmark_and_script_are_dropped(tmp_path):
-    """책갈피형('?...')과 스크립트형('javascript...') Command 는 링크로 만들지
-    않는다 (실측: 143E433F503322BD33 / 80168 — HWP 바이너리 경로와 동일 규칙)."""
+def test_hwpx_hyperlink_command_only_internal_bookmark_and_script(tmp_path):
+    """책갈피형('?참조')은 문서 내 책갈피로 가는 내부 하이퍼링크(#참조)로 만들고,
+    스크립트형('javascript...')은 여전히 버린다 (실측: 143E433F503322BD33 —
+    HWP %hlk '?참조' ↔ HWPX HYPERLINK TargetType=BOOKMARK '?참조', HWP 경로와 동일)."""
     def begin(cmd):
         return (
             '<hp:ctrl><hp:fieldBegin id="1" type="HYPERLINK" name="" editable="0">'
@@ -353,15 +354,19 @@ def test_hwpx_hyperlink_command_only_bookmark_and_script_are_dropped(tmp_path):
             '</hp:parameters></hp:fieldBegin></hp:ctrl>' % cmd
         )
 
-    path = tmp_path / "link-dropped.hwpx"
+    path = tmp_path / "link-internal.hwpx"
     _write_hwpx(path, _section(
         _para(_run(begin('?참조;0;0;0;') + '<hp:t>내부참조</hp:t>' + _HYPERLINK_END))
         + _para(_run(begin('javascript\\:\\;;1;0;0;') + '<hp:t>제1항</hp:t>' + _HYPERLINK_END))
     ))
 
     doc = HWPXParser().parse(str(path))
-    for elem in doc.sections[0].elements:
-        assert all(not r.link for r in elem.runs)
+    elements = doc.sections[0].elements
+    # 책갈피형 → 내부 하이퍼링크 #참조
+    assert [(r.text, r.link) for r in elements[0].runs] == [("내부참조", "#참조")]
+    # 스크립트형 → 링크 없음
+    assert all(not r.link for r in elements[1].runs)
+    assert to_markdown(doc).splitlines()[0] == "[내부참조](#참조)"
 
 
 def test_hwpx_hidden_comment_becomes_comment_footnote(tmp_path):

@@ -70,9 +70,9 @@ def parse_field_command_url(data: bytes) -> str:
     Command 는 'http\\://host;1;0;0;' 꼴로 백슬래시 이스케이프('\\:','\\;','\\\\')가
     걸려 있고 첫 비이스케이프 ';' 뒤는 옵션 플래그다 (corpus 실측 표본:
     'www.hufscit.com;1;0;0;', 'javascript\\:\\;;1;0;0;', '?참조;0;0;0;').
-    HWPX 파서는 Path 파라미터가 있을 때만 링크를 만드는데, 책갈피형('?...')과
-    스크립트형('javascript...')은 Path 가 없다 — 같은 문서 쌍에서 동일한 결과가
-    나오도록 여기서도 그 둘은 버린다.
+    책갈피형('?참조')은 문서 내 책갈피로 가는 내부 하이퍼링크이므로 '#참조' 로
+    복원한다 (실측 143E433F503322BD33: HWP %hlk '?참조' ↔ HWPX HYPERLINK
+    TargetType=BOOKMARK Command '?참조'). 스크립트형('javascript...')만 버린다.
     """
     if len(data) < 11:
         return ""
@@ -100,8 +100,12 @@ def field_command_to_url(command: str) -> str:
         i += 1
     url = ''.join(out).strip().strip('\x00')
 
-    if not url or url.startswith('?') or url.lower().startswith('javascript'):
+    if not url or url.lower().startswith('javascript'):
         return ""
+    if url.startswith('?'):
+        # 책갈피형 내부 하이퍼링크 — 문서 내 책갈피(앵커)로 점프한다.
+        anchor = url[1:].strip()
+        return f"#{anchor}" if anchor else ""
     return url
 
 

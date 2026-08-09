@@ -289,8 +289,9 @@ def test_field_command_url_extraction():
     assert parse_field_command_url(payload("http\\://www.hancom.co.kr;1;0;0;")) == \
         "http://www.hancom.co.kr"
     assert parse_field_command_url(payload("www.hufscit.com;1;0;0;")) == "www.hufscit.com"
-    # HWPX 정답지(Path 파라미터 부재)와 동일하게 책갈피/스크립트 링크는 버린다
-    assert parse_field_command_url(payload("?참조;0;0;0;")) == ""
+    # 책갈피형('?참조')은 문서 내 책갈피로 가는 내부 하이퍼링크 → '#참조'
+    assert parse_field_command_url(payload("?참조;0;0;0;")) == "#참조"
+    # 스크립트 링크는 여전히 버린다
     assert parse_field_command_url(payload("javascript\\:\\;;1;0;0;")) == ""
     # 이스케이프된 세미콜론은 URL 의 일부다
     assert parse_field_command_url(payload("http\\://a.kr/x\\;y;1;0;0;")) == "http://a.kr/x;y"
@@ -368,6 +369,31 @@ def test_hyperlink_renders_as_markdown_link():
     md = to_markdown(Document(sections=[section]))
 
     assert "[한컴](http://www.hancom.co.kr)" in md
+
+
+def test_internal_hyperlink_to_bookmark_renders_as_anchor():
+    """책갈피형 %hlk('?참조')는 문서 내 책갈피로 가는 내부 하이퍼링크(#참조)로
+    렌더된다 (실측 143E433F503322BD33: HWP %hlk '?참조' ↔ HWPX 동일)."""
+    from dochan.model.document import Document
+    from dochan.output.markdown import to_markdown
+
+    text_payload = (
+        field_start_block(b"klh%") +
+        "내부참조".encode("utf-16-le") +
+        field_end_block() +
+        struct.pack("<H", 13)
+    )
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, text_payload) +
+        rec(HWPTAG_CTRL_HEADER, 1, hlk_ctrl_payload("?참조;0;0;0;"))
+    )
+    section = parse_section(data)
+
+    paras = [e for e in section.elements if isinstance(e, Paragraph)]
+    linked = [(r.text, r.link) for r in paras[0].runs if r.link]
+    assert linked == [("내부참조", "#참조")]
+    assert to_markdown(Document(sections=[section])) == "[내부참조](#참조)"
 
 
 # ── Task 3: 이미지 대체 텍스트 (개체 설명문) ──

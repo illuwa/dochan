@@ -33,15 +33,23 @@ def _element_to_text(elem) -> str:
         if elem.ocr_text:
             return elem.ocr_text
         return f"[이미지: {elem.filename}]" if elem.filename else "[이미지]"
-    elif isinstance(elem, (HeaderFooter, Footnote)):
+    elif isinstance(elem, HeaderFooter):
         return elem.text.strip()
+    elif isinstance(elem, Footnote):
+        parts = [_element_to_text(item) for item in elem.paragraphs]
+        return '\n'.join(part for part in parts if part).strip()
     return ""
 
 
 def _table_to_text(table: Table) -> str:
     lines = []
     for row in table.rows:
-        cells = [cell.text.replace('\n', ' ') for cell in row if not cell.is_merged_away]
+        cells = []
+        for cell in row:
+            if cell.is_merged_away:
+                continue
+            parts = [_element_to_text(item) for item in cell.paragraphs]
+            cells.append(' '.join(part for part in parts if part).replace('\n', ' '))
         if cells:
             lines.append('\t'.join(cells))
     return '\n'.join(lines)

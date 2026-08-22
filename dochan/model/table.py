@@ -15,10 +15,22 @@ class Cell:
 
     @property
     def text(self) -> str:
+        from .equation import Equation
+        from .image import Image
+
         parts = []
-        for p in self.paragraphs:
-            if hasattr(p, 'text'):
-                parts.append(p.text)
+        for element in self.paragraphs:
+            if isinstance(element, Equation):
+                value = element.latex or element.script
+                if value:
+                    parts.append(f'[수식: {value}]')
+            elif isinstance(element, Image):
+                if element.ocr_text:
+                    parts.append(element.ocr_text)
+                elif element.filename:
+                    parts.append(f'[이미지: {element.filename}]')
+            elif hasattr(element, 'text'):
+                parts.append(element.text)
         return '\n'.join(parts)
 
     @property
@@ -38,3 +50,17 @@ class Table:
     @property
     def col_count(self) -> int:
         return max((len(r) for r in self.rows), default=0)
+
+    @property
+    def text(self) -> str:
+        """Plain-text table content for container models such as footnotes."""
+        lines = []
+        for row in self.rows:
+            cells = [
+                cell.text.replace('\n', ' ')
+                for cell in row
+                if not cell.is_merged_away
+            ]
+            if cells:
+                lines.append('\t'.join(cells))
+        return '\n'.join(lines)

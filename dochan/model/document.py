@@ -1,6 +1,6 @@
 """Document model — 전체 문서 구조"""
 from dataclasses import dataclass, field
-from typing import List, Optional, Any
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -16,6 +16,8 @@ class TextRun:
     subscript: bool = False
     font_size_pt: float = 10.0
     provenance: Any = None
+    note_reference_type: str = ""
+    note_reference_number: Optional[int] = None
 
 
 @dataclass
@@ -59,37 +61,63 @@ class Document:
     provenance: Any = None
 
     def find_all(self, element_type: str):
-        """타입별 요소 검색 (table, equation, image 등)"""
+        """타입별 요소를 문서 순서대로 중복 없이 재귀 검색한다."""
         from .table import Table
         from .equation import Equation
         from .image import Image
+        from .header_footer import Comment, Footnote, HeaderFooter
 
         type_map = {
-            'table': Table,
-            'equation': Equation,
-            'image': Image,
-            'paragraph': Paragraph,
+            'table': (Table, None),
+            'equation': (Equation, None),
+            'image': (Image, None),
+            'paragraph': (Paragraph, None),
+            'header': (HeaderFooter, {'header'}),
+            'footer': (HeaderFooter, {'footer'}),
+            'header_footer': (HeaderFooter, None),
+            'footnote': (Footnote, {'footnote'}),
+            'endnote': (Footnote, {'endnote'}),
+            'comment': (Comment, None),
+            'note': (Footnote, {'footnote', 'endnote', 'comment'}),
         }
-        cls = type_map.get(element_type)
-        if not cls:
+        target = type_map.get(str(element_type).lower())
+        if target is None:
             return []
+        cls, allowed_types = target
 
         results = []
+        seen = set()
         for section in self.sections:
-            self._find_recursive(section.elements, cls, results)
+            self._find_recursive(section.elements, cls, results, seen, allowed_types)
         return results
 
-    def _find_recursive(self, elements, cls, results):
-        """재귀적으로 모든 요소 검색 (표 셀 내부 포함)"""
+    def _find_recursive(self, elements, cls, results, seen=None, allowed_types=None):
+        """표, 머리글/바닥글, 각주/미주 내부를 재귀 탐색한다."""
         from .table import Table
+        from .header_footer import HeaderFooter, Footnote
+
+        if seen is None:
+            seen = set()
         for elem in elements:
-            if isinstance(elem, cls):
+            identity = id(elem)
+            if identity in seen:
+                continue
+            seen.add(identity)
+
+            type_matches = allowed_types is None or getattr(elem, 'type', None) in allowed_types
+            if isinstance(elem, cls) and type_matches:
                 results.append(elem)
-            # 표 안의 셀 내부도 검색
+
             if isinstance(elem, Table):
                 for row in elem.rows:
                     for cell in row:
-                        self._find_recursive(cell.paragraphs, cls, results)
+                        self._find_recursive(
+                            cell.paragraphs, cls, results, seen, allowed_types,
+                        )
+            elif isinstance(elem, (HeaderFooter, Footnote)):
+                self._find_recursive(
+                    elem.paragraphs, cls, results, seen, allowed_types,
+                )
 
     @property
     def metadata(self) -> dict:
@@ -100,7 +128,7 @@ class Document:
             'styles': len(self.styles),
             'face_names': len(self.face_names),
             'assets': len(self.assets),
-            'errors': self.errors,
+            'errors': list(self.errors),
         }
         if self.source_format:
             metadata['source_format'] = self.source_format

@@ -1,10 +1,13 @@
 import zipfile
 
+import dochan.ooxml.pptx as pptx_module
+import pytest
 from dochan import Dochan
 from dochan.batch import batch_convert
 from dochan.cli import _cmd_info
 from dochan.ooxml.pptx import PPTXReader
 from dochan.output.markdown import to_markdown
+from dochan.quality.checker import check_quality
 
 
 def _write_pptx(path, presentation_xml, slide_xmls, presentation_rels_xml=None, extra_parts=None):
@@ -24,6 +27,94 @@ def _write_pptx(path, presentation_xml, slide_xmls, presentation_rels_xml=None, 
             zf.writestr(name, data)
         for name, data in (extra_parts or {}).items():
             zf.writestr(name, data)
+
+
+def _write_chart_pptx(path, series_xml):
+    _write_pptx(
+        path,
+        """
+        <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+        </p:presentation>
+        """,
+        {
+            "ppt/slides/slide1.xml": """
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <p:cSld><p:spTree><p:graphicFrame>
+                <a:graphic><a:graphicData><c:chart r:id="rIdChart"/></a:graphicData></a:graphic>
+              </p:graphicFrame></p:spTree></p:cSld>
+            </p:sld>
+            """,
+        },
+        extra_parts={
+            "ppt/slides/_rels/slide1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+            </Relationships>
+            """,
+            "ppt/charts/chart1.xml": f"""
+            <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+              <c:chart><c:plotArea><c:barChart>{series_xml}</c:barChart></c:plotArea></c:chart>
+            </c:chartSpace>
+            """,
+        },
+    )
+
+
+def _write_two_chart_pptx(path):
+    chart_xml = """
+    <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+      <c:chart><c:plotArea><c:barChart><c:ser>
+        <c:tx><c:v>Series</c:v></c:tx>
+        <c:cat><c:strRef><c:strCache>
+          <c:pt idx="0"><c:v>A</c:v></c:pt>
+        </c:strCache></c:strRef></c:cat>
+        <c:val><c:numRef><c:numCache>
+          <c:pt idx="0"><c:v>1</c:v></c:pt>
+        </c:numCache></c:numRef></c:val>
+      </c:ser></c:barChart></c:plotArea></c:chart>
+    </c:chartSpace>
+    """
+    _write_pptx(
+        path,
+        """
+        <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+        </p:presentation>
+        """,
+        {
+            "ppt/slides/slide1.xml": """
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <p:cSld><p:spTree>
+                <p:graphicFrame><a:graphic><a:graphicData>
+                  <c:chart r:id="rIdChart1"/>
+                </a:graphicData></a:graphic></p:graphicFrame>
+                <p:graphicFrame><a:graphic><a:graphicData>
+                  <c:chart r:id="rIdChart2"/>
+                </a:graphicData></a:graphic></p:graphicFrame>
+              </p:spTree></p:cSld>
+            </p:sld>
+            """,
+        },
+        extra_parts={
+            "ppt/slides/_rels/slide1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+              <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
+            </Relationships>
+            """,
+            "ppt/charts/chart1.xml": chart_xml,
+            "ppt/charts/chart2.xml": chart_xml,
+        },
+    )
 
 
 def test_reads_pptx_slide_text_in_order(tmp_path):
@@ -264,6 +355,38 @@ def test_reads_pptx_bullets_and_auto_numbered_paragraphs(tmp_path):
     assert markdown == "• Bullet point\n\n3. Third item\n\n4. Fourth item"
 
 
+def test_rejects_pptx_numbering_value_above_output_limit(tmp_path, monkeypatch):
+    path = tmp_path / "oversized-numbering.pptx"
+    numbering_type = "romanUcPeriod" + ("x" * 512)
+    monkeypatch.setattr(pptx_module, "MAX_NUMBERING_VALUE", 9, raising=False)
+    _write_pptx(
+        path,
+        """
+        <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+        </p:presentation>
+        """,
+        {
+            "ppt/slides/slide1.xml": f"""
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <p:cSld><p:spTree><p:sp><p:txBody><a:p>
+                <a:pPr><a:buAutoNum type="{numbering_type}" startAt="10"/></a:pPr>
+                <a:r><a:t>Bounded item</a:t></a:r>
+              </a:p></p:txBody></p:sp></p:spTree></p:cSld>
+            </p:sld>
+            """,
+        },
+    )
+
+    doc = PPTXReader().read(str(path))
+
+    assert any("PPTX numbering value limit exceeded" in error for error in doc.errors)
+    assert all(len(error) < 200 for error in doc.errors)
+    assert len(doc.sections[0].elements[0].text) < 100
+
+
 def test_reads_pptx_core_properties_as_markdown_metadata(tmp_path):
     path = tmp_path / "core-props.pptx"
     _write_pptx(
@@ -481,6 +604,38 @@ def test_reads_pptx_merged_table_cells_as_spans(tmp_path):
     assert table.rows[1][0].row_span == 2
     assert table.rows[2][0].is_merged_away
     assert table.rows[2][1].text == "Q2"
+
+
+def test_pptx_false_merge_attributes_do_not_hide_cells(tmp_path):
+    path = tmp_path / "false-merge-table.pptx"
+    _write_pptx(
+        path,
+        """
+        <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+        </p:presentation>
+        """,
+        {
+            "ppt/slides/slide1.xml": """
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <p:cSld><p:spTree><p:graphicFrame><a:graphic><a:graphicData>
+                <a:tbl><a:tr>
+                  <a:tc hMerge="0" vMerge="false">
+                    <a:txBody><a:p><a:r><a:t>Visible cell</a:t></a:r></a:p></a:txBody>
+                  </a:tc>
+                </a:tr></a:tbl>
+              </a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld>
+            </p:sld>
+            """,
+        },
+    )
+
+    cell = PPTXReader().read(str(path)).sections[0].elements[0].rows[0][0]
+
+    assert cell.text == "Visible cell"
+    assert not cell.is_merged_away
 
 
 def test_reads_pptx_elements_by_vertical_position(tmp_path):
@@ -981,6 +1136,52 @@ def test_records_pptx_embedded_image_relationship_as_asset(tmp_path):
     assert asset.metadata["label"] == "Revenue Chart ARR up 42 percent Picture 1"
     assert asset.metadata["source_format"] == "pptx"
     assert asset.metadata["slide"] == 1
+    assert asset.metadata["missing"] is False
+
+
+def test_records_missing_pptx_image_part_once_for_quality(tmp_path):
+    path = tmp_path / "missing-picture-part.pptx"
+    _write_pptx(
+        path,
+        """
+        <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+        </p:presentation>
+        """,
+        {
+            "ppt/slides/slide1.xml": """
+            <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <p:cSld><p:spTree>
+                <p:pic><p:nvPicPr><p:cNvPr id="2" name="Missing picture"/></p:nvPicPr>
+                  <p:blipFill><a:blip r:embed="rIdMissing"/></p:blipFill></p:pic>
+                <p:pic><p:nvPicPr><p:cNvPr id="3" name="Duplicate"/></p:nvPicPr>
+                  <p:blipFill><a:blip r:embed="rIdMissing"/></p:blipFill></p:pic>
+              </p:spTree></p:cSld>
+            </p:sld>
+            """,
+            "ppt/slides/_rels/slide1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdMissing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/missing.png"/>
+            </Relationships>
+            """,
+        },
+    )
+
+    doc = PPTXReader().read(str(path))
+    report = check_quality(doc)
+
+    assert len(doc.assets) == 1
+    assert doc.assets[0].source_path == "ppt/media/missing.png"
+    assert doc.assets[0].metadata["missing"] is True
+    assert doc.errors == [
+        "WARN: PPTX image part not found: ppt/media/missing.png"
+    ]
+    assert report.total_images == 1
+    assert report.missing_images == 1
+    assert report.parse_errors == 0
 
 
 def test_reads_pptx_linked_external_image_reference_without_asset(tmp_path):
@@ -1168,6 +1369,100 @@ def test_reads_pptx_multi_series_chart_as_single_table(tmp_path):
         ["Q1", "10", "3"],
         ["Q2", "20", "8"],
     ]
+
+
+def test_rejects_pptx_chart_series_above_document_budget(tmp_path, monkeypatch):
+    path = tmp_path / "chart-series-limit.pptx"
+    monkeypatch.setattr(pptx_module, "MAX_CHART_SERIES", 1, raising=False)
+    _write_chart_pptx(
+        path,
+        """
+        <c:ser><c:tx><c:v>First</c:v></c:tx></c:ser>
+        <c:ser><c:tx><c:v>Second</c:v></c:tx></c:ser>
+        """,
+    )
+
+    doc = PPTXReader().read(str(path))
+
+    assert any("PPTX chart series limit exceeded" in error for error in doc.errors)
+    assert doc.find_all("table") == []
+
+
+def test_rejects_pptx_chart_points_above_document_budget(tmp_path, monkeypatch):
+    path = tmp_path / "chart-point-limit.pptx"
+    monkeypatch.setattr(pptx_module, "MAX_CHART_POINTS", 3, raising=False)
+    _write_chart_pptx(
+        path,
+        """
+        <c:ser>
+          <c:tx><c:v>Series</c:v></c:tx>
+          <c:cat><c:strRef><c:strCache>
+            <c:pt idx="0"><c:v>A</c:v></c:pt>
+            <c:pt idx="1"><c:v>B</c:v></c:pt>
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:pt idx="0"><c:v>1</c:v></c:pt>
+            <c:pt idx="1"><c:v>2</c:v></c:pt>
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        """,
+    )
+
+    doc = PPTXReader().read(str(path))
+
+    assert any("PPTX chart point limit exceeded" in error for error in doc.errors)
+    assert doc.find_all("table") == []
+
+
+def test_rejects_pptx_chart_table_above_document_cell_budget(tmp_path, monkeypatch):
+    path = tmp_path / "chart-cell-limit.pptx"
+    monkeypatch.setattr(pptx_module, "MAX_CHART_OUTPUT_CELLS", 5, raising=False)
+    _write_chart_pptx(
+        path,
+        """
+        <c:ser>
+          <c:tx><c:v>Series</c:v></c:tx>
+          <c:cat><c:strRef><c:strCache>
+            <c:pt idx="0"><c:v>A</c:v></c:pt>
+            <c:pt idx="1"><c:v>B</c:v></c:pt>
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:pt idx="0"><c:v>1</c:v></c:pt>
+            <c:pt idx="1"><c:v>2</c:v></c:pt>
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        """,
+    )
+
+    doc = PPTXReader().read(str(path))
+
+    assert any("PPTX chart output cell limit exceeded" in error for error in doc.errors)
+    assert doc.find_all("table") == []
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit", "error_text"),
+    [
+        ("MAX_CHART_SERIES", 1, "PPTX chart series limit exceeded"),
+        ("MAX_CHART_POINTS", 2, "PPTX chart point limit exceeded"),
+        ("MAX_CHART_OUTPUT_CELLS", 4, "PPTX chart output cell limit exceeded"),
+    ],
+)
+def test_pptx_chart_budgets_are_cumulative_across_document(
+    tmp_path,
+    monkeypatch,
+    limit_name,
+    limit,
+    error_text,
+):
+    path = tmp_path / f"cumulative-{limit_name}.pptx"
+    monkeypatch.setattr(pptx_module, limit_name, limit)
+    _write_two_chart_pptx(path)
+
+    doc = PPTXReader().read(str(path))
+
+    assert any(error_text in error for error in doc.errors)
+    assert len(doc.find_all("table")) == 1
 
 
 def test_reads_pptx_smartart_diagram_text(tmp_path):

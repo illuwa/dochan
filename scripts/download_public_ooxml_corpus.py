@@ -1,80 +1,92 @@
 """Download a small license-audited public OOXML benchmark corpus."""
 import argparse
+import hashlib
 import json
+import os
+import secrets
+import stat
+import time
+import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Dict, Iterable, List
+
+
+ALLOWED_OOXML_FORMATS = frozenset({"docx", "pptx", "xlsx"})
+DOWNLOAD_TIMEOUT_SECONDS = 30.0
+MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 64 * 1024
 
 
 PUBLIC_OOXML_FIXTURES = [
     {
         "name": "python-docx-test.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/tests/test_files/test.docx",
+        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/test.docx",
         "source": "python-openxml/python-docx",
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "name": "python-docx-having-images.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/tests/test_files/having-images.docx",
+        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/having-images.docx",
         "source": "python-openxml/python-docx",
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "name": "python-docx-blk-inner-content.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/tests/test_files/blk-inner-content.docx",
+        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/tests/test_files/blk-inner-content.docx",
         "source": "python-openxml/python-docx",
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "name": "python-docx-comments-rich-para.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/comments-rich-para.docx",
+        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/features/steps/test_files/comments-rich-para.docx",
         "source": "python-openxml/python-docx",
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "name": "python-docx-hdr-header-footer.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/hdr-header-footer.docx",
+        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/features/steps/test_files/hdr-header-footer.docx",
         "source": "python-openxml/python-docx",
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "name": "python-docx-num-having-numbering-part.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/num-having-numbering-part.docx",
+        "url": "https://raw.githubusercontent.com/python-openxml/python-docx/e45454602b53e8e572b179ccf1c91093ec9f4ed7/features/steps/test_files/num-having-numbering-part.docx",
         "source": "python-openxml/python-docx",
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "name": "doxx-comprehensive.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/bgreenwell/doxx/main/tests/fixtures/comprehensive.docx",
+        "url": "https://raw.githubusercontent.com/bgreenwell/doxx/51c9bc40c0a178abe51377cf692293b1723c63b7/tests/fixtures/comprehensive.docx",
         "source": "bgreenwell/doxx",
         "license": "MIT",
-        "license_url": "https://github.com/bgreenwell/doxx/blob/main/LICENSE",
+        "license_url": "https://github.com/bgreenwell/doxx/blob/51c9bc40c0a178abe51377cf692293b1723c63b7/LICENSE",
     },
     {
         "name": "doxx-images.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/bgreenwell/doxx/main/tests/fixtures/images.docx",
+        "url": "https://raw.githubusercontent.com/bgreenwell/doxx/51c9bc40c0a178abe51377cf692293b1723c63b7/tests/fixtures/images.docx",
         "source": "bgreenwell/doxx",
         "license": "MIT",
-        "license_url": "https://github.com/bgreenwell/doxx/blob/main/LICENSE",
+        "license_url": "https://github.com/bgreenwell/doxx/blob/51c9bc40c0a178abe51377cf692293b1723c63b7/LICENSE",
     },
     {
         "name": "apache-poi-sample.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/SampleDoc.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/SampleDoc.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -82,7 +94,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-footnotes.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/footnotes.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/footnotes.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -90,7 +102,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-bookmarks.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/bookmarks.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/bookmarks.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -98,7 +110,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-checkboxes.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/checkboxes.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/checkboxes.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -106,7 +118,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-deep-table-cell.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/deep-table-cell.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/deep-table-cell.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -114,7 +126,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-shapes-with-text.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/shapes-with-text.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/shapes-with-text.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -122,7 +134,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-endnotes.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/endnotes.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/endnotes.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -130,7 +142,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-heading123.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/heading123.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/heading123.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -138,7 +150,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-header-footer-unicode.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/HeaderFooterUnicode.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/HeaderFooterUnicode.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -146,7 +158,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-embedded-document.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/EmbeddedDocument.docx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/document/EmbeddedDocument.docx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -154,71 +166,71 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "python-pptx-test.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/tests/test_files/test.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/tests/test_files/test.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-test-slides.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/tests/test_files/test_slides.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/tests/test_files/test_slides.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-minimal.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/tests/test_files/minimal.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/tests/test_files/minimal.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-prs-notes.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/prs-notes.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/features/steps/test_files/prs-notes.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-shp-shapes.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-shapes.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/features/steps/test_files/shp-shapes.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-shp-picture.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-picture.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/features/steps/test_files/shp-picture.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-cht-charts.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/cht-charts.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/features/steps/test_files/cht-charts.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "python-pptx-tbl-cell.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/tbl-cell.pptx",
+        "url": "https://raw.githubusercontent.com/scanny/python-pptx/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/features/steps/test_files/tbl-cell.pptx",
         "source": "scanny/python-pptx",
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "name": "apache-poi-shapes.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/shapes.pptx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/slideshow/shapes.pptx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -226,7 +238,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-with-japanese.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/with_japanese.pptx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/slideshow/with_japanese.pptx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -234,7 +246,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-bar-chart.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/bar-chart.pptx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/slideshow/bar-chart.pptx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -242,7 +254,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-sample.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/sample.pptx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/slideshow/sample.pptx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -250,7 +262,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-with-master.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/WithMaster.pptx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/slideshow/WithMaster.pptx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -258,7 +270,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-comments.pptx",
         "format": "pptx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/slideshow/45545_Comment.pptx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/slideshow/45545_Comment.pptx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -266,39 +278,39 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "pyexcel-bug-176.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/pyexcel/pyexcel/dev/tests/fixtures/bug_176.xlsx",
+        "url": "https://raw.githubusercontent.com/pyexcel/pyexcel/0bfeee32704678a9da498d62b5c55dc8d474853e/tests/fixtures/bug_176.xlsx",
         "source": "pyexcel/pyexcel",
         "license": "BSD-3-Clause",
-        "license_url": "https://github.com/pyexcel/pyexcel/blob/dev/LICENSE",
+        "license_url": "https://github.com/pyexcel/pyexcel/blob/0bfeee32704678a9da498d62b5c55dc8d474853e/LICENSE",
     },
     {
         "name": "pyexcel-empty-sheet.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/pyexcel/pyexcel/dev/tests/fixtures/file_with_an_empty_sheet.xlsx",
+        "url": "https://raw.githubusercontent.com/pyexcel/pyexcel/0bfeee32704678a9da498d62b5c55dc8d474853e/tests/fixtures/file_with_an_empty_sheet.xlsx",
         "source": "pyexcel/pyexcel",
         "license": "BSD-3-Clause",
-        "license_url": "https://github.com/pyexcel/pyexcel/blob/dev/LICENSE",
+        "license_url": "https://github.com/pyexcel/pyexcel/blob/0bfeee32704678a9da498d62b5c55dc8d474853e/LICENSE",
     },
     {
         "name": "eparse-nested.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/ChrisPappalardo/eparse/main/tests/eparse_nested_test_data.xlsx",
+        "url": "https://raw.githubusercontent.com/ChrisPappalardo/eparse/039e55266aad31711954be4d6fb74f3765104207/tests/eparse_nested_test_data.xlsx",
         "source": "ChrisPappalardo/eparse",
         "license": "MIT",
-        "license_url": "https://github.com/ChrisPappalardo/eparse/blob/main/LICENSE",
+        "license_url": "https://github.com/ChrisPappalardo/eparse/blob/039e55266aad31711954be4d6fb74f3765104207/LICENSE",
     },
     {
         "name": "eparse-unit.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/ChrisPappalardo/eparse/main/tests/eparse_unit_test_data.xlsx",
+        "url": "https://raw.githubusercontent.com/ChrisPappalardo/eparse/039e55266aad31711954be4d6fb74f3765104207/tests/eparse_unit_test_data.xlsx",
         "source": "ChrisPappalardo/eparse",
         "license": "MIT",
-        "license_url": "https://github.com/ChrisPappalardo/eparse/blob/main/LICENSE",
+        "license_url": "https://github.com/ChrisPappalardo/eparse/blob/039e55266aad31711954be4d6fb74f3765104207/LICENSE",
     },
     {
         "name": "apache-poi-sample.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/SampleSS.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/SampleSS.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -306,7 +318,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-simple-comments.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/SimpleWithComments.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/SimpleWithComments.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -314,7 +326,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-inline-strings.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/InlineStrings.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/InlineStrings.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -322,7 +334,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-sample-strict.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/SampleSS.strict.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/SampleSS.strict.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -330,7 +342,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-shared-hyperlink.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/sharedhyperlink.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/sharedhyperlink.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -338,7 +350,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-header-footer.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/headerFooterTest.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/headerFooterTest.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -346,7 +358,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-ampersand-header.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/AmpersandHeader.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/AmpersandHeader.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -354,7 +366,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-header-footer-complex.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/HeaderFooterComplexFormats.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/HeaderFooterComplexFormats.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -362,7 +374,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-simple-strict.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/SimpleStrict.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/SimpleStrict.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -370,7 +382,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-with-textbox.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/WithTextBox.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/WithTextBox.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -378,7 +390,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-with-drawing.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/WithDrawing.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/WithDrawing.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -386,7 +398,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-picture.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/picture.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/picture.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -394,7 +406,7 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-with-chart.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/WithChart.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/WithChart.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
@@ -402,12 +414,55 @@ PUBLIC_OOXML_FIXTURES = [
     {
         "name": "apache-poi-chart-title-formula.xlsx",
         "format": "xlsx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/spreadsheet/chartTitle_withTitleFormula.xlsx",
+        "url": "https://raw.githubusercontent.com/apache/poi/379bcdcc4cfe9d899eabc2e226a1322161413c7f/test-data/spreadsheet/chartTitle_withTitleFormula.xlsx",
         "source": "apache/poi",
         "license": "Apache-2.0",
         "license_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
     },
 ]
+
+SOURCE_REVISIONS = {
+    "python-openxml/python-docx": "e45454602b53e8e572b179ccf1c91093ec9f4ed7",
+    "bgreenwell/doxx": "51c9bc40c0a178abe51377cf692293b1723c63b7",
+    "apache/poi": "379bcdcc4cfe9d899eabc2e226a1322161413c7f",
+    "scanny/python-pptx": "278b47b1dedd5b46ee84c286e77cdfb0bf4594be",
+    "pyexcel/pyexcel": "0bfeee32704678a9da498d62b5c55dc8d474853e",
+    "ChrisPappalardo/eparse": "039e55266aad31711954be4d6fb74f3765104207",
+}
+INTEGRITY_MANIFEST_PATH = Path(__file__).with_name("public_ooxml_fixture_integrity.json")
+
+
+def _pin_builtin_fixture(fixture: dict, integrity: dict) -> None:
+    source = fixture["source"]
+    revision = SOURCE_REVISIONS[source]
+    parsed = urllib.parse.urlsplit(fixture["url"])
+    try:
+        decoded_path = urllib.parse.unquote_to_bytes(parsed.path).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            "fixture URL path is not valid UTF-8: {}".format(fixture["name"])
+        ) from exc
+    expected_prefix = "/{}/{}/".format(source, revision)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc.lower() != "raw.githubusercontent.com"
+        or parsed.query
+        or parsed.fragment
+        or not decoded_path.startswith(expected_prefix)
+        or decoded_path == expected_prefix
+    ):
+        raise ValueError("fixture URL is not pinned to its source revision: {}".format(fixture["name"]))
+    fixture["source_revision"] = revision
+    fixture["source_name"] = decoded_path[len(expected_prefix):]
+    fixture.update(integrity[fixture["name"]])
+
+
+_INTEGRITY_MANIFEST = json.loads(INTEGRITY_MANIFEST_PATH.read_text(encoding="utf-8"))
+if _INTEGRITY_MANIFEST.get("source_revisions") != SOURCE_REVISIONS:
+    raise ValueError("fixture integrity manifest source revisions are stale")
+for _fixture in PUBLIC_OOXML_FIXTURES:
+    _pin_builtin_fixture(_fixture, _INTEGRITY_MANIFEST["fixtures"])
+del _fixture
 
 PUBLIC_OOXML_EXPECTATIONS = {
     "docx/apache-poi-sample.docx": {
@@ -425,11 +480,11 @@ PUBLIC_OOXML_EXPECTATIONS = {
     "docx/apache-poi-footnotes.docx": {
         "expected_text": [
             "Author: Anton Trekin",
-            "Eto ochen prostoy<sup>[1]</sup> text so snoskoy",
+            "Eto ochen prostoy[^1] text so snoskoy",
             "snoska",
         ],
         "expected_markdown": [
-            "[^각주]: snoska",
+            "[^1]: snoska",
         ],
     },
     "docx/apache-poi-bookmarks.docx": {
@@ -484,11 +539,11 @@ PUBLIC_OOXML_EXPECTATIONS = {
         "expected_text": [
             "Author: pavel",
             "A Nepalese name for Tilaka",
-            "A pendant worn in place of the red spot (tilaka <sup>[1]</sup>or 'tika')",
+            "A pendant worn in place of the red spot (tilaka [^1]or 'tika')",
             "Apache Tika is a subproject of the Lucene",
         ],
         "expected_markdown": [
-            "[^미주]: XXX",
+            "[^1]: XXX",
         ],
     },
     "docx/apache-poi-heading123.docx": {
@@ -970,11 +1025,276 @@ PUBLIC_OOXML_EXPECTATIONS = {
     },
 }
 
-APACHE_POI_PROBE_MANIFEST_VERSION = 1
+APACHE_POI_PROBE_MANIFEST_VERSION = 3
+
+
+def _validate_fixture_identity(fixture: dict) -> None:
+    if not isinstance(fixture, dict):
+        raise ValueError("fixture index entries must be JSON objects")
+
+    file_format = fixture.get("format")
+    if not isinstance(file_format, str) or file_format not in ALLOWED_OOXML_FORMATS:
+        allowed = ", ".join(sorted(ALLOWED_OOXML_FORMATS))
+        raise ValueError("fixture format must be one of: {}".format(allowed))
+
+    name = fixture.get("name")
+    invalid_name = (
+        not isinstance(name, str)
+        or not name.strip()
+        or name in {".", ".."}
+        or "\x00" in name
+        or "/" in name
+        or "\\" in name
+    )
+    if not invalid_name:
+        invalid_name = (
+            PurePosixPath(name).is_absolute()
+            or PureWindowsPath(name).is_absolute()
+            or PurePosixPath(name).name != name
+            or PureWindowsPath(name).name != name
+        )
+    if invalid_name:
+        raise ValueError("fixture name must be a non-empty single basename")
+
+    source_revision = _fixture_source_revision(fixture)
+    if source_revision and (
+        not isinstance(source_revision, str)
+        or not source_revision.strip()
+        or "/" in source_revision
+        or "\\" in source_revision
+    ):
+        raise ValueError("fixture source revision must be a non-empty path segment")
+
+    url = fixture.get("url")
+    if isinstance(url, str):
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.hostname == "raw.githubusercontent.com":
+            source = fixture.get("source")
+            source_name = fixture.get("source_name")
+            source_parts = source.split("/") if isinstance(source, str) else []
+            source_name_parts = (
+                source_name.split("/") if isinstance(source_name, str) else []
+            )
+            immutable_revision = (
+                len(source_revision) == 40
+                and all(
+                    character in "0123456789abcdef"
+                    for character in source_revision
+                )
+            )
+            unsafe_source = (
+                len(source_parts) != 2
+                or any(part in ("", ".", "..") for part in source_parts)
+            )
+            unsafe_source_name = (
+                not source_name_parts
+                or any(part in ("", ".", "..") for part in source_name_parts)
+                or "\\" in source_name
+            )
+            invalid_percent_escape = any(
+                character == "%"
+                and (
+                    index + 2 >= len(parsed.path)
+                    or any(
+                        digit not in "0123456789abcdefABCDEF"
+                        for digit in parsed.path[index + 1:index + 3]
+                    )
+                )
+                for index, character in enumerate(parsed.path)
+            )
+            try:
+                decoded_path = urllib.parse.unquote_to_bytes(parsed.path).decode(
+                    "utf-8"
+                )
+            except UnicodeDecodeError:
+                decoded_path = ""
+            expected_path = "/{}/{}/{}".format(
+                source,
+                source_revision,
+                source_name,
+            )
+            if (
+                parsed.scheme != "https"
+                or parsed.netloc.lower() != "raw.githubusercontent.com"
+                or parsed.query
+                or parsed.fragment
+                or not immutable_revision
+                or unsafe_source
+                or unsafe_source_name
+                or invalid_percent_escape
+                or decoded_path != expected_path
+            ):
+                raise ValueError(
+                    "fixture URL does not exactly match its source revision and name"
+                )
+
+    recorded_fixture_id = fixture.get("fixture_id")
+    if recorded_fixture_id is not None:
+        if not fixture.get("identity_sha256") and not fixture.get("sha256"):
+            raise ValueError(
+                "fixture fixture_id requires a sha256-backed canonical identity"
+            )
+        canonical_fixture_id = _canonical_apache_poi_fixture_id(fixture)
+        if recorded_fixture_id != canonical_fixture_id:
+            raise ValueError("fixture fixture_id does not match its canonical identity")
+
+
+def _fixture_source_revision(fixture: dict) -> str:
+    for key in ("source_revision", "source_ref", "ref"):
+        value = fixture.get(key)
+        if value not in (None, ""):
+            revision = str(value).strip()
+            if len(revision) == 40 and all(
+                character in "0123456789abcdefABCDEF" for character in revision
+            ):
+                return revision.lower()
+            return revision
+    return ""
+
+
+def _normalize_manifest_id_map(value, field_name: str) -> Dict[str, List[str]]:
+    if not isinstance(value, dict):
+        raise ValueError("probe manifest {} must be a JSON object".format(field_name))
+    normalized: Dict[str, List[str]] = {}
+    for file_format, fixture_ids in value.items():
+        if isinstance(fixture_ids, (str, bytes)) or not isinstance(
+            fixture_ids,
+            (list, tuple, set),
+        ):
+            raise ValueError(
+                "probe manifest {} entries must be JSON arrays".format(field_name)
+            )
+        normalized[str(file_format).lower().lstrip(".")] = sorted(
+            {str(item) for item in fixture_ids}
+        )
+    return normalized
+
+
+def _expected_fixture_sha256(fixture: dict):
+    if "sha256" not in fixture:
+        return None
+    expected = fixture["sha256"]
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in expected)
+    ):
+        raise ValueError("fixture sha256 must be a 64-character hexadecimal digest")
+    return expected.lower()
+
+
+def _expected_fixture_bytes(fixture: dict):
+    if "bytes" not in fixture:
+        return None
+    expected = fixture["bytes"]
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+        raise ValueError("fixture bytes must be a non-negative integer")
+    return expected
+
+
+def _fixture_destination(fixture: dict, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_root = output_dir.resolve(strict=False)
+    format_dir = output_dir / fixture["format"]
+    destination = format_dir / fixture["name"]
+    resolved_destination = destination.resolve(strict=False)
+    try:
+        resolved_destination.relative_to(output_root)
+    except ValueError:
+        raise ValueError("fixture destination resolves outside output directory")
+    return destination
+
+
+def _open_fixture_parent(output_dir: Path, file_format: str):
+    """Open one corpus format directory without following a replaced symlink."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_root = output_dir.resolve(strict=True)
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    root_fd = os.open(str(output_root), directory_flags)
+    try:
+        try:
+            parent_fd = os.open(file_format, directory_flags, dir_fd=root_fd)
+        except FileNotFoundError:
+            try:
+                os.mkdir(file_format, mode=0o777, dir_fd=root_fd)
+            except FileExistsError:
+                pass
+            parent_fd = os.open(file_format, directory_flags, dir_fd=root_fd)
+    except OSError as exc:
+        os.close(root_fd)
+        raise ValueError("fixture destination resolves outside output directory") from exc
+    os.close(root_fd)
+    return output_root, parent_fd
+
+
+def _fixture_parent_is_current(
+    output_root: Path,
+    file_format: str,
+    parent_fd: int,
+) -> bool:
+    """Return whether the live corpus path still names the opened directory."""
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    root_fd = None
+    current_fd = None
+    try:
+        root_fd = os.open(str(output_root), directory_flags)
+        current_fd = os.open(file_format, directory_flags, dir_fd=root_fd)
+        opened = os.fstat(parent_fd)
+        current = os.fstat(current_fd)
+        return (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino)
+    except OSError:
+        return False
+    finally:
+        if current_fd is not None:
+            os.close(current_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _open_fixture_temp(parent_fd: int, destination_name: str):
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    for _ in range(128):
+        temporary_name = ".{}.{}.part".format(
+            destination_name,
+            secrets.token_hex(8),
+        )
+        try:
+            temporary_fd = os.open(
+                temporary_name,
+                flags,
+                0o666,
+                dir_fd=parent_fd,
+            )
+        except FileExistsError:
+            continue
+        return temporary_name, temporary_fd
+    raise FileExistsError(
+        "could not allocate download temporary file for: {}".format(
+            destination_name
+        )
+    )
 
 
 def selected_fixtures(formats: Iterable[str], fixtures: Iterable[dict] = None) -> List[dict]:
-    fixtures = list(fixtures or PUBLIC_OOXML_FIXTURES)
+    fixtures = list(PUBLIC_OOXML_FIXTURES if fixtures is None else fixtures)
+    for fixture in fixtures:
+        _validate_fixture_identity(fixture)
     requested = {fmt.lower().lstrip(".") for fmt in formats}
     return [fixture for fixture in fixtures if fixture["format"] in requested]
 
@@ -984,13 +1304,19 @@ def load_fixture_index(path: Path) -> List[dict]:
     fixtures = payload.get("fixtures", payload) if isinstance(payload, dict) else payload
     if not isinstance(fixtures, list):
         raise ValueError("fixture index must be a JSON list or an object with a 'fixtures' list")
-    return [dict(fixture) for fixture in fixtures]
+    loaded = []
+    for fixture in fixtures:
+        _validate_fixture_identity(fixture)
+        loaded.append(dict(fixture))
+    return loaded
 
 
 def empty_apache_poi_probe_manifest() -> dict:
     return {
         "version": APACHE_POI_PROBE_MANIFEST_VERSION,
         "used": {},
+        "used_sources": {},
+        "legacy_used": {},
         "probes": [],
     }
 
@@ -1000,23 +1326,101 @@ def load_apache_poi_probe_manifest(path: Path) -> dict:
         return empty_apache_poi_probe_manifest()
     payload = json.loads(path.read_text(encoding="utf-8"))
     manifest = empty_apache_poi_probe_manifest()
-    manifest["version"] = payload.get("version", APACHE_POI_PROBE_MANIFEST_VERSION)
-    manifest["used"] = {
-        str(file_format).lower().lstrip("."): sorted({str(item) for item in fixture_ids})
-        for file_format, fixture_ids in payload.get("used", {}).items()
-    }
-    manifest["probes"] = list(payload.get("probes", []))
+    if not isinstance(payload, dict):
+        raise ValueError("probe manifest must be a JSON object")
+    version = payload.get("version", 1)
+    if type(version) is not int:
+        raise ValueError("probe manifest version must be an integer")
+    if version < 1 or version > APACHE_POI_PROBE_MANIFEST_VERSION:
+        raise ValueError("probe manifest version is not supported")
+    normalized_used = _normalize_manifest_id_map(payload.get("used", {}), "used")
+    normalized_used_sources = _normalize_manifest_id_map(
+        payload.get("used_sources", {}),
+        "used_sources",
+    )
+    normalized_legacy = _normalize_manifest_id_map(
+        payload.get("legacy_used", {}),
+        "legacy_used",
+    )
+    probes = payload.get("probes", [])
+    if not isinstance(probes, list) or not all(
+        isinstance(probe, dict) for probe in probes
+    ):
+        raise ValueError("probe manifest probes must be a JSON array of objects")
+    if version < APACHE_POI_PROBE_MANIFEST_VERSION:
+        legacy_formats = set(normalized_legacy) | set(normalized_used)
+        normalized_legacy = {
+            file_format: sorted(
+                set(normalized_legacy.get(file_format, ()))
+                | set(normalized_used.get(file_format, ()))
+            )
+            for file_format in legacy_formats
+        }
+        normalized_used = {}
+        normalized_used_sources = {}
+    manifest["used"] = normalized_used
+    manifest["used_sources"] = normalized_used_sources
+    manifest["legacy_used"] = normalized_legacy
+    manifest["probes"] = [dict(probe) for probe in probes]
     return manifest
 
 
+def _fixture_source_name(fixture: dict) -> str:
+    source_name = fixture.get("source_name")
+    if not source_name and fixture.get("url"):
+        source_name = str(fixture["url"]).rstrip("/").rsplit("/", 1)[-1]
+    if not source_name and fixture.get("path"):
+        source_name = Path(str(fixture["path"])).name
+    if not source_name:
+        source_name = fixture.get("name", "")
+    return str(source_name)
+
+
+def apache_poi_fixture_source_id(fixture: dict) -> str:
+    components = {
+        "source": str(fixture.get("source", "")).strip(),
+        "source_name": _fixture_source_name(fixture),
+        "source_revision": _fixture_source_revision(fixture),
+    }
+    canonical = json.dumps(
+        components,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "source-v1:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _canonical_apache_poi_fixture_id(fixture: dict) -> str:
+    sha256 = fixture.get("identity_sha256") or fixture.get("sha256", "")
+    if sha256:
+        sha256 = _expected_fixture_sha256({"sha256": sha256})
+    components = {
+        "sha256": sha256 or "",
+        "source": str(fixture.get("source", "")).strip(),
+        "source_name": _fixture_source_name(fixture),
+        "source_revision": _fixture_source_revision(fixture),
+    }
+    canonical = json.dumps(components, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "v2:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def apache_poi_fixture_id(fixture: dict) -> str:
+    canonical = _canonical_apache_poi_fixture_id(fixture)
+    recorded = fixture.get("fixture_id")
+    if recorded is not None and recorded != canonical:
+        raise ValueError("fixture fixture_id does not match its canonical identity")
+    return canonical
+
+
+def _legacy_apache_poi_fixture_id(fixture: dict) -> str:
     if fixture.get("source_name"):
         return str(fixture["source_name"])
     if fixture.get("url"):
         return str(fixture["url"]).rstrip("/").rsplit("/", 1)[-1]
     if fixture.get("path"):
         return Path(str(fixture["path"])).name
-    return str(fixture["name"])
+    return str(fixture.get("name", ""))
 
 
 def select_unseen_apache_poi_fixtures(
@@ -1027,10 +1431,28 @@ def select_unseen_apache_poi_fixtures(
 ) -> List[dict]:
     manifest = manifest or empty_apache_poi_probe_manifest()
     requested = [fmt.lower().lstrip(".") for fmt in formats]
+    manifest_version = manifest.get("version", 1)
+    direct_legacy_used = (
+        manifest.get("used", {})
+        if manifest_version < APACHE_POI_PROBE_MANIFEST_VERSION
+        else {}
+    )
     used_by_format = {
         file_format: set(fixture_ids)
-        for file_format, fixture_ids in manifest.get("used", {}).items()
+        for file_format, fixture_ids in (
+            {} if direct_legacy_used else manifest.get("used", {})
+        ).items()
     }
+    used_sources_by_format = {
+        file_format: set(source_ids)
+        for file_format, source_ids in manifest.get("used_sources", {}).items()
+    }
+    legacy_used_by_format = {
+        file_format: set(fixture_ids)
+        for file_format, fixture_ids in manifest.get("legacy_used", {}).items()
+    }
+    for file_format, fixture_ids in direct_legacy_used.items():
+        legacy_used_by_format.setdefault(file_format, set()).update(fixture_ids)
     selected = []
     counts: Dict[str, int] = {file_format: 0 for file_format in requested}
 
@@ -1041,16 +1463,48 @@ def select_unseen_apache_poi_fixtures(
         fixture_id = apache_poi_fixture_id(fixture)
         if fixture_id in used_by_format.get(file_format, set()):
             continue
+        source_id = apache_poi_fixture_source_id(fixture)
+        if source_id in used_sources_by_format.get(file_format, set()):
+            continue
+        has_immutable_identity = bool(
+            _fixture_source_revision(fixture) or fixture.get("sha256")
+        )
+        if (
+            not has_immutable_identity
+            and _legacy_apache_poi_fixture_id(fixture)
+            in legacy_used_by_format.get(file_format, set())
+        ):
+            continue
         selected.append(fixture)
         counts[file_format] += 1
     return selected
 
 
-def record_apache_poi_probe_manifest(path: Path, records: List[dict], probe_name: str) -> dict:
+def record_probe_outcome(
+    path: Path,
+    records: List[dict],
+    probe_name: str,
+    *,
+    successful_records: Iterable[dict] = (),
+    invalid: Iterable[dict] = (),
+    failure_reasons: Iterable[str] = (),
+) -> dict:
     manifest = load_apache_poi_probe_manifest(path)
     used = {
         file_format: set(fixture_ids)
         for file_format, fixture_ids in manifest.get("used", {}).items()
+    }
+    used_sources = {
+        file_format: set(source_ids)
+        for file_format, source_ids in manifest.get("used_sources", {}).items()
+    }
+    successful = {
+        (apache_poi_fixture_id(record), str(record.get("path", "")))
+        for record in successful_records
+    }
+    invalid_by_path = {
+        str(item.get("path", "")): str(item.get("error", ""))
+        for item in invalid
     }
     probe_files = []
 
@@ -1059,57 +1513,400 @@ def record_apache_poi_probe_manifest(path: Path, records: List[dict], probe_name
         fixture_id = apache_poi_fixture_id(record)
         if not file_format or not fixture_id:
             continue
-        used.setdefault(file_format, set()).add(fixture_id)
-        probe_files.append({
+        record_path = str(record.get("path", ""))
+        if record_path in invalid_by_path:
+            status = "invalid"
+        elif (fixture_id, record_path) in successful:
+            status = "success"
+            used.setdefault(file_format, set()).add(fixture_id)
+            used_sources.setdefault(file_format, set()).add(
+                apache_poi_fixture_source_id(record)
+            )
+        else:
+            status = "failed"
+        probe_file = {
             "format": file_format,
             "id": fixture_id,
-            "path": record.get("path", ""),
-        })
+            "path": record_path,
+            "status": status,
+        }
+        if status == "invalid" and invalid_by_path[record_path]:
+            probe_file["error"] = invalid_by_path[record_path]
+        probe_files.append(probe_file)
 
     manifest["used"] = {
         file_format: sorted(fixture_ids)
         for file_format, fixture_ids in sorted(used.items())
     }
+    manifest["used_sources"] = {
+        file_format: sorted(source_ids)
+        for file_format, source_ids in sorted(used_sources.items())
+    }
+    reasons = [str(reason) for reason in failure_reasons]
     manifest["probes"].append({
         "name": probe_name,
-        "files": sorted(probe_files, key=lambda item: (item["format"], item["id"])),
+        "ok": not reasons and all(item["status"] == "success" for item in probe_files),
+        "failure_reasons": reasons,
+        "files": sorted(
+            probe_files,
+            key=lambda item: (item["format"], item["path"], item["id"]),
+        ),
     })
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(
+        path,
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+    )
     return manifest
 
 
-def download_fixture(fixture: dict, output_dir: Path) -> dict:
-    format_dir = output_dir / fixture["format"]
-    format_dir.mkdir(parents=True, exist_ok=True)
-    destination = format_dir / fixture["name"]
-    urllib.request.urlretrieve(fixture["url"], destination)
+def record_apache_poi_probe_manifest(
+    path: Path,
+    records: List[dict],
+    probe_name: str,
+) -> dict:
+    """Compatibility wrapper for callers recording an all-success probe."""
+    return record_probe_outcome(
+        path,
+        records,
+        probe_name,
+        successful_records=records,
+    )
+
+
+def download_fixture(
+    fixture: dict,
+    output_dir: Path,
+    *,
+    timeout: float = DOWNLOAD_TIMEOUT_SECONDS,
+    max_download_bytes: int = MAX_DOWNLOAD_BYTES,
+) -> dict:
+    _validate_fixture_identity(fixture)
+    supplied_fixture_id = fixture.get("fixture_id")
+    expected_sha256 = _expected_fixture_sha256(fixture)
+    expected_bytes = _expected_fixture_bytes(fixture)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError("download timeout must be a positive number")
+    if (
+        isinstance(max_download_bytes, bool)
+        or not isinstance(max_download_bytes, int)
+        or max_download_bytes < 0
+    ):
+        raise ValueError("maximum download size must be a non-negative integer")
+
+    output_dir = Path(output_dir)
+    destination = _fixture_destination(fixture, output_dir)
+    digest = hashlib.sha256()
+    downloaded_bytes = 0
+    output_root = None
+    parent_fd = None
+    temporary_name = None
+    temporary_fd = None
+    try:
+        parsed_url = urllib.parse.urlsplit(fixture["url"])
+        if parsed_url.scheme != "https" or not parsed_url.hostname:
+            raise ValueError("fixture URL must use HTTPS")
+
+        output_root, parent_fd = _open_fixture_parent(
+            output_dir,
+            fixture["format"],
+        )
+        try:
+            destination_stat = os.stat(
+                destination.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            destination_mode = None
+        else:
+            if not stat.S_ISREG(destination_stat.st_mode):
+                raise OSError(
+                    "fixture destination is not a regular file: {}".format(
+                        destination
+                    )
+                )
+            destination_mode = destination_stat.st_mode & 0o777
+
+        temporary_name, temporary_fd = _open_fixture_temp(
+            parent_fd,
+            destination.name,
+        )
+        if destination_mode is not None:
+            os.fchmod(temporary_fd, destination_mode)
+
+        # The external index URL is constrained immediately above to HTTPS
+        # with a non-empty host, then streamed under time and byte limits.
+        deadline = time.monotonic() + float(timeout)
+        with urllib.request.urlopen(  # nosemgrep: dynamic-urllib-use-detected
+            fixture["url"],
+            timeout=timeout,
+        ) as response:
+            with os.fdopen(temporary_fd, mode="wb") as temporary_file:
+                temporary_fd = None
+                read_chunk = getattr(response, "read1", None)
+                if read_chunk is None:
+                    read_chunk = response.read
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            "download exceeded wall clock timeout of {} seconds".format(
+                                timeout
+                            )
+                        )
+                    _set_response_timeout(response, remaining)
+                    chunk = read_chunk(DOWNLOAD_CHUNK_BYTES)
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(
+                            "download exceeded wall clock timeout of {} seconds".format(
+                                timeout
+                            )
+                        )
+                    if not chunk:
+                        break
+                    next_size = downloaded_bytes + len(chunk)
+                    if next_size > max_download_bytes:
+                        raise ValueError(
+                            "download exceeds maximum download size of {} bytes".format(
+                                max_download_bytes
+                            )
+                        )
+                    temporary_file.write(chunk)
+                    digest.update(chunk)
+                    downloaded_bytes = next_size
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+
+        actual_sha256 = digest.hexdigest()
+        if expected_bytes is not None and downloaded_bytes != expected_bytes:
+            raise ValueError(
+                "downloaded bytes {} does not match expected bytes {}".format(
+                    downloaded_bytes,
+                    expected_bytes,
+                )
+            )
+        if expected_sha256 is not None and actual_sha256 != expected_sha256:
+            raise ValueError(
+                "downloaded sha256 {} does not match expected sha256 {}".format(
+                    actual_sha256,
+                    expected_sha256,
+                )
+            )
+
+        identity_record = dict(fixture)
+        identity_record.pop("fixture_id", None)
+        identity_record["identity_sha256"] = actual_sha256
+        identity_record["sha256"] = actual_sha256
+        actual_fixture_id = apache_poi_fixture_id(identity_record)
+        if (
+            supplied_fixture_id is not None
+            and supplied_fixture_id != actual_fixture_id
+        ):
+            raise ValueError(
+                "fixture fixture_id does not match downloaded content identity"
+            )
+
+        if not _fixture_parent_is_current(
+            output_root,
+            fixture["format"],
+            parent_fd,
+        ):
+            raise OSError("fixture destination directory changed during download")
+        os.replace(
+            temporary_name,
+            destination.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        temporary_name = None
+        os.fsync(parent_fd)
+        if not _fixture_parent_is_current(
+            output_root,
+            fixture["format"],
+            parent_fd,
+        ):
+            try:
+                os.unlink(destination.name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            raise OSError("fixture destination directory changed during download")
+    finally:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        if temporary_name is not None and parent_fd is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        if parent_fd is not None:
+            os.close(parent_fd)
+
     record = dict(fixture)
+    record.pop("fixture_id", None)
+    record["identity_sha256"] = actual_sha256
     record["path"] = destination.relative_to(output_dir).as_posix()
-    record["bytes"] = destination.stat().st_size
+    record["bytes"] = downloaded_bytes
+    record["sha256"] = actual_sha256
+    record["fixture_id"] = actual_fixture_id
     return record
 
 
 def write_sources(output_dir: Path, records: List[dict]) -> None:
-    (output_dir / "SOURCES.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(
+        output_dir / "SOURCES.json",
+        json.dumps(records, ensure_ascii=False, indent=2),
+    )
     lines = [
         "# Public OOXML Corpus Sources",
         "",
-        "| File | Format | Source | License | URL |",
-        "| --- | --- | --- | --- | --- |",
+        "| File | Format | Source | Revision | License | Bytes | SHA-256 | URL |",
+        "| --- | --- | --- | --- | --- | ---: | --- | --- |",
     ]
     for record in records:
         lines.append(
-            "| {path} | {format} | {source} | {license} | {url} |".format(
+            "| {path} | {format} | {source} | {source_revision} | {license} | {bytes} | {sha256} | {url} |".format(
                 path=record["path"],
                 format=record["format"],
                 source=record["source"],
+                source_revision=record.get("source_revision", ""),
                 license=record["license"],
+                bytes=record["bytes"],
+                sha256=record.get("sha256", ""),
                 url=record["url"],
             )
         )
     lines.append("")
-    (output_dir / "SOURCES.md").write_text("\n".join(lines), encoding="utf-8")
+    atomic_write_text(output_dir / "SOURCES.md", "\n".join(lines))
+
+
+def _set_response_timeout(response, timeout: float) -> None:
+    """Best-effort socket deadline tightening; read1 keeps slow-drip reads bounded."""
+    try:
+        response.fp.raw._sock.settimeout(max(timeout, 0.001))
+    except (AttributeError, OSError):
+        return
+
+
+def _open_parent_directory(path: Path):
+    absolute_parent = Path(os.path.abspath(str(path.parent)))
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    parent_fd = os.open(os.path.sep, directory_flags)
+    try:
+        for part in absolute_parent.parts[1:]:
+            try:
+                child_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, mode=0o777, dir_fd=parent_fd)
+                except FileExistsError:
+                    pass
+                child_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = child_fd
+    except Exception:
+        os.close(parent_fd)
+        raise
+    return absolute_parent, parent_fd
+
+
+def _parent_directory_is_current(parent: Path, parent_fd: int) -> bool:
+    try:
+        live = os.stat(str(parent), follow_symlinks=False)
+        opened = os.fstat(parent_fd)
+    except OSError:
+        return False
+    return stat.S_ISDIR(live.st_mode) and (
+        live.st_dev,
+        live.st_ino,
+    ) == (
+        opened.st_dev,
+        opened.st_ino,
+    )
+
+
+def atomic_write_text(path: Path, payload: str) -> None:
+    path = Path(path)
+    if path.name in {"", ".", ".."}:
+        raise ValueError("atomic output path must name a file")
+    parent, parent_fd = _open_parent_directory(path)
+    temporary_name = None
+    temporary_fd = None
+    try:
+        try:
+            destination_stat = os.stat(
+                path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            destination_mode = None
+        else:
+            if not stat.S_ISREG(destination_stat.st_mode):
+                raise OSError("atomic output destination is not a regular file: {}".format(path))
+            destination_mode = stat.S_IMODE(destination_stat.st_mode)
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        for _ in range(128):
+            temporary_name = ".{}.{}.tmp".format(path.name, secrets.token_hex(8))
+            try:
+                temporary_fd = os.open(
+                    temporary_name,
+                    flags,
+                    0o666,
+                    dir_fd=parent_fd,
+                )
+            except FileExistsError:
+                continue
+            break
+        else:
+            raise FileExistsError("could not allocate manifest temporary file: {}".format(path))
+
+        if destination_mode is not None:
+            os.fchmod(temporary_fd, destination_mode)
+
+        with os.fdopen(temporary_fd, mode="w", encoding="utf-8") as temporary_file:
+            temporary_fd = None
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        if not _parent_directory_is_current(parent, parent_fd):
+            raise OSError("atomic output directory changed during write: {}".format(parent))
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        temporary_name = None
+        os.fsync(parent_fd)
+        if not _parent_directory_is_current(parent, parent_fd):
+            try:
+                os.unlink(path.name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            raise OSError("atomic output directory changed during write: {}".format(parent))
+    finally:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
+
+
+_atomic_write_text = atomic_write_text
 
 
 def write_expected_manifest(output_dir: Path, records: List[dict]) -> None:
@@ -1118,8 +1915,10 @@ def write_expected_manifest(output_dir: Path, records: List[dict]) -> None:
         for record in records
         if record.get("path") in PUBLIC_OOXML_EXPECTATIONS
     }
-    if expected:
-        (output_dir / "expected.json").write_text(json.dumps(expected, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(
+        output_dir / "expected.json",
+        json.dumps(expected, ensure_ascii=False, indent=2),
+    )
 
 
 def download_corpus(
@@ -1141,8 +1940,6 @@ def download_corpus(
     records = [download_fixture(fixture, output_dir) for fixture in candidates]
     write_sources(output_dir, records)
     write_expected_manifest(output_dir, records)
-    if probe_manifest_path:
-        record_apache_poi_probe_manifest(probe_manifest_path, records, probe_name or output_dir.name)
     return records
 
 

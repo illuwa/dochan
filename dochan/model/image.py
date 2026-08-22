@@ -1,5 +1,5 @@
 """Image model — 이미지 참조 + OCR 텍스트"""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

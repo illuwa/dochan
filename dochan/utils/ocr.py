@@ -5,17 +5,25 @@ utils/ocr.py — Tesseract OCR 연동
 
 import io
 import logging
-from typing import Optional
+import sys
 
 logger = logging.getLogger('dochan')
 
 # OCR 사용 가능 여부
 _ocr_available = None
+MIN_OCR_PYTHON = (3, 10)
+
+
+def _python_supports_ocr() -> bool:
+    """Return whether secure OCR dependencies support this interpreter."""
+    return sys.version_info >= MIN_OCR_PYTHON
 
 
 def is_ocr_available() -> bool:
     """Tesseract OCR 사용 가능 여부"""
     global _ocr_available
+    if not _python_supports_ocr():
+        return False
     if _ocr_available is not None:
         return _ocr_available
 

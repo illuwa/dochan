@@ -22,11 +22,15 @@ Thumbs.db
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .tox/
 
 # Project specific
+/.code-review-graph/
+/graphify-out/
+/~/
 test_pairs/
 test_output.md
 gt_pdf_text.txt

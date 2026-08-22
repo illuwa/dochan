@@ -1,5 +1,6 @@
 import struct
 
+import dochan.office_binary.xls as xls_module
 from dochan import Dochan
 from dochan.batch import batch_convert
 from dochan.cli import _cmd_info
@@ -686,6 +687,102 @@ def test_parse_biff_workbook_restores_unicode_labels_blanks_and_merged_cells():
     assert to_markdown(doc) == "## Report\n\n| 분기 |  |\n| --- | --- |\n| 10 | 20 |"
 
 
+def test_parse_biff_workbook_uses_merge_endpoints_for_sparse_table_dimensions():
+    globals_part = _bof()
+    worksheet = _bof() + _merged_cells([(0, 1, 0, 2)]) + _eof()
+    offset = len(globals_part) + len(_boundsheet(0, "MergeOnly"))
+    workbook = globals_part + _boundsheet(offset, "MergeOnly") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.row_count == 2
+    assert table.col_count == 3
+    assert table.rows[0][0].row_span == 2
+    assert table.rows[0][0].col_span == 3
+    assert all(
+        table.rows[row][col].is_merged_away
+        for row, col in ((0, 1), (0, 2), (1, 0), (1, 1), (1, 2))
+    )
+
+
+def test_biff_merge_tracking_does_not_materialize_cells_before_table_build():
+    sheet = xls_module._SheetInfo(name="Sheet1", offset=0)
+
+    xls_module._parse_sheet_records(
+        _merged_cells([(0, 1, 0, 2)]),
+        sheet,
+        [],
+        {},
+        [],
+        [],
+        [],
+        [],
+    )
+
+    assert not sheet.cells
+    assert sheet.row_indices == {0, 1}
+    assert sheet.col_indices == {0, 2}
+    assert sheet.merged_ranges == [(0, 1, 0, 2)]
+
+
+def test_parse_biff_workbook_expands_label_table_to_merged_range_endpoints():
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _label(0, 0, "Heading")
+        + _merged_cells([(0, 1, 0, 2)])
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "MergedLabel"))
+    workbook = globals_part + _boundsheet(offset, "MergedLabel") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.row_count == 2
+    assert table.col_count == 3
+    assert table.rows[0][0].text == "Heading"
+    assert table.rows[0][0].row_span == 2
+    assert table.rows[0][0].col_span == 3
+    assert table.rows[1][2].is_merged_away
+
+
+def test_parse_biff_workbook_bounds_cumulative_merged_range_work(monkeypatch):
+    monkeypatch.setattr(xls_module, "MAX_BIFF_RANGE_CELLS", 4)
+    globals_part = _bof()
+    worksheet = (
+        _bof()
+        + _merged_cells([(0, 0, 0, 1), (0, 0, 0, 1), (0, 0, 0, 1)])
+        + _eof()
+    )
+    offset = len(globals_part) + len(_boundsheet(0, "MergeBudget"))
+    workbook = globals_part + _boundsheet(offset, "MergeBudget") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+    table = doc.sections[0].elements[0]
+
+    assert table.row_count == 1
+    assert table.col_count == 2
+    assert table.rows[0][0].col_span == 2
+    assert sum("cumulative merged range limit" in error.lower() for error in doc.errors) == 1
+
+
+def test_parse_biff_workbook_checks_merge_endpoints_against_dense_budget(
+    monkeypatch,
+):
+    monkeypatch.setattr(xls_module, "MAX_BIFF_DENSE_CELLS", 5)
+    globals_part = _bof()
+    worksheet = _bof() + _merged_cells([(0, 1, 0, 2)]) + _eof()
+    offset = len(globals_part) + len(_boundsheet(0, "MergeLimit"))
+    workbook = globals_part + _boundsheet(offset, "MergeLimit") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+
+    assert any("dense cell limit" in error.lower() for error in doc.errors)
+    assert not doc.find_all("table")
+
+
 def test_parse_biff_workbook_preserves_mulblank_cell_coordinates():
     globals_part = _bof()
     worksheet = (
@@ -750,6 +847,30 @@ def test_parse_biff_workbook_preserves_dimension_used_range():
     assert table.col_count == 3
     assert [cell.text for cell in table.rows[0]] == ["10", "", ""]
     assert [cell.text for cell in table.rows[3]] == ["", "", ""]
+
+
+def test_parse_biff_workbook_accepts_empty_dimension_without_diagnostic():
+    globals_part = _bof()
+    worksheet = _bof() + _dimension(0, 0, 0, 0) + _eof()
+    offset = len(globals_part) + len(_boundsheet(0, "Empty"))
+    workbook = globals_part + _boundsheet(offset, "Empty") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+
+    assert not doc.errors
+    assert not doc.find_all("table")
+
+
+def test_parse_biff_workbook_rejects_partially_empty_dimension():
+    globals_part = _bof()
+    worksheet = _bof() + _dimension(0, 0, 0, 1) + _eof()
+    offset = len(globals_part) + len(_boundsheet(0, "Malformed"))
+    workbook = globals_part + _boundsheet(offset, "Malformed") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+
+    assert any("dimension range out of bounds" in error.lower() for error in doc.errors)
+    assert not doc.find_all("table")
 
 
 def test_parse_biff_workbook_applies_format_and_xf_number_formats():

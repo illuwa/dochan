@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools==82.0.1", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -30,8 +30,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov"]
-ocr = ["pytesseract>=0.3", "Pillow>=9.0"]
+dev = ["pytest>=7.0", "pytest-cov", "ruff==0.16.2"]
+ocr = [
+    "pytesseract>=0.3; python_version >= '3.10'",
+    "Pillow>=12.3; python_version >= '3.10'",
+]
 
 [project.urls]
 Homepage = "https://github.com/illuwa/dochan"
@@ -48,5 +51,12 @@ where = ["."]
 include = ["dochan", "dochan.*"]
 namespaces = false
 
+[tool.setuptools.package-data]
+dochan = ["config.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

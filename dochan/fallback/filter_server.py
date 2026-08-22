@@ -7,8 +7,12 @@ fallback/filter_server.py — 웹한글 기안기 필터 서버 연동
 """
 
 import logging
+from pathlib import Path
+import secrets
+import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger('dochan')
 
@@ -19,6 +23,9 @@ class FilterServerConfig:
     base_url: str = "http://localhost:8080"
     timeout: int = 30
     api_key: str = ""
+    health_cache_seconds: float = 5.0
+    max_upload_bytes: int = 200 * 1024 * 1024
+    max_response_bytes: int = 50 * 1024 * 1024
 
 
 class FilterServerClient:
@@ -27,22 +34,51 @@ class FilterServerClient:
     def __init__(self, config: Optional[FilterServerConfig] = None):
         self.config = config or FilterServerConfig()
         self._available = None
+        self._available_checked_at = 0.0
+
+    def _endpoint(self, path: str) -> str:
+        base_url = self.config.base_url.rstrip('/')
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+            raise ValueError("filter server base_url must be an HTTP(S) URL")
+        return f"{base_url}/{path.lstrip('/')}"
+
+    @staticmethod
+    def _open_http(request, timeout):
+        """Open a request whose URL has already passed `_endpoint` validation."""
+        import urllib.request
+
+        parsed = urlsplit(request.full_url)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+            raise ValueError("filter server request must use HTTP(S)")
+        # The request URL is constrained above to HTTP(S) with a hostname.
+        return urllib.request.urlopen(  # nosemgrep: dynamic-urllib-use-detected
+            request,
+            timeout=timeout,
+        )
 
     def is_available(self) -> bool:
         """필터 서버 접속 가능 여부"""
-        if self._available is not None:
-            return self._available
+        cache_age = time.monotonic() - self._available_checked_at
+        if (
+            self._available is True
+            and cache_age < max(float(self.config.health_cache_seconds), 0.0)
+        ):
+            return True
 
         try:
             import urllib.request
             req = urllib.request.Request(
-                f"{self.config.base_url}/health",
+                self._endpoint('/health'),
                 method='GET',
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            health_timeout = min(max(float(self.config.timeout), 0.1), 5.0)
+            with self._open_http(req, timeout=health_timeout) as resp:
                 self._available = resp.status == 200
         except Exception:
             self._available = False
+
+        self._available_checked_at = time.monotonic()
 
         return self._available
 
@@ -56,11 +92,14 @@ class FilterServerClient:
             import urllib.request
 
             with open(hwp_path, 'rb') as f:
-                file_data = f.read()
+                file_data = f.read(self.config.max_upload_bytes + 1)
+            if len(file_data) > self.config.max_upload_bytes:
+                logger.error("필터 서버 업로드 크기 제한 초과")
+                return None
 
             # multipart/form-data 전송
-            boundary = '----HWPParserBoundary'
-            filename = hwp_path.split('/')[-1]
+            boundary = f"----DochanBoundary{secrets.token_hex(16)}"
+            filename = Path(hwp_path).name.replace('\r', '_').replace('\n', '_').replace('"', '_')
 
             body = (
                 f'--{boundary}\r\n'
@@ -69,7 +108,7 @@ class FilterServerClient:
             ).encode('utf-8') + file_data + f'\r\n--{boundary}--\r\n'.encode('utf-8')
 
             req = urllib.request.Request(
-                f"{self.config.base_url}/convert",
+                self._endpoint('/convert'),
                 data=body,
                 headers={
                     'Content-Type': f'multipart/form-data; boundary={boundary}',
@@ -78,12 +117,19 @@ class FilterServerClient:
             )
 
             if self.config.api_key:
+                if '\r' in self.config.api_key or '\n' in self.config.api_key:
+                    raise ValueError("filter server api_key contains invalid header characters")
                 req.add_header('Authorization', f'Bearer {self.config.api_key}')
 
-            with urllib.request.urlopen(req, timeout=self.config.timeout) as resp:
-                return resp.read().decode('utf-8')
+            with self._open_http(req, timeout=self.config.timeout) as resp:
+                response_data = resp.read(self.config.max_response_bytes + 1)
+                if len(response_data) > self.config.max_response_bytes:
+                    raise ValueError("filter server response exceeds size limit")
+                return response_data.decode('utf-8')
 
         except Exception as e:
+            self._available = False
+            self._available_checked_at = 0.0
             logger.error(f"필터 서버 변환 실패: {e}")
             return None
 

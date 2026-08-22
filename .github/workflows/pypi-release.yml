@@ -1,3 +1,4 @@
+---
 name: PyPI Release
 
 on:
@@ -5,7 +6,7 @@ on:
   pull_request:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: read
@@ -17,54 +18,222 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install pinned dependency manager
+        run: python -m pip install --disable-pip-version-check "uv==0.12.3"
+
+      - name: Install locked dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install .[dev]
+          uv export \
+            --locked \
+            --extra dev \
+            --no-emit-project \
+            --format requirements.txt \
+            --output-file "${RUNNER_TEMP}/test-requirements.txt"
+          python -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --requirement "${RUNNER_TEMP}/test-requirements.txt"
+          python -m pip install --disable-pip-version-check --no-deps .
 
       - name: Run tests
         run: python -m pytest tests/
 
+      - name: Run lint checks
+        if: matrix.python-version == '3.13'
+        run: ruff check dochan scripts tests
+
+  security:
+    name: Security gates
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      GITLEAKS_VERSION: v8.30.1
+      PIP_AUDIT_VERSION: 2.10.1
+      SEMGREP_RULES_COMMIT: 40b8c63f75dc7c22c8a77482d73bfb864b146f7e
+      SEMGREP_VERSION: 1.172.0
+      UV_VERSION: 0.12.3
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Python scanners
+        run: |
+          python -m pip install --disable-pip-version-check \
+            "pip-audit==${PIP_AUDIT_VERSION}" \
+            "semgrep==${SEMGREP_VERSION}" \
+            "uv==${UV_VERSION}"
+
+      - name: Audit dependencies
+        run: |
+          uv export \
+            --locked \
+            --no-dev \
+            --extra ocr \
+            --no-emit-project \
+            --format requirements.txt \
+            --output-file "${RUNNER_TEMP}/audit-requirements.txt"
+          python -m pip_audit \
+            --requirement "${RUNNER_TEMP}/audit-requirements.txt" \
+            --require-hashes \
+            --disable-pip \
+            --progress-spinner off
+
+      - name: Fetch pinned Semgrep rules
+        run: |
+          git init --quiet "${RUNNER_TEMP}/semgrep-rules"
+          git -C "${RUNNER_TEMP}/semgrep-rules" remote add origin \
+            https://github.com/semgrep/semgrep-rules.git
+          git -C "${RUNNER_TEMP}/semgrep-rules" fetch --depth 1 origin \
+            "${SEMGREP_RULES_COMMIT}"
+          git -C "${RUNNER_TEMP}/semgrep-rules" checkout --quiet --detach FETCH_HEAD
+
+      - name: Run high-confidence SAST checks
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          semgrep scan \
+            --config "${RUNNER_TEMP}/semgrep-rules/python/lang/security" \
+            --severity ERROR \
+            --error \
+            --disable-version-check \
+            --jobs 2 \
+            dochan scripts
+
+      - name: Install pinned Gitleaks binary
+        run: |
+          gitleaks_archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          gitleaks_bin_dir="${RUNNER_TEMP}/gitleaks-bin"
+          mkdir -p "${gitleaks_bin_dir}"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${gitleaks_archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${gitleaks_archive}" | sha256sum --check --strict
+          tar -xzf "${gitleaks_archive}" -C "${gitleaks_bin_dir}" gitleaks
+
+      - name: Scan committed files for secrets
+        run: |
+          secret_scan_root="${RUNNER_TEMP}/gitleaks-tree"
+          mkdir -p "${secret_scan_root}"
+          git archive --format=tar HEAD | tar -xf - -C "${secret_scan_root}"
+          "${RUNNER_TEMP}/gitleaks-bin/gitleaks" dir \
+            --no-banner \
+            --redact \
+            --exit-code 1 \
+            --max-target-megabytes 10 \
+            "${secret_scan_root}"
+
   publish:
     name: Build and publish to PyPI
-    needs: test
+    needs: [test, security]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/project/dochan/
     permissions:
-      id-token: write
       contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
 
       - name: Build distributions
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install build twine
+          python -m pip install --disable-pip-version-check \
+            "build==1.5.0" \
+            "twine==7.0.0" \
+            "uv==0.12.3"
           python -m build
+
+      - name: Verify release versions
+        run: python scripts/verify_release_version.py --tag "${GITHUB_REF_NAME}" --wheel dist/*.whl
 
       - name: Validate distributions
         run: python -m twine check dist/*
 
+      - name: Smoke-test installed wheel outside checkout
+        shell: bash
+        run: |
+          artifact_venv="${RUNNER_TEMP}/dochan-artifact-venv"
+          python -m venv "${artifact_venv}"
+          uv export \
+            --locked \
+            --no-dev \
+            --no-emit-project \
+            --format requirements.txt \
+            --output-file "${RUNNER_TEMP}/runtime-requirements.txt"
+          "${artifact_venv}/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --requirement "${RUNNER_TEMP}/runtime-requirements.txt"
+          "${artifact_venv}/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --no-deps dist/*.whl
+
+          (
+            cd "${RUNNER_TEMP}"
+            EXPECTED_VERSION="${GITHUB_REF_NAME#v}" \
+              env -u PYTHONPATH "${artifact_venv}/bin/python" -I - <<'PY'
+          import importlib.metadata
+          import importlib.resources
+          import os
+          import zipfile
+          from pathlib import Path
+
+          import dochan
+
+          expected_version = os.environ["EXPECTED_VERSION"]
+          assert dochan.__version__ == expected_version
+          assert importlib.metadata.version("dochan") == expected_version
+
+          config = importlib.resources.files("dochan").joinpath("config.yaml")
+          assert config.is_file()
+          assert config.read_text(encoding="utf-8").strip()
+
+          smoke_docx = Path("artifact-smoke.docx")
+          with zipfile.ZipFile(smoke_docx, "w") as archive:
+              archive.writestr("[Content_Types].xml", "<Types/>")
+              archive.writestr(
+                  "word/document.xml",
+                  """<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body><w:p><w:r><w:t>artifact smoke</w:t></w:r></w:p></w:body>
+          </w:document>""",
+              )
+          PY
+            env -u PYTHONPATH "${artifact_venv}/bin/dochan" --help >/dev/null
+            env -u PYTHONPATH "${artifact_venv}/bin/dochan" info \
+              artifact-smoke.docx >artifact-info.json
+            grep -F '"format": "docx"' artifact-info.json
+            env -u PYTHONPATH "${artifact_venv}/bin/dochan" convert \
+              artifact-smoke.docx --output artifact-smoke.md
+            grep -Fqx "artifact smoke" artifact-smoke.md
+          )
+
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
+          attestations: false

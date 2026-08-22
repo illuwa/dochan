@@ -7,6 +7,15 @@ from typing import List, Optional
 import olefile
 
 from ..model.document import Document
+from ..utils.bounded_io import (
+    BoundedIOError,
+    ByteBudget,
+    MAX_OLE_DOCUMENT_SIZE,
+    MAX_OLE_STREAM_SIZE,
+    ResourceLimitError,
+    read_ole_stream,
+    validate_file_size,
+)
 from .structure import build_structured_section
 
 SLIDE_CONTAINER = 1006
@@ -283,14 +292,20 @@ class PPTReader:
     extensions = (".ppt",)
 
     def read(self, file_path: str) -> Document:
+        doc = Document(source_format="ppt")
+        try:
+            validate_file_size(file_path, MAX_OLE_DOCUMENT_SIZE)
+        except ResourceLimitError as exc:
+            doc.errors.append(f"ERR: PPT stream validation failed: {exc}")
+            return doc
+
         try:
             ole = olefile.OleFileIO(file_path)
         except Exception as exc:
-            doc = Document(source_format="ppt")
             doc.errors.append(f"ERR: PPT OLE 파일 열기 실패: {exc}")
             return doc
 
-        doc = Document(source_format="ppt")
+        stream_budget = ByteBudget(MAX_OLE_DOCUMENT_SIZE)
         try:
             stream_names = _ppt_stream_names(ole)
             if not stream_names:
@@ -301,7 +316,18 @@ class PPTReader:
             best_score = None
             for stream_name in stream_names:
                 try:
-                    ppt_data = ole.openstream(stream_name).read()
+                    ppt_data = read_ole_stream(
+                        ole,
+                        stream_name,
+                        max_bytes=MAX_OLE_STREAM_SIZE,
+                        budget=stream_budget,
+                    )
+                except BoundedIOError as exc:
+                    fatal_doc = Document(source_format="ppt")
+                    fatal_doc.errors.append(
+                        f"ERR: PPT stream validation failed: {exc}"
+                    )
+                    return fatal_doc
                 except Exception as exc:
                     doc.errors.append(f"ERR: PPT {stream_name} stream read 실패: {exc}")
                     continue

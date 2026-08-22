@@ -46,6 +46,19 @@ def test_unknown_zip_returns_empty_format(tmp_path):
     assert detect_ooxml_format(str(path)) == ""
 
 
+def test_multiple_ooxml_main_parts_are_ambiguous(tmp_path):
+    path = tmp_path / "polyglot.xlsx"
+    _write_zip(
+        path,
+        {
+            "word/document.xml": "<document/>",
+            "xl/workbook.xml": "<workbook/>",
+        },
+    )
+
+    assert detect_ooxml_format(str(path)) == "ambiguous"
+
+
 def test_reads_xml_part_with_xxe_disabled(tmp_path):
     path = tmp_path / "sample.docx"
     _write_zip(path, {"word/document.xml": "<root><child>ok</child></root>"})
@@ -106,3 +119,15 @@ def test_rejects_mixed_separator_path_traversal_part_name(tmp_path):
     with OOXMLPackage(str(path)) as package:
         with pytest.raises(ValueError, match="unsafe package path"):
             package.read_part("folder\\..\\evil.xml")
+
+
+def test_streaming_open_rejects_declared_part_above_common_limit(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "sample.xlsx"
+    _write_zip(path, {"xl/worksheets/sheet1.xml": b"12345"})
+    monkeypatch.setattr("dochan.ooxml.package.MAX_PART_SIZE", 4)
+
+    with OOXMLPackage(str(path)) as package:
+        with pytest.raises(ValueError, match="package part too large"):
+            package.open_part("xl/worksheets/sheet1.xml")

@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from fractions import Fraction
 import posixpath
 import re
-from typing import Dict, List, Tuple
+import zipfile
+from typing import Dict, List, Optional, Tuple
 
 from lxml import etree
 
@@ -13,7 +14,7 @@ from ..model.header_footer import HeaderFooter
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
 from .core import core_property_elements, read_core_properties
-from .package import MAX_PART_SIZE, OOXMLPackage
+from .package import MAX_XML_PART_SIZE, OOXMLPackage
 
 S_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 STRICT_S_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
@@ -47,6 +48,16 @@ BUILTIN_NUM_FORMATS = {
 }
 STREAMING_ROW_LIMIT = 200
 STREAMING_CELL_LIMIT = 5000
+MAX_EXCEL_ROWS = 1048576
+MAX_EXCEL_COLUMNS = 16384
+MAX_RANGE_CELLS = 200000
+MAX_DENSE_TABLE_CELLS = 200000
+MAX_CHART_SERIES = 1000
+MAX_CHART_POINTS = 200000
+MAX_CHART_OUTPUT_CELLS = 200000
+MAX_OOXML_UNSIGNED_INT = 4_294_967_295
+MAX_IMAGE_ASSET_REFS = 10000
+MAX_DIAGNOSTIC_PATH_CHARS = 256
 
 
 @dataclass(frozen=True)
@@ -77,8 +88,18 @@ def _rel_attr(elem, name: str) -> str:
     return _attr(elem, R_NS, name) or _attr(elem, STRICT_R_NS, name)
 
 
+def _bounded_diagnostic_path(path: str) -> str:
+    value = str(path).replace("\r", "\\r").replace("\n", "\\n")
+    if len(value) <= MAX_DIAGNOSTIC_PATH_CHARS:
+        return value
+    return value[:MAX_DIAGNOSTIC_PATH_CHARS - 3] + "..."
+
+
 def _local_name(elem) -> str:
-    return elem.tag.rsplit("}", 1)[-1]
+    tag = getattr(elem, "tag", None)
+    if not isinstance(tag, str):
+        return ""
+    return tag.rsplit("}", 1)[-1]
 
 
 def _column_index(cell_ref: str) -> int:
@@ -120,9 +141,26 @@ class XLSXReader:
     extensions = (".xlsx",)
 
     def read(self, file_path: str) -> Document:
+        try:
+            return self._read_document(file_path)
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+            return Document(
+                source_format=self.format_name,
+                errors=[f"ERR: XLSX package parse failed: {exc}"],
+            )
+
+    def _read_document(self, file_path: str) -> Document:
         doc = Document(source_format="xlsx")
+        self._errors = doc.errors
         self._image_asset_ids = set()
+        self._image_asset_count = 0
+        self._image_asset_limit_reported = False
         self._assets = []
+        self._chart_series_remaining = MAX_CHART_SERIES
+        self._chart_points_remaining = MAX_CHART_POINTS
+        self._chart_output_cells_remaining = MAX_CHART_OUTPUT_CELLS
+        self._document_range_cells_used = 0
+        self._document_range_budget_exhausted = False
         with OOXMLPackage(file_path) as package:
             self._package = package
             core_elements = core_property_elements(read_core_properties(package), "xlsx")
@@ -130,9 +168,20 @@ class XLSXReader:
             styles = self._read_styles(package)
             relationships = self._read_workbook_relationships(package)
             workbook = package.read_xml_part("xl/workbook.xml")
+            workbook_properties = workbook.find(
+                "s:workbookPr",
+                namespaces=_namespaces(workbook),
+            )
+            self._date_1904 = (
+                workbook_properties is not None
+                and workbook_properties.get("date1904", "").strip().lower()
+                in {"1", "true", "on"}
+            )
             defined_name_elements = self._defined_name_elements(workbook)
             sheets = self._read_sheets(workbook, relationships)
             for index, (sheet_name, sheet_path) in enumerate(sheets, start=1):
+                self._sheet_range_cells_used = 0
+                self._sheet_range_budget_exhausted = False
                 section = Section(
                     provenance=Provenance(
                         source_format="xlsx",
@@ -141,7 +190,12 @@ class XLSXReader:
                     )
                 )
                 if package.exists(sheet_path):
-                    if package.part_size(sheet_path) > MAX_PART_SIZE:
+                    if package.part_size(sheet_path) > MAX_XML_PART_SIZE:
+                        doc.errors.append(
+                            "WARN: XLSX large-sheet preview omits merges, hyperlinks, comments, "
+                            "headers, footers, drawings, and embedded assets: "
+                            f"{sheet_path}"
+                        )
                         table = self._read_large_sheet_table(package, sheet_path, sheet_name, shared_strings, styles)
                         if table.rows:
                             section.elements.append(table)
@@ -333,13 +387,27 @@ class XLSXReader:
         max_col = -1
         for fallback_row_idx, row_elem in enumerate(root.findall("s:sheetData/s:row", namespaces=_namespaces(root))):
             row_idx = self._sheet_row_index(row_elem, fallback_row_idx)
+            if row_idx is None:
+                continue
             by_col = {}
             next_col_idx = 0
             for cell_elem in row_elem.findall("s:c", namespaces=_namespaces(row_elem)):
                 explicit_cell_ref = cell_elem.get("r", "")
                 if explicit_cell_ref and self._is_fast_blank_unreferenced_cell(cell_elem, explicit_cell_ref, hyperlinks, comments, merge_refs):
                     continue
-                col_idx = _column_index(explicit_cell_ref) if explicit_cell_ref else next_col_idx
+                if explicit_cell_ref:
+                    coordinates = self._validated_cell_coordinates(explicit_cell_ref)
+                    if coordinates is None:
+                        continue
+                    explicit_row_idx, col_idx = coordinates
+                    if explicit_row_idx != row_idx:
+                        self._errors.append(
+                            "ERR: XLSX cell reference row does not match its row: "
+                            f"{explicit_cell_ref}"
+                        )
+                        continue
+                else:
+                    col_idx = next_col_idx
                 cell_ref = explicit_cell_ref or f"{_column_name(col_idx)}{row_idx + 1}"
                 next_col_idx = col_idx + 1
                 if not explicit_cell_ref and self._is_fast_blank_unreferenced_cell(cell_elem, cell_ref, hyperlinks, comments, merge_refs):
@@ -389,6 +457,12 @@ class XLSXReader:
                 row_maps[row_idx] = by_col
 
         rows = []
+        if max_row >= 0 and max_col >= 0 and (max_row + 1) * (max_col + 1) > MAX_DENSE_TABLE_CELLS:
+            self._errors.append(
+                "ERR: XLSX dense cell limit exceeded: "
+                f"{(max_row + 1) * (max_col + 1)} > {MAX_DENSE_TABLE_CELLS}"
+            )
+            return Table()
         for row_idx in range(max_row + 1):
             by_col = row_maps.get(row_idx, {})
             cells = [
@@ -411,6 +485,7 @@ class XLSXReader:
         max_col = -1
         cell_count = 0
         shared_formulas = {}
+        truncation_error = ""
         with package.open_part(sheet_path) as stream:
             context = etree.iterparse(
                 stream,
@@ -422,11 +497,27 @@ class XLSXReader:
             for _, row_elem in context:
                 row_cells = {}
                 next_col_idx = 0
+                row_index = self._sheet_row_index(row_elem, len(rows))
+                if row_index is None:
+                    row_elem.clear()
+                    continue
                 for cell_elem in row_elem:
                     if _local_name(cell_elem) != "c":
                         continue
                     explicit_cell_ref = cell_elem.get("r", "")
-                    col_idx = _column_index(explicit_cell_ref) if explicit_cell_ref else next_col_idx
+                    if explicit_cell_ref:
+                        coordinates = self._validated_cell_coordinates(explicit_cell_ref)
+                        if coordinates is None:
+                            continue
+                        explicit_row_idx, col_idx = coordinates
+                        if explicit_row_idx != row_index:
+                            self._errors.append(
+                                "ERR: XLSX cell reference row does not match its row: "
+                                f"{explicit_cell_ref}"
+                            )
+                            continue
+                    else:
+                        col_idx = next_col_idx
                     next_col_idx = col_idx + 1
                     cell_children = self._cell_children(cell_elem)
                     if not any(name in cell_children for name in ("v", "f", "is")):
@@ -435,7 +526,19 @@ class XLSXReader:
                     cell_text = self._cell_text(cell_elem, shared_strings, styles, shared_formulas, cell_children)
                     if not cell_text:
                         continue
-                    cell_ref = explicit_cell_ref or f"{_column_name(col_idx)}{len(rows) + 1}"
+                    if len(rows) >= STREAMING_ROW_LIMIT:
+                        truncation_error = (
+                            "ERR: XLSX streaming row limit exceeded: "
+                            f"more than {STREAMING_ROW_LIMIT} rows"
+                        )
+                        break
+                    if cell_count >= STREAMING_CELL_LIMIT:
+                        truncation_error = (
+                            "ERR: XLSX streaming cell limit exceeded: "
+                            f"more than {STREAMING_CELL_LIMIT} cells"
+                        )
+                        break
+                    cell_ref = explicit_cell_ref or f"{_column_name(col_idx)}{row_index + 1}"
                     provenance = Provenance(
                         source_format="xlsx",
                         sheet=sheet_name,
@@ -453,17 +556,42 @@ class XLSXReader:
                     )
                     max_col = max(max_col, col_idx)
                     cell_count += 1
-                    if cell_count >= STREAMING_CELL_LIMIT:
-                        break
+                if truncation_error:
+                    if row_cells:
+                        rows.append(row_cells)
+                        dense_area = len(rows) * (max_col + 1)
+                        if dense_area > MAX_DENSE_TABLE_CELLS:
+                            self._errors.append(
+                                "ERR: XLSX streaming dense cell limit exceeded: "
+                                f"{dense_area} > {MAX_DENSE_TABLE_CELLS}"
+                            )
+                            return Table()
+                    row_elem.clear()
+                    break
                 if row_cells:
                     rows.append(row_cells)
+                    dense_area = len(rows) * (max_col + 1)
+                    if dense_area > MAX_DENSE_TABLE_CELLS:
+                        self._errors.append(
+                            "ERR: XLSX streaming dense cell limit exceeded: "
+                            f"{dense_area} > {MAX_DENSE_TABLE_CELLS}"
+                        )
+                        return Table()
                 row_elem.clear()
                 while row_elem.getprevious() is not None:
                     del row_elem.getparent()[0]
-                if len(rows) >= STREAMING_ROW_LIMIT or cell_count >= STREAMING_CELL_LIMIT:
-                    break
+
+        if truncation_error and truncation_error not in self._errors:
+            self._errors.append(truncation_error)
 
         if max_col < 0:
+            return Table()
+        dense_area = len(rows) * (max_col + 1)
+        if dense_area > MAX_DENSE_TABLE_CELLS:
+            self._errors.append(
+                "ERR: XLSX streaming dense cell limit exceeded: "
+                f"{dense_area} > {MAX_DENSE_TABLE_CELLS}"
+            )
             return Table()
         return Table(
             rows=[
@@ -607,13 +735,21 @@ class XLSXReader:
     def _record_image_asset(self, rel_id: str, target: str, label: str, sheet_name: str):
         if not rel_id or not target:
             return
-        key = ("image", rel_id, target)
+        key = ("image", target)
         if key in getattr(self, "_image_asset_ids", set()):
             return
-        package = getattr(self, "_package", None)
-        if package is not None and not package.exists(target):
+        if getattr(self, "_image_asset_count", 0) >= MAX_IMAGE_ASSET_REFS:
+            if not getattr(self, "_image_asset_limit_reported", False):
+                self._errors.append(
+                    "WARN: XLSX image asset reference limit exceeded "
+                    f"({MAX_IMAGE_ASSET_REFS})"
+                )
+                self._image_asset_limit_reported = True
             return
+        package = getattr(self, "_package", None)
+        missing = package is not None and not package.exists(target)
         self._image_asset_ids.add(key)
+        self._image_asset_count = getattr(self, "_image_asset_count", 0) + 1
         assets = getattr(self, "_assets", None)
         if assets is None:
             assets = []
@@ -624,9 +760,22 @@ class XLSXReader:
                 source_path=target,
                 filename=posixpath.basename(target),
                 content_type=self._image_content_type(target),
-                metadata={"label": label, "source_format": "xlsx", "sheet": sheet_name},
+                metadata={
+                    "kind": "image",
+                    "label": label,
+                    "missing": missing,
+                    "source_format": "xlsx",
+                    "sheet": sheet_name,
+                },
             )
         )
+        if missing:
+            warning = (
+                "WARN: XLSX image part not found: "
+                f"{_bounded_diagnostic_path(target)}"
+            )
+            if warning not in self._errors:
+                self._errors.append(warning)
 
     def _record_embedded_asset(self, rel_id: str, target: str, rel_type: str, sheet_name: str):
         if not rel_id or not target:
@@ -723,8 +872,45 @@ class XLSXReader:
         return self._chart_text(title)
 
     def _chart_series_table(self, chart_root) -> Table:
+        if not hasattr(self, "_chart_series_remaining"):
+            self._chart_series_remaining = MAX_CHART_SERIES
+            self._chart_points_remaining = MAX_CHART_POINTS
+            self._chart_output_cells_remaining = MAX_CHART_OUTPUT_CELLS
+
+        if self._chart_output_cells_remaining <= 0:
+            self._record_chart_limit_error("output cell", 1, 0)
+            return Table()
+
+        series_elements = chart_root.findall(".//c:ser", namespaces=NS)
+        series_count = len(series_elements)
+        if series_count > self._chart_series_remaining:
+            self._record_chart_limit_error(
+                "series",
+                series_count,
+                self._chart_series_remaining,
+            )
+            self._chart_series_remaining = 0
+            return Table()
+
+        point_count = sum(
+            1
+            for series in series_elements
+            for _ in series.iterfind(".//c:pt", namespaces=NS)
+        )
+        if point_count > self._chart_points_remaining:
+            self._record_chart_limit_error(
+                "point",
+                point_count,
+                self._chart_points_remaining,
+            )
+            self._chart_points_remaining = 0
+            return Table()
+
+        self._chart_series_remaining -= series_count
+        self._chart_points_remaining -= point_count
+
         series_items = []
-        for series in chart_root.findall(".//c:ser", namespaces=NS):
+        for series in series_elements:
             series_name = self._chart_series_name(series)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
@@ -739,6 +925,17 @@ class XLSXReader:
             indexes.update(values)
             for index, category in categories.items():
                 category_labels.setdefault(index, category)
+
+        output_cell_count = (len(series_items) + 1) * (len(indexes) + 1)
+        if output_cell_count > self._chart_output_cells_remaining:
+            self._record_chart_limit_error(
+                "output cell",
+                output_cell_count,
+                self._chart_output_cells_remaining,
+            )
+            self._chart_output_cells_remaining = 0
+            return Table()
+        self._chart_output_cells_remaining -= output_cell_count
 
         rows = [
             [
@@ -760,6 +957,14 @@ class XLSXReader:
                 ]
             )
         return Table(rows=rows)
+
+    def _record_chart_limit_error(self, kind: str, actual: int, remaining: int) -> None:
+        error = (
+            f"ERR: XLSX chart {kind} budget exceeded: "
+            f"{actual} > {remaining} remaining"
+        )
+        if error not in self._errors:
+            self._errors.append(error)
 
     def _chart_series_name(self, series) -> str:
         tx = series.find("c:tx", namespaces=NS)
@@ -785,14 +990,28 @@ class XLSXReader:
         if parent is None:
             return points
         for point in parent.findall(".//c:pt", namespaces=NS):
-            try:
-                index = int(point.get("idx", "0"))
-            except ValueError:
-                index = len(points)
+            raw_index = point.get("idx")
+            if (
+                raw_index is None
+                or not raw_index.isascii()
+                or not raw_index.isdigit()
+                or len(raw_index) > 10
+            ):
+                self._record_invalid_chart_point_index()
+                continue
+            index = int(raw_index)
+            if index > MAX_OOXML_UNSIGNED_INT:
+                self._record_invalid_chart_point_index()
+                continue
             value = "".join(node.text or "" for node in point.findall("c:v", namespaces=NS)).strip()
             if value:
                 points[index] = value
         return points
+
+    def _record_invalid_chart_point_index(self) -> None:
+        error = "ERR: XLSX chart point index is invalid"
+        if error not in self._errors:
+            self._errors.append(error)
 
     def _cell_children(self, cell_elem) -> Dict[str, object]:
         children = {}
@@ -830,17 +1049,26 @@ class XLSXReader:
             return False
         return not any(name in cell_children for name in ("v", "f", "is"))
 
-    def _sheet_row_index(self, row_elem, fallback: int = 0) -> int:
+    def _sheet_row_index(self, row_elem, fallback: int = 0):
         try:
             row_ref = row_elem.get("r", "")
             if row_ref:
-                return max(int(row_ref) - 1, 0)
+                row_idx = int(row_ref) - 1
+                if not 0 <= row_idx < MAX_EXCEL_ROWS:
+                    self._errors.append(f"ERR: XLSX row reference out of bounds: {row_ref}")
+                    return None
+                return row_idx
         except ValueError:
-            pass
+            self._errors.append(f"ERR: XLSX invalid row reference: {row_elem.get('r', '')}")
+            return None
         first_cell = row_elem.find("s:c", namespaces=_namespaces(row_elem))
         first_cell_ref = first_cell.get("r", "") if first_cell is not None else ""
         if first_cell_ref:
-            return _row_index(first_cell_ref)
+            coordinates = self._validated_cell_coordinates(first_cell_ref)
+            return coordinates[0] if coordinates is not None else None
+        if not 0 <= fallback < MAX_EXCEL_ROWS:
+            self._errors.append(f"ERR: XLSX inferred row reference out of bounds: {fallback + 1}")
+            return None
         return fallback
 
     def _read_hyperlinks(self, package: OOXMLPackage, root, sheet_path: str) -> Dict[str, Tuple[str, str]]:
@@ -855,23 +1083,81 @@ class XLSXReader:
             if not target and location:
                 target = f"#{location}"
             if cell_ref and target:
-                for ref in self._cell_refs_in_range(cell_ref):
+                refs = self._cell_refs_in_range(cell_ref, "hyperlink")
+                if refs is None:
+                    break
+                for ref in refs:
                     hyperlinks[ref] = (display, target)
         return hyperlinks
 
-    def _cell_refs_in_range(self, cell_ref: str) -> List[str]:
+    def _cell_refs_in_range(self, cell_ref: str, context: str = "range") -> Optional[List[str]]:
         if ":" not in cell_ref:
+            if self._validated_cell_coordinates(cell_ref) is None:
+                return []
+            if not self._reserve_range_cells(1, context, cell_ref):
+                return None
             return [cell_ref]
         start_ref, end_ref = cell_ref.split(":", 1)
-        start_row, start_col = _row_index(start_ref), _column_index(start_ref)
-        end_row, end_col = _row_index(end_ref), _column_index(end_ref)
+        start = self._validated_cell_coordinates(start_ref)
+        end = self._validated_cell_coordinates(end_ref)
+        if start is None or end is None:
+            return []
+        start_row, start_col = start
+        end_row, end_col = end
         row_start, row_end = sorted((start_row, end_row))
         col_start, col_end = sorted((start_col, end_col))
+        area = (row_end - row_start + 1) * (col_end - col_start + 1)
+        if area > MAX_RANGE_CELLS:
+            self._errors.append(
+                f"ERR: XLSX range limit exceeded for {cell_ref}: {area} > {MAX_RANGE_CELLS}"
+            )
+            return None
+        if not self._reserve_range_cells(area, context, cell_ref):
+            return None
         refs = []
         for row_idx in range(row_start, row_end + 1):
             for col_idx in range(col_start, col_end + 1):
                 refs.append(f"{_column_name(col_idx)}{row_idx + 1}")
         return refs
+
+    def _reserve_range_cells(self, area: int, context: str, cell_ref: str) -> bool:
+        if getattr(self, "_sheet_range_budget_exhausted", False):
+            return False
+        if getattr(self, "_document_range_budget_exhausted", False):
+            return False
+
+        sheet_used = getattr(self, "_sheet_range_cells_used", 0)
+        document_used = getattr(self, "_document_range_cells_used", 0)
+        if sheet_used + area > MAX_RANGE_CELLS:
+            self._errors.append(
+                "ERR: XLSX cumulative sheet range limit exceeded for "
+                f"{context} {cell_ref}: {sheet_used + area} > {MAX_RANGE_CELLS}"
+            )
+            self._sheet_range_budget_exhausted = True
+            return False
+        if document_used + area > MAX_RANGE_CELLS:
+            self._errors.append(
+                "ERR: XLSX cumulative document range limit exceeded for "
+                f"{context} {cell_ref}: {document_used + area} > {MAX_RANGE_CELLS}"
+            )
+            self._document_range_budget_exhausted = True
+            return False
+
+        self._sheet_range_cells_used = sheet_used + area
+        self._document_range_cells_used = document_used + area
+        return True
+
+    def _validated_cell_coordinates(self, cell_ref: str):
+        match = re.fullmatch(r"\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})", cell_ref or "")
+        if not match:
+            self._errors.append(f"ERR: XLSX invalid cell reference: {cell_ref}")
+            return None
+        col_idx = _column_index(match.group(1))
+        row_idx = int(match.group(2)) - 1
+        if row_idx >= MAX_EXCEL_ROWS or col_idx >= MAX_EXCEL_COLUMNS:
+            self._errors.append(f"ERR: XLSX cell reference out of bounds: {cell_ref}")
+            return None
+        return row_idx, col_idx
 
     def _read_sheet_relationships(self, package: OOXMLPackage, sheet_path: str, resolve_internal: bool = False) -> Dict[str, str]:
         sheet_dir = posixpath.dirname(sheet_path)
@@ -950,10 +1236,25 @@ class XLSXReader:
             if ":" not in ref:
                 continue
             start_ref, end_ref = ref.split(":", 1)
-            start_row, start_col = _row_index(start_ref), _column_index(start_ref)
-            end_row, end_col = _row_index(end_ref), _column_index(end_ref)
+            start = self._validated_cell_coordinates(start_ref)
+            end = self._validated_cell_coordinates(end_ref)
+            if start is None or end is None:
+                continue
+            start_row, start_col = start
+            end_row, end_col = end
+            if end_row < start_row or end_col < start_col:
+                self._errors.append(f"ERR: XLSX invalid merge range: {ref}")
+                continue
             row_span = max(end_row - start_row + 1, 1)
             col_span = max(end_col - start_col + 1, 1)
+            area = row_span * col_span
+            if area > MAX_RANGE_CELLS:
+                self._errors.append(
+                    f"ERR: XLSX range limit exceeded for {ref}: {area} > {MAX_RANGE_CELLS}"
+                )
+                break
+            if not self._reserve_range_cells(area, "merged cells", ref):
+                break
             merges[(start_row, start_col)] = (row_span, col_span)
             for row_idx in range(start_row, end_row + 1):
                 for col_idx in range(start_col, end_col + 1):
@@ -1100,32 +1401,40 @@ class XLSXReader:
             number = float(value)
         except ValueError:
             return value
-        if metadata.kind == "duration":
-            return self._excel_duration(number, include_seconds="ss" in fmt.lower())
-        if metadata.kind == "time":
-            return self._excel_time(number, include_seconds="ss" in fmt.lower())
-        if metadata.kind == "date":
-            return self._excel_date(number).strftime("%Y-%m-%d")
-        if metadata.kind == "zero_fill":
-            formatted = self._zero_filled_number(number, metadata.pattern)
-            return self._apply_literal_affixes(formatted, metadata)
-        if metadata.kind == "fraction":
-            formatted = self._fraction_number(number, metadata.denominator_limit)
-            return self._apply_literal_affixes(formatted, metadata)
-        if metadata.kind == "scientific":
-            formatted = f"{number:.{metadata.decimals}E}"
-            return self._apply_literal_affixes(formatted, metadata)
-        if metadata.kind == "percent":
-            formatted = f"{abs(number) * 100:.{metadata.decimals}f}%" if metadata.negative_parentheses and number < 0 else f"{number * 100:.{metadata.decimals}f}%"
-            formatted = self._apply_literal_affixes(formatted, metadata)
-            return f"({formatted})" if metadata.negative_parentheses and number < 0 else formatted
-        if metadata.kind == "decimal":
-            separator = "," if metadata.thousands else ""
-            display_number = abs(number) if metadata.negative_parentheses and number < 0 else number
-            formatted = f"{display_number:{separator}.{metadata.decimals}f}"
-            formatted = f"{metadata.currency_symbol}{formatted}"
-            formatted = self._apply_literal_affixes(formatted, metadata)
-            return f"({formatted})" if metadata.negative_parentheses and number < 0 else formatted
+        try:
+            if metadata.kind == "duration":
+                return self._excel_duration(number, include_seconds="ss" in fmt.lower())
+            if metadata.kind == "time":
+                return self._excel_time(number, include_seconds="ss" in fmt.lower())
+            if metadata.kind == "date":
+                if not getattr(self, "_date_1904", False) and 60 <= number < 61:
+                    return "1900-02-29"
+                return self._excel_date(number).strftime("%Y-%m-%d")
+            if metadata.kind == "zero_fill":
+                formatted = self._zero_filled_number(number, metadata.pattern)
+                return self._apply_literal_affixes(formatted, metadata)
+            if metadata.kind == "fraction":
+                formatted = self._fraction_number(number, metadata.denominator_limit)
+                return self._apply_literal_affixes(formatted, metadata)
+            if metadata.kind == "scientific":
+                formatted = f"{number:.{metadata.decimals}E}"
+                return self._apply_literal_affixes(formatted, metadata)
+            if metadata.kind == "percent":
+                formatted = f"{abs(number) * 100:.{metadata.decimals}f}%" if metadata.negative_parentheses and number < 0 else f"{number * 100:.{metadata.decimals}f}%"
+                formatted = self._apply_literal_affixes(formatted, metadata)
+                return f"({formatted})" if metadata.negative_parentheses and number < 0 else formatted
+            if metadata.kind == "decimal":
+                separator = "," if metadata.thousands else ""
+                display_number = abs(number) if metadata.negative_parentheses and number < 0 else number
+                formatted = f"{display_number:{separator}.{metadata.decimals}f}"
+                formatted = f"{metadata.currency_symbol}{formatted}"
+                formatted = self._apply_literal_affixes(formatted, metadata)
+                return f"({formatted})" if metadata.negative_parentheses and number < 0 else formatted
+        except (OverflowError, ValueError):
+            warning = f"WARN: XLSX formatted numeric value is out of range: {value[:80]}"
+            errors = getattr(self, "_errors", None)
+            if errors is not None and warning not in errors:
+                errors.append(warning)
         return value
 
     def _format_metadata(self, fmt: str) -> _FormatMetadata:
@@ -1212,7 +1521,14 @@ class XLSXReader:
         return not any(token in clean_fmt for token in ("yy", "dd", "mmm", "m/d", "d/m"))
 
     def _excel_date(self, serial: float) -> datetime:
-        base = datetime(1899, 12, 30)
+        if getattr(self, "_date_1904", False):
+            base = datetime(1904, 1, 1)
+        elif serial < 60:
+            base = datetime(1899, 12, 31)
+        else:
+            # Excel's 1900 date system includes the fictitious 1900-02-29 at
+            # serial 60.  Dates after that point therefore need one-day offset.
+            base = datetime(1899, 12, 30)
         return base + timedelta(days=serial)
 
     def _excel_time(self, serial: float, include_seconds: bool = False) -> str:

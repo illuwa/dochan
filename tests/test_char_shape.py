@@ -3,7 +3,6 @@ tests/test_char_shape.py — CharShape 파싱 테스트
 """
 
 import struct
-import pytest
 from dochan.hwp.records.char_shape import CharShape
 
 

@@ -4,7 +4,7 @@ utils/error_recovery.py — 에러 복구 전략
 """
 
 import logging
-from typing import Optional, Any
+from typing import Any
 
 logger = logging.getLogger('dochan')
 

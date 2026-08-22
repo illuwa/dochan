@@ -9,9 +9,20 @@ import olefile
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from ..utils.bounded_io import (
+    BoundedIOError,
+    ByteBudget,
+    MAX_OLE_DOCUMENT_SIZE,
+    MAX_OLE_STREAM_SIZE,
+    ResourceLimitError,
+    read_ole_stream,
+)
 from ..utils.safe_decompress import safe_zlib_decompress
 
 logger = logging.getLogger(__name__)
+
+MAX_BINDATA_ITEM_SIZE = MAX_OLE_STREAM_SIZE
+MAX_BINDATA_TOTAL_SIZE = MAX_OLE_DOCUMENT_SIZE
 
 
 @dataclass
@@ -26,13 +37,24 @@ class BinDataItem:
         return f"BIN{self.storage_id:04X}.{self.extension}" if self.extension else f"BIN{self.storage_id:04X}"
 
 
-def extract_bin_data(ole: olefile.OleFileIO, is_compressed: bool) -> Dict[int, BinDataItem]:
+def extract_bin_data(
+    ole: olefile.OleFileIO,
+    is_compressed: bool,
+    *,
+    stream_budget: Optional[ByteBudget] = None,
+    max_item_size: Optional[int] = None,
+    max_total_size: Optional[int] = None,
+) -> Dict[int, BinDataItem]:
     """
     OLE 스토리지에서 BinData/ 하위의 모든 바이너리 데이터 추출
 
     반환: {storage_id: BinDataItem} 딕셔너리
     """
     result = {}
+    item_limit = MAX_BINDATA_ITEM_SIZE if max_item_size is None else max_item_size
+    total_limit = MAX_BINDATA_TOTAL_SIZE if max_total_size is None else max_total_size
+    raw_budget = stream_budget or ByteBudget(total_limit)
+    extracted_budget = ByteBudget(total_limit)
 
     for entry in ole.listdir():
         if len(entry) >= 2 and entry[0] == 'BinData':
@@ -50,14 +72,29 @@ def extract_bin_data(ole: olefile.OleFileIO, is_compressed: bool) -> Dict[int, B
                 ext = storage_name.split('.')[-1] if '.' in storage_name else ""
 
                 # 데이터 읽기
-                raw_data = ole.openstream('/'.join(entry)).read()
+                stream_name = '/'.join(entry)
+                raw_data = read_ole_stream(
+                    ole,
+                    stream_name,
+                    max_bytes=item_limit,
+                    budget=raw_budget,
+                )
 
                 # 압축 해제 (문서가 압축 설정인 경우)
                 if is_compressed:
                     try:
-                        raw_data = safe_zlib_decompress(raw_data)
-                    except (ValueError, Exception) as e:
+                        raw_data = safe_zlib_decompress(
+                            raw_data,
+                            max_size=min(item_limit, extracted_budget.remaining),
+                        )
+                    except ValueError as e:
+                        if "Decompressed size exceeds limit" in str(e):
+                            raise ResourceLimitError(
+                                f"{stream_name} exceeds extracted BinData budget"
+                            ) from e
                         logger.debug("BinData 압축 해제 실패 (비압축 데이터일 수 있음): %s", e)
+
+                extracted_budget.consume(len(raw_data), stream_name)
 
                 result[storage_id] = BinDataItem(
                     storage_id=storage_id,
@@ -65,6 +102,8 @@ def extract_bin_data(ole: olefile.OleFileIO, is_compressed: bool) -> Dict[int, B
                     extension=ext.lower(),
                 )
 
+            except BoundedIOError:
+                raise
             except (ValueError, struct.error, UnicodeDecodeError, OSError) as e:
                 logger.warning("BinData 항목 '%s' 파싱 실패: %s", storage_name, e)
                 continue

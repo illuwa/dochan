@@ -7,7 +7,6 @@ hwp/records/ctrl_header.py — CTRL_HEADER ctrlId 파싱
   → "tbl " → 파일 내 bytes = b' lbt' (0x20, 0x6C, 0x62, 0x74)
 """
 
-import struct
 
 
 def _make_4chid(a: str, b: str, c: str, d: str) -> bytes:

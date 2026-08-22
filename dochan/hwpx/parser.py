@@ -11,9 +11,9 @@ KS X 6101:2011 / OWPML 표준 기반.
   BinData/ — 바이너리 데이터 (이미지 등)
 """
 
+import posixpath
 import zipfile
-import os
-from typing import Optional
+
 from lxml import etree
 
 from ..model.document import Document, Section, Paragraph, TextRun
@@ -24,7 +24,19 @@ from ..model.header_footer import HeaderFooter, Footnote
 
 # Zip bomb protection constants
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_COMPRESSION_RATIO = 100
+MAX_XML_FILE_SIZE = 32 * 1024 * 1024
+MAX_XML_ELEMENTS = 1000000
+MAX_COMPRESSION_RATIO = 2000
+MAX_META_FILE_SIZE = 32 * 1024 * 1024
+MAX_ARCHIVE_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 10000
+MAX_SECTION_COUNT = 1000
+MAX_TABLE_CELLS = 200000
+MAX_TABLE_SPAN = 200000
+
+
+class _SectionCountExceeded(ValueError):
+    pass
 
 # Safe XML parser (XXE protection)
 _safe_xml_parser = etree.XMLParser(resolve_entities=False, no_network=True)
@@ -41,39 +53,78 @@ NS = {
 class HWPXParser:
 
     def __init__(self):
+        self._reset()
+
+    def _reset(self):
         self.errors = []
-        self._bin_data_map = {}  # binItemId → filename
+        self._part_name_map = {}  # normalized package path -> ZIP entry name
+        self._bin_data_map = {}  # exact binary reference -> ZIP entry name
+        self._ambiguous_bin_ids = set()
+        self._explicit_bin_ids = set()
+        self._reported_ambiguous_bin_ids = set()
+        self._char_shapes = []
+        self._table_cells_remaining = MAX_TABLE_CELLS
+        self._table_cell_budget_exhausted = False
 
     def parse(self, file_path: str) -> Document:
         """HWPX 파일 파싱"""
-        doc = Document()
+        self._reset()
+        doc = Document(source_format="hwpx")
 
         try:
             with zipfile.ZipFile(file_path, 'r') as zf:
+                infos = zf.infolist()
+                if len(infos) > MAX_ARCHIVE_ENTRIES:
+                    raise ValueError(
+                        f"HWPX entry count exceeds limit: {len(infos)} > {MAX_ARCHIVE_ENTRIES}"
+                    )
+                total_size = sum(info.file_size for info in infos)
+                if total_size > MAX_ARCHIVE_UNCOMPRESSED_SIZE:
+                    raise ValueError(
+                        "HWPX total uncompressed size exceeds limit: "
+                        f"{total_size} > {MAX_ARCHIVE_UNCOMPRESSED_SIZE}"
+                    )
+                for info in infos:
+                    normalized = _normalize_part_name(info.filename)
+                    if normalized in self._part_name_map:
+                        raise ValueError(f"duplicate HWPX part name: {normalized}")
+                    self._part_name_map[normalized] = info.filename
+
+                mimetype_part = self._part_name_map.get("mimetype")
+                if mimetype_part is None:
+                    raise ValueError("HWPX mimetype marker is missing")
+                mimetype = self._read_zip_part(zf, mimetype_part, 128).decode(
+                    "ascii", errors="strict"
+                ).strip()
+                if mimetype != "application/hwp+zip":
+                    raise ValueError(f"invalid HWPX mimetype marker: {mimetype!r}")
+
                 # 바이너리 데이터 목록 수집
-                self._collect_bin_data(zf)
+                self._collect_bin_data()
 
                 # CharShape 목록 파싱
                 self._parse_header_xml(zf)
 
                 # 섹션 파일 목록 추출
                 section_files = self._get_section_files(zf)
+                if not section_files:
+                    self.errors.append("ERR: HWPX section parts not found")
 
                 # 각 섹션 파싱
                 for sf in section_files:
                     try:
                         info = zf.getinfo(sf)
-                        if info.file_size > MAX_FILE_SIZE:
-                            self.errors.append(f"섹션 {sf} 크기 초과: {info.file_size} bytes")
+                        if info.file_size > MAX_XML_FILE_SIZE:
+                            self.errors.append(f"ERR: 섹션 {sf} 크기 초과: {info.file_size} bytes")
                             continue
                         if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
-                            self.errors.append(f"섹션 {sf} 압축률 초과")
+                            self.errors.append(f"ERR: 섹션 {sf} 압축률 초과")
                             continue
-                        xml_data = zf.read(sf)
+                        xml_data = self._read_zip_part(zf, sf, MAX_XML_FILE_SIZE)
                         section = self._parse_section_xml(xml_data)
                         doc.sections.append(section)
                     except Exception as e:
-                        self.errors.append(f"섹션 {sf} 파싱 실패: {e}")
+                        self.errors.append(f"ERR: 섹션 {sf} 파싱 실패: {e}")
 
                 # 이미지 바이너리 데이터 로드
                 self._load_image_data(zf, doc)
@@ -86,19 +137,34 @@ class HWPXParser:
         doc.errors = self.errors
         return doc
 
+    def _read_zip_part(self, zf: zipfile.ZipFile, name: str, max_size: int) -> bytes:
+        info = zf.getinfo(name)
+        if info.file_size > max_size:
+            raise ValueError(
+                f"{name} size exceeds limit: {info.file_size} > {max_size}"
+            )
+        if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+            raise ValueError(f"{name} compression ratio exceeds limit")
+        return zf.read(name)
+
     def _parse_header_xml(self, zf: zipfile.ZipFile):
         """Contents/header.xml에서 CharShape 목록 파싱"""
         self._char_shapes = []  # list of dicts: {bold, italic, underline, strikeout, size_pt}
 
         for candidate in ['Contents/header.xml', 'header.xml']:
-            if candidate not in zf.namelist():
+            part_name = self._part_name_map.get(candidate)
+            if part_name is None:
                 continue
             try:
-                data = zf.read(candidate)
+                data = self._read_zip_part(zf, part_name, MAX_META_FILE_SIZE)
+                if data.count(b"<") > MAX_XML_ELEMENTS:
+                    raise ValueError("HWPX header XML element limit exceeded")
                 root = etree.fromstring(data, parser=_safe_xml_parser)
 
                 for elem in root.iter():
                     tag = _local_tag(elem.tag)
+                    if tag == 'binItem':
+                        self._index_binary_item(elem, candidate)
                     # HWPX: <charPr> (charShape가 아님)
                     if tag == 'charPr' and elem.get('id') is not None:
                         cs = {
@@ -130,52 +196,185 @@ class HWPXParser:
                                 sshape = child.get('shape', 'NONE')
                                 cs['strikeout'] = sshape != 'NONE'
                         self._char_shapes.append(cs)
-            except Exception:
-                pass
+            except Exception as e:
+                self.errors.append(f"ERR: HWPX metadata {candidate} parse failed: {e}")
             break
 
-    def _collect_bin_data(self, zf: zipfile.ZipFile):
+    def _collect_bin_data(self):
         """BinData 폴더의 파일 목록 수집"""
-        for name in zf.namelist():
-            if name.startswith('BinData/'):
-                basename = os.path.basename(name)
-                if basename:
-                    # 파일명에서 ID 추출 시도
-                    base = basename.split('.')[0]
-                    self._bin_data_map[basename] = name
+        for normalized, part_name in self._part_name_map.items():
+            if not normalized.startswith('BinData/'):
+                continue
+            basename = posixpath.basename(normalized)
+            if not basename:
+                continue
+            self._register_bin_data_alias(normalized, part_name)
+            self._register_bin_data_alias(basename, part_name)
+            stem, _ = posixpath.splitext(basename)
+            if stem:
+                self._register_bin_data_alias(stem, part_name)
+
+    def _register_bin_data_alias(
+        self,
+        alias: str,
+        part_name: str,
+        *,
+        explicit: bool = False,
+    ):
+        """Register an exact binary reference, retaining ambiguity instead of guessing."""
+        alias = alias.strip().replace('\\', '/')
+        if not alias:
+            return
+
+        if explicit:
+            if alias not in self._explicit_bin_ids:
+                self._bin_data_map[alias] = part_name
+                self._ambiguous_bin_ids.discard(alias)
+                self._explicit_bin_ids.add(alias)
+                return
+        elif alias in self._explicit_bin_ids or alias in self._ambiguous_bin_ids:
+            return
+
+        existing = self._bin_data_map.get(alias)
+        if existing is None:
+            self._bin_data_map[alias] = part_name
+        elif existing != part_name:
+            self._bin_data_map.pop(alias, None)
+            self._ambiguous_bin_ids.add(alias)
+
+    def _index_binary_item(self, item, owner_part: str):
+        """Index an explicit package binary ID without fuzzy filename matching."""
+        href = item.get('href', '')
+        resolved = self._resolve_manifest_part(owner_part, href)
+        if resolved is None or not resolved.startswith('BinData/'):
+            return
+        part_name = self._part_name_map[resolved]
+        for attribute in ('id', 'itemID', 'itemId'):
+            item_id = item.get(attribute, '')
+            if item_id:
+                self._register_bin_data_alias(
+                    item_id,
+                    part_name,
+                    explicit=True,
+                )
+
+    def _resolve_bin_data_reference(self, reference: str):
+        """Resolve an image reference through the precomputed exact index."""
+        reference = reference.strip().replace('\\', '/')
+        if not reference:
+            return None
+        candidates = [reference]
+        try:
+            normalized = _normalize_part_name(reference)
+        except ValueError:
+            normalized = reference
+        if normalized != reference:
+            candidates.append(normalized)
+
+        for candidate in candidates:
+            if candidate in self._ambiguous_bin_ids:
+                if candidate not in self._reported_ambiguous_bin_ids:
+                    self.errors.append(
+                        f"WARN: HWPX image reference is ambiguous: {candidate}"
+                    )
+                    self._reported_ambiguous_bin_ids.add(candidate)
+                return None
+            part_name = self._bin_data_map.get(candidate)
+            if part_name is not None:
+                return part_name
+        return None
 
     def _get_section_files(self, zf: zipfile.ZipFile) -> list:
         """content.hpf에서 섹션 파일 목록 추출"""
         section_files = []
+        seen_sections = set()
+
+        def add_section(normalized_name):
+            if normalized_name in seen_sections:
+                return
+            part_name = self._part_name_map.get(normalized_name)
+            if part_name is None:
+                return
+            if len(section_files) >= MAX_SECTION_COUNT:
+                raise _SectionCountExceeded(
+                    "HWPX section count exceeds limit: "
+                    f"{len(section_files) + 1} > {MAX_SECTION_COUNT}"
+                )
+            seen_sections.add(normalized_name)
+            section_files.append(part_name)
 
         # content.hpf 파싱 시도
         hpf_candidates = ['Contents/content.hpf', 'content.hpf']
         for hpf in hpf_candidates:
-            if hpf in zf.namelist():
+            hpf_part = self._part_name_map.get(hpf)
+            if hpf_part is not None:
                 try:
-                    hpf_data = zf.read(hpf)
+                    hpf_data = self._read_zip_part(zf, hpf_part, MAX_META_FILE_SIZE)
+                    if hpf_data.count(b"<") > MAX_XML_ELEMENTS:
+                        raise ValueError("HWPX content manifest XML element limit exceeded")
                     root = etree.fromstring(hpf_data, parser=_safe_xml_parser)
                     # rootfile 항목에서 섹션 찾기
                     for item in root.iter():
                         href = item.get('href', '')
-                        if 'section' in href.lower() and href.endswith('.xml'):
-                            full_path = f"Contents/{href}" if not href.startswith('Contents/') else href
-                            if full_path in zf.namelist():
-                                section_files.append(full_path)
-                except Exception:
-                    pass
+                        resolved = self._resolve_manifest_part(hpf, href)
+                        if resolved is None:
+                            continue
+
+                        if resolved.startswith('BinData/'):
+                            self._index_binary_item(item, hpf)
+
+                        if 'section' in href.lower() and href.lower().endswith('.xml'):
+                            add_section(resolved)
+                except _SectionCountExceeded:
+                    raise
+                except Exception as e:
+                    self.errors.append(f"ERR: HWPX metadata {hpf} parse failed: {e}")
                 break
 
         # 폴백: 직접 section*.xml 찾기
         if not section_files:
-            for name in sorted(zf.namelist()):
-                if 'section' in name.lower() and name.endswith('.xml'):
-                    section_files.append(name)
+            for normalized in sorted(self._part_name_map):
+                if 'section' in normalized.lower() and normalized.lower().endswith('.xml'):
+                    add_section(normalized)
 
         return section_files
 
+    def _resolve_manifest_part(self, manifest_name: str, href: str):
+        """Resolve a manifest href to one normalized archive part name."""
+        href = href.strip()
+        if not href or href.replace('\\', '/').startswith('/'):
+            return None
+
+        candidates = []
+        try:
+            candidates.append(_normalize_part_name(href))
+        except ValueError:
+            pass
+        manifest_dir = posixpath.dirname(manifest_name)
+        if manifest_dir:
+            try:
+                candidates.append(
+                    _normalize_part_name(posixpath.join(manifest_dir, href))
+                )
+            except ValueError:
+                pass
+        if not href.replace('\\', '/').startswith('Contents/'):
+            try:
+                candidates.append(
+                    _normalize_part_name(posixpath.join('Contents', href))
+                )
+            except ValueError:
+                pass
+
+        for candidate in dict.fromkeys(candidates):
+            if candidate in self._part_name_map:
+                return candidate
+        return None
+
     def _parse_section_xml(self, xml_data: bytes) -> Section:
         """섹션 XML → Section 모델"""
+        if xml_data.count(b"<") > MAX_XML_ELEMENTS:
+            raise ValueError("HWPX section XML element limit exceeded")
         section = Section()
         root = etree.fromstring(xml_data, parser=_safe_xml_parser)
 
@@ -397,6 +596,8 @@ class HWPXParser:
             if tag == 'tr':
                 row = self._parse_table_row(child)
                 rows.append(row)
+                if self._table_cell_budget_exhausted:
+                    break
 
         table.rows = rows
         return table
@@ -408,28 +609,41 @@ class HWPXParser:
         for child in tr_elem:
             tag = _local_tag(child.tag)
             if tag == 'tc':
+                if not self._reserve_table_cell():
+                    break
                 cell = self._parse_table_cell(child)
                 cells.append(cell)
+                if self._table_cell_budget_exhausted:
+                    break
 
         return cells
+
+    def _reserve_table_cell(self) -> bool:
+        if self._table_cell_budget_exhausted:
+            return False
+        if self._table_cells_remaining <= 0:
+            error = (
+                "ERR: HWPX table cell limit exceeded: "
+                f"more than {MAX_TABLE_CELLS} cells"
+            )
+            if error not in self.errors:
+                self.errors.append(error)
+            self._table_cell_budget_exhausted = True
+            return False
+        self._table_cells_remaining -= 1
+        return True
 
     def _parse_table_cell(self, tc_elem) -> Cell:
         """<tc> → Cell"""
         cell = Cell()
 
         # 병합 속성 — tc 속성 또는 하위 cellSpan 태그
-        col_span = tc_elem.get('colSpan')
-        row_span = tc_elem.get('rowSpan')
-        if col_span:
-            try:
-                cell.col_span = int(col_span)
-            except ValueError:
-                pass
-        if row_span:
-            try:
-                cell.row_span = int(row_span)
-            except ValueError:
-                pass
+        col_span = self._validated_table_span(tc_elem.get('colSpan'))
+        row_span = self._validated_table_span(tc_elem.get('rowSpan'))
+        if col_span is not None:
+            cell.col_span = col_span
+        if row_span is not None:
+            cell.row_span = row_span
 
         # <hp:cellSpan colSpan="1" rowSpan="1"/> 태그에서도 읽기
         for child in tc_elem:
@@ -437,16 +651,17 @@ class HWPXParser:
             if tag == 'cellSpan':
                 cs = child.get('colSpan')
                 rs = child.get('rowSpan')
-                if cs:
-                    try:
-                        cell.col_span = int(cs)
-                    except ValueError:
-                        pass
-                if rs:
-                    try:
-                        cell.row_span = int(rs)
-                    except ValueError:
-                        pass
+                child_col_span = self._validated_table_span(cs)
+                child_row_span = self._validated_table_span(rs)
+                if child_col_span is not None:
+                    cell.col_span = child_col_span
+                if child_row_span is not None:
+                    cell.row_span = child_row_span
+
+        if cell.col_span * cell.row_span > MAX_TABLE_CELLS:
+            self._record_invalid_table_span()
+            cell.col_span = 1
+            cell.row_span = 1
 
         # 셀 내 문단+이미지 — 직접 자식 <subList> 또는 <p>에서
         for child in tc_elem:
@@ -464,6 +679,31 @@ class HWPXParser:
 
         return cell
 
+    def _validated_table_span(self, raw_value):
+        if raw_value is None:
+            return None
+        value = raw_value.strip()
+        digits = value.lstrip('0') or '0'
+        max_digits = str(MAX_TABLE_SPAN)
+        if (
+            not value
+            or not value.isascii()
+            or not value.isdigit()
+            or len(digits) > len(max_digits)
+        ):
+            self._record_invalid_table_span()
+            return 1
+        span = int(digits)
+        if span <= 0 or span > MAX_TABLE_SPAN:
+            self._record_invalid_table_span()
+            return 1
+        return span
+
+    def _record_invalid_table_span(self):
+        error = "ERR: HWPX invalid table span value"
+        if error not in self.errors:
+            self.errors.append(error)
+
     def _parse_picture_elem(self, pic_elem) -> Image:
         """<pic> → Image"""
         img = Image()
@@ -476,11 +716,14 @@ class HWPXParser:
                        child.get('binaryItemId', '') or
                        child.get('binaryItemIdRef', ''))
                 if bid:
-                    img.filename = bid
-                    for key, path in self._bin_data_map.items():
-                        if bid in key:
-                            img.filename = key
-                            break
+                    part_name = self._resolve_bin_data_reference(bid)
+                    if part_name is not None:
+                        img.filename = posixpath.basename(
+                            part_name.replace('\\', '/')
+                        )
+                        img._hwpx_part_name = part_name
+                    else:
+                        img.filename = bid
 
         return img
 
@@ -489,24 +732,46 @@ class HWPXParser:
         images = doc.find_all('image')
         for img in images:
             if img.filename and not img.has_data:
-                for zip_name in zf.namelist():
-                    if zip_name.startswith('BinData/') and img.filename in zip_name:
-                        try:
-                            info = zf.getinfo(zip_name)
-                            if info.file_size > MAX_FILE_SIZE:
-                                self.errors.append(f"이미지 {zip_name} 크기 초과: {info.file_size} bytes")
-                                break
-                            if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
-                                self.errors.append(f"이미지 {zip_name} 압축률 초과")
-                                break
-                            img.image_data = zf.read(zip_name)
-                        except Exception:
-                            pass
-                        break
+                zip_name = getattr(img, '_hwpx_part_name', None)
+                if zip_name is None:
+                    zip_name = self._resolve_bin_data_reference(img.filename)
+                if zip_name is None:
+                    continue
+                try:
+                    info = zf.getinfo(zip_name)
+                    if info.file_size > MAX_FILE_SIZE:
+                        self.errors.append(f"WARN: 이미지 {zip_name} 크기 초과: {info.file_size} bytes")
+                        continue
+                    if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
+                        self.errors.append(f"WARN: 이미지 {zip_name} 압축률 초과")
+                        continue
+                    img.image_data = self._read_zip_part(
+                        zf,
+                        zip_name,
+                        MAX_FILE_SIZE,
+                    )
+                except Exception as e:
+                    self.errors.append(f"ERR: HWPX image {zip_name} read failed: {e}")
 
 
 def _local_tag(tag: str) -> str:
     """'{namespace}localname' → 'localname'"""
+    if not isinstance(tag, str):
+        return ""
     if '}' in tag:
         return tag.split('}', 1)[1]
     return tag
+
+
+def _normalize_part_name(name: str) -> str:
+    """Return a canonical, relative POSIX path for one ZIP package part."""
+    normalized = posixpath.normpath(name.replace('\\', '/'))
+    if (
+        not normalized
+        or normalized == '.'
+        or normalized == '..'
+        or normalized.startswith('../')
+        or normalized.startswith('/')
+    ):
+        raise ValueError(f"invalid HWPX part name: {name!r}")
+    return normalized

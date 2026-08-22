@@ -3,7 +3,7 @@ output/markdown.py — Markdown 변환
 AI/LLM에 최적화된 Markdown 출력
 """
 
-from ..model.document import Document, Paragraph, TextRun
+from ..model.document import Document, Paragraph
 from ..model.table import Table, Cell
 from ..model.equation import Equation
 from ..model.image import Image
@@ -13,14 +13,18 @@ from ..model.header_footer import HeaderFooter, Footnote
 def to_markdown(doc: Document) -> str:
     """Document → Markdown 문자열 변환"""
     parts = []
+    note_labels, reference_labels = _assign_note_labels(doc)
     include_sheet_headings = _should_include_sheet_headings(doc)
     include_slide_headings = _should_include_slide_headings(doc)
 
+    rendered_notes = set()
     for section in doc.sections:
         elements = list(section.elements)
         if include_sheet_headings:
             while elements and _is_sheet_preamble(elements[0]):
-                md = _element_to_md(elements.pop(0))
+                md = _element_to_md(
+                    elements.pop(0), note_labels, reference_labels,
+                )
                 if md:
                     parts.append(md)
             sheet_heading = _sheet_heading(section)
@@ -31,11 +35,72 @@ def to_markdown(doc: Document) -> str:
             if slide_heading:
                 parts.append(slide_heading)
         for elem in elements:
-            md = _element_to_md(elem)
+            if isinstance(elem, Footnote):
+                # Definitions are emitted once from the document-wide,
+                # recursively deduplicated note list below.  This also covers
+                # notes nested in cells and header/footer containers.
+                continue
+            md = _element_to_md(elem, note_labels, reference_labels)
             if md:
                 parts.append(md)
 
+    for note in doc.find_all('note'):
+        identity = id(note)
+        if identity in rendered_notes:
+            continue
+        rendered_notes.add(identity)
+        md = _footnote_to_md(note, note_labels, reference_labels)
+        if md:
+            parts.append(md)
+
     return '\n\n'.join(parts)
+
+
+def _assign_note_labels(doc: Document):
+    """Return collision-free definition labels and DOCX reference mappings."""
+    labels = {}
+    reference_labels = {}
+    used = set()
+    next_automatic = 1
+    used_comment_numbers = set()
+    next_comment = 1
+
+    for note in doc.find_all('note'):
+        requested = getattr(note, 'number', None)
+        if not isinstance(requested, int) or isinstance(requested, bool) or requested <= 0:
+            requested = None
+
+        note_type = getattr(note, 'type', '')
+        if note_type == 'comment':
+            if requested is not None and requested not in used_comment_numbers:
+                comment_number = requested
+            else:
+                while next_comment in used_comment_numbers:
+                    next_comment += 1
+                comment_number = next_comment
+                next_comment += 1
+            used_comment_numbers.add(comment_number)
+            label = f"comment-{comment_number}"
+            labels[id(note)] = label
+            reference_number = requested if requested is not None else comment_number
+            reference_labels.setdefault((note_type, reference_number), label)
+            continue
+
+        if requested is not None and requested not in used:
+            label = requested
+        else:
+            while next_automatic in used:
+                next_automatic += 1
+            label = next_automatic
+            next_automatic += 1
+
+        used.add(label)
+        labels[id(note)] = label
+        reference_number = requested if requested is not None else label
+        if note_type in {'footnote', 'endnote'}:
+            reference_labels.setdefault((note_type, reference_number), label)
+
+    return labels, reference_labels
 
 
 def _should_include_sheet_headings(doc: Document) -> bool:
@@ -87,11 +152,11 @@ def _slide_number(section) -> int:
         return 0
 
 
-def _element_to_md(elem) -> str:
+def _element_to_md(elem, note_labels=None, reference_labels=None) -> str:
     if isinstance(elem, Paragraph):
-        return _paragraph_to_md(elem)
+        return _paragraph_to_md(elem, reference_labels)
     elif isinstance(elem, Table):
-        return _table_to_md(elem)
+        return _table_to_md(elem, reference_labels)
     elif isinstance(elem, Equation):
         return _equation_to_md(elem)
     elif isinstance(elem, Image):
@@ -99,12 +164,12 @@ def _element_to_md(elem) -> str:
     elif isinstance(elem, HeaderFooter):
         return _header_footer_to_md(elem)
     elif isinstance(elem, Footnote):
-        return _footnote_to_md(elem)
+        return _footnote_to_md(elem, note_labels)
     return ""
 
 
-def _paragraph_to_md(para: Paragraph) -> str:
-    text = _runs_to_md(para.runs)
+def _paragraph_to_md(para: Paragraph, reference_labels=None) -> str:
+    text = _runs_to_md(para.runs, reference_labels)
     if not text.strip():
         return ""
 
@@ -115,9 +180,26 @@ def _paragraph_to_md(para: Paragraph) -> str:
     return text
 
 
-def _runs_to_md(runs: list) -> str:
+def _runs_to_md(runs: list, reference_labels=None) -> str:
     parts = []
     for run in runs:
+        note_type = getattr(run, 'note_reference_type', '')
+        note_number = getattr(run, 'note_reference_number', None)
+        if (
+            note_type in {'footnote', 'endnote', 'comment'}
+            and isinstance(note_number, int)
+            and not isinstance(note_number, bool)
+            and note_number > 0
+        ):
+            default_label = (
+                f"comment-{note_number}" if note_type == "comment" else note_number
+            )
+            label = (reference_labels or {}).get(
+                (note_type, note_number), default_label,
+            )
+            parts.append(f"[^{label}]")
+            continue
+
         text = run.text
         if not text:
             continue
@@ -144,7 +226,7 @@ def _runs_to_md(runs: list) -> str:
     return ''.join(parts)
 
 
-def _table_to_md(table: Table) -> str:
+def _table_to_md(table: Table, reference_labels=None) -> str:
     if not table.rows:
         return ""
 
@@ -157,7 +239,7 @@ def _table_to_md(table: Table) -> str:
             if cell.is_merged_away:
                 cells_text.append("")
             else:
-                cells_text.append(_cell_text(cell))
+                cells_text.append(_cell_text(cell, reference_labels))
 
         # 열 수 맞추기
         while len(cells_text) < col_count:
@@ -174,15 +256,36 @@ def _table_to_md(table: Table) -> str:
     return '\n'.join(lines)
 
 
-def _cell_text(cell: Cell) -> str:
+def _cell_text(cell: Cell, reference_labels=None) -> str:
     texts = []
     for p in cell.paragraphs:
-        if hasattr(p, 'text'):
-            text = p.text.replace('\n', ' ').replace('\r', '')
+        if isinstance(p, Paragraph):
+            text = _runs_to_md(p.runs, reference_labels)
+            text = text.replace('\n', ' ').replace('\r', '')
             text = text.replace('|', '\\|')
             texts.append(text)
-        elif isinstance(p, Image) and p.ocr_text:
-            text = p.ocr_text.replace('\n', ' ').replace('\r', '').replace('|', '\\|')
+        elif isinstance(p, Footnote):
+            # A note is a definition container, not inline table-cell text.
+            # Its semantic reference is rendered by the owning TextRun and
+            # the definition is appended once at document scope.
+            continue
+        elif isinstance(p, Equation):
+            latex = p.latex or p.script
+            if latex:
+                texts.append(f"${latex}$".replace('|', '\\|'))
+        elif isinstance(p, Image):
+            if p.ocr_text:
+                text = p.ocr_text.replace('\n', ' ').replace('\r', '').replace('|', '\\|')
+                texts.append(text)
+            elif p.filename:
+                texts.append(f"![이미지]({p.filename})".replace('|', '\\|'))
+        elif isinstance(p, Table):
+            nested = _table_to_md(p, reference_labels)
+            if nested:
+                texts.append(nested.replace('\n', ' ').replace('|', '\\|'))
+        elif hasattr(p, 'text'):
+            text = p.text.replace('\n', ' ').replace('\r', '')
+            text = text.replace('|', '\\|')
             texts.append(text)
     return ' '.join(texts)
 
@@ -217,19 +320,24 @@ def _header_footer_to_md(hf: HeaderFooter) -> str:
     return ""
 
 
-def _footnote_to_md(fn: Footnote) -> str:
+def _footnote_to_md(fn: Footnote, note_labels=None, reference_labels=None) -> str:
     body = []
     for item in fn.paragraphs:
-        if isinstance(item, Table):
-            rendered = _table_to_md(item)
-        elif isinstance(item, Paragraph):
-            rendered = _paragraph_to_md(item)
-        else:
+        rendered = _element_to_md(item, note_labels, reference_labels)
+        if not rendered:
             rendered = getattr(item, "text", "")
         if rendered.strip():
             body.append(rendered)
     if body:
-        label = "각주" if fn.type == "footnote" else "미주"
+        label = (note_labels or {}).get(id(fn))
+        if label is None:
+            if fn.type == "footnote":
+                label = "각주"
+            elif fn.type == "comment":
+                label = f"comment-{fn.number}" if fn.number else "comment"
+            else:
+                label = "미주"
         text = "\n\n".join(body)
+        text = text.replace('\n', '\n    ')
         return f"[^{label}]: {text}"
     return ""

@@ -2,10 +2,8 @@
 tests/test_control_char.py — 제어 문자 크기 맵 테스트
 """
 
-import pytest
 from dochan.control_char import (
     get_advance_bytes, is_extended_ctrl,
-    CTRL_CHAR_WCHAR_SIZE, EXTENDED_CTRL_CHARS,
 )
 
 
@@ -45,7 +43,7 @@ class TestCtrlHeaderConstants:
 
     def test_make_4chid(self):
         from dochan.hwp.records.ctrl_header import (
-            _make_4chid, CTRL_TABLE, CTRL_EQUATION,
+            CTRL_TABLE, CTRL_EQUATION,
             ctrl_id_to_str, identify_control,
         )
 

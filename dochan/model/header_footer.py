@@ -1,6 +1,6 @@
-"""HeaderFooter / Footnote model"""
+"""Header/footer and note models."""
 from dataclasses import dataclass, field
-from typing import List
+from typing import Optional
 
 
 @dataclass
@@ -19,7 +19,15 @@ class Footnote:
     """각주/미주"""
     type: str = "footnote"  # "footnote" or "endnote"
     paragraphs: list = field(default_factory=list)
+    number: Optional[int] = None
 
     @property
     def text(self) -> str:
         return '\n'.join(p.text for p in self.paragraphs if hasattr(p, 'text'))
+
+
+@dataclass
+class Comment(Footnote):
+    """DOCX comment with its document-order number and author."""
+    type: str = "comment"
+    author: str = ""

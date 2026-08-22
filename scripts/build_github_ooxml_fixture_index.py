@@ -1,49 +1,64 @@
 """Build a license-tagged OOXML fixture index from selected GitHub repositories."""
 import argparse
 import json
+import re
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List
+from urllib.parse import unquote, urlsplit
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.download_public_ooxml_corpus import atomic_write_text  # noqa: E402
 
 
 GITHUB_OOXML_SOURCES = [
     {
         "repo": "python-openxml/python-docx",
-        "ref": "master",
+        "ref": "e45454602b53e8e572b179ccf1c91093ec9f4ed7",
         "directories": ["tests/test_files", "features/steps/test_files"],
         "formats": ["docx"],
         "license": "MIT",
-        "license_url": "https://github.com/python-openxml/python-docx/blob/master/LICENSE",
+        "license_url": "https://github.com/python-openxml/python-docx/blob/e45454602b53e8e572b179ccf1c91093ec9f4ed7/LICENSE",
     },
     {
         "repo": "scanny/python-pptx",
-        "ref": "master",
+        "ref": "278b47b1dedd5b46ee84c286e77cdfb0bf4594be",
         "directories": ["tests/test_files", "features/steps/test_files"],
         "formats": ["pptx"],
         "license": "MIT",
-        "license_url": "https://github.com/scanny/python-pptx/blob/master/LICENSE",
+        "license_url": "https://github.com/scanny/python-pptx/blob/278b47b1dedd5b46ee84c286e77cdfb0bf4594be/LICENSE",
     },
     {
         "repo": "pyexcel/pyexcel",
-        "ref": "dev",
+        "ref": "0bfeee32704678a9da498d62b5c55dc8d474853e",
         "directories": ["tests/fixtures"],
         "formats": ["xlsx"],
         "license": "BSD-3-Clause",
-        "license_url": "https://github.com/pyexcel/pyexcel/blob/dev/LICENSE",
+        "license_url": "https://github.com/pyexcel/pyexcel/blob/0bfeee32704678a9da498d62b5c55dc8d474853e/LICENSE",
     },
     {
         "repo": "ChrisPappalardo/eparse",
-        "ref": "main",
+        "ref": "039e55266aad31711954be4d6fb74f3765104207",
         "directories": ["tests"],
         "formats": ["xlsx"],
         "license": "MIT",
-        "license_url": "https://github.com/ChrisPappalardo/eparse/blob/main/LICENSE",
+        "license_url": "https://github.com/ChrisPappalardo/eparse/blob/039e55266aad31711954be4d6fb74f3765104207/LICENSE",
     },
 ]
 
 
 def fetch_github_directory(url: str) -> List[dict]:
-    with urllib.request.urlopen(url, timeout=30) as response:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != "api.github.com":
+        raise ValueError("fixture index URL must use the GitHub HTTPS API")
+    with urllib.request.urlopen(  # nosemgrep: dynamic-urllib-use-detected
+        url,
+        timeout=30,
+    ) as response:
         return json.load(response)
 
 
@@ -61,6 +76,7 @@ def build_github_ooxml_fixture_index(
     source_summaries = []
 
     for source in sources:
+        _validate_immutable_revision(source.get("ref"))
         source_formats = {fmt.lower().lstrip(".") for fmt in source.get("formats", [])}
         active_formats = requested & source_formats
         if not active_formats:
@@ -100,6 +116,15 @@ def github_entry_to_fixture(entry: dict, source: dict, directory: str, active_fo
         return {}
 
     repo = source["repo"]
+    source_revision = source["ref"]
+    _validate_immutable_revision(source_revision)
+    _validate_download_url(
+        download_url,
+        repo,
+        source_revision,
+        directory,
+        name,
+    )
     source_name = f"{directory}/{name}"
     unique_name = "__".join([
         repo.replace("/", "__"),
@@ -112,9 +137,40 @@ def github_entry_to_fixture(entry: dict, source: dict, directory: str, active_fo
         "format": file_format,
         "url": download_url,
         "source": repo,
+        "source_revision": source_revision,
         "license": source["license"],
         "license_url": source["license_url"],
     }
+
+
+def _validate_immutable_revision(revision: str) -> None:
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError("GitHub source revision must be an immutable 40-character commit")
+
+
+def _validate_download_url(
+    url: str,
+    repo: str,
+    revision: str,
+    directory: str,
+    name: str,
+) -> None:
+    parsed = urlsplit(str(url))
+    expected_prefix = "/{}/{}/".format(repo, revision)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "raw.githubusercontent.com"
+        or not unquote(parsed.path).startswith(expected_prefix)
+    ):
+        raise ValueError("GitHub download URL does not match its source revision")
+    expected_path = "/{}/{}/{}/{}".format(
+        repo,
+        revision,
+        directory.strip("/"),
+        name,
+    )
+    if unquote(parsed.path) != expected_path or parsed.query or parsed.fragment:
+        raise ValueError("GitHub download URL does not match its source path")
 
 
 def fixture_counts(fixtures: Iterable[dict]) -> Dict[str, int]:
@@ -132,8 +188,10 @@ def main() -> int:
 
     formats = [item.strip() for item in args.formats.split(",") if item.strip()]
     index = build_github_ooxml_fixture_index(formats=formats)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(
+        args.output,
+        json.dumps(index, ensure_ascii=False, indent=2) + "\n",
+    )
     print(json.dumps({"output": str(args.output), "counts": index["counts"]}, ensure_ascii=False, indent=2))
     return 0
 

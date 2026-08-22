@@ -1,18 +1,33 @@
 import json
 import sys
 
+import pytest
+
 from scripts.build_apache_poi_fixture_index import (
+    APACHE_POI_BRANCH,
     APACHE_POI_LICENSE_URL,
+    fetch_github_directory,
     apache_poi_entry_to_fixture,
     build_apache_poi_fixture_index,
 )
+
+
+@pytest.mark.parametrize("url", ["http://api.github.com/repos/apache/poi", "file:///etc/passwd"])
+def test_fetch_github_directory_rejects_non_github_https_urls(url, monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not open")),
+    )
+
+    with pytest.raises(ValueError, match="GitHub HTTPS API"):
+        fetch_github_directory(url)
 
 
 def test_apache_poi_entry_to_fixture_keeps_license_and_source_metadata():
     fixture = apache_poi_entry_to_fixture(
         {
             "name": "Example.docx",
-            "download_url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/Example.docx",
+            "download_url": f"https://raw.githubusercontent.com/apache/poi/{APACHE_POI_BRANCH}/test-data/document/Example.docx",
         },
         "docx",
     )
@@ -21,22 +36,24 @@ def test_apache_poi_entry_to_fixture_keeps_license_and_source_metadata():
         "name": "Example.docx",
         "source_name": "Example.docx",
         "format": "docx",
-        "url": "https://raw.githubusercontent.com/apache/poi/trunk/test-data/document/Example.docx",
+        "url": f"https://raw.githubusercontent.com/apache/poi/{APACHE_POI_BRANCH}/test-data/document/Example.docx",
         "source": "apache/poi",
+        "source_revision": APACHE_POI_BRANCH,
         "license": "Apache-2.0",
         "license_url": APACHE_POI_LICENSE_URL,
     }
 
 
 def test_build_apache_poi_fixture_index_filters_formats_and_sorts():
+    revision = "1" * 40
     responses = {
         "document": [
-            {"name": "z.docx", "download_url": "https://example.test/z.docx"},
-            {"name": "ignore.doc", "download_url": "https://example.test/ignore.doc"},
-            {"name": "a.docx", "download_url": "https://example.test/a.docx"},
+            {"name": "z.docx", "download_url": f"https://raw.githubusercontent.com/apache/poi/{revision}/test-data/document/z.docx"},
+            {"name": "ignore.doc", "download_url": f"https://raw.githubusercontent.com/apache/poi/{revision}/test-data/document/ignore.doc"},
+            {"name": "a.docx", "download_url": f"https://raw.githubusercontent.com/apache/poi/{revision}/test-data/document/a.docx"},
         ],
         "spreadsheet": [
-            {"name": "b.xlsx", "download_url": "https://example.test/b.xlsx"},
+            {"name": "b.xlsx", "download_url": f"https://raw.githubusercontent.com/apache/poi/{revision}/test-data/spreadsheet/b.xlsx"},
             {"name": "missing-url.xlsx"},
         ],
     }
@@ -47,11 +64,11 @@ def test_build_apache_poi_fixture_index_filters_formats_and_sorts():
         directory = url.split("/test-data/")[1].split("?")[0]
         return responses[directory]
 
-    index = build_apache_poi_fixture_index(["xlsx", "docx"], branch="test-branch", fetch_directory=fake_fetch)
+    index = build_apache_poi_fixture_index(["xlsx", "docx"], branch=revision, fetch_directory=fake_fetch)
 
     assert seen_urls == [
-        "https://api.github.com/repos/apache/poi/contents/test-data/spreadsheet?ref=test-branch",
-        "https://api.github.com/repos/apache/poi/contents/test-data/document?ref=test-branch",
+        f"https://api.github.com/repos/apache/poi/contents/test-data/spreadsheet?ref={revision}",
+        f"https://api.github.com/repos/apache/poi/contents/test-data/document?ref={revision}",
     ]
     assert index["counts"] == {"docx": 2, "xlsx": 1}
     assert [(item["format"], item["source_name"]) for item in index["fixtures"]] == [
@@ -59,6 +76,37 @@ def test_build_apache_poi_fixture_index_filters_formats_and_sorts():
         ("docx", "z.docx"),
         ("xlsx", "b.xlsx"),
     ]
+    assert {item["source_revision"] for item in index["fixtures"]} == {revision}
+
+
+def test_apache_poi_fixture_rejects_download_url_for_a_different_revision():
+    with pytest.raises(ValueError, match="source revision"):
+        apache_poi_entry_to_fixture(
+            {
+                "name": "Example.docx",
+                "download_url": "https://raw.githubusercontent.com/apache/poi/{}/test-data/document/Example.docx".format(
+                    "2" * 40
+                ),
+            },
+            "docx",
+            source_revision="1" * 40,
+        )
+
+
+def test_apache_poi_fixture_rejects_download_url_for_a_different_path():
+    revision = "1" * 40
+    with pytest.raises(ValueError, match="source path"):
+        apache_poi_entry_to_fixture(
+            {
+                "name": "Expected.docx",
+                "download_url": (
+                    "https://raw.githubusercontent.com/apache/poi/{}/"
+                    "test-data/spreadsheet/Different.docx"
+                ).format(revision),
+            },
+            "docx",
+            source_revision=revision,
+        )
 
 
 def test_build_apache_poi_fixture_index_cli_writes_json(tmp_path, monkeypatch):

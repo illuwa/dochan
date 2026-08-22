@@ -1,19 +1,24 @@
 """Benchmark dochan against optional local competitor installations."""
 import argparse
 import json
+import math
 import posixpath
 import re
 import signal
 import sys
-import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from statistics import mean, median
 from time import perf_counter
 from typing import Callable, Dict, Iterable, List, Tuple
 
+from lxml import etree
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from dochan.ooxml import package as ooxml_package  # noqa: E402
+from scripts.download_public_ooxml_corpus import atomic_write_text  # noqa: E402
 
 OFFICE_FORMATS = ("docx", "pptx", "xlsx")
 CONVERTER_NAMES = ("dochan", "markitdown", "docling")
@@ -31,9 +36,78 @@ JSON_PROFILE_KEYS = (
 MARKDOWN_IMAGE_RE = re.compile(r"!\[(.*?)\]\(([^)]+)\)")
 
 
-def iter_input_files(root: Path, formats: Iterable[str] = OFFICE_FORMATS) -> List[Path]:
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def _require_positive_timeout(value: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError("timeout_seconds must be greater than zero")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError("timeout_seconds must be greater than zero")
+    return parsed
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def iter_input_files(
+    root: Path,
+    formats: Iterable[str] = OFFICE_FORMATS,
+    input_files: Iterable[str] = None,
+) -> List[Path]:
     suffixes = {f".{fmt.lower().lstrip('.')}" for fmt in formats}
-    return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in suffixes)
+    root = root.resolve(strict=True)
+    if input_files is None:
+        candidates = sorted(
+            path for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in suffixes
+        )
+    else:
+        candidates = []
+        seen = set()
+        for value in input_files:
+            relative = str(value)
+            posix_path = PurePosixPath(relative)
+            windows_path = PureWindowsPath(relative)
+            if (
+                not relative
+                or relative in {".", ".."}
+                or posix_path.as_posix() != relative
+                or posix_path.is_absolute()
+                or windows_path.is_absolute()
+                or "\\" in relative
+                or any(part in {"", ".", ".."} for part in posix_path.parts)
+            ):
+                raise ValueError("input file must be a normalized relative path: {}".format(value))
+            candidate = root.joinpath(*posix_path.parts)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            candidates.append(candidate)
+
+    files = []
+    for candidate in candidates:
+        if candidate.is_symlink():
+            raise ValueError("input file must not be a symlink: {}".format(candidate))
+        resolved = candidate.resolve(strict=True)
+        if not _path_is_within(resolved, root):
+            raise ValueError("input file resolves outside benchmark root: {}".format(candidate))
+        if not resolved.is_file():
+            raise ValueError("input file is not a regular file: {}".format(candidate))
+        if resolved.suffix.lower() not in suffixes:
+            raise ValueError("input file format was not requested: {}".format(candidate))
+        files.append(resolved)
+    return sorted(files)
 
 
 def load_expectations(root: Path) -> Dict[str, dict]:
@@ -246,12 +320,49 @@ def _row_success(row: dict) -> bool:
     return bool(row.get("nonempty"))
 
 
+def preflight_ooxml_archive(path: Path) -> str:
+    """Validate every OOXML member under the parser's allocation budgets."""
+    try:
+        with ooxml_package.OOXMLPackage(str(path)) as package:
+            for name in package.namelist():
+                expected_size = package.part_size(name)
+                if expected_size > ooxml_package.MAX_PART_SIZE:
+                    raise ValueError("package part too large: {}".format(name))
+                if (
+                    name.lower().endswith((".xml", ".rels"))
+                    and expected_size > ooxml_package.MAX_XML_PART_SIZE
+                ):
+                    raise ValueError("package XML part too large: {}".format(name))
+                streamed_size = 0
+                with package.open_part(name) as part:
+                    while True:
+                        chunk = part.read(64 * 1024)
+                        if not chunk:
+                            break
+                        streamed_size += len(chunk)
+                        if streamed_size > ooxml_package.MAX_PART_SIZE:
+                            raise ValueError("package part too large: {}".format(name))
+                if streamed_size != expected_size:
+                    raise ValueError(
+                        "package part size mismatch: {} != {} for {}".format(
+                            streamed_size,
+                            expected_size,
+                            name,
+                        )
+                    )
+    except Exception as exc:
+        return repr(exc)
+    return ""
+
+
 def input_has_ooxml_semantic_signal(path: Path) -> bool:
     suffix = path.suffix.lower()
     if suffix not in {".docx", ".pptx", ".xlsx"}:
         return True
     try:
-        with zipfile.ZipFile(path) as archive:
+        if preflight_ooxml_archive(path):
+            return True
+        with ooxml_package.OOXMLPackage(str(path)) as archive:
             names = archive.namelist()
             if _has_media_asset(names, suffix):
                 return True
@@ -261,7 +372,8 @@ def input_has_ooxml_semantic_signal(path: Path) -> bool:
                 if not name.endswith(".xml") or not _is_semantic_xml_part(name, suffix):
                     continue
                 try:
-                    xml = archive.read(name).decode("utf-8", "ignore")
+                    root = archive.read_xml_part(name, recover=True)
+                    xml = etree.tostring(root, encoding="unicode")
                 except Exception:
                     return True
                 if _xml_has_visible_text(xml):
@@ -279,9 +391,13 @@ def input_has_ooxml_semantic_signal(path: Path) -> bool:
     return False
 
 
-def _docx_archive_has_alt_chunk_signal(archive: zipfile.ZipFile) -> bool:
+def _docx_archive_has_alt_chunk_signal(archive: ooxml_package.OOXMLPackage) -> bool:
     try:
-        rels = archive.read("word/_rels/document.xml.rels").decode("utf-8", "ignore")
+        rels_root = archive.read_xml_part(
+            "word/_rels/document.xml.rels",
+            recover=True,
+        )
+        rels = etree.tostring(rels_root, encoding="unicode")
     except Exception:
         return False
     for relationship in re.findall(r"<(?:[A-Za-z0-9_]+:)?Relationship\b[^>]*>", rels):
@@ -292,10 +408,10 @@ def _docx_archive_has_alt_chunk_signal(archive: zipfile.ZipFile) -> bool:
             continue
         target = target_match.group(1)
         part = posixpath.normpath(target.lstrip("/") if target.startswith("/") else posixpath.join("word", target))
-        if part not in archive.namelist():
+        if not archive.exists(part):
             continue
         try:
-            data = archive.read(part)
+            data = archive.read_part(part)
         except Exception:
             continue
         if _html_like_bytes_have_text(data):
@@ -437,8 +553,7 @@ def _convert_docling(path: Path) -> str:
 
 
 def _run_with_timeout(callback: Callable[[], Tuple[str, dict]], timeout_seconds: float) -> Tuple[str, dict]:
-    if not timeout_seconds or timeout_seconds <= 0:
-        return callback()
+    timeout_seconds = _require_positive_timeout(timeout_seconds)
 
     def raise_timeout(_signum, _frame):
         raise TimeoutError(f"conversion timed out after {timeout_seconds:g}s")
@@ -806,19 +921,35 @@ def run_benchmark(
     converter_names: Iterable[str] = CONVERTER_NAMES,
     output_root: Path = None,
     timeout_seconds: float = DEFAULT_CONVERSION_TIMEOUT_SECONDS,
+    input_files: Iterable[str] = None,
 ) -> dict:
-    files = iter_input_files(root, formats)
-    requested_converters = [name.strip().lower() for name in converter_names if name.strip()]
+    timeout_seconds = _require_positive_timeout(timeout_seconds)
+    root = root.resolve(strict=True)
+    formats = list(formats)
+    files = iter_input_files(root, formats, input_files=input_files)
+    invalid_inputs = [
+        {"file": str(file_path), "error": error}
+        for file_path in files
+        for error in [preflight_ooxml_archive(file_path)]
+        if error
+    ]
+    invalid_paths = {Path(item["file"]) for item in invalid_inputs}
+    valid_files = [file_path for file_path in files if file_path not in invalid_paths]
+    requested_converters = []
+    for name in converter_names:
+        normalized = name.strip().lower()
+        if normalized and normalized not in requested_converters:
+            requested_converters.append(normalized)
     converter_status = inspect_converter_availability(requested_converters)
     converters = discover_converters(requested_converters)
     expectations = load_expectations(root)
     input_semantic_empty = {
         file_path: not input_has_ooxml_semantic_signal(file_path)
-        for file_path in files
+        for file_path in valid_files
     }
     results = []
 
-    for file_path in files:
+    for file_path in valid_files:
         for name, convert in converters.items():
             for run_index in range(1, max(runs, 1) + 1):
                 started = perf_counter()
@@ -839,8 +970,7 @@ def run_benchmark(
                 output_path = None
                 if output_root is not None:
                     output_path = output_capture_path(output_root, name, Path(relative_path), run_index)
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    output_path.write_text(output, encoding="utf-8")
+                    atomic_write_text(output_path, output)
                 expectation = expectations.get(relative_path, {})
                 row = {
                     "converter": name,
@@ -865,13 +995,15 @@ def run_benchmark(
     format_summary = summarize_by_format(results)
     competitive_summary = compare_against_dochan(format_summary)
     file_competitive_summary = compare_files_against_dochan(summary)
-    return {
+    report = {
         "root": str(root),
-        "formats": list(formats),
+        "formats": formats,
         "runs": max(runs, 1),
         "timeout_seconds": timeout_seconds,
         "output_root": str(output_root) if output_root is not None else "",
         "file_count": len(files),
+        "valid_file_count": len(valid_files),
+        "invalid_inputs": invalid_inputs,
         "requested_converters": requested_converters,
         "converter_status": converter_status,
         "converters": sorted(converters),
@@ -883,17 +1015,63 @@ def run_benchmark(
         "file_competitive_summary": file_competitive_summary,
         "file_improvement_candidates": find_file_improvement_candidates(file_competitive_summary),
     }
+    failure_reasons = []
+    if not files:
+        failure_reasons.append("no input files")
+    if invalid_inputs:
+        failure_reasons.append("invalid OOXML inputs: {}".format(len(invalid_inputs)))
+    if not requested_converters:
+        failure_reasons.append("no converters requested")
+    for name in requested_converters:
+        status = converter_status.get(name, {})
+        if not status.get("available") or name not in converters:
+            failure_reasons.append("converter unavailable: {}".format(name))
+
+    failed_rows = [row for row in results if not _row_success(row)]
+    error_rows = [row for row in failed_rows if row.get("error")]
+    unexpected_empty_rows = [
+        row for row in failed_rows
+        if not row.get("error") and not row.get("nonempty")
+    ]
+    other_failed_rows = [
+        row for row in failed_rows
+        if row not in error_rows and row not in unexpected_empty_rows
+    ]
+    if error_rows:
+        failure_reasons.append("conversion errors: {}".format(len(error_rows)))
+    if unexpected_empty_rows:
+        failure_reasons.append(
+            "unexpected empty outputs: {}".format(len(unexpected_empty_rows))
+        )
+    if other_failed_rows:
+        failure_reasons.append(
+            "unsuccessful conversion results: {}".format(len(other_failed_rows))
+        )
+
+    report["failure_reasons"] = failure_reasons
+    report["ok"] = not failure_reasons
+    return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark dochan against local MarkItDown/Docling installations.")
     parser.add_argument("root", type=Path, help="Directory containing benchmark documents")
     parser.add_argument("--formats", default=",".join(OFFICE_FORMATS), help="Comma-separated extensions")
-    parser.add_argument("--converters", default=",".join(CONVERTER_NAMES), help="Comma-separated converter names")
+    parser.add_argument(
+        "--converters",
+        default="dochan",
+        help="Comma-separated converter names; optional competitors must be requested explicitly",
+    )
     parser.add_argument("--runs", type=int, default=1, help="Repeated runs per converter/file")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_CONVERSION_TIMEOUT_SECONDS, help="Seconds before a single conversion is recorded as timed out")
+    parser.add_argument("--timeout", type=_positive_float, default=DEFAULT_CONVERSION_TIMEOUT_SECONDS, help="Seconds before a single conversion is recorded as timed out")
     parser.add_argument("--output", type=Path, default=None, help="Optional JSON output path")
     parser.add_argument("--save-outputs", type=Path, default=None, help="Optional directory for converter Markdown outputs")
+    parser.add_argument(
+        "--input-file",
+        action="append",
+        default=None,
+        help="Relative input path to include; repeat to restrict a reused corpus to the current run",
+    )
     args = parser.parse_args()
 
     formats = [item.strip().lstrip(".") for item in args.formats.split(",") if item.strip()]
@@ -905,13 +1083,14 @@ def main() -> int:
         converter_names=converter_names,
         output_root=args.save_outputs,
         timeout_seconds=args.timeout,
+        input_files=args.input_file,
     )
     payload = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
-        args.output.write_text(payload, encoding="utf-8")
+        atomic_write_text(args.output, payload)
     else:
         print(payload)
-    return 0
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":

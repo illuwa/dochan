@@ -1,11 +1,14 @@
 import zipfile
 
+from lxml import etree
+
 import dochan.ooxml.xlsx as xlsx_module
 from dochan import Dochan
 from dochan.batch import batch_convert
 from dochan.cli import _cmd_info
 from dochan.ooxml.xlsx import XLSXReader
 from dochan.output.markdown import to_markdown
+from dochan.quality.checker import check_quality
 
 
 def _write_xlsx(
@@ -91,6 +94,35 @@ def test_reads_xlsx_shared_strings_as_table(tmp_path):
     assert table.rows[1][1].paragraphs[0].runs[0].provenance.cell == "B2"
 
 
+def test_reads_cell_values_when_xml_comments_are_present(tmp_path, monkeypatch):
+    path = tmp_path / "commented-cell.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData>
+                <row r="1"><c r="A1"><!-- valid OOXML comment --><v>1</v></c></row>
+              </sheetData>
+            </worksheet>
+            """
+        },
+    )
+
+    document = XLSXReader().read(str(path))
+    assert document.find_all("table")[0].rows[0][0].text == "1"
+
+    monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 1)
+    streamed_document = XLSXReader().read(str(path))
+    assert streamed_document.find_all("table")[0].rows[0][0].text == "1"
+
+
 def test_reads_large_xlsx_sheet_with_streaming_preview(tmp_path, monkeypatch):
     path = tmp_path / "large-sheet.xlsx"
     rows = "\n".join(
@@ -100,7 +132,7 @@ def test_reads_large_xlsx_sheet_with_streaming_preview(tmp_path, monkeypatch):
           <c r="B{row_index}"><v>{row_index}</v></c>
         </row>
         """
-        for row_index in range(1, 6)
+        for row_index in range(1, 202)
     )
     _write_xlsx(
         path,
@@ -118,14 +150,127 @@ def test_reads_large_xlsx_sheet_with_streaming_preview(tmp_path, monkeypatch):
             """
         },
     )
-    monkeypatch.setattr(xlsx_module, "MAX_PART_SIZE", 128)
-    monkeypatch.setattr(xlsx_module, "STREAMING_ROW_LIMIT", 3)
+    monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 128)
+    monkeypatch.setattr(xlsx_module, "STREAMING_ROW_LIMIT", 200)
 
-    markdown = to_markdown(XLSXReader().read(str(path)))
+    document = XLSXReader().read(str(path))
+    markdown = to_markdown(document)
 
     assert "Large row 1" in markdown
-    assert "Large row 3" in markdown
-    assert "Large row 4" not in markdown
+    assert "Large row 200" in markdown
+    assert "Large row 201" not in markdown
+    assert document.errors == [
+        "WARN: XLSX large-sheet preview omits merges, hyperlinks, comments, "
+        "headers, footers, drawings, and embedded assets: xl/worksheets/sheet1.xml",
+        "ERR: XLSX streaming row limit exceeded: more than 200 rows",
+    ]
+
+
+def test_large_xlsx_streaming_preview_exact_row_limit_is_not_truncated(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "exact-row-limit.xlsx"
+    rows = "".join(
+        f'<row r="{index}"><c r="A{index}"><v>{index}</v></c></row>'
+        for index in range(1, 201)
+    )
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Huge" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": f"""
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData>{rows}</sheetData>
+            </worksheet>
+            """,
+        },
+    )
+    monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 1)
+    monkeypatch.setattr(xlsx_module, "STREAMING_ROW_LIMIT", 200)
+
+    document = XLSXReader().read(str(path))
+
+    rows = document.find_all("table")[0].rows
+    assert len(rows) == 200
+    assert rows[0][0].text == "1"
+    assert rows[-1][0].text == "200"
+    assert not [error for error in document.errors if error.startswith("ERR:")]
+
+
+def test_large_xlsx_streaming_preview_reports_omitted_cell(tmp_path, monkeypatch):
+    path = tmp_path / "cell-limit-exceeded.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Huge" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData><row r="1">
+                <c r="A1"><v>1</v></c>
+                <c r="B1"><v>2</v></c>
+                <c r="C1"><v>3</v></c>
+              </row></sheetData>
+            </worksheet>
+            """,
+        },
+    )
+    monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 1)
+    monkeypatch.setattr(xlsx_module, "STREAMING_CELL_LIMIT", 2)
+
+    document = XLSXReader().read(str(path))
+    table = document.find_all("table")[0]
+
+    assert [cell.text for cell in table.rows[0]] == ["1", "2"]
+    assert document.errors[-1] == (
+        "ERR: XLSX streaming cell limit exceeded: more than 2 cells"
+    )
+
+
+def test_large_xlsx_streaming_preview_exact_cell_limit_is_not_truncated(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "exact-cell-limit.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Huge" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData><row r="1">
+                <c r="A1"><v>1</v></c>
+                <c r="B1"><v>2</v></c>
+              </row></sheetData>
+            </worksheet>
+            """,
+        },
+    )
+    monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 1)
+    monkeypatch.setattr(xlsx_module, "STREAMING_CELL_LIMIT", 2)
+
+    document = XLSXReader().read(str(path))
+
+    assert [cell.text for cell in document.find_all("table")[0].rows[0]] == [
+        "1",
+        "2",
+    ]
+    assert not [error for error in document.errors if error.startswith("ERR:")]
 
 
 def test_reads_xlsx_shared_strings_with_dtd_entity_bomb_neutralized(tmp_path):
@@ -701,6 +846,65 @@ def test_records_xlsx_drawing_image_relationship_as_asset(tmp_path):
     assert asset.metadata["label"] == "Revenue chart Picture 2"
     assert asset.metadata["source_format"] == "xlsx"
     assert asset.metadata["sheet"] == "Drawing"
+    assert asset.metadata["missing"] is False
+
+
+def test_records_missing_xlsx_image_part_once_for_quality(tmp_path):
+    path = tmp_path / "missing-drawing-image.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Drawing" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheetData/><drawing r:id="rIdDrawing"/>
+            </worksheet>
+            """
+        },
+        extra_parts={
+            "xl/worksheets/_rels/sheet1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+            </Relationships>
+            """,
+            "xl/drawings/drawing1.xml": """
+            <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>
+                <xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Missing"/></xdr:nvPicPr>
+                  <xdr:blipFill><a:blip r:embed="rIdMissing"/></xdr:blipFill></xdr:pic></xdr:oneCellAnchor>
+              <xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>0</xdr:row></xdr:from>
+                <xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Duplicate"/></xdr:nvPicPr>
+                  <xdr:blipFill><a:blip r:embed="rIdMissing"/></xdr:blipFill></xdr:pic></xdr:oneCellAnchor>
+            </xdr:wsDr>
+            """,
+            "xl/drawings/_rels/drawing1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdMissing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/missing.png"/>
+            </Relationships>
+            """,
+        },
+    )
+
+    doc = XLSXReader().read(str(path))
+    report = check_quality(doc)
+
+    assert len(doc.assets) == 1
+    assert doc.assets[0].source_path == "xl/media/missing.png"
+    assert doc.assets[0].metadata["missing"] is True
+    assert doc.errors == [
+        "WARN: XLSX image part not found: xl/media/missing.png"
+    ]
+    assert report.total_images == 1
+    assert report.missing_images == 1
+    assert report.parse_errors == 0
 
 
 def test_reads_xlsx_vml_ole_preview_image_and_records_asset(tmp_path):
@@ -1001,6 +1205,260 @@ def test_reads_xlsx_multi_series_chart_as_single_table(tmp_path):
     assert "| Category | ARR | Profit |" in markdown
     assert "| Q1 | 10 | 3 |" in markdown
     assert "| Q2 | 20 | 8 |" in markdown
+
+
+def test_xlsx_chart_output_budget_is_document_wide(monkeypatch):
+    chart_root = etree.fromstring(
+        b"""
+        <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+          <c:chart><c:plotArea><c:lineChart>
+            <c:ser><c:tx><c:v>A</c:v></c:tx><c:val><c:numRef><c:numCache>
+              <c:pt idx="0"><c:v>1</c:v></c:pt>
+            </c:numCache></c:numRef></c:val></c:ser>
+          </c:lineChart></c:plotArea></c:chart>
+        </c:chartSpace>
+        """
+    )
+    monkeypatch.setattr(xlsx_module, "MAX_CHART_OUTPUT_CELLS", 7)
+    reader = XLSXReader()
+    reader._errors = []
+
+    first = reader._chart_series_table(chart_root)
+    second = reader._chart_series_table(chart_root)
+
+    assert first.row_count == 2
+    assert first.col_count == 2
+    assert second.rows == []
+    assert reader._errors == [
+        "ERR: XLSX chart output cell budget exceeded: 4 > 3 remaining"
+    ]
+
+
+def test_xlsx_chart_rejects_series_and_point_budgets_before_cell_allocation(
+    monkeypatch,
+):
+    chart_root = etree.fromstring(
+        b"""
+        <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+          <c:chart><c:plotArea><c:lineChart>
+            <c:ser><c:val><c:numRef><c:numCache>
+              <c:pt idx="0"><c:v>1</c:v></c:pt>
+              <c:pt idx="1"><c:v>2</c:v></c:pt>
+            </c:numCache></c:numRef></c:val></c:ser>
+            <c:ser><c:val><c:numRef><c:numCache>
+              <c:pt idx="2"><c:v>3</c:v></c:pt>
+            </c:numCache></c:numRef></c:val></c:ser>
+          </c:lineChart></c:plotArea></c:chart>
+        </c:chartSpace>
+        """
+    )
+
+    monkeypatch.setattr(xlsx_module, "MAX_CHART_SERIES", 1)
+    reader = XLSXReader()
+    reader._errors = []
+    assert reader._chart_series_table(chart_root).rows == []
+    assert reader._errors == ["ERR: XLSX chart series budget exceeded: 2 > 1 remaining"]
+
+    monkeypatch.setattr(xlsx_module, "MAX_CHART_SERIES", 2)
+    monkeypatch.setattr(xlsx_module, "MAX_CHART_POINTS", 2)
+    reader = XLSXReader()
+    reader._errors = []
+    assert reader._chart_series_table(chart_root).rows == []
+    assert reader._errors == ["ERR: XLSX chart point budget exceeded: 3 > 2 remaining"]
+
+
+def test_xlsx_chart_rejects_unbounded_or_invalid_point_indexes_before_int_conversion():
+    huge_index = "9" * 500_000
+    series = etree.fromstring(
+        f"""
+        <c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+          <c:val><c:numRef><c:numCache>
+            <c:pt idx="{huge_index}"><c:v>huge</c:v></c:pt>
+            <c:pt idx="4294967296"><c:v>overflow</c:v></c:pt>
+            <c:pt idx="-1"><c:v>negative</c:v></c:pt>
+            <c:pt idx="１２"><c:v>non-ascii</c:v></c:pt>
+            <c:pt><c:v>missing</c:v></c:pt>
+            <c:pt idx="4294967295"><c:v>valid</c:v></c:pt>
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        """.encode()
+    )
+    reader = XLSXReader()
+    reader._errors = []
+
+    points = reader._chart_points(series, "c:val")
+
+    assert points == {4294967295: "valid"}
+    assert reader._errors == ["ERR: XLSX chart point index is invalid"]
+
+
+def test_xlsx_honors_1900_and_1904_date_systems(tmp_path):
+    styles = """
+    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <cellXfs count="1"><xf numFmtId="14"/></cellXfs>
+    </styleSheet>
+    """
+    sheet = """
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData><row r="1"><c r="A1" s="0"><v>{serial}</v></c></row></sheetData>
+    </worksheet>
+    """
+
+    path_1900 = tmp_path / "dates-1900.xlsx"
+    _write_xlsx(
+        path_1900,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <workbookPr date1904="0"/>
+          <sheets><sheet name="Dates" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {"xl/worksheets/sheet1.xml": sheet.format(serial=1)},
+        styles_xml=styles,
+    )
+    assert XLSXReader().read(str(path_1900)).find_all("table")[0].rows[0][0].text == (
+        "1900-01-01"
+    )
+
+    path_1904 = tmp_path / "dates-1904.xlsx"
+    _write_xlsx(
+        path_1904,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <workbookPr date1904="true"/>
+          <sheets><sheet name="Dates" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {"xl/worksheets/sheet1.xml": sheet.format(serial=0)},
+        styles_xml=styles,
+    )
+    assert XLSXReader().read(str(path_1904)).find_all("table")[0].rows[0][0].text == (
+        "1904-01-01"
+    )
+
+
+def test_xlsx_preserves_excel_visible_fictitious_1900_leap_day():
+    reader = XLSXReader()
+    reader._errors = []
+    reader._date_1904 = False
+
+    assert reader._format_cell_value("59", "m/d/yy") == "1900-02-28"
+    assert reader._format_cell_value("60", "m/d/yy") == "1900-02-29"
+    assert reader._format_cell_value("60.5", "m/d/yy") == "1900-02-29"
+    assert reader._format_cell_value("61", "m/d/yy") == "1900-03-01"
+
+
+def test_xlsx_out_of_range_date_falls_back_to_raw_value(tmp_path):
+    path = tmp_path / "extreme-date.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Dates" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData><row r="1"><c r="A1" s="0"><v>1e308</v></c></row></sheetData>
+            </worksheet>
+            """
+        },
+        styles_xml="""
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <cellXfs count="1"><xf numFmtId="14"/></cellXfs>
+        </styleSheet>
+        """,
+    )
+
+    document = XLSXReader().read(str(path))
+
+    assert document.find_all("table")[0].rows[0][0].text == "1e308"
+    assert document.errors == [
+        "WARN: XLSX formatted numeric value is out of range: 1e308"
+    ]
+
+
+def test_dochan_routes_ooxml_by_package_content_before_extension(tmp_path):
+    path = tmp_path / "workbook.docx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Actual XLSX</t></is></c></row></sheetData>
+            </worksheet>
+            """
+        },
+    )
+
+    document = Dochan(str(path)).doc
+
+    assert document.source_format == "xlsx"
+    assert document.find_all("table")[0].rows[0][0].text == "Actual XLSX"
+    assert document.errors == []
+
+
+def test_dochan_rejects_ooxml_polyglot_with_multiple_main_parts(tmp_path):
+    path = tmp_path / "polyglot.xlsx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", "<document/>")
+        archive.writestr("xl/workbook.xml", "<workbook/>")
+
+    document = Dochan(str(path)).doc
+
+    assert document.sections == []
+    assert document.errors == ["ERR: 모호한 OOXML 파일 형식"]
+
+
+def test_dochan_rejects_hwpx_ooxml_polyglot(tmp_path):
+    path = tmp_path / "polyglot.hwpx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/hwp+zip")
+        archive.writestr("word/document.xml", "<document/>")
+        archive.writestr("Contents/section0.xml", "<section/>")
+
+    document = Dochan(str(path)).doc
+
+    assert document.sections == []
+    assert document.errors == ["ERR: 모호한 ZIP 문서 형식"]
+
+
+def test_malformed_known_ooxml_extension_uses_its_reader_error_contract(tmp_path):
+    path = tmp_path / "malformed.xlsx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("junk.txt", "not a workbook")
+
+    document = Dochan(str(path)).doc
+
+    assert document.source_format == "xlsx"
+    assert document.sections == []
+    assert document.errors
+    assert all("HWPX" not in error for error in document.errors)
+
+
+def test_extensionless_hwpx_routes_only_with_standard_mimetype(tmp_path):
+    path = tmp_path / "document"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/hwp+zip")
+        archive.writestr(
+            "Contents/section0.xml",
+            "<section><p><run><t>HWPX</t></run></p></section>",
+        )
+
+    document = Dochan(str(path)).doc
+
+    assert document.source_format == "hwpx"
+    assert document.sections[0].elements[0].text == "HWPX"
 
 
 def test_reads_xlsx_sparse_rows_and_columns_by_cell_references(tmp_path):

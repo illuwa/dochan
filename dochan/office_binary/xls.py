@@ -3,7 +3,7 @@ from datetime import date, timedelta
 import re
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import olefile
 
@@ -11,6 +11,15 @@ from .structure import is_encrypted_container
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
+from ..utils.bounded_io import (
+    BoundedIOError,
+    ByteBudget,
+    MAX_OLE_DOCUMENT_SIZE,
+    MAX_OLE_STREAM_SIZE,
+    ResourceLimitError,
+    read_ole_stream,
+    validate_file_size,
+)
 
 # BIFF 의 DIMENSION/ROW 레코드는 생성기가 주장하는 값이라 신뢰할 수 없다.
 # 그대로 믿으면 1KB 파일로 수천만 셀을 만들게 된다. 다만 실제 셀이 뒷받침하는 격자는
@@ -38,15 +47,82 @@ class _SheetInfo:
     header: str = ""
     footer: str = ""
     merged_ranges: List[Tuple[int, int, int, int]] = field(default_factory=list)
+    merged_cell_work: int = 0
     row_indices: Set[int] = field(default_factory=set)
     col_indices: Set[int] = field(default_factory=set)
     dimension: Optional[Tuple[int, int, int, int]] = None
+    errors: List[str] = field(default_factory=list)
 
 
 @dataclass
 class _DefinedName:
     name: str
     tokens: bytes = b""
+
+
+MAX_BIFF_ROWS = 65536
+MAX_BIFF_COLUMNS = 256
+MAX_BIFF_RANGE_CELLS = 200000
+MAX_BIFF_DENSE_CELLS = 200000
+
+
+def _valid_biff_range(first_row: int, last_row: int, first_col: int, last_col: int) -> bool:
+    return (
+        0 <= first_row <= last_row < MAX_BIFF_ROWS
+        and 0 <= first_col <= last_col < MAX_BIFF_COLUMNS
+    )
+
+
+def _biff_range_area(first_row: int, last_row: int, first_col: int, last_col: int) -> int:
+    return (last_row - first_row + 1) * (last_col - first_col + 1)
+
+
+def _append_sheet_error_once(sheet: _SheetInfo, message: str) -> None:
+    if message not in sheet.errors:
+        sheet.errors.append(message)
+
+
+def _reserve_sheet_cells(
+    sheet: _SheetInfo,
+    coordinates: Iterable[Tuple[int, int]],
+    context: str,
+) -> bool:
+    new_cell_count = 0
+    for row, col in coordinates:
+        if not _valid_biff_range(row, row, col, col):
+            _append_sheet_error_once(
+                sheet,
+                f"ERR: XLS {context} cell out of bounds: row={row}, col={col}",
+            )
+            return False
+        if (row, col) in sheet.cells:
+            continue
+        new_cell_count += 1
+        if len(sheet.cells) + new_cell_count > MAX_BIFF_DENSE_CELLS:
+            _append_sheet_error_once(
+                sheet,
+                "ERR: XLS cell limit exceeded: "
+                f"{len(sheet.cells) + new_cell_count} > {MAX_BIFF_DENSE_CELLS}",
+            )
+            return False
+    return True
+
+
+def _set_sheet_cell(
+    sheet: _SheetInfo,
+    row: int,
+    col: int,
+    value: str,
+    context: str,
+    *,
+    overwrite: bool = True,
+) -> bool:
+    coordinate = (row, col)
+    if not _reserve_sheet_cells(sheet, (coordinate,), context):
+        return False
+    if overwrite or coordinate not in sheet.cells:
+        sheet.cells[coordinate] = value
+    return True
 
 
 def _cell_ref(row: int, col: int) -> str:
@@ -369,6 +445,7 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
         if table.rows:
             section.elements.append(table)
         doc.sections.append(section)
+        doc.errors.extend(sheet.errors)
 
     return doc
 
@@ -607,38 +684,81 @@ def _parse_sheet_records(
             row, col, ixfe, sst_index = struct.unpack_from("<HHHI", record_data, 0)
             _capture_font(row, col, ixfe)
             try:
-                sheet.cells[(row, col)] = shared_strings[sst_index]
+                value = shared_strings[sst_index]
             except IndexError:
-                sheet.cells[(row, col)] = ""
+                value = ""
+            _set_sheet_cell(sheet, row, col, value, "LABELSST")
         elif record_type == 0x0204 and len(record_data) >= 8:  # LABEL
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, ixfe = struct.unpack_from("<HHH", record_data, 0)
             _capture_font(row, col, ixfe)
-            sheet.cells[(row, col)] = _read_biff8_label_text(record_data, 6)
+            _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _read_biff8_label_text(record_data, 6),
+                "LABEL",
+            )
         elif record_type == 0x0004 and len(record_data) >= 7:  # BIFF2/3/4 LABEL
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, _ = struct.unpack_from("<HHH", record_data, 0)
-            sheet.cells[(row, col)] = _read_biff_label_text(record_data, 6)
+            _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _read_biff_label_text(record_data, 6),
+                "LABEL",
+            )
         elif record_type == 0x00D6 and len(record_data) >= 9:  # RSTRING
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, ixfe = struct.unpack_from("<HHH", record_data, 0)
             _capture_font(row, col, ixfe)
-            sheet.cells[(row, col)] = _read_biff8_label_text(record_data, 6)
+            _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _read_biff8_label_text(record_data, 6),
+                "RSTRING",
+            )
         elif record_type in (0x0201, 0x0001) and len(record_data) >= 6:  # BLANK
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, _ = struct.unpack_from("<HHH", record_data, 0)
-            sheet.cells.setdefault((row, col), "")
+            _set_sheet_cell(sheet, row, col, "", "BLANK", overwrite=False)
         elif record_type == 0x00BE and len(record_data) >= 8:  # MULBLANK
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, first_col = struct.unpack_from("<HH", record_data, 0)
             last_col = struct.unpack_from("<H", record_data, len(record_data) - 2)[0]
+            xf_payload_size = len(record_data) - 6
+            if xf_payload_size % 2:
+                sheet.errors.append(
+                    f"ERR: XLS MULBLANK malformed XF payload size: {xf_payload_size}"
+                )
+                continue
+            xf_count = xf_payload_size // 2
+            declared_count = last_col - first_col + 1 if last_col >= first_col else 0
+            valid_range = _valid_biff_range(row, row, first_col, last_col)
+            if not valid_range:
+                sheet.errors.append(
+                    "ERR: XLS MULBLANK range out of bounds: "
+                    f"row={row}, cols={first_col}:{last_col}"
+                )
+            if declared_count != xf_count:
+                sheet.errors.append(
+                    "ERR: XLS MULBLANK XF count mismatch: "
+                    f"columns={declared_count}, xfs={xf_count}"
+                )
+            if not valid_range or declared_count != xf_count:
+                continue
+            coordinates = ((row, col) for col in range(first_col, last_col + 1))
+            if not _reserve_sheet_cells(sheet, coordinates, "MULBLANK"):
+                continue
             for col in range(first_col, last_col + 1):
-                sheet.cells.setdefault((row, col), "")
+                _set_sheet_cell(sheet, row, col, "", "MULBLANK", overwrite=False)
         elif record_type == 0x0208 and len(record_data) >= 2:  # ROW
             pending_formula_cell = None
             pending_shared_formula_anchor = None
@@ -648,6 +768,11 @@ def _parse_sheet_records(
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             first_col, last_col = struct.unpack_from("<HH", record_data, 0)
+            if not _valid_biff_range(0, 0, first_col, last_col):
+                sheet.errors.append(
+                    f"ERR: XLS COLINFO range out of bounds: {first_col}:{last_col}"
+                )
+                continue
             for col in range(first_col, last_col + 1):
                 sheet.col_indices.add(col)
         elif record_type == 0x0200 and len(record_data) >= 8:  # DIMENSION
@@ -658,8 +783,18 @@ def _parse_sheet_records(
                 first_row, last_row, first_col, last_col = struct.unpack_from("<IIHH", record_data, 0)
             else:
                 first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", record_data, 0)
-            if first_row < last_row and first_col < last_col:
+            if first_row == last_row == first_col == last_col == 0:
+                sheet.dimension = None
+            elif (
+                first_row < last_row <= MAX_BIFF_ROWS
+                and first_col < last_col <= MAX_BIFF_COLUMNS
+            ):
                 sheet.dimension = (first_row, last_row, first_col, last_col)
+            else:
+                sheet.errors.append(
+                    "ERR: XLS DIMENSION range out of bounds: "
+                    f"rows={first_row}:{last_row}, cols={first_col}:{last_col}"
+                )
         elif record_type == 0x0014:  # HEADER
             pending_formula_cell = None
             pending_shared_formula_anchor = None
@@ -674,45 +809,86 @@ def _parse_sheet_records(
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
             _capture_font(row, col, xf_index)
             value = struct.unpack_from("<d", record_data, 6)[0]
-            sheet.cells[(row, col)] = _format_number_with_format(
-                value,
-                _format_for_xf(xf_index, formats, xf_formats),
-                date_1904=date_1904,
+            _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _format_number_with_format(
+                    value,
+                    _format_for_xf(xf_index, formats, xf_formats),
+                    date_1904=date_1904,
+                ),
+                "NUMBER",
             )
         elif record_type == 0x0002 and len(record_data) >= 8:  # INTEGER
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, xf_index, value = struct.unpack_from("<HHHH", record_data, 0)
-            sheet.cells[(row, col)] = _format_number_with_format(
-                float(value),
-                _format_for_xf(xf_index, formats, xf_formats),
-                date_1904=date_1904,
+            _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _format_number_with_format(
+                    float(value),
+                    _format_for_xf(xf_index, formats, xf_formats),
+                    date_1904=date_1904,
+                ),
+                "INTEGER",
             )
         elif record_type == 0x027E and len(record_data) >= 10:  # RK
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, xf_index, raw = struct.unpack_from("<HHHI", record_data, 0)
             value = _decode_rk(raw)
-            sheet.cells[(row, col)] = _format_number_with_format(
-                value,
-                _format_for_xf(xf_index, formats, xf_formats),
-                date_1904=date_1904,
+            _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _format_number_with_format(
+                    value,
+                    _format_for_xf(xf_index, formats, xf_formats),
+                    date_1904=date_1904,
+                ),
+                "RK",
             )
         elif record_type == 0x00BD and len(record_data) >= 10:  # MULRK
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, first_col = struct.unpack_from("<HH", record_data, 0)
             last_col = struct.unpack_from("<H", record_data, len(record_data) - 2)[0]
+            value_payload_size = len(record_data) - 6
+            value_count = value_payload_size // 6
+            declared_count = last_col - first_col + 1 if last_col >= first_col else 0
+            valid_range = _valid_biff_range(row, row, first_col, last_col)
+            if value_payload_size % 6 or declared_count != value_count:
+                sheet.errors.append(
+                    "ERR: XLS MULRK value count mismatch: "
+                    f"columns={declared_count}, values={value_count}"
+                )
+            if not valid_range:
+                sheet.errors.append(
+                    "ERR: XLS MULRK range out of bounds: "
+                    f"row={row}, cols={first_col}:{last_col}"
+                )
+            if value_payload_size % 6 or declared_count != value_count or not valid_range:
+                continue
+            coordinates = ((row, col) for col in range(first_col, last_col + 1))
+            if not _reserve_sheet_cells(sheet, coordinates, "MULRK"):
+                continue
             offset = 4
             for col in range(first_col, last_col + 1):
-                if offset + 6 > len(record_data) - 2:
-                    break
                 xf_index, raw = struct.unpack_from("<HI", record_data, offset)
                 value = _decode_rk(raw)
-                sheet.cells[(row, col)] = _format_number_with_format(
-                    value,
-                    _format_for_xf(xf_index, formats, xf_formats),
-                    date_1904=date_1904,
+                _set_sheet_cell(
+                    sheet,
+                    row,
+                    col,
+                    _format_number_with_format(
+                        value,
+                        _format_for_xf(xf_index, formats, xf_formats),
+                        date_1904=date_1904,
+                    ),
+                    "MULRK",
                 )
                 offset += 6
         elif record_type in (0x0205, 0x0005) and len(record_data) >= 8:  # BOOLERR
@@ -720,29 +896,45 @@ def _parse_sheet_records(
             pending_shared_formula_anchor = None
             row, col, _, value, is_error = struct.unpack_from("<HHHBB", record_data, 0)
             if is_error:
-                sheet.cells[(row, col)] = _format_biff_error(value)
+                formatted = _format_biff_error(value)
             else:
-                sheet.cells[(row, col)] = "TRUE" if value else "FALSE"
+                formatted = "TRUE" if value else "FALSE"
+            _set_sheet_cell(sheet, row, col, formatted, "BOOLERR")
         elif record_type == 0x0006 and len(record_data) >= 14:  # FORMULA cached number
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
             formatted = _decode_formula_cached_result(record_data, _format_for_xf(xf_index, formats, xf_formats))
             formula = _decode_formula_tokens(record_data, external_sheets, sheet_names, defined_names)
-            sheet.cells[(row, col)] = _with_formula_text(formatted, formula) if formula else formatted
+            if not _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                _with_formula_text(formatted, formula) if formula else formatted,
+                "FORMULA",
+            ):
+                pending_formula_cell = None
+                pending_shared_formula_anchor = None
+                continue
             formula_anchor = _formula_exp_anchor(record_data)
             if formula_anchor:
                 shared_formula_cells.setdefault(formula_anchor, []).append((row, col))
                 pending_shared_formula_anchor = formula_anchor
                 if formula_anchor in shared_formula_templates:
-                    sheet.cells[(row, col)] = _with_formula_text(
-                        formatted,
-                        _decode_shared_formula_for_cell(
-                            shared_formula_templates[formula_anchor],
-                            formula_anchor,
-                            (row, col),
-                            external_sheets,
-                            sheet_names,
-                            defined_names,
+                    _set_sheet_cell(
+                        sheet,
+                        row,
+                        col,
+                        _with_formula_text(
+                            formatted,
+                            _decode_shared_formula_for_cell(
+                                shared_formula_templates[formula_anchor],
+                                formula_anchor,
+                                (row, col),
+                                external_sheets,
+                                sheet_names,
+                                defined_names,
+                            ),
                         ),
+                        "shared FORMULA",
                     )
             else:
                 pending_shared_formula_anchor = None
@@ -750,23 +942,35 @@ def _parse_sheet_records(
             pending_formula_text = formula
         elif record_type in (0x0207, 0x0007) and pending_formula_cell is not None:  # STRING formula result
             value = _read_formula_string_result_text(record_type, record_data)
-            sheet.cells[pending_formula_cell] = f"{value} (={pending_formula_text})" if pending_formula_text else value
+            _set_sheet_cell(
+                sheet,
+                pending_formula_cell[0],
+                pending_formula_cell[1],
+                f"{value} (={pending_formula_text})" if pending_formula_text else value,
+                "STRING formula result",
+            )
             pending_formula_cell = None
         elif record_type == 0x04BC and pending_shared_formula_anchor is not None:  # SHRFMLA
             tokens = _shared_formula_tokens(record_data)
             if tokens:
                 shared_formula_templates[pending_shared_formula_anchor] = tokens
                 for cell in shared_formula_cells.get(pending_shared_formula_anchor, []):
-                    sheet.cells[cell] = _with_formula_text(
-                        sheet.cells.get(cell, ""),
-                        _decode_shared_formula_for_cell(
-                            tokens,
-                            pending_shared_formula_anchor,
-                            cell,
-                            external_sheets,
-                            sheet_names,
-                            defined_names,
+                    _set_sheet_cell(
+                        sheet,
+                        cell[0],
+                        cell[1],
+                        _with_formula_text(
+                            sheet.cells.get(cell, ""),
+                            _decode_shared_formula_for_cell(
+                                tokens,
+                                pending_shared_formula_anchor,
+                                cell,
+                                external_sheets,
+                                sheet_names,
+                                defined_names,
+                            ),
                         ),
+                        "shared FORMULA",
                     )
             pending_formula_cell = None
             pending_shared_formula_anchor = None
@@ -779,7 +983,30 @@ def _parse_sheet_records(
                 if offset + 8 > len(record_data):
                     break
                 first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", record_data, offset)
+                if not _valid_biff_range(first_row, last_row, first_col, last_col):
+                    sheet.errors.append("ERR: XLS merged range out of bounds")
+                    offset += 8
+                    continue
+                area = _biff_range_area(first_row, last_row, first_col, last_col)
+                if area > MAX_BIFF_RANGE_CELLS:
+                    sheet.errors.append(
+                        f"ERR: XLS range limit exceeded for merged cells: {area}"
+                    )
+                    offset += 8
+                    continue
+                cumulative_area = sheet.merged_cell_work + area
+                if cumulative_area > MAX_BIFF_RANGE_CELLS:
+                    _append_sheet_error_once(
+                        sheet,
+                        "ERR: XLS cumulative merged range limit exceeded: "
+                        f"{cumulative_area} > {MAX_BIFF_RANGE_CELLS}",
+                    )
+                    offset += 8
+                    continue
+                sheet.merged_cell_work = cumulative_area
                 sheet.merged_ranges.append((first_row, last_row, first_col, last_col))
+                sheet.row_indices.update((first_row, last_row))
+                sheet.col_indices.update((first_col, last_col))
                 range_fill_budget = _fill_cell_range(
                     sheet, first_row, last_row, first_col, last_col, range_fill_budget
                 )
@@ -789,26 +1016,48 @@ def _parse_sheet_records(
             pending_shared_formula_anchor = None
             first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", record_data, 0)
             url = _extract_hlink_url(record_data)
-            if url:
+            if not _valid_biff_range(first_row, last_row, first_col, last_col):
+                sheet.errors.append("ERR: XLS hyperlink range out of bounds")
+            elif url:
                 span = _range_span(first_row, last_row, first_col, last_col)
-                if 0 < span <= range_fill_budget:
-                    range_fill_budget -= span
-                    for row_idx in range(first_row, last_row + 1):
-                        for col_idx in range(first_col, last_col + 1):
+                area = _biff_range_area(first_row, last_row, first_col, last_col)
+                over_limit = area > MAX_BIFF_RANGE_CELLS
+                if not over_limit and 0 < span <= range_fill_budget:
+                    coordinates = [
+                        (row_idx, col_idx)
+                        for row_idx in range(first_row, last_row + 1)
+                        for col_idx in range(first_col, last_col + 1)
+                    ]
+                    if _reserve_sheet_cells(sheet, coordinates, "hyperlink"):
+                        range_fill_budget -= span
+                        for row_idx, col_idx in coordinates:
                             sheet.hyperlinks[(row_idx, col_idx)] = url
-                            sheet.cells.setdefault((row_idx, col_idx), "")
+                            _set_sheet_cell(
+                                sheet, row_idx, col_idx, "", "hyperlink", overwrite=False,
+                            )
                 elif span > 0:
-                    # 범위가 예산을 넘으면 앵커 한 칸에만 링크를 붙인다
+                    # 범위가 상한이나 예산을 넘으면 앵커 한 칸에만 링크를 붙인다.
+                    # 범위 자체는 sheet.merged_ranges 로 남으므로 정보를 잃지 않는다.
+                    if over_limit:
+                        sheet.errors.append("ERR: XLS range limit exceeded for hyperlink")
                     sheet.hyperlinks[(first_row, first_col)] = url
-                    sheet.cells.setdefault((first_row, first_col), "")
+                    _set_sheet_cell(
+                        sheet, first_row, first_col, "", "hyperlink", overwrite=False,
+                    )
         elif record_type == 0x001C and len(record_data) >= 11:  # NOTE
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col = struct.unpack_from("<HH", record_data, 0)
             author = _extract_note_author(record_data)
-            if author:
+            if author and _set_sheet_cell(
+                sheet,
+                row,
+                col,
+                "",
+                "NOTE",
+                overwrite=False,
+            ):
                 sheet.comments[(row, col)] = author
-                sheet.cells.setdefault((row, col), "")
 
 
 def has_filepass_record(data: bytes, scan_limit: int = 4096) -> bool:
@@ -1287,11 +1536,14 @@ def _sheet_to_table(
         first_row, last_row, first_col, last_col = sheet.dimension
         if last_row > first_row:
             max_row = max(max_row, last_row - 1)
+            sheet.row_indices.update((first_row, last_row - 1))
         if last_col > first_col:
             max_col = max(max_col, last_col - 1)
+            sheet.col_indices.update((first_col, last_col - 1))
 
     if max_row < 0 or max_col < 0:
         return Table()
+
 
     # 내용이 하나도 없는 큰 격자는 탭만 수십만 개인 표가 되어 출력 가치가 없다.
     # 작은 격자는 빈 좌표 보존을 위해 그대로 둔다.
@@ -1330,6 +1582,7 @@ def _sheet_to_table(
         _warn_truncated(errors, sheet, max_row, max_col)
     if max_row < 0 or max_col < 0:
         return Table()
+
     if budget is not None:
         budget[0] -= grid_size
 
@@ -1400,14 +1653,20 @@ class XLSReader:
     extensions = (".xls",)
 
     def read(self, file_path: str) -> Document:
+        doc = Document(source_format="xls")
+        try:
+            validate_file_size(file_path, MAX_OLE_DOCUMENT_SIZE)
+        except ResourceLimitError as exc:
+            doc.errors.append(f"ERR: XLS stream validation failed: {exc}")
+            return doc
+
         try:
             ole = olefile.OleFileIO(file_path)
         except Exception as exc:
-            doc = Document(source_format="xls")
             doc.errors.append(f"ERR: XLS OLE 파일 열기 실패: {exc}")
             return doc
 
-        doc = Document(source_format="xls")
+        stream_budget = ByteBudget(MAX_OLE_DOCUMENT_SIZE)
         try:
             if is_encrypted_container(ole):
                 doc.errors.append("ERR: XLS 암호로 보호된 문서입니다")
@@ -1421,7 +1680,12 @@ class XLSReader:
             best_score = None
             for stream_name in stream_names:
                 try:
-                    workbook_data = ole.openstream(stream_name).read()
+                    workbook_data = read_ole_stream(
+                        ole,
+                        stream_name,
+                        max_bytes=MAX_OLE_STREAM_SIZE,
+                        budget=stream_budget,
+                    )
                     if has_filepass_record(workbook_data):
                         doc.errors.append(
                             f"ERR: XLS {stream_name} 은 암호로 보호되어 있습니다 (FILEPASS)"
@@ -1432,6 +1696,12 @@ class XLSReader:
                     if best_document is None or score > best_score:
                         best_document = candidate
                         best_score = score
+                except BoundedIOError as exc:
+                    fatal_doc = Document(source_format="xls")
+                    fatal_doc.errors.append(
+                        f"ERR: XLS stream validation failed: {exc}"
+                    )
+                    return fatal_doc
                 except Exception as exc:
                     doc.errors.append(f"ERR: XLS {stream_name} stream 처리 실패: {exc}")
                     continue

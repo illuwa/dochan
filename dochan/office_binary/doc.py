@@ -6,6 +6,15 @@ from typing import List, Optional
 import olefile
 
 from ..model.document import Document
+from ..utils.bounded_io import (
+    BoundedIOError,
+    ByteBudget,
+    MAX_OLE_DOCUMENT_SIZE,
+    MAX_OLE_STREAM_SIZE,
+    ResourceLimitError,
+    read_ole_stream,
+    validate_file_size,
+)
 from .structure import build_structured_section, is_encrypted_container
 
 SECTION_BREAK = "\u241c"
@@ -287,14 +296,20 @@ class DOCReader:
         return bool(flags & 0x0100)
 
     def read(self, file_path: str) -> Document:
+        doc = Document(source_format="doc")
+        try:
+            validate_file_size(file_path, MAX_OLE_DOCUMENT_SIZE)
+        except ResourceLimitError as exc:
+            doc.errors.append(f"ERR: DOC stream validation failed: {exc}")
+            return doc
+
         try:
             ole = olefile.OleFileIO(file_path)
         except Exception as exc:
-            doc = Document(source_format="doc")
             doc.errors.append(f"ERR: DOC OLE 파일 열기 실패: {exc}")
             return doc
 
-        doc = Document(source_format="doc")
+        stream_budget = ByteBudget(MAX_OLE_DOCUMENT_SIZE)
         try:
             if is_encrypted_container(ole):
                 doc.errors.append("ERR: DOC 암호로 보호된 문서입니다")
@@ -303,7 +318,15 @@ class DOCReader:
                 doc.errors.append("ERR: DOC WordDocument stream not found")
                 return doc
             try:
-                word_data = ole.openstream("WordDocument").read()
+                word_data = read_ole_stream(
+                    ole,
+                    "WordDocument",
+                    max_bytes=MAX_OLE_STREAM_SIZE,
+                    budget=stream_budget,
+                )
+            except BoundedIOError as exc:
+                doc.errors.append(f"ERR: DOC stream validation failed: {exc}")
+                return doc
             except Exception as exc:
                 doc.errors.append(f"ERR: DOC WordDocument stream read 실패: {exc}")
                 return doc
@@ -326,7 +349,18 @@ class DOCReader:
 
             for table_name in self._table_stream_names(ole, word_data):
                 try:
-                    candidate = ole.openstream(table_name).read()
+                    candidate = read_ole_stream(
+                        ole,
+                        table_name,
+                        max_bytes=MAX_OLE_STREAM_SIZE,
+                        budget=stream_budget,
+                    )
+                except BoundedIOError as exc:
+                    fatal_doc = Document(source_format="doc")
+                    fatal_doc.errors.append(
+                        f"ERR: DOC stream validation failed: {exc}"
+                    )
+                    return fatal_doc
                 except Exception as exc:
                     doc.errors.append(f"ERR: DOC {table_name} stream read 실패: {exc}")
                     continue

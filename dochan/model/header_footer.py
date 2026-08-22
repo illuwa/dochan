@@ -1,6 +1,6 @@
-"""HeaderFooter / Footnote model"""
+"""Header/footer and note models."""
 from dataclasses import dataclass, field
-from typing import List
+from typing import Optional
 
 from .table import flatten_block_texts
 
@@ -26,3 +26,10 @@ class Footnote:
     @property
     def text(self) -> str:
         return '\n'.join(flatten_block_texts(self.paragraphs))
+
+
+@dataclass
+class Comment(Footnote):
+    """DOCX 주석. 문서 순서 번호와 작성자를 함께 담는다."""
+    type: str = "comment"
+    author: str = ""

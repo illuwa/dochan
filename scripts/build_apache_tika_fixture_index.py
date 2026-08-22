@@ -1,12 +1,21 @@
 """Build a JSON fixture index from Apache Tika OOXML test documents."""
 import argparse
 import json
+import re
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List
+from urllib.parse import unquote, urlsplit
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.download_public_ooxml_corpus import atomic_write_text  # noqa: E402
 
 
-APACHE_TIKA_BRANCH = "main"
+APACHE_TIKA_BRANCH = "cf9c2c8660f9af82701d89c1824a190556774db0"
 APACHE_TIKA_LICENSE = "Apache-2.0"
 APACHE_TIKA_LICENSE_URL = "https://www.apache.org/licenses/LICENSE-2.0.txt"
 APACHE_TIKA_REPO = "apache/tika"
@@ -17,7 +26,13 @@ APACHE_TIKA_TEST_DOCUMENTS_DIR = (
 
 
 def fetch_github_directory(url: str) -> List[dict]:
-    with urllib.request.urlopen(url, timeout=30) as response:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != "api.github.com":
+        raise ValueError("Apache Tika fixture index URL must use the GitHub HTTPS API")
+    with urllib.request.urlopen(  # nosemgrep: dynamic-urllib-use-detected
+        url,
+        timeout=30,
+    ) as response:
         return json.load(response)
 
 
@@ -31,12 +46,20 @@ def build_apache_tika_fixture_index(
     directory: str = APACHE_TIKA_TEST_DOCUMENTS_DIR,
     fetch_directory: Callable[[str], List[dict]] = fetch_github_directory,
 ) -> dict:
+    _validate_immutable_revision(branch)
     requested = {fmt.lower().lstrip(".") for fmt in formats}
     url = github_contents_url(directory, branch)
     fixtures = [
         fixture
         for entry in fetch_directory(url)
-        for fixture in [apache_tika_entry_to_fixture(entry, requested, directory)]
+        for fixture in [
+            apache_tika_entry_to_fixture(
+                entry,
+                requested,
+                directory,
+                source_revision=branch,
+            )
+        ]
         if fixture
     ]
     return {
@@ -48,7 +71,12 @@ def build_apache_tika_fixture_index(
     }
 
 
-def apache_tika_entry_to_fixture(entry: dict, active_formats: Iterable[str], directory: str) -> dict:
+def apache_tika_entry_to_fixture(
+    entry: dict,
+    active_formats: Iterable[str],
+    directory: str,
+    source_revision: str = APACHE_TIKA_BRANCH,
+) -> dict:
     name = str(entry.get("name", ""))
     file_format = Path(name).suffix.lower().lstrip(".")
     if file_format not in set(active_formats):
@@ -58,6 +86,8 @@ def apache_tika_entry_to_fixture(entry: dict, active_formats: Iterable[str], dir
     download_url = entry.get("download_url")
     if not download_url:
         return {}
+    _validate_immutable_revision(source_revision)
+    _validate_download_url(download_url, source_revision, directory, name)
     source_name = f"{directory}/{name}"
     return {
         "name": name,
@@ -65,9 +95,38 @@ def apache_tika_entry_to_fixture(entry: dict, active_formats: Iterable[str], dir
         "format": file_format,
         "url": download_url,
         "source": APACHE_TIKA_REPO,
+        "source_revision": source_revision,
         "license": APACHE_TIKA_LICENSE,
         "license_url": APACHE_TIKA_LICENSE_URL,
     }
+
+
+def _validate_immutable_revision(revision: str) -> None:
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError("Apache Tika source revision must be an immutable 40-character commit")
+
+
+def _validate_download_url(
+    url: str,
+    revision: str,
+    directory: str,
+    name: str,
+) -> None:
+    parsed = urlsplit(str(url))
+    expected_prefix = "/apache/tika/{}/".format(revision)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "raw.githubusercontent.com"
+        or not unquote(parsed.path).startswith(expected_prefix)
+    ):
+        raise ValueError("Apache Tika download URL does not match its source revision")
+    expected_path = "/apache/tika/{}/{}/{}".format(
+        revision,
+        directory.strip("/"),
+        name,
+    )
+    if unquote(parsed.path) != expected_path or parsed.query or parsed.fragment:
+        raise ValueError("Apache Tika download URL does not match its source path")
 
 
 def fixture_counts(fixtures: Iterable[dict]) -> Dict[str, int]:
@@ -87,8 +146,10 @@ def main() -> int:
 
     formats = [item.strip() for item in args.formats.split(",") if item.strip()]
     index = build_apache_tika_fixture_index(formats=formats, branch=args.branch, directory=args.directory)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(
+        args.output,
+        json.dumps(index, ensure_ascii=False, indent=2) + "\n",
+    )
     print(json.dumps({"output": str(args.output), "counts": index["counts"]}, ensure_ascii=False, indent=2))
     return 0
 

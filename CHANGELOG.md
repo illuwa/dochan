@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+- Hardened HWP/HWPX and Office parsers with bounded decompression, archive,
+  XML, structure-depth, table, range, and cell-allocation limits.
+- Fixed batch output collisions, fatal-error exit status, atomic publishing,
+  note references, structured provenance/OCR output, and cross-validation
+  scoring for unavailable sources.
+- Made public fixture inputs immutable and competitor runs version-traceable
+  with pinned upstream revisions and top-level converters, integrity metadata,
+  download limits, and resolved dependency inventories.
+- Added locked Python 3.9–3.13 release tests, dependency/SAST/secret gates,
+  tag-to-wheel version verification, and reproducible release documentation.
+
 ## [1.3.0] - 2026-08-09
 
 네이티브 PDF 리더(텍스트·표준 암호화·이미지 OCR·글리프 폭 레이아웃), 크로스

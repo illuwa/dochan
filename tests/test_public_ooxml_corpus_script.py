@@ -1,13 +1,23 @@
+import hashlib
+import io
 import json
+import re
+
+import pytest
 
 import scripts.download_public_ooxml_corpus as corpus_script
 from scripts.download_public_ooxml_corpus import (
+    APACHE_POI_PROBE_MANIFEST_VERSION,
     PUBLIC_OOXML_EXPECTATIONS,
     PUBLIC_OOXML_FIXTURES,
+    apache_poi_fixture_id,
+    apache_poi_fixture_source_id,
+    atomic_write_text,
     download_corpus,
     load_fixture_index,
     load_apache_poi_probe_manifest,
     record_apache_poi_probe_manifest,
+    record_probe_outcome,
     selected_fixtures,
     select_unseen_apache_poi_fixtures,
     write_expected_manifest,
@@ -63,6 +73,15 @@ def test_public_ooxml_fixtures_cover_docx_pptx_and_xlsx_with_licenses():
     }.issubset(names)
 
 
+def test_builtin_fixture_sources_and_integrity_are_immutable():
+    for fixture in PUBLIC_OOXML_FIXTURES:
+        revision = fixture["source_revision"]
+        assert re.fullmatch(r"[0-9a-f]{40}", revision)
+        assert "/{}/".format(revision) in fixture["url"]
+        assert isinstance(fixture["bytes"], int) and fixture["bytes"] > 0
+        assert re.fullmatch(r"[0-9a-f]{64}", fixture["sha256"])
+
+
 def test_selected_fixtures_filters_formats_without_losing_order():
     fixtures = selected_fixtures(["xlsx", "docx"])
 
@@ -72,6 +91,10 @@ def test_selected_fixtures_filters_formats_without_losing_order():
         for fixture in PUBLIC_OOXML_FIXTURES
         if fixture["format"] in {"xlsx", "docx"}
     ]
+
+
+def test_selected_fixtures_preserves_an_explicit_empty_fixture_index():
+    assert selected_fixtures(["docx"], fixtures=[]) == []
 
 
 def test_public_ooxml_expectations_cover_selected_semantic_fixtures():
@@ -141,7 +164,7 @@ def test_public_ooxml_expectations_cover_selected_semantic_fixtures():
     assert "![image](word/media/image1.emf)" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-embedded-document.docx"]["expected_markdown"]
     assert "word/embeddings/Microsoft_Office_Excel_97-2003_Worksheet1.xls" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-embedded-document.docx"]["expected_assets"]
     assert "word/media/image1.emf" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-embedded-document.docx"]["expected_assets"]
-    assert "Eto ochen prostoy<sup>[1]</sup> text so snoskoy" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-footnotes.docx"]["expected_text"]
+    assert "Eto ochen prostoy[^1] text so snoskoy" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-footnotes.docx"]["expected_text"]
     assert "# Test Document" in PUBLIC_OOXML_EXPECTATIONS["docx/apache-poi-sample.docx"]["expected_markdown"]
     assert "# Comprehensive Test Document" in PUBLIC_OOXML_EXPECTATIONS["docx/doxx-comprehensive.docx"]["expected_markdown"]
     assert ["Product", "Quantity", "Price"] in PUBLIC_OOXML_EXPECTATIONS["docx/doxx-comprehensive.docx"]["expected_tables"][0]
@@ -207,6 +230,19 @@ def test_write_expected_manifest_filters_to_downloaded_records(tmp_path):
     ]
 
 
+def test_write_expected_manifest_atomically_replaces_stale_data_with_empty_object(tmp_path):
+    manifest = tmp_path / "expected.json"
+    manifest.write_text(
+        json.dumps({"docx/stale.docx": {"expected_text": ["stale"]}}),
+        encoding="utf-8",
+    )
+
+    write_expected_manifest(tmp_path, [{"path": "docx/current.docx"}])
+
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {}
+    assert list(tmp_path.glob(".expected.json.*.tmp")) == []
+
+
 def test_select_unseen_apache_poi_fixtures_skips_manifested_ids_per_format():
     candidates = [
         {"name": "a.docx", "format": "docx", "source_name": "a.docx"},
@@ -229,6 +265,195 @@ def test_select_unseen_apache_poi_fixtures_skips_manifested_ids_per_format():
     assert [item["source_name"] for item in selected] == ["b.docx", "b.pptx"]
 
 
+def test_fixture_identity_changes_with_revision_and_content_digest():
+    fixture = {
+        "name": "same.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/same.docx",
+        "source_revision": "1" * 40,
+        "sha256": "a" * 64,
+    }
+
+    original = apache_poi_fixture_id(fixture)
+    revised = apache_poi_fixture_id({**fixture, "source_revision": "2" * 40})
+    changed_content = apache_poi_fixture_id({**fixture, "sha256": "b" * 64})
+
+    assert original.startswith("v2:")
+    assert len({original, revised, changed_content}) == 3
+
+
+def test_fixture_identity_rejects_a_spoofed_recorded_id():
+    fixture = {
+        "name": "same.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/same.docx",
+        "source_revision": "1" * 40,
+        "sha256": "a" * 64,
+        "fixture_id": "v2:" + "0" * 64,
+    }
+
+    with pytest.raises(ValueError, match="fixture_id"):
+        apache_poi_fixture_id(fixture)
+
+
+def test_fixture_index_rejects_a_recorded_id_without_content_digest(tmp_path):
+    fixture = {
+        "name": "same.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/same.docx",
+        "source_revision": "1" * 40,
+        "fixture_id": "v2:" + "0" * 64,
+    }
+    fixture_index = tmp_path / "fixtures.json"
+    fixture_index.write_text(json.dumps([fixture]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sha256-backed"):
+        load_fixture_index(fixture_index)
+
+
+def test_legacy_manifest_does_not_hide_a_new_immutable_revision(tmp_path):
+    manifest_path = tmp_path / "legacy.json"
+    manifest_path.write_text(
+        json.dumps({"version": 1, "used": {"docx": ["same.docx"]}, "probes": []}),
+        encoding="utf-8",
+    )
+    candidate = {
+        "name": "same.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "same.docx",
+        "source_revision": "1" * 40,
+    }
+
+    manifest = load_apache_poi_probe_manifest(manifest_path)
+    selected = select_unseen_apache_poi_fixtures(
+        [candidate], ["docx"], per_format=1, manifest=manifest
+    )
+
+    assert manifest["version"] == APACHE_POI_PROBE_MANIFEST_VERSION
+    assert manifest["legacy_used"] == {"docx": ["same.docx"]}
+    assert selected == [candidate]
+
+
+def test_v2_manifest_reprobes_once_to_migrate_to_content_and_source_identity(
+    tmp_path,
+):
+    manifest_path = tmp_path / "v2.json"
+    candidate = {
+        "name": "same.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/same.docx",
+        "source_revision": "1" * 40,
+    }
+    old_pre_download_id = apache_poi_fixture_id(candidate)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "used": {"docx": [old_pre_download_id]},
+                "legacy_used": {},
+                "probes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_apache_poi_probe_manifest(manifest_path)
+
+    assert manifest["version"] == APACHE_POI_PROBE_MANIFEST_VERSION
+    assert manifest["used"] == {}
+    assert manifest["used_sources"] == {}
+    assert manifest["legacy_used"] == {"docx": [old_pre_download_id]}
+    assert select_unseen_apache_poi_fixtures(
+        [candidate], ["docx"], per_format=1, manifest=manifest
+    ) == [candidate]
+
+
+@pytest.mark.parametrize("version", [0, APACHE_POI_PROBE_MANIFEST_VERSION + 1])
+def test_probe_manifest_rejects_unsupported_versions(tmp_path, version):
+    manifest_path = tmp_path / "unsupported.json"
+    manifest_path.write_text(
+        json.dumps({"version": version, "used": {}, "probes": []}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="version"):
+        load_apache_poi_probe_manifest(manifest_path)
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0, "1"])
+def test_probe_manifest_rejects_non_integer_version_types(tmp_path, version):
+    manifest_path = tmp_path / "invalid-version.json"
+    manifest_path.write_text(
+        json.dumps({"version": version, "used": {}, "probes": []}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="version must be an integer"):
+        load_apache_poi_probe_manifest(manifest_path)
+
+
+@pytest.mark.parametrize("probes", [{}, "probe", ["probe"], [None]])
+def test_probe_manifest_rejects_malformed_probe_lists(tmp_path, probes):
+    manifest_path = tmp_path / "invalid-probes.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "version": APACHE_POI_PROBE_MANIFEST_VERSION,
+                "used": {},
+                "probes": probes,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="probes"):
+        load_apache_poi_probe_manifest(manifest_path)
+
+
+def test_successful_content_identity_uses_source_key_to_skip_only_same_revision(
+    tmp_path,
+):
+    manifest_path = tmp_path / "probe.json"
+    candidate = {
+        "name": "same.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/same.docx",
+        "source_revision": "1" * 40,
+    }
+    record = {
+        **candidate,
+        "identity_sha256": "a" * 64,
+        "sha256": "a" * 64,
+        "path": "docx/same.docx",
+    }
+    record["fixture_id"] = apache_poi_fixture_id(record)
+
+    manifest = record_probe_outcome(
+        manifest_path,
+        [record],
+        "complete",
+        successful_records=[record],
+    )
+
+    assert manifest["used"] == {"docx": [record["fixture_id"]]}
+    assert manifest["used_sources"] == {
+        "docx": [apache_poi_fixture_source_id(candidate)]
+    }
+    assert select_unseen_apache_poi_fixtures(
+        [candidate], ["docx"], per_format=1, manifest=manifest
+    ) == []
+    revised = {**candidate, "source_revision": "2" * 40}
+    assert select_unseen_apache_poi_fixtures(
+        [revised], ["docx"], per_format=1, manifest=manifest
+    ) == [revised]
+
+
 def test_record_apache_poi_probe_manifest_persists_used_ids_and_probe_files(tmp_path):
     manifest_path = tmp_path / "apache-poi-probe-manifest.json"
     first_records = [
@@ -244,14 +469,78 @@ def test_record_apache_poi_probe_manifest_persists_used_ids_and_probe_files(tmp_
     reloaded = load_apache_poi_probe_manifest(manifest_path)
 
     assert manifest == reloaded
+    assert reloaded["version"] == APACHE_POI_PROBE_MANIFEST_VERSION
     assert reloaded["used"] == {
-        "docx": ["first.docx", "second.docx"],
-        "xlsx": ["first.xlsx"],
+        "docx": sorted(apache_poi_fixture_id(record) for record in first_records[:1] + second_records),
+        "xlsx": [apache_poi_fixture_id(first_records[1])],
     }
     assert [probe["name"] for probe in reloaded["probes"]] == ["probe-1", "probe-2"]
     assert reloaded["probes"][0]["files"] == [
-        {"format": "docx", "id": "first.docx", "path": "docx/first.docx"},
-        {"format": "xlsx", "id": "first.xlsx", "path": ""},
+        {
+            "format": "docx",
+            "id": apache_poi_fixture_id(first_records[0]),
+            "path": "docx/first.docx",
+            "status": "success",
+        },
+        {
+            "format": "xlsx",
+            "id": apache_poi_fixture_id(first_records[1]),
+            "path": "",
+            "status": "success",
+        },
+    ]
+
+
+def test_record_probe_outcome_records_all_files_but_retries_failed_and_invalid(tmp_path):
+    manifest_path = tmp_path / "probe.json"
+    records = [
+        {
+            "format": "docx",
+            "name": "good.docx",
+            "source": "owner/repo",
+            "source_name": "good.docx",
+            "source_revision": "1" * 40,
+            "sha256": "a" * 64,
+            "path": "docx/good.docx",
+        },
+        {
+            "format": "docx",
+            "name": "failed.docx",
+            "source": "owner/repo",
+            "source_name": "failed.docx",
+            "source_revision": "1" * 40,
+            "sha256": "b" * 64,
+            "path": "docx/failed.docx",
+        },
+        {
+            "format": "docx",
+            "name": "invalid.docx",
+            "source": "owner/repo",
+            "source_name": "invalid.docx",
+            "source_revision": "1" * 40,
+            "sha256": "c" * 64,
+            "path": "docx/invalid.docx",
+        },
+    ]
+
+    manifest = record_probe_outcome(
+        manifest_path,
+        records,
+        "mixed",
+        successful_records=[records[0]],
+        invalid=[{"path": records[2]["path"], "error": "bad ZIP"}],
+        failure_reasons=["invalid OOXML archives: 1", "benchmark failed"],
+    )
+
+    assert manifest["used"] == {"docx": [apache_poi_fixture_id(records[0])]}
+    assert [item["status"] for item in manifest["probes"][-1]["files"]] == [
+        "failed",
+        "success",
+        "invalid",
+    ]
+    assert manifest["probes"][-1]["failure_reasons"] == [
+        "invalid OOXML archives: 1",
+        "benchmark failed",
     ]
 
 
@@ -263,6 +552,312 @@ def test_load_fixture_index_accepts_top_level_list_and_fixtures_object(tmp_path)
 
     assert load_fixture_index(list_path) == [{"name": "a.docx", "format": "docx"}]
     assert load_fixture_index(object_path) == [{"name": "b.xlsx", "format": "xlsx"}]
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    [
+        {"name": "unsupported.pdf", "format": "pdf"},
+        {"name": "", "format": "docx"},
+        {"name": "/tmp/absolute.docx", "format": "docx"},
+        {"name": "../traversal.docx", "format": "docx"},
+        {"name": "nested/fixture.docx", "format": "docx"},
+        {"name": r"nested\fixture.docx", "format": "docx"},
+    ],
+    ids=["format", "empty", "absolute", "parent", "slash", "backslash"],
+)
+def test_load_fixture_index_rejects_unsafe_fixture_identity(tmp_path, fixture):
+    fixture_index = tmp_path / "fixtures.json"
+    fixture_index.write_text(json.dumps([fixture]), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_fixture_index(fixture_index)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://raw.githubusercontent.com/owner/repo/"
+        + "1" * 40
+        + "/fixtures/other.docx",
+        "https://raw.githubusercontent.com/owner/repo/"
+        + "1" * 40
+        + "/fixtures/sample.docx/extra",
+        "https://raw.githubusercontent.com/owner/repo/"
+        + "1" * 40
+        + "/fixtures/sample.docx?download=1",
+        "https://raw.githubusercontent.com/owner/repo/"
+        + "1" * 40
+        + "/fixtures/sample.docx#fragment",
+    ],
+    ids=["different-name", "extra-suffix", "query", "fragment"],
+)
+def test_load_fixture_index_requires_exact_raw_github_source_path(tmp_path, url):
+    fixture = {
+        "name": "sample.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/sample.docx",
+        "source_revision": "1" * 40,
+        "url": url,
+    }
+    fixture_index = tmp_path / "fixtures.json"
+    fixture_index.write_text(json.dumps([fixture]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="URL"):
+        load_fixture_index(fixture_index)
+
+
+def test_load_fixture_index_accepts_percent_encoded_exact_raw_github_path(tmp_path):
+    fixture = {
+        "name": "sample.docx",
+        "format": "docx",
+        "source": "owner/repo",
+        "source_name": "test files/sample fixture.docx",
+        "source_revision": "1" * 40,
+        "url": (
+            "https://raw.githubusercontent.com/owner/repo/"
+            + "1" * 40
+            + "/test%20files/sample%20fixture.docx"
+        ),
+    }
+    fixture_index = tmp_path / "fixtures.json"
+    fixture_index.write_text(json.dumps([fixture]), encoding="utf-8")
+
+    assert load_fixture_index(fixture_index) == [fixture]
+
+
+def test_download_fixture_rejects_symlink_escape_before_network(tmp_path, monkeypatch):
+    output_dir = tmp_path / "corpus"
+    outside_dir = tmp_path / "outside"
+    output_dir.mkdir()
+    outside_dir.mkdir()
+    (output_dir / "docx").symlink_to(outside_dir, target_is_directory=True)
+    network_calls = []
+
+    def unexpected_network_call(*args, **kwargs):
+        network_calls.append((args, kwargs))
+        raise AssertionError("network must not be contacted for an escaping destination")
+
+    monkeypatch.setattr(corpus_script.urllib.request, "urlopen", unexpected_network_call)
+    monkeypatch.setattr(corpus_script.urllib.request, "urlretrieve", unexpected_network_call)
+
+    with pytest.raises(ValueError, match="outside output directory"):
+        corpus_script.download_fixture(
+            {
+                "name": "escape.docx",
+                "format": "docx",
+                "url": "https://example.test/escape.docx",
+            },
+            output_dir,
+        )
+
+    assert network_calls == []
+    assert list(outside_dir.iterdir()) == []
+
+
+def test_download_fixture_rejects_format_directory_swap_during_download(
+    tmp_path, monkeypatch
+):
+    output_dir = tmp_path / "corpus"
+    format_dir = output_dir / "docx"
+    displaced_dir = output_dir / "docx-original"
+    outside_dir = tmp_path / "outside"
+    format_dir.mkdir(parents=True)
+    outside_dir.mkdir()
+    sentinel = outside_dir / "sentinel.txt"
+    sentinel.write_text("unchanged", encoding="utf-8")
+
+    def swapping_urlopen(url, timeout):
+        format_dir.rename(displaced_dir)
+        format_dir.symlink_to(outside_dir, target_is_directory=True)
+        return io.BytesIO(b"downloaded fixture bytes")
+
+    monkeypatch.setattr(
+        corpus_script.urllib.request,
+        "urlopen",
+        swapping_urlopen,
+    )
+
+    with pytest.raises(OSError, match="directory changed"):
+        corpus_script.download_fixture(
+            {
+                "name": "swapped.docx",
+                "format": "docx",
+                "url": "https://example.test/swapped.docx",
+            },
+            output_dir,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+    assert not (outside_dir / "swapped.docx").exists()
+    assert not (displaced_dir / "swapped.docx").exists()
+    assert not list(displaced_dir.glob("*.part"))
+
+
+def test_download_fixture_streams_with_timeout_and_records_actual_integrity(tmp_path, monkeypatch):
+    payload = b"downloaded fixture bytes"
+    calls = []
+
+    def fake_urlopen(url, timeout):
+        calls.append((url, timeout))
+        return io.BytesIO(payload)
+
+    def forbidden_urlretrieve(*args, **kwargs):
+        raise AssertionError("urlretrieve must not be used")
+
+    monkeypatch.setattr(corpus_script.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(corpus_script.urllib.request, "urlretrieve", forbidden_urlretrieve)
+    fixture = {
+        "name": "sample.docx",
+        "format": "docx",
+        "url": "https://example.test/sample.docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/sample.docx",
+        "source_revision": "1" * 40,
+    }
+
+    record = corpus_script.download_fixture(
+        fixture,
+        tmp_path / "corpus",
+        timeout=1.5,
+        max_download_bytes=1024,
+    )
+
+    destination = tmp_path / "corpus" / "docx" / "sample.docx"
+    assert destination.read_bytes() == payload
+    assert calls == [(fixture["url"], 1.5)]
+    assert record["bytes"] == len(payload)
+    assert record["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert record["identity_sha256"] == record["sha256"]
+    assert record["fixture_id"] == apache_poi_fixture_id(record)
+    assert record["fixture_id"] != apache_poi_fixture_id(fixture)
+    assert [path.name for path in destination.parent.iterdir()] == [destination.name]
+
+
+def test_download_fixture_rejects_supplied_id_that_differs_from_actual_content(
+    tmp_path,
+    monkeypatch,
+):
+    payload = b"downloaded fixture bytes"
+    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    fixture = {
+        "name": "sample.docx",
+        "format": "docx",
+        "url": "https://example.test/sample.docx",
+        "source": "owner/repo",
+        "source_name": "fixtures/sample.docx",
+        "source_revision": "1" * 40,
+        "sha256": actual_sha256,
+        "identity_sha256": "0" * 64,
+    }
+    fixture["fixture_id"] = apache_poi_fixture_id(fixture)
+    monkeypatch.setattr(
+        corpus_script.urllib.request,
+        "urlopen",
+        lambda url, timeout: io.BytesIO(payload),
+    )
+    output_dir = tmp_path / "corpus"
+
+    with pytest.raises(ValueError, match="downloaded content identity"):
+        corpus_script.download_fixture(fixture, output_dir)
+
+    assert list((output_dir / "docx").iterdir()) == []
+
+
+def test_download_fixture_enforces_maximum_bytes_and_removes_temporary_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        corpus_script.urllib.request,
+        "urlopen",
+        lambda url, timeout: io.BytesIO(b"too large"),
+    )
+    output_dir = tmp_path / "corpus"
+
+    with pytest.raises(ValueError, match="maximum download size"):
+        corpus_script.download_fixture(
+            {
+                "name": "oversized.pptx",
+                "format": "pptx",
+                "url": "https://example.test/oversized.pptx",
+            },
+            output_dir,
+            max_download_bytes=4,
+        )
+
+    destination_dir = output_dir / "pptx"
+    assert not (destination_dir / "oversized.pptx").exists()
+    assert list(destination_dir.iterdir()) == []
+
+
+def test_download_fixture_enforces_absolute_wall_clock_deadline_and_cleans_temp(
+    tmp_path, monkeypatch
+):
+    class SlowDrip:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read1(self, _size):
+            return b"x"
+
+    ticks = iter([0.0, 0.1, 0.6, 1.1])
+    monkeypatch.setattr(corpus_script.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        corpus_script.urllib.request,
+        "urlopen",
+        lambda url, timeout: SlowDrip(),
+    )
+    output_dir = tmp_path / "corpus"
+
+    with pytest.raises(TimeoutError, match="wall clock"):
+        corpus_script.download_fixture(
+            {
+                "name": "slow.docx",
+                "format": "docx",
+                "url": "https://example.test/slow.docx",
+            },
+            output_dir,
+            timeout=1.0,
+        )
+
+    assert list((output_dir / "docx").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        {"sha256": "0" * 64},
+        {"bytes": 1},
+    ],
+    ids=["sha256", "bytes"],
+)
+def test_download_fixture_rejects_integrity_mismatch_without_destination(
+    tmp_path,
+    monkeypatch,
+    expected,
+):
+    payload = b"actual fixture"
+    monkeypatch.setattr(
+        corpus_script.urllib.request,
+        "urlopen",
+        lambda url, timeout: io.BytesIO(payload),
+    )
+    fixture = {
+        "name": "mismatch.xlsx",
+        "format": "xlsx",
+        "url": "https://example.test/mismatch.xlsx",
+    }
+    fixture.update(expected)
+    output_dir = tmp_path / "corpus"
+
+    with pytest.raises(ValueError, match="does not match"):
+        corpus_script.download_fixture(fixture, output_dir)
+
+    destination_dir = output_dir / "xlsx"
+    assert not (destination_dir / "mismatch.xlsx").exists()
+    assert list(destination_dir.iterdir()) == []
 
 
 def test_download_corpus_can_filter_fixture_index_through_probe_manifest(tmp_path, monkeypatch):
@@ -327,8 +922,53 @@ def test_download_corpus_can_filter_fixture_index_through_probe_manifest(tmp_pat
 
     assert [record["source_name"] for record in records] == ["b.docx", "b.xlsx"]
     assert manifest["used"] == {
-        "docx": ["a.docx", "b.docx"],
-        "xlsx": ["a.xlsx", "b.xlsx"],
+        "docx": [apache_poi_fixture_id(fixtures[0])],
+        "xlsx": [apache_poi_fixture_id(fixtures[2])],
     }
-    assert manifest["probes"][-1]["name"] == "next-probe"
+    assert [probe["name"] for probe in manifest["probes"]] == ["already-used"]
     assert sorted((tmp_path / "corpus").rglob("*.*"))
+
+
+def test_atomic_write_text_refuses_a_symlink_destination(tmp_path):
+    outside = tmp_path / "outside.json"
+    outside.write_text("unchanged", encoding="utf-8")
+    destination = tmp_path / "report.json"
+    destination.symlink_to(outside)
+
+    with pytest.raises(OSError, match="regular file"):
+        atomic_write_text(destination, "replacement")
+
+    assert outside.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_atomic_write_text_detects_parent_swap_and_removes_displaced_output(
+    tmp_path, monkeypatch
+):
+    parent = tmp_path / "reports"
+    displaced = tmp_path / "reports-original"
+    outside = tmp_path / "outside"
+    parent.mkdir()
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    real_replace = corpus_script.os.replace
+
+    def swapping_replace(source, destination, *, src_dir_fd, dst_dir_fd):
+        parent.rename(displaced)
+        parent.symlink_to(outside, target_is_directory=True)
+        return real_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(corpus_script.os, "replace", swapping_replace)
+
+    with pytest.raises(OSError, match="directory changed"):
+        atomic_write_text(parent / "report.json", "replacement")
+
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+    assert not (outside / "report.json").exists()
+    assert not (displaced / "report.json").exists()
+    assert list(displaced.iterdir()) == []

@@ -1,7 +1,11 @@
-"""Run a reproducible OOXML probe from a fixture index JSON file."""
+"""Run a pinned-input OOXML probe from a fixture index JSON file."""
 import argparse
+import hashlib
+import os
 import json
+import math
 import sys
+import stat
 from pathlib import Path
 from typing import Iterable, List
 
@@ -9,13 +13,127 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.benchmark_competitors import run_benchmark
-from scripts.download_public_ooxml_corpus import download_corpus, load_fixture_index
-from scripts.run_apache_poi_probe import summarize_dochan_only, validate_zip_files, remove_invalid_zip_files
-from scripts.run_isolated_competitor_benchmark import parse_competitors, run_isolated_benchmarks
+from scripts.benchmark_competitors import run_benchmark  # noqa: E402
+from scripts.download_public_ooxml_corpus import (  # noqa: E402
+    atomic_write_text,
+    download_corpus,
+    load_fixture_index,
+    record_probe_outcome,
+)
+from scripts.run_apache_poi_probe import (  # noqa: E402
+    remove_invalid_zip_files,
+    summarize_dochan_only,
+    validate_zip_files,
+)
+from scripts.run_isolated_competitor_benchmark import (  # noqa: E402
+    parse_competitors,
+    run_isolated_benchmarks,
+)
 
 
 DEFAULT_FORMATS = ("docx", "pptx", "xlsx")
+DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_SETUP_TIMEOUT_SECONDS = 900.0
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def _require_positive_timeout(value: float, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError("{} must be greater than zero".format(name))
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError("{} must be greater than zero".format(name))
+    return parsed
+
+
+def _open_regular_file(path: Path) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(str(path), flags)
+    except OSError as exc:
+        raise ValueError("fixture is not a regular file: {}".format(path)) from exc
+    try:
+        info = os.fstat(descriptor)
+    except Exception:
+        os.close(descriptor)
+        raise
+    if not stat.S_ISREG(info.st_mode):
+        os.close(descriptor)
+        raise ValueError("fixture is not a regular file: {}".format(path))
+    return descriptor, info
+
+
+def _verify_fixture_records(corpus_dir: Path, records: Iterable[dict]) -> List[dict]:
+    invalid = []
+    for record in records:
+        path = record.get("path")
+        if not isinstance(path, str):
+            invalid.append({
+                "path": str(path),
+                "error": "fixture path missing",
+            })
+            continue
+        full_path = corpus_dir / path
+        expected_bytes = record.get("bytes")
+        expected_sha256 = record.get("sha256")
+        if expected_bytes is None and expected_sha256 is None:
+            continue
+        try:
+            descriptor, before = _open_regular_file(full_path)
+        except ValueError as exc:
+            invalid.append({
+                "path": path,
+                "error": str(exc),
+            })
+            continue
+        digest = hashlib.sha256()
+        actual_bytes = 0
+        try:
+            with os.fdopen(descriptor, "rb") as source:
+                descriptor = -1
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    actual_bytes += len(chunk)
+                    digest.update(chunk)
+        finally:
+            if descriptor != -1:
+                os.close(descriptor)
+        actual_digest = digest.hexdigest()
+        if expected_bytes is not None and actual_bytes != expected_bytes:
+            invalid.append({
+                "path": path,
+                "error": "fixture size changed after download: {} != {}".format(
+                    actual_bytes,
+                    expected_bytes,
+                ),
+            })
+            continue
+        if expected_sha256 is not None and actual_digest != expected_sha256:
+            invalid.append({
+                "path": path,
+                "error": "fixture sha256 changed after download: {} != {}".format(
+                    actual_digest,
+                    expected_sha256,
+                ),
+            })
+            continue
+        if expected_bytes is not None and before.st_size != expected_bytes:
+            invalid.append({
+                "path": path,
+                "error": "fixture identity changed after download: size {} != {}".format(
+                    before.st_size,
+                    expected_bytes,
+                ),
+            })
+    return invalid
 
 
 def parse_formats(value: str) -> List[str]:
@@ -34,9 +152,15 @@ def run_fixture_probe(
     runs: int = 1,
     keep_venv: bool = False,
     keep_going: bool = False,
-    timeout_seconds: float = 120.0,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     retry_failed_runs: int = 1,
+    setup_timeout_seconds: float = DEFAULT_SETUP_TIMEOUT_SECONDS,
 ) -> dict:
+    timeout_seconds = _require_positive_timeout(timeout_seconds, "timeout_seconds")
+    setup_timeout_seconds = _require_positive_timeout(
+        setup_timeout_seconds,
+        "setup_timeout_seconds",
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     formats = list(formats)
     corpus_dir = output_dir / "corpus"
@@ -50,11 +174,14 @@ def run_fixture_probe(
         probe_name=probe_name,
         probe_per_format=per_format,
     )
+    integrity_failures = _verify_fixture_records(corpus_dir, records)
     invalid = validate_zip_files(corpus_dir, records)
+    invalid.extend(integrity_failures)
     invalid_paths = {item["path"] for item in invalid}
     if invalid:
         remove_invalid_zip_files(corpus_dir, invalid)
     valid_records = [record for record in records if record["path"] not in invalid_paths]
+    valid_files = [record["path"] for record in valid_records]
 
     report = {
         "probe_name": probe_name,
@@ -65,13 +192,31 @@ def run_fixture_probe(
         "formats": formats,
         "per_format": per_format,
         "downloaded": len(records),
-        "files": [record["path"] for record in valid_records],
+        "files": valid_files,
         "zip_invalid": invalid,
         "dochan": {},
         "isolated": {},
+        "failure_reasons": [],
+        "ok": False,
     }
     if not valid_records:
-        (output_dir / "probe.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        if invalid:
+            report["failure_reasons"].append(
+                "invalid OOXML archives: {}".format(len(invalid))
+            )
+        report["failure_reasons"].append("no valid fixture files")
+        atomic_write_text(
+            output_dir / "probe.json",
+            json.dumps(report, ensure_ascii=False, indent=2),
+        )
+        record_probe_outcome(
+            manifest_path,
+            records,
+            probe_name,
+            successful_records=(),
+            invalid=invalid,
+            failure_reasons=report["failure_reasons"],
+        )
         return report
 
     dochan_report = run_benchmark(
@@ -80,8 +225,13 @@ def run_fixture_probe(
         runs=1,
         converter_names=["dochan"],
         output_root=output_dir / "outputs" / "dochan",
+        timeout_seconds=timeout_seconds,
+        input_files=valid_files,
     )
-    (output_dir / "dochan.json").write_text(json.dumps(dochan_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(
+        output_dir / "dochan.json",
+        json.dumps(dochan_report, ensure_ascii=False, indent=2),
+    )
     isolated = run_isolated_benchmarks(
         corpus_root=corpus_dir,
         output_dir=output_dir / "isolated",
@@ -90,18 +240,62 @@ def run_fixture_probe(
         formats=formats,
         runs=runs,
         timeout_seconds=timeout_seconds,
+        setup_timeout_seconds=setup_timeout_seconds,
         retry_failed_runs=retry_failed_runs,
         keep_venv=keep_venv,
         keep_going=keep_going,
+        input_files=valid_files,
     )
-    report["dochan"] = summarize_dochan_only(dochan_report)
+    dochan_summary = summarize_dochan_only(dochan_report)
+    report["dochan"] = dochan_summary
     report["isolated"] = isolated
-    (output_dir / "probe.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    failure_reasons = []
+    if invalid:
+        failure_reasons.append("invalid OOXML archives: {}".format(len(invalid)))
+    dochan_complete = dochan_summary["file_count"] == len(valid_files)
+    if not dochan_complete:
+        failure_reasons.append(
+            "dochan benchmark file count mismatch: {}/{}".format(
+                dochan_summary["file_count"],
+                len(valid_files),
+            )
+        )
+    if not dochan_summary["ok"]:
+        failure_reasons.append("dochan benchmark failed")
+    isolated_records = isolated.get("competitors", [])
+    isolated_complete = not (
+        isolated.get("ok") is not True
+        or not isolated_records
+        or any(record.get("ok") is not True for record in isolated_records)
+    )
+    if not isolated_complete:
+        failure_reasons.append("isolated benchmark failed")
+    successful_records = (
+        valid_records
+        if dochan_complete and dochan_summary["ok"] and isolated_complete
+        else []
+    )
+    report["failure_reasons"] = failure_reasons
+    report["ok"] = not failure_reasons
+    atomic_write_text(
+        output_dir / "probe.json",
+        json.dumps(report, ensure_ascii=False, indent=2),
+    )
+    record_probe_outcome(
+        manifest_path,
+        records,
+        probe_name,
+        successful_records=successful_records,
+        invalid=invalid,
+        failure_reasons=failure_reasons,
+    )
     return report
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a reproducible OOXML fixture-index probe loop.")
+    parser = argparse.ArgumentParser(
+        description="Run a pinned-input OOXML fixture-index probe loop."
+    )
     parser.add_argument("output_dir", type=Path, help="Directory for corpus, reports, and outputs")
     parser.add_argument("--fixture-index", type=Path, required=True, help="Fixture index JSON")
     parser.add_argument("--probe-name", required=True, help="Probe name recorded in manifest and report")
@@ -111,7 +305,8 @@ def main() -> int:
     parser.add_argument("--competitors", default="markitdown,docling", help="Comma-separated competitors")
     parser.add_argument("--python", type=Path, default=Path(sys.executable), help="Python executable for isolated venvs")
     parser.add_argument("--runs", type=int, default=1, help="Repeated runs per converter/file")
-    parser.add_argument("--timeout", type=float, default=120.0, help="Seconds before a single conversion is recorded as timed out")
+    parser.add_argument("--timeout", type=_positive_float, default=DEFAULT_TIMEOUT_SECONDS, help="Seconds before a single conversion is recorded as timed out")
+    parser.add_argument("--setup-timeout", type=_positive_float, default=DEFAULT_SETUP_TIMEOUT_SECONDS, help="Absolute seconds allowed for each competitor setup and benchmark process")
     parser.add_argument("--retry-failed-runs", type=int, default=1, help="Retry a failed isolated competitor benchmark command this many times")
     parser.add_argument("--keep-venv", action="store_true", help="Keep temporary competitor venvs")
     parser.add_argument("--keep-going", action="store_true", help="Continue after isolated competitor failure")
@@ -128,12 +323,13 @@ def main() -> int:
         python=args.python,
         runs=args.runs,
         timeout_seconds=args.timeout,
+        setup_timeout_seconds=args.setup_timeout,
         retry_failed_runs=args.retry_failed_runs,
         keep_venv=args.keep_venv,
         keep_going=args.keep_going,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if all(item["ok"] for item in report.get("isolated", {}).get("competitors", [])) else 1
+    return 0 if report["ok"] else 1
 
 
 if __name__ == "__main__":

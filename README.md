@@ -12,7 +12,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
     <a href="https://github.com/illuwa/dochan/stargazers"><img src="https://img.shields.io/github/stars/illuwa/dochan?style=social" alt="GitHub Stars"></a>
   </p>
-    <p align="center"><strong>Current stable version: 1.2.1</strong></p>
+    <p align="center"><strong>Current stable version: 1.3.0</strong></p>
 </p>
 
 ---
@@ -24,6 +24,7 @@
 - `doc` (문서) + `한` (韓, 한국) = **dochan** — "독한 파서"라는 더블 미닝
 - HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary + PDF(텍스트) 1차 지원
 - 155개 실문서로 검증, 평균 96.5점, 공개가능한 문서로 계속 학습시켜 개선할 예정
+- 공개 OOXML fixture 50개의 고정 SHA-256 corpus와 형식별 회귀 테스트로 지속 검증
 
 ```python
 from dochan import Dochan
@@ -55,9 +56,9 @@ print(doc.to_markdown())
 pip install dochan
 ```
 
-OCR 기능이 필요한 경우:
+OCR 기능이 필요한 경우(Python 3.10 이상):
 ```bash
-pip install dochan[ocr]
+pip install "dochan[ocr]"
 brew install tesseract tesseract-lang  # macOS
 ```
 
@@ -247,10 +248,10 @@ dochan/
 
 dochan은 신뢰할 수 없는 문서도 안전하게 처리합니다:
 
-- **Zip Bomb 방어**: zlib/ZIP 해제 크기 제한 (200MB)
+- **Zip Bomb 방어**: raw zlib 출력 200MB, OOXML/HWPX XML part 32MB, 일반 part 100MB, archive 합계 512MB 상한
 - **XXE 차단**: XML 외부 엔티티 해석 비활성화
 - **Path Traversal 방지**: 배치 처리 시 경로 탈출 차단
-- **메모리 제한**: 표 크기 1M셀, 재귀 깊이 100 제한
+- **메모리 제한**: HWP·HWPX·DOCX·XLSX·XLS 문서당 표 셀 20만 개, HWP·DOCX 일반 구조 깊이 64, HWP·DOCX 표 깊이 32, PPTX 그룹 깊이 64 상한
 - **입력 검증**: FileHeader/스트림명/OOXML 패키지명/바이너리 바운드 체크
 
 ## Contributing
@@ -261,8 +262,10 @@ dochan은 신뢰할 수 없는 문서도 안전하게 처리합니다:
 # 개발 환경 설정
 git clone https://github.com/illuwa/dochan.git
 cd dochan
-pip install -e ".[dev]"
-python -m pytest tests/
+python -m pip install "uv==0.12.3"
+uv sync --locked --extra dev
+uv run --locked --extra dev ruff check dochan scripts tests
+uv run --locked --extra dev python -m pytest tests/
 ```
 
 ## Acknowledgments

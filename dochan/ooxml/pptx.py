@@ -1,7 +1,10 @@
 """Native PPTX reader."""
 import posixpath
+import zipfile
 from fractions import Fraction
 from typing import Dict, List
+
+from lxml import etree
 
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
@@ -16,6 +19,14 @@ DGM_NS = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS = {"p": P_NS, "a": A_NS, "c": C_NS, "dgm": DGM_NS, "r": R_NS, "rel": REL_NS}
+MAX_GROUP_DEPTH = 64
+MAX_SHAPE_NODES = 100000
+MAX_NUMBERING_VALUE = 100000
+MAX_CHART_SERIES = 1000
+MAX_CHART_POINTS = 200000
+MAX_CHART_OUTPUT_CELLS = 200000
+MAX_IMAGE_ASSET_REFS = 10000
+MAX_DIAGNOSTIC_PATH_CHARS = 256
 
 
 def _r_attr(elem, name: str) -> str:
@@ -36,13 +47,45 @@ def _int_attr(elem, name: str, default: int = 1) -> int:
     return value if value > 0 else default
 
 
+def _bool_attr(elem, name: str) -> bool:
+    value = elem.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "off", "no"}
+
+
+def _bounded_diagnostic_path(path: str) -> str:
+    value = str(path).replace("\r", "\\r").replace("\n", "\\n")
+    if len(value) <= MAX_DIAGNOSTIC_PATH_CHARS:
+        return value
+    return value[:MAX_DIAGNOSTIC_PATH_CHARS - 3] + "..."
+
+
 class PPTXReader:
     format_name = "pptx"
     extensions = (".pptx",)
 
     def read(self, file_path: str) -> Document:
+        try:
+            return self._read_document(file_path)
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+            return Document(
+                source_format=self.format_name,
+                errors=[f"ERR: PPTX package parse failed: {exc}"],
+            )
+
+    def _read_document(self, file_path: str) -> Document:
         doc = Document(source_format="pptx")
+        self._errors = doc.errors
+        self._shape_budget = MAX_SHAPE_NODES
+        self._shape_limit_reported = False
+        self._chart_series_remaining = MAX_CHART_SERIES
+        self._chart_points_remaining = MAX_CHART_POINTS
+        self._chart_output_cells_remaining = MAX_CHART_OUTPUT_CELLS
+        self._chart_budget_exhausted = False
         self._image_asset_ids = set()
+        self._image_asset_count = 0
+        self._image_asset_limit_reported = False
         self._assets = []
         self._slide_images = {}
         self._image_bytes_total = 0
@@ -242,8 +285,20 @@ class PPTXReader:
         scale_x: Fraction = Fraction(1, 1),
         scale_y: Fraction = Fraction(1, 1),
         skip_placeholder_shapes: bool = False,
+        depth: int = 0,
     ):
+        if depth > MAX_GROUP_DEPTH:
+            if not self._shape_limit_reported:
+                self._errors.append("ERR: PPTX group depth limit exceeded")
+                self._shape_limit_reported = True
+            return
         for child in list(container):
+            if self._shape_budget <= 0:
+                if not self._shape_limit_reported:
+                    self._errors.append("ERR: PPTX shape node limit exceeded")
+                    self._shape_limit_reported = True
+                return
+            self._shape_budget -= 1
             if child.tag == f"{{{P_NS}}}sp":
                 if skip_placeholder_shapes and self._is_placeholder_shape(child):
                     ordinal_ref[0] += 1
@@ -342,6 +397,7 @@ class PPTXReader:
                     scale_x=scale_x * transform["scale_x"],
                     scale_y=scale_y * transform["scale_y"],
                     skip_placeholder_shapes=skip_placeholder_shapes,
+                    depth=depth + 1,
                 )
 
     def _picture_reference(self, pic_elem, relationships: Dict[str, str], slide_number: int) -> str:
@@ -389,13 +445,21 @@ class PPTXReader:
     def _record_image_asset(self, rel_id: str, target: str, label: str, slide_number: int):
         if not rel_id or not target:
             return
-        key = (rel_id, target)
+        key = ("image", target)
         if key in getattr(self, "_image_asset_ids", set()):
             return
-        package = getattr(self, "_package", None)
-        if package is not None and not package.exists(target):
+        if getattr(self, "_image_asset_count", 0) >= MAX_IMAGE_ASSET_REFS:
+            if not getattr(self, "_image_asset_limit_reported", False):
+                self._errors.append(
+                    "WARN: PPTX image asset reference limit exceeded "
+                    f"({MAX_IMAGE_ASSET_REFS})"
+                )
+                self._image_asset_limit_reported = True
             return
+        package = getattr(self, "_package", None)
+        missing = package is not None and not package.exists(target)
         self._image_asset_ids.add(key)
+        self._image_asset_count = getattr(self, "_image_asset_count", 0) + 1
         assets = getattr(self, "_assets", None)
         if assets is None:
             assets = []
@@ -406,9 +470,22 @@ class PPTXReader:
                 source_path=target,
                 filename=posixpath.basename(target),
                 content_type=self._image_content_type(target),
-                metadata={"label": label, "source_format": "pptx", "slide": slide_number},
+                metadata={
+                    "kind": "image",
+                    "label": label,
+                    "missing": missing,
+                    "source_format": "pptx",
+                    "slide": slide_number,
+                },
             )
         )
+        if missing:
+            warning = (
+                "WARN: PPTX image part not found: "
+                f"{_bounded_diagnostic_path(target)}"
+            )
+            if warning not in self._errors:
+                self._errors.append(warning)
 
     def _image_content_type(self, target: str) -> str:
         extension = posixpath.splitext(target.lower())[1]
@@ -615,16 +692,43 @@ class PPTXReader:
         key = (level, numbering_type)
         start_at = auto_number.get("startAt")
         if start_at:
-            try:
-                count = int(start_at)
-            except ValueError:
-                count = 1
+            count = self._validated_numbering_value(
+                start_at,
+                "start value",
+            )
         else:
             count = bullet_counts.get(key, 1)
-        bullet_counts[key] = count + 1
+        if not 1 <= count <= MAX_NUMBERING_VALUE:
+            self._record_numbering_limit("list counter")
+            count = 1
+        bullet_counts[key] = min(count + 1, MAX_NUMBERING_VALUE + 1)
         return count
 
+    def _validated_numbering_value(self, raw_value: str, context: str) -> int:
+        value = str(raw_value).strip()
+        digits = value.lstrip("0") or "0"
+        limit = str(MAX_NUMBERING_VALUE)
+        if (
+            not value
+            or not value.isascii()
+            or not value.isdigit()
+            or len(digits) > len(limit)
+            or (len(digits) == len(limit) and digits > limit)
+            or digits == "0"
+        ):
+            self._record_numbering_limit(context)
+            return 1
+        return int(digits)
+
+    def _record_numbering_limit(self, context: str) -> None:
+        error = f"ERR: PPTX numbering value limit exceeded ({context})"
+        if error not in self._errors:
+            self._errors.append(error)
+
     def _auto_number_marker(self, numbering_type: str, count: int) -> str:
+        if not 1 <= count <= MAX_NUMBERING_VALUE:
+            self._record_numbering_limit("generated marker")
+            return ""
         if numbering_type.endswith("ParenR"):
             suffix = ")"
         else:
@@ -670,9 +774,9 @@ class PPTXReader:
         result = []
         value = count
         for number, marker in numerals:
-            while value >= number:
-                result.append(marker)
-                value -= number
+            repetitions, value = divmod(value, number)
+            if repetitions:
+                result.append(marker * repetitions)
         return "".join(result)
 
     def _parse_table(
@@ -694,8 +798,14 @@ class PPTXReader:
                 row.append(
                     Cell(
                         paragraphs=paragraphs,
-                        row_span=0 if tc_elem.get("vMerge") else _int_attr(tc_elem, "rowSpan"),
-                        col_span=0 if tc_elem.get("hMerge") else _int_attr(tc_elem, "gridSpan"),
+                        row_span=(
+                            0 if _bool_attr(tc_elem, "vMerge")
+                            else _int_attr(tc_elem, "rowSpan")
+                        ),
+                        col_span=(
+                            0 if _bool_attr(tc_elem, "hMerge")
+                            else _int_attr(tc_elem, "gridSpan")
+                        ),
                         provenance=Provenance(
                             source_format="pptx",
                             slide=slide_number,
@@ -766,11 +876,22 @@ class PPTXReader:
         return texts
 
     def _chart_series_table(self, chart_root) -> Table:
+        if getattr(self, "_chart_budget_exhausted", False):
+            return Table()
         series_items = []
-        for series in chart_root.findall(".//c:ser", namespaces=NS):
+        for series in chart_root.iterfind(".//c:ser", namespaces=NS):
+            if not self._reserve_chart_resource(
+                "_chart_series_remaining",
+                1,
+                MAX_CHART_SERIES,
+                "series",
+            ):
+                return Table()
             series_name = self._chart_series_name(series)
             categories = self._chart_points(series, "c:cat")
             values = self._chart_points(series, "c:val")
+            if getattr(self, "_chart_budget_exhausted", False):
+                return Table()
             series_items.append((series_name, categories, values))
         if not series_items:
             return Table()
@@ -782,6 +903,15 @@ class PPTXReader:
             indexes.update(values)
             for index, category in categories.items():
                 category_labels.setdefault(index, category)
+
+        output_cells = (len(indexes) + 1) * (len(series_items) + 1)
+        if not self._reserve_chart_resource(
+            "_chart_output_cells_remaining",
+            output_cells,
+            MAX_CHART_OUTPUT_CELLS,
+            "output cell",
+        ):
+            return Table()
 
         rows = [
             [
@@ -826,7 +956,14 @@ class PPTXReader:
         parent = series.find(parent_path, namespaces=NS)
         if parent is None:
             return points
-        for point in parent.findall(".//c:pt", namespaces=NS):
+        for point in parent.iterfind(".//c:pt", namespaces=NS):
+            if not self._reserve_chart_resource(
+                "_chart_points_remaining",
+                1,
+                MAX_CHART_POINTS,
+                "point",
+            ):
+                return {}
             try:
                 index = int(point.get("idx", "0"))
             except ValueError:
@@ -835,3 +972,23 @@ class PPTXReader:
             if value:
                 points[index] = value
         return points
+
+    def _reserve_chart_resource(
+        self,
+        remaining_attribute: str,
+        amount: int,
+        limit: int,
+        label: str,
+    ) -> bool:
+        if getattr(self, "_chart_budget_exhausted", False):
+            return False
+        remaining = getattr(self, remaining_attribute, limit)
+        if amount < 0 or amount > remaining:
+            error = f"ERR: PPTX chart {label} limit exceeded"
+            errors = getattr(self, "_errors", None)
+            if errors is not None and error not in errors:
+                errors.append(error)
+            self._chart_budget_exhausted = True
+            return False
+        setattr(self, remaining_attribute, remaining - amount)
+        return True

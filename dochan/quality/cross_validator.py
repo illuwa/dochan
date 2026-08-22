@@ -7,10 +7,44 @@ quality/cross_validator.py — 3중 교차 검증
 동일 문서의 HWP+PDF 세트를 입력받아 세 소스 간 텍스트를 비교.
 """
 
-import re
+import math
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
+
+from .checker import check_quality
+from ..utils.diagnostics import is_fatal_diagnostic
+
+
+MAX_REFERENCE_TEXT_BYTES = 100 * 1024 * 1024
+MAX_REFERENCE_PDF_BYTES = 100 * 1024 * 1024
+MAX_REFERENCE_PDF_PAGES = 2_000
+MAX_REFERENCE_PDF_TEXT_BYTES = 100 * 1024 * 1024
+MAX_REFERENCE_PDF_TABLES = 10_000
+MAX_REFERENCE_PDF_TABLE_ROWS = 200_000
+MAX_REFERENCE_PDF_TABLE_CELLS = 200_000
+MAX_REFERENCE_PDF_TABLE_TEXT_BYTES = 100 * 1024 * 1024
+_UTF8_COUNT_CHUNK_CHARS = 64 * 1024
+
+
+def _bounded_utf8_size(text: str, limit: int) -> Optional[int]:
+    """Return the UTF-8 size, or None once *limit* is exceeded.
+
+    Counting in chunks avoids allocating a second, potentially very large,
+    encoded copy of untrusted extracted text just to enforce the budget.
+    """
+    if len(text) > limit:
+        # Every Unicode code point occupies at least one byte in UTF-8.
+        return None
+
+    total = 0
+    for start in range(0, len(text), _UTF8_COUNT_CHUNK_CHARS):
+        chunk = text[start:start + _UTF8_COUNT_CHUNK_CHARS]
+        total += len(chunk.encode('utf-8'))
+        if total > limit:
+            return None
+    return total
 
 
 @dataclass
@@ -23,6 +57,7 @@ class SourceResult:
     table_count: int = 0
     image_count: int = 0
     error: str = ""
+    warnings: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -36,6 +71,7 @@ class PairComparison:
     sentence_coverage: float = 0.0  # B 문장 중 A에 있는 비율
     word_coverage: float = 0.0      # B 단어 중 A에 있는 비율
     length_ratio: float = 0.0       # A/B
+    available_metrics: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -47,6 +83,9 @@ class CrossValidationReport:
     missing_in_hwp: List[str] = field(default_factory=list)  # 다른 소스엔 있지만 HWP 파서에 없는 문장
     overall_score: float = 0.0
     verdict: str = ""
+    # A report is unavailable until validate() records at least one valid
+    # dochan/reference comparison.
+    validation_available: bool = False
 
     def summary(self) -> str:
         lines = [
@@ -59,16 +98,40 @@ class CrossValidationReport:
                 lines.append(f"  {name}: 에러 - {src.error}")
             else:
                 lines.append(f"  {name}: {src.char_count}자, 표 {src.table_count}개, 이미지 {src.image_count}개")
+            for warning in src.warnings:
+                lines.append(f"    경고 - {warning}")
 
         lines.append("")
         lines.append("── 쌍별 비교 ──")
         for comp in self.comparisons:
+            available = set(comp.available_metrics)
+            similarity = (
+                f"{comp.bigram_similarity:.1f}%"
+                if 'bigram_similarity' in available else "N/A"
+            )
+            keywords = (
+                f"{comp.keyword_matches}/{comp.keyword_total}"
+                if 'keywords' in available else "N/A"
+            )
+            sentence_coverage = (
+                f"{comp.sentence_coverage:.1f}%"
+                if 'sentence_coverage' in available else "N/A"
+            )
+            word_coverage = (
+                f"{comp.word_coverage:.1f}%"
+                if 'word_coverage' in available else "N/A"
+            )
+            length_ratio = (
+                f"{comp.length_ratio:.0f}%"
+                if 'length_ratio' in available else "N/A"
+            )
             lines.append(
                 f"  {comp.source_a} vs {comp.source_b}: "
-                f"유사도 {comp.bigram_similarity:.1f}%, "
-                f"키워드 {comp.keyword_matches}/{comp.keyword_total}, "
-                f"문장커버 {comp.sentence_coverage:.1f}%, "
-                f"길이비 {comp.length_ratio:.0f}%"
+                f"유사도 {similarity}, "
+                f"키워드 {keywords}, "
+                f"문장커버 {sentence_coverage}, "
+                f"단어커버 {word_coverage}, "
+                f"길이비 {length_ratio}"
             )
 
         if self.missing_in_hwp:
@@ -80,8 +143,11 @@ class CrossValidationReport:
                 lines.append(f"  ... 외 {len(self.missing_in_hwp) - 10}건")
 
         lines.append("")
-        lines.append(f"── 종합 ──")
-        lines.append(f"  점수: {self.overall_score:.1f}/100")
+        lines.append("── 종합 ──")
+        if self.validation_available:
+            lines.append(f"  점수: {self.overall_score:.1f}/100")
+        else:
+            lines.append("  점수: 검증 불가")
         lines.append(f"  판정: {self.verdict}")
         return '\n'.join(lines)
 
@@ -114,18 +180,35 @@ class CrossValidator:
         if odl_output_path:
             report.sources['open_dataloader'] = self._extract_odl(odl_output_path)
 
-        # 자동 키워드 추출 (키워드가 비어있으면)
-        if not self.keywords:
-            self.keywords = self._auto_extract_keywords(report.sources)
+        # 자동 키워드는 현재 검증에만 사용해 다음 호출로 상태를 누출하지 않는다.
+        validation_keywords = list(self.keywords)
+        if not validation_keywords:
+            validation_keywords = self._auto_extract_keywords({
+                name: source
+                for name, source in report.sources.items()
+                if not source.error and source.clean_text.strip()
+            })
 
         # 쌍별 비교
         source_names = list(report.sources.keys())
         for i in range(len(source_names)):
             for j in range(i + 1, len(source_names)):
                 a_name, b_name = source_names[i], source_names[j]
+                a_source = report.sources[a_name]
+                b_source = report.sources[b_name]
+                if a_source.error or b_source.error:
+                    continue
+                # An empty reference contains no evidence and must not make a
+                # validation look available.  An empty dochan result remains
+                # comparable so a valid reference produces a fail-closed zero.
+                if (
+                    (a_name != 'dochan' and not a_source.clean_text.strip())
+                    or (b_name != 'dochan' and not b_source.clean_text.strip())
+                ):
+                    continue
                 comp = self._compare_pair(
-                    report.sources[a_name], report.sources[b_name],
-                    a_name, b_name,
+                    a_source, b_source,
+                    a_name, b_name, validation_keywords,
                 )
                 report.comparisons.append(comp)
 
@@ -134,8 +217,18 @@ class CrossValidator:
             report.missing_in_hwp = self._find_missing_in_hwp(report.sources)
 
         # 종합 점수
-        report.overall_score = self._calc_overall_score(report)
-        report.verdict = self._judge(report.overall_score)
+        hwp_comparisons = [
+            comparison
+            for comparison in report.comparisons
+            if 'dochan' in (comparison.source_a, comparison.source_b)
+        ]
+        report.validation_available = bool(hwp_comparisons)
+        if report.validation_available:
+            report.overall_score = self._calc_overall_score(report)
+            report.verdict = self._judge(report.overall_score)
+        else:
+            report.overall_score = 0.0
+            report.verdict = "검증 불가 — 유효한 dochan 대조 소스 없음"
 
         return report
 
@@ -145,20 +238,25 @@ class CrossValidator:
         result = SourceResult(name='dochan')
         try:
             from ..reader import Dochan
-            from ..model.table import Table
-            from ..model.image import Image
 
             reader = Dochan(path, ocr=True)
             result.raw_text = reader.to_markdown()
             result.clean_text = self._normalize(result.raw_text)
             result.char_count = len(result.clean_text)
 
-            for s in reader.doc.sections:
-                for e in s.elements:
-                    if isinstance(e, Table):
-                        result.table_count += 1
-                    elif isinstance(e, Image):
-                        result.image_count += 1
+            quality = check_quality(reader.doc)
+            result.table_count = quality.total_tables
+            result.image_count = quality.total_images
+
+            fatal_errors = []
+            for issue in getattr(reader, 'errors', []) or []:
+                issue_text = str(issue)
+                if is_fatal_diagnostic(issue_text):
+                    fatal_errors.append(issue_text)
+                else:
+                    result.warnings.append(issue_text)
+            if fatal_errors:
+                result.error = '; '.join(fatal_errors)
         except Exception as e:
             result.error = str(e)
         return result
@@ -166,20 +264,100 @@ class CrossValidator:
     def _extract_pdfplumber(self, path: str) -> SourceResult:
         result = SourceResult(name='pdfplumber')
         try:
+            input_size = os.path.getsize(path)
+            if input_size > MAX_REFERENCE_PDF_BYTES:
+                raise ValueError(
+                    "PDF input exceeds the "
+                    f"{MAX_REFERENCE_PDF_BYTES}-byte limit"
+                )
+
             import pdfplumber
-            pdf = pdfplumber.open(path)
             page_texts = []
-            for page in pdf.pages:
-                t = page.extract_text()
-                if t:
-                    page_texts.append(t)
-                result.table_count += len(page.extract_tables())
-                result.image_count += len(page.images)
+            text_bytes = 0
+            table_count = 0
+            table_rows = 0
+            table_cells = 0
+            table_text_bytes = 0
+            with pdfplumber.open(path) as pdf:
+                page_count = len(pdf.pages)
+                if page_count > MAX_REFERENCE_PDF_PAGES:
+                    raise ValueError(
+                        "PDF page count exceeds the "
+                        f"{MAX_REFERENCE_PDF_PAGES}-page limit"
+                    )
+
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        separator_bytes = 2 if page_texts else 0
+                        remaining = (
+                            MAX_REFERENCE_PDF_TEXT_BYTES
+                            - text_bytes
+                            - separator_bytes
+                        )
+                        extracted_bytes = _bounded_utf8_size(t, remaining)
+                        if extracted_bytes is None:
+                            raise ValueError(
+                                "PDF extracted text exceeds the "
+                                f"{MAX_REFERENCE_PDF_TEXT_BYTES}-byte limit"
+                            )
+                        text_bytes += separator_bytes + extracted_bytes
+                        page_texts.append(t)
+
+                    tables = page.extract_tables() or []
+                    table_count += len(tables)
+                    if table_count > MAX_REFERENCE_PDF_TABLES:
+                        raise ValueError(
+                            "PDF extracted table count exceeds the "
+                            f"{MAX_REFERENCE_PDF_TABLES}-table limit"
+                        )
+                    for table in tables:
+                        rows = table or []
+                        table_rows += len(rows)
+                        if table_rows > MAX_REFERENCE_PDF_TABLE_ROWS:
+                            raise ValueError(
+                                "PDF extracted table rows exceed the "
+                                f"{MAX_REFERENCE_PDF_TABLE_ROWS}-row limit"
+                            )
+                        for row in rows:
+                            cells = row or []
+                            table_cells += len(cells)
+                            if table_cells > MAX_REFERENCE_PDF_TABLE_CELLS:
+                                raise ValueError(
+                                    "PDF extracted table cells exceed the "
+                                    f"{MAX_REFERENCE_PDF_TABLE_CELLS}-cell limit"
+                                )
+                            for cell in cells:
+                                if cell is None:
+                                    continue
+                                cell_text = (
+                                    cell if isinstance(cell, str) else str(cell)
+                                )
+                                remaining = (
+                                    MAX_REFERENCE_PDF_TABLE_TEXT_BYTES
+                                    - table_text_bytes
+                                )
+                                cell_bytes = _bounded_utf8_size(
+                                    cell_text,
+                                    remaining,
+                                )
+                                if cell_bytes is None:
+                                    raise ValueError(
+                                        "PDF extracted table text exceeds the "
+                                        f"{MAX_REFERENCE_PDF_TABLE_TEXT_BYTES}"
+                                        "-byte limit"
+                                    )
+                                table_text_bytes += cell_bytes
+
+                    result.image_count += len(page.images)
+
+            result.table_count = table_count
 
             # ★ PDF 머리글/바닥글 반복 제거
             # 3페이지 이상에서 동일한 첫/끝 줄은 머리글/바닥글로 간주
             if len(page_texts) >= 3:
                 from collections import Counter
+                repeat_threshold = max(2, math.ceil(len(page_texts) * 0.3))
                 first_lines = Counter()
                 last_lines = Counter()
                 for t in page_texts:
@@ -190,35 +368,39 @@ class CrossValidator:
                         last_lines[lines[-1].strip()] += 1
 
                 header_lines = {line for line, cnt in first_lines.items()
-                               if cnt >= len(page_texts) * 0.3 and len(line) > 2}
+                               if cnt >= repeat_threshold and len(line) > 2}
                 footer_lines = {line for line, cnt in last_lines.items()
-                               if cnt >= len(page_texts) * 0.3 and len(line) > 2}
-                # Also remove standalone page numbers
-                footer_lines.update(line for line, cnt in last_lines.items()
-                                    if re.match(r'^\d{1,3}$', line.strip()))
+                               if cnt >= repeat_threshold and len(line) > 2}
 
                 cleaned = []
                 for t in page_texts:
                     lines = t.strip().split('\n')
-                    lines = [l for l in lines
-                            if l.strip() not in header_lines
-                            and l.strip() not in footer_lines]
+                    if lines and lines[0].strip() in header_lines:
+                        lines.pop(0)
+                    if lines and lines[-1].strip() in footer_lines:
+                        lines.pop()
                     cleaned.append('\n'.join(lines))
                 page_texts = cleaned
 
             result.raw_text = '\n\n'.join(page_texts)
             result.clean_text = self._normalize(result.raw_text)
             result.char_count = len(result.clean_text)
-            pdf.close()
         except Exception as e:
-            result.error = str(e)
+            # Never expose partially extracted data as a successful reference.
+            return SourceResult(name='pdfplumber', error=str(e))
         return result
 
     def _extract_odl(self, path: str) -> SourceResult:
         result = SourceResult(name='open_dataloader')
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                result.raw_text = f.read()
+            with open(path, 'rb') as f:
+                payload = f.read(MAX_REFERENCE_TEXT_BYTES + 1)
+            if len(payload) > MAX_REFERENCE_TEXT_BYTES:
+                raise ValueError(
+                    "Open Dataloader output exceeds the "
+                    f"{MAX_REFERENCE_TEXT_BYTES}-byte limit"
+                )
+            result.raw_text = payload.decode('utf-8')
             result.clean_text = self._normalize(result.raw_text)
             result.char_count = len(result.clean_text)
             # 마크다운에서 표/이미지 수 추출
@@ -231,10 +413,20 @@ class CrossValidator:
     # ── 비교 ──
 
     def _compare_pair(self, a: SourceResult, b: SourceResult,
-                      a_name: str, b_name: str) -> PairComparison:
+                      a_name: str, b_name: str,
+                      keywords: Optional[List[str]] = None) -> PairComparison:
         comp = PairComparison(source_a=a_name, source_b=b_name)
 
         if a.error or b.error:
+            return comp
+
+        active_keywords = self.keywords if keywords is None else keywords
+        comp.keyword_total = len(active_keywords)
+
+        if (
+            (a_name == 'dochan' and not a.clean_text.strip())
+            or (b_name == 'dochan' and not b.clean_text.strip())
+        ):
             return comp
 
         a_stripped = a.clean_text.replace(' ', '')
@@ -242,21 +434,22 @@ class CrossValidator:
 
         # bigram 유사도
         comp.bigram_similarity = self._bigram_sim(a_stripped, b_stripped) * 100
+        comp.available_metrics.append('bigram_similarity')
 
         # ★ 단어 수준 커버리지 (표 텍스트 대응)
-        a_words = set(re.findall(r'[가-힣]{2,}', a.clean_text))
-        b_words = set(re.findall(r'[가-힣]{2,}', b.clean_text))
+        a_words = set(re.findall(r'[^\W_]+', a.clean_text, flags=re.UNICODE))
+        b_words = set(re.findall(r'[^\W_]+', b.clean_text, flags=re.UNICODE))
         if b_words:
             comp.word_coverage = len(a_words & b_words) / len(b_words) * 100
-        else:
-            comp.word_coverage = 100.0
+            comp.available_metrics.append('word_coverage')
 
         # 키워드 매칭
-        comp.keyword_total = len(self.keywords)
         comp.keyword_matches = sum(
-            1 for kw in self.keywords
-            if (kw in a.raw_text) == (kw in b.raw_text)
+            1 for kw in active_keywords
+            if kw in a.raw_text and kw in b.raw_text
         )
+        if active_keywords:
+            comp.available_metrics.append('keywords')
 
         # 문장 커버리지 (B 기준으로 A에 있는지)
         # ★ 유연한 매칭: 15자 키워드 + 페이지번호 제거 + 다중 위치 검색
@@ -280,10 +473,12 @@ class CrossValidator:
                 if matched:
                     found += 1
             comp.sentence_coverage = found / len(b_sents) * 100
+            comp.available_metrics.append('sentence_coverage')
 
         # 길이 비율
         if b.char_count > 0:
             comp.length_ratio = a.char_count / b.char_count * 100
+            comp.available_metrics.append('length_ratio')
 
         return comp
 
@@ -318,25 +513,51 @@ class CrossValidator:
             return 0.0
 
         # 가중치: 단어커버 30% + bigram 25% + 문장커버 15% + 키워드 15% + 길이비 15%
-        avg_sim = sum(c.bigram_similarity for c in hwp_comps) / len(hwp_comps)
-        avg_sent_cov = sum(c.sentence_coverage for c in hwp_comps) / len(hwp_comps)
-        avg_word_cov = sum(c.word_coverage for c in hwp_comps) / len(hwp_comps)
-        avg_kw = sum(
-            c.keyword_matches / max(c.keyword_total, 1) * 100
-            for c in hwp_comps
-        ) / len(hwp_comps)
+        scores = []
+        metric_weights = {
+            'word_coverage': 0.30,
+            'bigram_similarity': 0.25,
+            'sentence_coverage': 0.15,
+            'keywords': 0.15,
+            'length_ratio': 0.15,
+        }
+        for comparison in hwp_comps:
+            available = set(comparison.available_metrics)
+            # Hand-constructed legacy comparisons predate availability flags;
+            # keep their historical all-metrics interpretation.
+            if not available:
+                available = set(metric_weights)
+            values = {
+                'word_coverage': comparison.word_coverage,
+                'bigram_similarity': comparison.bigram_similarity,
+                'sentence_coverage': comparison.sentence_coverage,
+                'keywords': (
+                    comparison.keyword_matches / comparison.keyword_total * 100
+                    if comparison.keyword_total
+                    else 0.0
+                ),
+                'length_ratio': self._length_score(comparison.length_ratio),
+            }
+            evidence_metrics = available - {'length_ratio'}
+            if evidence_metrics and all(values[name] == 0 for name in evidence_metrics):
+                # Equal length alone is not evidence that unrelated texts
+                # match, so it cannot produce a positive validation score.
+                scores.append(0.0)
+                continue
+            weight = sum(metric_weights[name] for name in available)
+            scores.append(
+                sum(values[name] * metric_weights[name] for name in available)
+                / weight
+            )
+        return sum(scores) / len(scores)
 
-        # 길이비 적정성: 75~200%면 100점 (OCR로 길이 증가 허용)
-        avg_len_ratio = sum(c.length_ratio for c in hwp_comps) / len(hwp_comps)
-        if 75 <= avg_len_ratio <= 200:
-            len_score = 100.0
-        elif avg_len_ratio > 200:
-            len_score = max(0, 100 - (avg_len_ratio - 200) * 0.5)
-        else:
-            len_score = max(0, 100 - (75 - avg_len_ratio) * 1.5)
-
-        return (avg_word_cov * 0.30 + avg_sim * 0.25 + avg_sent_cov * 0.15 +
-                avg_kw * 0.15 + len_score * 0.15)
+    @staticmethod
+    def _length_score(length_ratio: float) -> float:
+        if 75 <= length_ratio <= 200:
+            return 100.0
+        if length_ratio > 200:
+            return max(0.0, 100 - (length_ratio - 200) * 0.5)
+        return max(0.0, 100 - (75 - length_ratio) * 1.5)
 
     def _judge(self, score: float) -> str:
         if score >= 90:
@@ -371,6 +592,8 @@ class CrossValidator:
     def _bigram_sim(a: str, b: str) -> float:
         if not a or not b:
             return 0.0
+        if a == b:
+            return 1.0
         a_bg = set(a[i:i+2] for i in range(len(a)-1))
         b_bg = set(b[i:i+2] for i in range(len(b)-1))
         inter = len(a_bg & b_bg)
@@ -398,8 +621,8 @@ class CrossValidator:
         if not best or not best.raw_text:
             return []
 
-        # 한글 2글자 이상 단어 빈도
-        words = re.findall(r'[가-힣]{2,}', best.raw_text)
+        # Unicode letter/number words keep the metric language-independent.
+        words = re.findall(r'[^\W_]+', best.raw_text, flags=re.UNICODE)
         freq = {}
         for w in words:
             if len(w) >= 3:

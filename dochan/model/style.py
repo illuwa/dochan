@@ -1,6 +1,5 @@
 """Style model — CharShape, ParaShape, Style, FaceName"""
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass
 
 
 @dataclass

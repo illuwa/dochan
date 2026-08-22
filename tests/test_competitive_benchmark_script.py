@@ -5,6 +5,9 @@ import time
 import zipfile
 from pathlib import Path
 
+import pytest
+
+from dochan.ooxml import package as ooxml_package
 from scripts.benchmark_competitors import (
     compare_against_dochan,
     compare_files_against_dochan,
@@ -17,6 +20,7 @@ from scripts.benchmark_competitors import (
     load_expectations,
     output_capture_path,
     profile_output,
+    preflight_ooxml_archive,
     summarize_results,
     summarize_by_format,
     run_benchmark,
@@ -32,6 +36,19 @@ def test_iter_input_files_filters_supported_office_formats(tmp_path):
     files = [path.name for path in iter_input_files(tmp_path, formats=["docx", "pptx", "xlsx"])]
 
     assert files == ["a.docx", "b.pptx", "c.xlsx"]
+
+
+def test_iter_input_files_can_restrict_reused_corpus_to_current_records(tmp_path):
+    (tmp_path / "current.docx").write_text("current", encoding="utf-8")
+    (tmp_path / "stale.docx").write_text("stale", encoding="utf-8")
+
+    files = iter_input_files(
+        tmp_path,
+        formats=["docx"],
+        input_files=["current.docx"],
+    )
+
+    assert files == [tmp_path / "current.docx"]
 
 
 def test_discover_converters_always_includes_dochan():
@@ -60,6 +77,89 @@ def test_run_benchmark_reports_requested_missing_converter_status(tmp_path):
     assert report["converter_status"]["dochan"]["available"] is True
     assert report["converter_status"]["missing_converter"]["available"] is False
     assert len(report["results"]) == 1
+    assert report["ok"] is False
+    assert any("missing_converter" in reason for reason in report["failure_reasons"])
+
+
+def test_run_benchmark_fails_closed_for_empty_corpus(tmp_path):
+    report = run_benchmark(
+        tmp_path,
+        formats=["docx"],
+        runs=1,
+        converter_names=["dochan"],
+    )
+
+    assert report["file_count"] == 0
+    assert report["ok"] is False
+    assert "no input files" in report["failure_reasons"]
+
+
+def test_benchmark_cli_returns_nonzero_for_empty_corpus(tmp_path, monkeypatch, capsys):
+    from scripts import benchmark_competitors as script
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["benchmark_competitors.py", str(tmp_path), "--converters", "dochan"],
+    )
+
+    assert script.main() == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_run_benchmark_fails_closed_for_converter_error(tmp_path, monkeypatch):
+    with zipfile.ZipFile(tmp_path / "current.docx", "w") as archive:
+        archive.writestr("word/document.xml", "<document/>")
+
+    def broken_converter(_path):
+        raise RuntimeError("conversion failed")
+
+    monkeypatch.setattr(
+        "scripts.benchmark_competitors.inspect_converter_availability",
+        lambda _names: {"broken": {"available": True, "error": ""}},
+    )
+    monkeypatch.setattr(
+        "scripts.benchmark_competitors.discover_converters",
+        lambda _names: {"broken": broken_converter},
+    )
+
+    report = run_benchmark(
+        tmp_path,
+        formats=["docx"],
+        runs=1,
+        converter_names=["broken"],
+        input_files=["current.docx"],
+    )
+
+    assert report["ok"] is False
+    assert report["failure_reasons"] == ["conversion errors: 1"]
+
+
+def test_run_benchmark_fails_closed_for_unexpected_empty_output(tmp_path, monkeypatch):
+    with zipfile.ZipFile(tmp_path / "current.docx", "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="urn:test"><w:t>visible</w:t></w:document>',
+        )
+    monkeypatch.setattr(
+        "scripts.benchmark_competitors.inspect_converter_availability",
+        lambda _names: {"empty": {"available": True, "error": ""}},
+    )
+    monkeypatch.setattr(
+        "scripts.benchmark_competitors.discover_converters",
+        lambda _names: {"empty": lambda _path: ""},
+    )
+
+    report = run_benchmark(
+        tmp_path,
+        formats=["docx"],
+        runs=1,
+        converter_names=["empty"],
+        input_files=["current.docx"],
+    )
+
+    assert report["ok"] is False
+    assert report["failure_reasons"] == ["unexpected empty outputs: 1"]
 
 
 def test_output_capture_path_preserves_relative_input_structure(tmp_path):
@@ -118,6 +218,17 @@ def test_run_benchmark_records_converter_timeout(tmp_path, monkeypatch):
     assert report["timeout_seconds"] == 0.01
     assert report["results"][0]["nonempty"] is False
     assert "TimeoutError" in report["results"][0]["error"]
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1])
+def test_run_benchmark_rejects_nonpositive_timeout(tmp_path, timeout_seconds):
+    with pytest.raises(ValueError, match="timeout"):
+        run_benchmark(
+            tmp_path,
+            formats=["docx"],
+            converter_names=["dochan"],
+            timeout_seconds=timeout_seconds,
+        )
 
 
 def test_load_expectations_reads_manifest_by_relative_file(tmp_path):
@@ -331,7 +442,9 @@ def test_profile_output_counts_only_meaningful_headings():
 def test_benchmark_script_uses_worktree_dochan_when_executed_by_path(tmp_path):
     generate_corpus(tmp_path)
 
-    result = subprocess.run(
+    # The interpreter is the current test executable, argv is a list, and the
+    # script path is a fixed repository fixture; no shell parsing is involved.
+    result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
         [
             sys.executable,
             "scripts/benchmark_competitors.py",
@@ -542,6 +655,45 @@ def test_input_has_ooxml_semantic_signal_ignores_generic_empty_xlsx_sheet_names(
 
     assert input_has_ooxml_semantic_signal(empty) is False
     assert input_has_ooxml_semantic_signal(valued) is True
+
+
+def test_ooxml_preflight_rejects_parser_part_budget_before_semantic_reads(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "oversized.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", b"12345")
+    monkeypatch.setattr(ooxml_package, "MAX_PART_SIZE", 4)
+
+    error = preflight_ooxml_archive(path)
+
+    assert "part too large" in error
+
+
+def test_run_benchmark_reports_invalid_ooxml_without_calling_converter(tmp_path, monkeypatch):
+    path = tmp_path / "invalid.docx"
+    path.write_text("not a ZIP", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        "scripts.benchmark_competitors.inspect_converter_availability",
+        lambda _names: {"probe": {"available": True, "error": ""}},
+    )
+    monkeypatch.setattr(
+        "scripts.benchmark_competitors.discover_converters",
+        lambda _names: {"probe": lambda _path: calls.append(_path) or "converted"},
+    )
+
+    report = run_benchmark(
+        tmp_path,
+        formats=["docx"],
+        converter_names=["probe"],
+        input_files=["invalid.docx"],
+    )
+
+    assert calls == []
+    assert report["ok"] is False
+    assert report["failure_reasons"] == ["invalid OOXML inputs: 1"]
+    assert report["invalid_inputs"][0]["file"] == str(path)
 
 
 def test_input_has_ooxml_semantic_signal_counts_docx_alt_chunk_html(tmp_path):

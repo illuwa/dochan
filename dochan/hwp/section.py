@@ -64,6 +64,23 @@ def _apply_link_ranges(runs, ranges):
     return runs
 
 
+MAX_HWP_RECORDS = 200_000
+MAX_HWP_STRUCTURE_DEPTH = 64
+MAX_HWP_TABLE_DEPTH = 32
+MAX_HWP_TABLE_CELLS = 200_000
+MAX_HWP_SECTION_CELLS = 200_000
+MAX_HWP_DOCUMENT_CELLS = 200_000
+
+
+class _HWPStructureError(ValueError):
+    """Internal signal used to reject one unsafe structure transaction."""
+
+    def __init__(self, key: str, message: str):
+        super().__init__(message)
+        self.key = key
+        self.message = message
+
+
 @dataclass
 class RawRecord:
     tag_id: int
@@ -75,17 +92,30 @@ class RawRecord:
 
 class SectionParser:
 
+    MAX_STRUCTURE_DEPTH = MAX_HWP_STRUCTURE_DEPTH
+    MAX_TABLE_DEPTH = MAX_HWP_TABLE_DEPTH
+    MAX_TABLE_CELLS = MAX_HWP_TABLE_CELLS
+    MAX_SECTION_CELLS = MAX_HWP_SECTION_CELLS
+    MAX_DOCUMENT_CELLS = MAX_HWP_DOCUMENT_CELLS
+
     def __init__(self, doc_info=None):
         self.doc_info = doc_info  # DocInfo 참조 (서식 해석용)
         self.errors = []
+        self._section_cells = 0
+        self._document_cells = 0
+        self._structure_depth = 0
+        self._table_depth = 0
+        self._fatal_error_keys = set()
+        self._table_failure_serial = 0
 
     def parse_stream(self, stream_data: bytes, is_compressed: bool) -> Section:
+        self._reset_section_limits()
         if is_compressed:
             stream_data = safe_zlib_decompress(stream_data)
 
         records = self._read_all_records(stream_data)
         tree = self._build_tree(records)
-        return self._tree_to_section(tree)
+        return self._tree_to_section(tree, reset_limits=False)
 
     # ── 레코드 읽기 ──
 
@@ -93,13 +123,22 @@ class SectionParser:
         records = []
         i = 0
         while i < len(data) - 3:
+            if len(records) >= MAX_HWP_RECORDS:
+                self.errors.append(
+                    "ERR: HWP section record count exceeds limit: "
+                    f"more than {MAX_HWP_RECORDS}"
+                )
+                break
             try:
                 rec, new_i = self._read_one_record(data, i)
                 if rec:
                     records.append(rec)
                 i = new_i
+            except ValueError as e:
+                self.errors.append(f"ERR: 레코드 읽기 실패 offset={i}: {e}")
+                break
             except Exception as e:
-                self.errors.append(f"레코드 읽기 실패 offset={i}: {e}")
+                self.errors.append(f"ERR: 레코드 읽기 실패 offset={i}: {e}")
                 i += 4  # 에러 복구: 4바이트 전진
         return records
 
@@ -112,13 +151,20 @@ class SectionParser:
         if size == 0xFFF:
             # 확장 크기
             if offset + 8 > len(data):
-                return None, len(data)
+                raise ValueError("truncated extended record header")
             size = struct.unpack_from("<I", data, offset + 4)[0]
-            rec_data = data[offset + 8 : offset + 8 + size]
-            return RawRecord(tag_id, level, size, rec_data, offset), offset + 8 + size
+            payload_start = offset + 8
         else:
-            rec_data = data[offset + 4 : offset + 4 + size]
-            return RawRecord(tag_id, level, size, rec_data, offset), offset + 4 + size
+            payload_start = offset + 4
+
+        payload_end = payload_start + size
+        if payload_end > len(data):
+            raise ValueError(
+                f"truncated record payload: declared={size}, "
+                f"available={max(len(data) - payload_start, 0)}"
+            )
+        rec_data = data[payload_start:payload_end]
+        return RawRecord(tag_id, level, size, rec_data, offset), payload_end
 
     # ── 트리 구축 ──
 
@@ -183,7 +229,12 @@ class SectionParser:
 
     def _fix_empty_list_headers(self, nodes, depth=0):
         """자식 없는 LIST_HEADER 뒤의 형제 PARA_HEADER를 자식으로 이동 (재귀)"""
-        if depth > 100:
+        if depth > self.MAX_STRUCTURE_DEPTH:
+            self._append_fatal_once(
+                "structure-depth",
+                "ERR: HWP structure depth exceeds limit: "
+                f"{depth} > {self.MAX_STRUCTURE_DEPTH}",
+            )
             return
         i = 0
         while i < len(nodes):
@@ -213,20 +264,83 @@ class SectionParser:
             else:
                 i += 1
 
+    def _append_fatal_once(self, key: str, message: str) -> None:
+        if key in self._fatal_error_keys:
+            return
+        self._fatal_error_keys.add(key)
+        self.errors.append(message)
+
+    def _reset_section_limits(self) -> None:
+        self._section_cells = 0
+        self._structure_depth = 0
+        self._table_depth = 0
+        self._fatal_error_keys.clear()
+        self._table_failure_serial = 0
+
+    def _reserve_table_cells(self, count: int) -> None:
+        if count < 0:
+            raise _HWPStructureError(
+                "table-dimensions",
+                "ERR: HWP table has invalid negative cell allocation",
+            )
+        if count > self.MAX_TABLE_CELLS:
+            raise _HWPStructureError(
+                "table-cells",
+                "ERR: HWP table cell allocation exceeds limit: "
+                f"{count} > {self.MAX_TABLE_CELLS}",
+            )
+        if self._section_cells + count > self.MAX_SECTION_CELLS:
+            raise _HWPStructureError(
+                "section-cells",
+                "ERR: HWP section cell allocation exceeds limit: "
+                f"{self._section_cells} + {count} > {self.MAX_SECTION_CELLS}",
+            )
+        if self._document_cells + count > self.MAX_DOCUMENT_CELLS:
+            raise _HWPStructureError(
+                "document-cells",
+                "ERR: HWP document cell allocation exceeds limit: "
+                f"{self._document_cells} + {count} > {self.MAX_DOCUMENT_CELLS}",
+            )
+        self._section_cells += count
+        self._document_cells += count
+
     # ── 트리 → 모델 변환 ──
 
-    def _tree_to_section(self, tree) -> Section:
+    def _tree_to_section(self, tree, *, reset_limits=True) -> Section:
+        if reset_limits:
+            self._reset_section_limits()
         section = Section()
 
         for node in tree:
             rec = node['record']
             if rec.tag_id == HWPTAG_PARA_HEADER:
-                elements = self._parse_paragraph_group(node)
-                section.elements.extend(elements)
+                try:
+                    elements = self._parse_paragraph_group(node)
+                    section.elements.extend(elements)
+                except _HWPStructureError as exc:
+                    self._append_fatal_once(exc.key, exc.message)
+                except RecursionError:
+                    self._append_fatal_once(
+                        "structure-recursion",
+                        "ERR: HWP structure recursion limit exceeded",
+                    )
 
         return section
 
     def _parse_paragraph_group(self, para_node):
+        self._structure_depth += 1
+        try:
+            if self._structure_depth > self.MAX_STRUCTURE_DEPTH:
+                raise _HWPStructureError(
+                    "structure-depth",
+                    "ERR: HWP structure depth exceeds limit: "
+                    f"{self._structure_depth} > {self.MAX_STRUCTURE_DEPTH}",
+                )
+            return self._parse_paragraph_group_impl(para_node)
+        finally:
+            self._structure_depth -= 1
+
+    def _parse_paragraph_group_impl(self, para_node):
         """PARA_HEADER 하위의 TEXT, CTRL_HEADER 등 파싱"""
         elements = []
         text_result = None
@@ -305,11 +419,31 @@ class SectionParser:
 
         # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
         for ctrl_node in ctrl_nodes:
-            ctrl_elem = self._parse_control(ctrl_node)
-            if isinstance(ctrl_elem, list):
-                elements.extend(ctrl_elem)
-            elif ctrl_elem:
-                elements.append(ctrl_elem)
+                failure_serial = self._table_failure_serial
+                try:
+                    ctrl_elem = self._parse_control(ctrl_node)
+                except _HWPStructureError as exc:
+                    if self._structure_depth > 1 or self._table_depth > 0:
+                        raise
+                    self._append_fatal_once(exc.key, exc.message)
+                    continue
+                except RecursionError as exc:
+                    if self._structure_depth > 1 or self._table_depth > 0:
+                        raise _HWPStructureError(
+                            "structure-recursion",
+                            "ERR: HWP structure recursion limit exceeded",
+                        ) from exc
+                    self._append_fatal_once(
+                        "structure-recursion",
+                        "ERR: HWP structure recursion limit exceeded",
+                    )
+                    continue
+                if self._table_failure_serial != failure_serial:
+                    continue
+                if isinstance(ctrl_elem, list):
+                    elements.extend(ctrl_elem)
+                elif ctrl_elem:
+                    elements.append(ctrl_elem)
 
         return elements
 
@@ -442,6 +576,47 @@ class SectionParser:
     _CAPTION_SIDE = {0: 'LEFT', 1: 'RIGHT', 2: 'TOP', 3: 'BOTTOM'}
 
     def _parse_table(self, ctrl_node):
+        """표 하나를 all-or-nothing 자원 트랜잭션으로 파싱한다.
+
+        중첩 깊이나 셀 예산을 넘기면 그 표만 통째로 되돌리고, 최상위에서는
+        오류로 강등해 문서 전체 파싱이 죽지 않게 한다.
+        """
+        parent_depth = self._table_depth
+        starting_cells = self._section_cells
+        starting_document_cells = self._document_cells
+        self._table_depth += 1
+        try:
+            if self._table_depth > self.MAX_TABLE_DEPTH:
+                raise _HWPStructureError(
+                    "table-depth",
+                    "ERR: HWP table nesting exceeds depth limit: "
+                    f"{self._table_depth} > {self.MAX_TABLE_DEPTH}",
+                )
+            return self._parse_table_impl(ctrl_node)
+        except RecursionError as exc:
+            self._section_cells = starting_cells
+            self._document_cells = starting_document_cells
+            error = _HWPStructureError(
+                "structure-recursion",
+                "ERR: HWP structure recursion limit exceeded",
+            )
+            if parent_depth > 0:
+                raise error from exc
+            self._append_fatal_once(error.key, error.message)
+            self._table_failure_serial += 1
+            return Table()
+        except _HWPStructureError as exc:
+            self._section_cells = starting_cells
+            self._document_cells = starting_document_cells
+            if parent_depth > 0:
+                raise
+            self._append_fatal_once(exc.key, exc.message)
+            self._table_failure_serial += 1
+            return Table()
+        finally:
+            self._table_depth -= 1
+
+    def _parse_table_impl(self, ctrl_node):
         """표 파싱 (셀 병합 대응, LIST_HEADER(72)+TABLE(77) 수집)
 
         ★ 캡션 처리: 표 캡션은 TABLE 레코드보다 먼저 오는 LIST_HEADER 다
@@ -485,61 +660,54 @@ class SectionParser:
             row_count = struct.unpack_from("<H", table_rec.data, 4)[0]
             col_count = struct.unpack_from("<H", table_rec.data, 6)[0]
 
-        # 각 LIST_HEADER에서 셀 정보 파싱
-        cells_info = []
-        for lh_node in list_header_nodes:
-            ci = self._parse_cell_info(lh_node)
-            cells_info.append(ci)
-
-        # 좌표 기반 격자 배치 (셀 병합 대응)
+        geometries = [self._parse_cell_geometry(node) for node in list_header_nodes]
         if row_count > 0 and col_count > 0:
-            if row_count * col_count > self.MAX_TABLE_CELLS:
-                self.errors.append(f"표 크기 초과: {row_count}x{col_count}")
-                return table
-            grid = [[Cell() for _ in range(col_count)] for _ in range(row_count)]
-            placed = 0
-            for ci in cells_info:
-                r, c = ci.get('row', 0), ci.get('col', 0)
-                if 0 <= r < row_count and 0 <= c < col_count:
-                    grid[r][c] = Cell(
-                        paragraphs=ci.get('paragraphs', []),
-                        row_span=ci.get('row_span', 1),
-                        col_span=ci.get('col_span', 1),
-                    )
-                    placed += 1
-
-            # ★ 좌표 배치 실패율이 높으면 순서대로 재배치
-            if placed < len(cells_info) * 0.5 and cells_info:
-                if row_count * col_count > self.MAX_TABLE_CELLS:
-                    self.errors.append(f"표 크기 초과: {row_count}x{col_count}")
-                    return table
-                grid = [[Cell() for _ in range(col_count)] for _ in range(row_count)]
-                idx = 0
-                for r in range(row_count):
-                    for c in range(col_count):
-                        if idx < len(cells_info):
-                            ci = cells_info[idx]
-                            grid[r][c] = Cell(
-                                paragraphs=ci.get('paragraphs', []),
-                                row_span=ci.get('row_span', 1),
-                                col_span=ci.get('col_span', 1),
-                            )
-                            idx += 1
-            table.rows = grid
+            allocation_rows = row_count
+            allocation_cols = col_count
+            use_coordinates = True
         else:
-            # 폴백: 단순 순서 배치
-            if col_count > 0 and cells_info:
-                rows = []
-                for i in range(0, len(cells_info), col_count):
-                    row = [Cell(paragraphs=ci.get('paragraphs', []))
-                           for ci in cells_info[i:i+col_count]]
-                    while len(row) < col_count:
-                        row.append(Cell())
-                    rows.append(row)
-                table.rows = rows
+            use_coordinates = False
+            if col_count > 0 and geometries:
+                allocation_rows = (
+                    len(geometries) + col_count - 1
+                ) // col_count
+                allocation_cols = col_count
+            elif geometries:
+                allocation_rows = 1
+                allocation_cols = len(geometries)
             else:
-                row = [Cell(paragraphs=ci.get('paragraphs', [])) for ci in cells_info]
-                table.rows = [row] if row else []
+                allocation_rows = 0
+                allocation_cols = 0
+
+        self._validate_cell_geometries(
+            geometries,
+            allocation_rows,
+            allocation_cols,
+            use_coordinates=use_coordinates,
+        )
+        allocation_count = allocation_rows * allocation_cols
+        self._reserve_table_cells(allocation_count)
+
+        cells_info = [self._parse_cell_info(node) for node in list_header_nodes]
+        grid = [
+            [Cell() for _ in range(allocation_cols)]
+            for _ in range(allocation_rows)
+        ]
+        if use_coordinates:
+            for info in cells_info:
+                row = info.get('row', 0)
+                col = info.get('col', 0)
+                cell = grid[row][col]
+                cell.paragraphs = info.get('paragraphs', [])
+                cell.row_span = info.get('row_span', 1)
+                cell.col_span = info.get('col_span', 1)
+        else:
+            for index, info in enumerate(cells_info):
+                row, col = divmod(index, allocation_cols)
+                grid[row][col].paragraphs = info.get('paragraphs', [])
+
+        # 앞서 분리해 둔 캡션을 잃지 않도록 새 Table 을 만들지 않고 격자만 채운다.
+        table.rows = grid
 
         return table
 
@@ -567,19 +735,62 @@ class SectionParser:
             return None
         return cap_paras, side
 
+    def _parse_cell_geometry(self, lh_node) -> dict:
+        """Read cell coordinates/spans without descending into its contents."""
+        if "cell_info" in lh_node:
+            info = lh_node["cell_info"]
+            return {
+                "row": info.get("row", 0),
+                "col": info.get("col", 0),
+                "row_span": info.get("row_span", 1),
+                "col_span": info.get("col_span", 1),
+            }
+
+        geometry = {'row': 0, 'col': 0, 'row_span': 1, 'col_span': 1}
+        data = lh_node['record'].data
+        if len(data) >= 16:
+            geometry['col'] = struct.unpack_from("<H", data, 8)[0]
+            geometry['row'] = struct.unpack_from("<H", data, 10)[0]
+            geometry['col_span'] = struct.unpack_from("<H", data, 12)[0]
+            geometry['row_span'] = struct.unpack_from("<H", data, 14)[0]
+        return geometry
+
+    def _validate_cell_geometries(
+        self,
+        geometries,
+        row_count: int,
+        col_count: int,
+        *,
+        use_coordinates: bool,
+    ) -> None:
+        for index, geometry in enumerate(geometries):
+            row_span = geometry.get('row_span', 1)
+            col_span = geometry.get('col_span', 1)
+            if row_span < 1 or col_span < 1:
+                raise _HWPStructureError(
+                    "table-span",
+                    "ERR: HWP table invalid cell span",
+                )
+            if use_coordinates:
+                row = geometry.get('row', 0)
+                col = geometry.get('col', 0)
+            else:
+                row, col = divmod(index, col_count)
+            if not (0 <= row < row_count and 0 <= col < col_count):
+                raise _HWPStructureError(
+                    "table-position",
+                    "ERR: HWP table cell position out of bounds",
+                )
+            if row + row_span > row_count or col + col_span > col_count:
+                raise _HWPStructureError(
+                    "table-span-bounds",
+                    "ERR: HWP table cell span out of bounds",
+                )
+
     def _parse_cell_info(self, lh_node) -> dict:
         """LIST_HEADER 노드에서 셀 위치/병합/내용 파싱"""
-        lh_rec = lh_node['record']
-        info = {'row': 0, 'col': 0, 'row_span': 1, 'col_span': 1, 'paragraphs': []}
-
-        # ★ 실제 LIST_HEADER = UINT32(paraCount) + UINT32(props) = 8바이트
-        # 셀 속성(26바이트)은 offset 8부터:
-        #   offset 8=Col, 10=Row, 12=ColSpan, 14=RowSpan
-        if len(lh_rec.data) >= 16:
-            info['col'] = struct.unpack_from("<H", lh_rec.data, 8)[0]
-            info['row'] = struct.unpack_from("<H", lh_rec.data, 10)[0]
-            info['col_span'] = struct.unpack_from("<H", lh_rec.data, 12)[0]
-            info['row_span'] = struct.unpack_from("<H", lh_rec.data, 14)[0]
+        info = self._parse_cell_geometry(lh_node)
+        info['paragraphs'] = []
 
         # 셀 내부 재귀 파싱 — 문단 + 중첩 컨트롤 모두
         for child in lh_node['children']:

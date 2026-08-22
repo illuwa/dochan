@@ -10,11 +10,12 @@ KS X 6101:2011 / OWPML 표준 기반.
   Contents/section0.xml, section1.xml, ... — 본문
   BinData/ — 바이너리 데이터 (이미지 등)
 """
+import os
 
+import posixpath
 import re
 import zipfile
-import os
-from typing import Optional
+
 from lxml import etree
 
 from ..model.document import Document, Section, Paragraph, TextRun
@@ -56,6 +57,18 @@ MAX_META_FILE_SIZE = 32 * 1024 * 1024
 # 한글 규정문서는 '개요 5' 같은 깊은 레벨을 평범한 본문 열거 항목에 쓰는 일이 잦아서,
 # 전 레벨을 승격하면 목록이 통째로 헤딩이 된다.
 MAX_OUTLINE_HEADING_LEVEL = 3
+
+# 패키지 자체의 폭주 방어 — 엔트리 수·해제 총량·XML 크기·섹션 수 상한
+MAX_XML_FILE_SIZE = 32 * 1024 * 1024
+MAX_XML_ELEMENTS = 1000000
+MAX_ARCHIVE_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
+MAX_ARCHIVE_ENTRIES = 10000
+MAX_SECTION_COUNT = 1000
+MAX_TABLE_SPAN = 200000
+
+
+class _SectionCountExceeded(ValueError):
+    pass
 
 # Safe XML parser (XXE protection)
 _safe_xml_parser = etree.XMLParser(resolve_entities=False, no_network=True)
@@ -135,6 +148,13 @@ class HWPXParser:
         self._field_overflow = 0      # 상한을 넘겨 버려진 fieldBegin 수 (짝 맞추기용)
         self._note_seq = 0            # 각주/미주 참조 번호
         self._cell_budget = MAX_DOCUMENT_CELLS
+        self._part_name_map = {}  # normalized package path -> ZIP entry name
+        self._bin_data_map = {}  # exact binary reference -> ZIP entry name
+        self._ambiguous_bin_ids = set()
+        self._explicit_bin_ids = set()
+        self._reported_ambiguous_bin_ids = set()
+        self._table_cells_remaining = MAX_TABLE_CELLS
+        self._table_cell_budget_exhausted = False
 
     def parse(self, file_path: str) -> Document:
         """HWPX 파일 파싱"""
@@ -144,6 +164,33 @@ class HWPXParser:
 
         try:
             with zipfile.ZipFile(file_path, 'r') as zf:
+                # 패키지 자체가 폭탄인지 먼저 본다 — 엔트리 수·해제 총량·중복 파트.
+                infos = zf.infolist()
+                if len(infos) > MAX_ARCHIVE_ENTRIES:
+                    raise ValueError(
+                        f"HWPX entry count exceeds limit: {len(infos)} > {MAX_ARCHIVE_ENTRIES}"
+                    )
+                total_size = sum(info.file_size for info in infos)
+                if total_size > MAX_ARCHIVE_UNCOMPRESSED_SIZE:
+                    raise ValueError(
+                        "HWPX total uncompressed size exceeds limit: "
+                        f"{total_size} > {MAX_ARCHIVE_UNCOMPRESSED_SIZE}"
+                    )
+                for info in infos:
+                    normalized = _normalize_part_name(info.filename)
+                    if normalized in self._part_name_map:
+                        raise ValueError(f"duplicate HWPX part name: {normalized}")
+                    self._part_name_map[normalized] = info.filename
+
+                mimetype_part = self._part_name_map.get("mimetype")
+                if mimetype_part is None:
+                    raise ValueError("HWPX mimetype marker is missing")
+                mimetype = self._read_zip_part(zf, mimetype_part, 128).decode(
+                    "ascii", errors="strict"
+                ).strip()
+                if mimetype != "application/hwp+zip":
+                    raise ValueError(f"invalid HWPX mimetype marker: {mimetype!r}")
+
                 # content.hpf 를 한 번만 읽어 섹션 목록과 바이너리 매핑을 함께 얻는다
                 self._read_content_hpf(zf)
 
@@ -153,21 +200,24 @@ class HWPXParser:
                 # 글자모양/문단모양/스타일 파싱
                 self._parse_header_xml(zf)
 
+                if not self._section_files:
+                    self.errors.append("ERR: HWPX section parts not found")
+
                 # 각 섹션 파싱
                 for sf in self._section_files:
                     try:
                         info = zf.getinfo(sf)
-                        if info.file_size > MAX_FILE_SIZE:
-                            self.errors.append(f"섹션 {sf} 크기 초과: {info.file_size} bytes")
+                        if info.file_size > MAX_XML_FILE_SIZE:
+                            self.errors.append(f"ERR: 섹션 {sf} 크기 초과: {info.file_size} bytes")
                             continue
                         if _compression_ratio_exceeded(info.file_size, info.compress_size):
-                            self.errors.append(f"섹션 {sf} 압축률 초과")
+                            self.errors.append(f"ERR: 섹션 {sf} 압축률 초과")
                             continue
-                        xml_data = zf.read(sf)
+                        xml_data = self._read_zip_part(zf, sf, MAX_XML_FILE_SIZE)
                         section = self._parse_section_xml(xml_data)
                         doc.sections.append(section)
                     except Exception as e:
-                        self.errors.append(f"섹션 {sf} 파싱 실패: {e}")
+                        self.errors.append(f"ERR: 섹션 {sf} 파싱 실패: {e}")
 
                 # 이미지 바이너리 데이터 로드
                 self._load_image_data(zf, doc)
@@ -184,6 +234,17 @@ class HWPXParser:
         doc.face_names = self._face_names
         doc.errors = self.errors
         return doc
+
+    def _read_zip_part(self, zf: zipfile.ZipFile, name: str, max_size: int) -> bytes:
+        """zip 파트를 크기·압축률 상한 안에서만 읽는다."""
+        info = zf.getinfo(name)
+        if info.file_size > max_size:
+            raise ValueError(
+                f"{name} size exceeds limit: {info.file_size} > {max_size}"
+            )
+        if _compression_ratio_exceeded(info.file_size, info.compress_size):
+            raise ValueError(f"{name} compression ratio exceeds limit")
+        return zf.read(name)
 
     # ── content.hpf / BinData ──
 
@@ -235,7 +296,9 @@ class HWPXParser:
         except KeyError:
             return None
         if info.file_size > MAX_META_FILE_SIZE:
-            self.errors.append(f"{name} 크기 초과: {info.file_size} bytes")
+            self.errors.append(
+                f"ERR: {name} size exceeds limit: {info.file_size} > {MAX_META_FILE_SIZE}"
+            )
             return None
         if _compression_ratio_exceeded(info.file_size, info.compress_size):
             self.errors.append(f"{name} 압축률 초과")
@@ -416,8 +479,42 @@ class HWPXParser:
 
     # ── 섹션 ──
 
+    def _resolve_manifest_part(self, manifest_name: str, href: str):
+        """Resolve a manifest href to one normalized archive part name."""
+        href = href.strip()
+        if not href or href.replace('\\', '/').startswith('/'):
+            return None
+
+        candidates = []
+        try:
+            candidates.append(_normalize_part_name(href))
+        except ValueError:
+            pass
+        manifest_dir = posixpath.dirname(manifest_name)
+        if manifest_dir:
+            try:
+                candidates.append(
+                    _normalize_part_name(posixpath.join(manifest_dir, href))
+                )
+            except ValueError:
+                pass
+        if not href.replace('\\', '/').startswith('Contents/'):
+            try:
+                candidates.append(
+                    _normalize_part_name(posixpath.join('Contents', href))
+                )
+            except ValueError:
+                pass
+
+        for candidate in dict.fromkeys(candidates):
+            if candidate in self._part_name_map:
+                return candidate
+        return None
+
     def _parse_section_xml(self, xml_data: bytes) -> Section:
         """섹션 XML → Section 모델"""
+        if xml_data.count(b"<") > MAX_XML_ELEMENTS:
+            raise ValueError("HWPX section XML element limit exceeded")
         section = Section()
         root = _parse_xml_tolerant(xml_data)
 
@@ -830,6 +927,9 @@ class HWPXParser:
                 )
                 table.rows = self._fallback_rows(tbl_elem)
                 return table
+            for _ in anchors:
+                if not self._reserve_table_cell():
+                    break
             self._cell_budget -= declared
             table.rows, dropped = _build_grid(anchors, row_cnt, col_cnt)
             if dropped:
@@ -849,34 +949,53 @@ class HWPXParser:
                 continue
             row = []
             for tc in child:
-                if _local_tag(tc.tag) == 'tc':
-                    row.append(self._parse_table_cell(tc))
+                if _local_tag(tc.tag) != 'tc':
+                    continue
+                if not self._reserve_table_cell():
+                    break
+                row.append(self._parse_table_cell(tc))
             rows.append(row)
+            if self._table_cell_budget_exhausted:
+                break
         return rows
+
+    def _reserve_table_cell(self) -> bool:
+        if self._table_cell_budget_exhausted:
+            return False
+        if self._table_cells_remaining <= 0:
+            error = (
+                "ERR: HWPX table cell limit exceeded: "
+                f"more than {MAX_TABLE_CELLS} cells"
+            )
+            if error not in self.errors:
+                self.errors.append(error)
+            self._table_cell_budget_exhausted = True
+            return False
+        self._table_cells_remaining -= 1
+        return True
 
     def _parse_table_cell(self, tc_elem) -> Cell:
         """<tc> → Cell"""
         cell = Cell()
 
         # 병합 속성 — tc 속성 또는 하위 cellSpan 태그
-        col_span = tc_elem.get('colSpan')
-        row_span = tc_elem.get('rowSpan')
-        if col_span:
-            try:
-                cell.col_span = int(col_span)
-            except ValueError:
-                pass
-        if row_span:
-            try:
-                cell.row_span = int(row_span)
-            except ValueError:
-                pass
+        col_span = self._validated_table_span(tc_elem.get('colSpan'))
+        row_span = self._validated_table_span(tc_elem.get('rowSpan'))
+        if col_span is not None:
+            cell.col_span = col_span
+        if row_span is not None:
+            cell.row_span = row_span
 
         # <hp:cellSpan colSpan="1" rowSpan="1"/> 태그에서도 읽기 (실문서는 이쪽을 쓴다)
         span = _find_child(tc_elem, 'cellSpan')
         if span is not None:
-            cell.col_span = max(_int_attr(span, 'colSpan', cell.col_span), 1)
-            cell.row_span = max(_int_attr(span, 'rowSpan', cell.row_span), 1)
+            # 손상·조작된 문서가 억대 span 을 주장해 격자를 폭주시키지 못하게 검증한다.
+            col_span = self._validated_table_span(span.get('colSpan'))
+            row_span = self._validated_table_span(span.get('rowSpan'))
+            if col_span is not None:
+                cell.col_span = max(col_span, 1)
+            if row_span is not None:
+                cell.row_span = max(row_span, 1)
 
         # 셀 내 문단+이미지 — 직접 자식 <subList> 또는 <p>에서
         for child in tc_elem:
@@ -889,6 +1008,31 @@ class HWPXParser:
                 cell.paragraphs.extend(self._parse_paragraph_elem(child))
 
         return cell
+
+    def _validated_table_span(self, raw_value):
+        if raw_value is None:
+            return None
+        value = raw_value.strip()
+        digits = value.lstrip('0') or '0'
+        max_digits = str(MAX_TABLE_SPAN)
+        if (
+            not value
+            or not value.isascii()
+            or not value.isdigit()
+            or len(digits) > len(max_digits)
+        ):
+            self._record_invalid_table_span()
+            return 1
+        span = int(digits)
+        if span <= 0 or span > MAX_TABLE_SPAN:
+            self._record_invalid_table_span()
+            return 1
+        return span
+
+    def _record_invalid_table_span(self):
+        error = "ERR: HWPX invalid table span value"
+        if error not in self.errors:
+            self.errors.append(error)
 
     # ── 이미지 ──
 
@@ -962,7 +1106,9 @@ class HWPXParser:
 
 def _local_tag(tag: str) -> str:
     """'{namespace}localname' → 'localname'"""
-    if isinstance(tag, str) and '}' in tag:
+    if not isinstance(tag, str):
+        return ""
+    if '}' in tag:
         return tag.split('}', 1)[1]
     return tag
 
@@ -1167,3 +1313,16 @@ def _build_grid(anchors, row_cnt: int, col_cnt: int):
                 grid[row][col] = Cell(row=row, col=col)
 
     return grid, dropped
+
+def _normalize_part_name(name: str) -> str:
+    """Return a canonical, relative POSIX path for one ZIP package part."""
+    normalized = posixpath.normpath(name.replace('\\', '/'))
+    if (
+        not normalized
+        or normalized == '.'
+        or normalized == '..'
+        or normalized.startswith('../')
+        or normalized.startswith('/')
+    ):
+        raise ValueError(f"invalid HWPX part name: {name!r}")
+    return normalized

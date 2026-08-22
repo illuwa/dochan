@@ -22,7 +22,8 @@ Issues에 `[Feature]` 태그로 제안해주세요.
 ```bash
 git clone https://github.com/YOUR_USERNAME/dochan.git
 cd dochan
-pip install -e ".[dev]"
+python -m pip install "uv==0.12.3"
+uv sync --locked --extra dev
 ```
 
 2. Branch 생성
@@ -32,7 +33,15 @@ git checkout -b feature/your-feature
 
 3. 코드 수정 + 테스트
 ```bash
-python -m pytest dochan/tests/
+uv run --locked --extra dev ruff check dochan scripts tests
+uv run --locked --extra dev python -m pytest tests/
+```
+
+Maintainers with the local `secaudit` tool installed also run the bounded
+tracked-file gate before merging:
+
+```bash
+uv run --locked --extra dev python scripts/run_tracked_security_audit.py
 ```
 
 4. PR 제출
@@ -48,6 +57,8 @@ python -m pytest dochan/tests/
 ```bash
 git clone https://github.com/illuwa/dochan.git
 cd dochan
-pip install -e ".[dev]"
-python -m pytest dochan/tests/
+python -m pip install "uv==0.12.3"
+uv sync --locked --extra dev
+uv run --locked --extra dev ruff check dochan scripts tests
+uv run --locked --extra dev python -m pytest tests/
 ```

@@ -5,7 +5,6 @@ quality/comparator.py — 필터 서버 GT 대조
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -49,6 +48,8 @@ def _char_similarity(a: str, b: str) -> float:
         return 1.0
     if not a or not b:
         return 0.0
+    if a == b:
+        return 1.0
 
     # bigram 기반 유사도
     a_bigrams = set()

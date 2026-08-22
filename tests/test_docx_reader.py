@@ -1,11 +1,14 @@
+import pytest
 import zipfile
 
+import dochan.ooxml.docx as docx_module
 from dochan import Dochan
 from dochan.batch import batch_convert
 from dochan.cli import _cmd_info
 from dochan.ooxml.docx import DOCXReader
 from dochan.output.json_out import to_dict
 from dochan.output.markdown import to_markdown
+from dochan.quality.checker import check_quality
 
 
 def _write_docx(
@@ -151,17 +154,18 @@ Content-Transfer-Encoding: quoted-printable
     assert "ROW 1 | Red dot" in markdown
 
 
-def test_reads_docx_tracked_move_text(tmp_path):
+def test_reads_docx_tracked_move_destination_once(tmp_path):
     path = tmp_path / "tracked-move.docx"
     _write_docx(path, """
     <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
       <w:body>
         <w:p>
           <w:moveFrom w:id="1" w:author="Author">
-            <w:ins w:id="2" w:author="Author">
-              <w:r><w:t>Moved text</w:t></w:r>
-            </w:ins>
+            <w:r><w:t>Moved text</w:t></w:r>
           </w:moveFrom>
+          <w:moveTo w:id="1" w:author="Author">
+            <w:r><w:t>Moved text</w:t></w:r>
+          </w:moveTo>
           <w:del w:id="3" w:author="Author">
             <w:r><w:delText>Deleted text</w:delText></w:r>
           </w:del>
@@ -172,7 +176,7 @@ def test_reads_docx_tracked_move_text(tmp_path):
 
     markdown = to_markdown(DOCXReader().read(str(path)))
 
-    assert "Moved text" in markdown
+    assert markdown.count("Moved text") == 1
     assert "Deleted text" not in markdown
 
 
@@ -494,6 +498,103 @@ def test_reads_docx_text_inside_textbox_content(tmp_path):
     assert para.text == "Before Boxed insight After"
 
 
+def _wrap_in_nested_textboxes(content, depth):
+    for _ in range(depth):
+        content = (
+            "<w:r><w:drawing><w:txbxContent><w:p>"
+            f"{content}"
+            "</w:p></w:txbxContent></w:drawing></w:r>"
+        )
+    return content
+
+
+def _nested_textbox_run(depth, leaf_text="Nested leaf"):
+    return _wrap_in_nested_textboxes(
+        f"<w:r><w:t>{leaf_text}</w:t></w:r>",
+        depth,
+    )
+
+
+def test_reads_deeply_nested_docx_textbox_leaf_once(tmp_path):
+    path = tmp_path / "nested-textbox-once.docx"
+    nested_run = _nested_textbox_run(10)
+    _write_docx(path, f"""
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body><w:p>{nested_run}</w:p></w:body>
+    </w:document>
+    """)
+
+    para = DOCXReader().read(str(path)).sections[0].elements[0]
+
+    assert para.text == "Nested leaf"
+
+
+def test_nested_docx_textboxes_preserve_text_order_and_host_run_style(tmp_path):
+    path = tmp_path / "nested-textbox-style.docx"
+    nested_run = _nested_textbox_run(2, "Inner")
+    _write_docx(path, f"""
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p>
+          <w:r><w:t>Before </w:t></w:r>
+          <w:r>
+            <w:rPr><w:b/></w:rPr>
+            <w:t>Box: </w:t>
+            <w:drawing>
+              <w:txbxContent><w:p>{nested_run}</w:p></w:txbxContent>
+            </w:drawing>
+            <w:t> tail</w:t>
+          </w:r>
+          <w:r><w:t> After</w:t></w:r>
+        </w:p>
+      </w:body>
+    </w:document>
+    """)
+
+    para = DOCXReader().read(str(path)).sections[0].elements[0]
+
+    assert para.text == "Before Box: Inner tail After"
+    assert para.runs[1].text == "Box: Inner tail"
+    assert para.runs[1].bold is True
+
+
+def test_docx_textbox_structure_depth_boundary_is_included(tmp_path):
+    path = tmp_path / "textbox-depth-boundary.docx"
+    nested_run = _nested_textbox_run(64, "Boundary leaf")
+    _write_docx(path, f"""
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body><w:p>{nested_run}</w:p></w:body>
+    </w:document>
+    """)
+
+    doc = DOCXReader().read(str(path))
+
+    assert doc.sections[0].elements[0].text == "Boundary leaf"
+    assert not [error for error in doc.errors if "structure depth limit" in error]
+
+
+def test_docx_textbox_over_depth_branch_is_omitted_and_sibling_survives(tmp_path):
+    path = tmp_path / "textbox-over-depth.docx"
+    deepest_content = (
+        f'{_nested_textbox_run(1, "Too deep")}'
+        "<w:r><w:t>Safe sibling</w:t></w:r>"
+    )
+    nested_run = _wrap_in_nested_textboxes(deepest_content, 64)
+    _write_docx(path, f"""
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body><w:p>{nested_run}</w:p></w:body>
+    </w:document>
+    """)
+
+    doc = DOCXReader().read(str(path))
+    para = doc.sections[0].elements[0]
+    depth_errors = [error for error in doc.errors if "structure depth limit" in error]
+
+    assert para.text == "Safe sibling"
+    assert "Too deep" not in para.text
+    assert depth_errors == ["ERR: DOCX structure depth limit exceeded (64)"]
+
+
 def test_reads_docx_body_level_content_controls_in_order(tmp_path):
     path = tmp_path / "body-sdt.docx"
     _write_docx(path, """
@@ -708,6 +809,42 @@ def test_records_docx_embedded_image_relationship_as_asset(tmp_path):
     assert asset.content_type == "image/png"
     assert asset.metadata["label"] == "Revenue Chart ARR increased Picture 1"
     assert asset.metadata["source_format"] == "docx"
+    assert asset.metadata["missing"] is False
+
+
+def test_records_missing_docx_image_part_once_for_quality(tmp_path):
+    path = tmp_path / "missing-image-part.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <w:body><w:p>
+            <w:r><w:drawing><a:blip r:embed="rIdMissing"/></w:drawing></w:r>
+            <w:r><w:drawing><a:blip r:embed="rIdMissing"/></w:drawing></w:r>
+          </w:p></w:body>
+        </w:document>
+        """,
+        document_rels_xml="""
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rIdMissing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/missing.png"/>
+        </Relationships>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    report = check_quality(doc)
+
+    assert len(doc.assets) == 1
+    assert doc.assets[0].source_path == "word/media/missing.png"
+    assert doc.assets[0].metadata["missing"] is True
+    assert doc.errors == [
+        "WARN: DOCX image part not found: word/media/missing.png"
+    ]
+    assert report.total_images == 1
+    assert report.missing_images == 1
+    assert report.parse_errors == 0
 
 
 def test_records_docx_embedded_object_relationships_as_assets(tmp_path):
@@ -842,6 +979,128 @@ def test_reads_docx_external_hyperlink_target(tmp_path):
     para = DOCXReader().read(str(path)).sections[0].elements[0]
 
     assert para.text == "See Report <https://example.com/report>"
+
+
+def test_skips_unsafe_docx_document_image_relationship_target(tmp_path):
+    path = tmp_path / "unsafe-image-target.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:r><w:t>Safe body</w:t></w:r>
+              <w:r><w:drawing><a:blip r:embed="rIdImage"/></w:drawing></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        document_rels_xml="""
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rIdImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../../outside.png"/>
+        </Relationships>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    markdown = to_markdown(doc)
+
+    assert doc.sections[0].elements[0].text == "Safe body"
+    assert "outside.png" not in markdown
+    assert doc.errors == [
+        "ERR: DOCX unsafe internal relationship target skipped: "
+        "word/_rels/document.xml.rels#rIdImage"
+    ]
+
+
+def test_skips_unsafe_docx_header_and_part_relationship_targets(tmp_path):
+    path = tmp_path / "unsafe-header-targets.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <w:body>
+            <w:p><w:r><w:t>Safe body</w:t></w:r></w:p>
+            <w:sectPr>
+              <w:headerReference w:type="default" r:id="rIdHeader"/>
+              <w:footerReference w:type="default" r:id="rIdUnsafeFooter"/>
+            </w:sectPr>
+          </w:body>
+        </w:document>
+        """,
+        document_rels_xml="""
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+          <Relationship Id="rIdUnsafeFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="../../outside.xml"/>
+        </Relationships>
+        """,
+        extra_parts={
+            "word/header1.xml": """
+            <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <w:p>
+                <w:r><w:t>Safe header</w:t></w:r>
+                <w:r><w:drawing><a:blip r:embed="rIdHeaderImage"/></w:drawing></w:r>
+              </w:p>
+            </w:hdr>
+            """,
+            "word/_rels/header1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdHeaderImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../../outside.png"/>
+            </Relationships>
+            """,
+        },
+    )
+
+    doc = DOCXReader().read(str(path))
+    markdown = to_markdown(doc)
+
+    assert "Safe body" in markdown
+    assert "Safe header" in markdown
+    assert "outside" not in markdown
+    assert doc.errors == [
+        "ERR: DOCX unsafe internal relationship target skipped: "
+        "word/_rels/document.xml.rels#rIdUnsafeFooter",
+        "ERR: DOCX unsafe internal relationship target skipped: "
+        "word/_rels/header1.xml.rels#rIdHeaderImage",
+    ]
+
+
+def test_skips_unsafe_docx_alt_chunk_and_embedded_targets(tmp_path):
+    path = tmp_path / "unsafe-other-targets.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <w:body>
+            <w:altChunk r:id="rIdChunk"/>
+            <w:p><w:r><w:t>Safe body</w:t></w:r></w:p>
+          </w:body>
+        </w:document>
+        """,
+        document_rels_xml="""
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rIdChunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="../../outside.html"/>
+          <Relationship Id="rIdEmbedded" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="../../outside.bin"/>
+        </Relationships>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+
+    assert doc.sections[0].elements[0].text == "Safe body"
+    assert doc.assets == []
+    assert doc.errors == [
+        "ERR: DOCX unsafe internal relationship target skipped: "
+        "word/_rels/document.xml.rels#rIdChunk",
+        "ERR: DOCX unsafe internal relationship target skipped: "
+        "word/_rels/document.xml.rels#rIdEmbedded",
+    ]
 
 
 def test_reads_docx_visible_bookmark_anchor_names(tmp_path):
@@ -1002,6 +1261,29 @@ def test_reads_docx_table_rows_and_cells_inside_content_controls(tmp_path):
     assert table.row_count == 2
     assert table.rows[1][0].text == "Choose an item."
     assert table.rows[1][1].text == "Here is just a sample"
+
+
+def test_docx_table_wrapper_depth_is_independent_from_nested_table_depth(tmp_path):
+    path = tmp_path / "table-wrapper-depth-independence.docx"
+    wrapped_paragraph = _deep_sdt(
+        "<w:p><w:r><w:t>Within structure limit</w:t></w:r></w:p>",
+        depth=64,
+    )
+    _write_docx(
+        path,
+        f"""
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:tbl><w:tr><w:tc>{wrapped_paragraph}</w:tc></w:tr></w:tbl>
+          </w:body>
+        </w:document>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+
+    assert doc.sections[0].elements[0].rows[0][0].text == "Within structure limit"
+    assert doc.errors == []
 
 
 def test_reads_docx_gridspan_as_col_span(tmp_path):
@@ -1211,6 +1493,148 @@ def test_reads_docx_letter_and_roman_numbering_formats(tmp_path):
     ]
 
 
+def test_rejects_docx_numbering_value_above_output_limit(tmp_path, monkeypatch):
+    path = tmp_path / "oversized-numbering.docx"
+    monkeypatch.setattr(docx_module, "MAX_NUMBERING_VALUE", 9, raising=False)
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+              <w:r><w:t>Bounded item</w:t></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        numbering_xml="""
+        <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="7">
+            <w:lvl w:ilvl="0">
+              <w:start w:val="10"/>
+              <w:numFmt w:val="upperRoman"/>
+              <w:lvlText w:val="%1."/>
+            </w:lvl>
+          </w:abstractNum>
+          <w:num w:numId="1"><w:abstractNumId w:val="7"/></w:num>
+        </w:numbering>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+
+    assert any("DOCX numbering value limit exceeded" in error for error in doc.errors)
+    assert len(doc.sections[0].elements[0].text) < 100
+
+
+def test_rejects_docx_numbering_level_above_supported_limit(tmp_path, monkeypatch):
+    path = tmp_path / "oversized-numbering-level.docx"
+    monkeypatch.setattr(docx_module, "MAX_NUMBERING_LEVEL", 1, raising=False)
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="1"/></w:numPr></w:pPr>
+              <w:r><w:t>Bounded item</w:t></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        numbering_xml="""
+        <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="7">
+            <w:lvl w:ilvl="2">
+              <w:numFmt w:val="decimal"/>
+              <w:lvlText w:val="%3."/>
+            </w:lvl>
+          </w:abstractNum>
+          <w:num w:numId="1"><w:abstractNumId w:val="7"/></w:num>
+        </w:numbering>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+
+    assert any("DOCX numbering level limit exceeded" in error for error in doc.errors)
+    assert doc.sections[0].elements[0].text == "Bounded item"
+
+
+def test_rejects_docx_numbering_template_above_output_limit(tmp_path, monkeypatch):
+    path = tmp_path / "oversized-numbering-template.docx"
+    monkeypatch.setattr(docx_module, "MAX_NUMBERING_TEMPLATE_CHARS", 8, raising=False)
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+              <w:r><w:t>Bounded item</w:t></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        numbering_xml="""
+        <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="7">
+            <w:lvl w:ilvl="0">
+              <w:numFmt w:val="decimal"/>
+              <w:lvlText w:val="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"/>
+            </w:lvl>
+          </w:abstractNum>
+          <w:num w:numId="1"><w:abstractNumId w:val="7"/></w:num>
+        </w:numbering>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+
+    assert any("DOCX numbering marker template limit exceeded" in error for error in doc.errors)
+    assert doc.sections[0].elements[0].text == "1. Bounded item"
+
+
+def test_docx_false_run_properties_disable_formatting(tmp_path):
+    path = tmp_path / "false-run-properties.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p><w:r>
+              <w:rPr>
+                <w:rStyle w:val="EnabledFormatting"/>
+                <w:b w:val="0"/>
+                <w:i w:val="false"/>
+                <w:u w:val="none"/>
+                <w:strike w:val="off"/>
+              </w:rPr>
+              <w:t>Plain text</w:t>
+            </w:r></w:p>
+          </w:body>
+        </w:document>
+        """,
+        styles_xml="""
+        <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:style w:type="character" w:styleId="EnabledFormatting">
+            <w:rPr><w:b/><w:i/><w:u w:val="single"/><w:strike/></w:rPr>
+          </w:style>
+        </w:styles>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    run = doc.sections[0].elements[0].runs[0]
+
+    assert not run.bold
+    assert not run.italic
+    assert not run.underline
+    assert not run.strikeout
+    assert to_markdown(doc) == "Plain text"
+
+
 def test_reads_docx_multilevel_numbering_with_parent_markers(tmp_path):
     path = tmp_path / "multilevel-numbering.docx"
     _write_docx(
@@ -1302,11 +1726,94 @@ def test_reads_docx_footnotes_and_endnotes(tmp_path):
 
     doc = DOCXReader().read(str(path))
 
-    assert doc.sections[0].elements[0].text == "Body with note[1] and endnote[2]"
-    assert doc.sections[0].elements[1].type == "footnote"
-    assert doc.sections[0].elements[1].text == "Footnote detail"
-    assert doc.sections[0].elements[2].type == "endnote"
-    assert doc.sections[0].elements[2].text == "Endnote detail"
+    paragraph, footnote, endnote = doc.sections[0].elements
+    assert paragraph.text == "Body with note[1] and endnote[2]"
+    assert paragraph.runs[1].note_reference_type == "footnote"
+    assert paragraph.runs[1].note_reference_number == 1
+    assert paragraph.runs[3].note_reference_type == "endnote"
+    assert paragraph.runs[3].note_reference_number == 2
+    assert footnote.type == "footnote"
+    assert footnote.number == 1
+    assert footnote.text == "Footnote detail"
+    assert endnote.type == "endnote"
+    assert endnote.number == 2
+    assert endnote.text == "Endnote detail"
+    assert "Body with note[^1] and endnote[^2]" in to_markdown(doc)
+
+
+def test_docx_note_reference_splits_mixed_run_and_preserves_literal_text_and_style(tmp_path):
+    path = tmp_path / "mixed-note-reference-run.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:r>
+                <w:rPr><w:b/><w:i/></w:rPr>
+                <w:t>literal [1] / </w:t>
+                <w:footnoteReference w:id="2"/>
+                <w:t> tail</w:t>
+              </w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        footnotes_xml="""
+        <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:footnote w:id="2"><w:p><w:r><w:t>Detail</w:t></w:r></w:p></w:footnote>
+        </w:footnotes>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    runs = doc.sections[0].elements[0].runs
+    payload_runs = to_dict(doc)["sections"][0]["elements"][0]["runs"]
+
+    assert [run.text for run in runs] == ["literal [1] / ", "[1]", " tail"]
+    assert all(run.bold and run.italic for run in runs)
+    assert runs[0].note_reference_type == ""
+    assert runs[0].note_reference_number is None
+    assert runs[1].note_reference_type == "footnote"
+    assert runs[1].note_reference_number == 1
+    assert runs[2].note_reference_type == ""
+    assert runs[2].note_reference_number is None
+    assert "note_reference_type" not in payload_runs[0]
+    assert payload_runs[1]["note_reference_type"] == "footnote"
+    assert payload_runs[1]["note_reference_number"] == 1
+    assert "***literal [1] / ***[^1]*** tail***" in to_markdown(doc)
+
+
+def test_docx_empty_first_note_does_not_renumber_second_definition(tmp_path):
+    path = tmp_path / "empty-first-note.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:r><w:t>First</w:t><w:footnoteReference w:id="2"/></w:r>
+              <w:r><w:t> Second</w:t><w:footnoteReference w:id="3"/></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        footnotes_xml="""
+        <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:footnote w:id="2"><w:p/></w:footnote>
+          <w:footnote w:id="3"><w:p><w:r><w:t>Second detail</w:t></w:r></w:p></w:footnote>
+        </w:footnotes>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    markdown = to_markdown(doc)
+    second_note = doc.sections[0].elements[1]
+
+    assert second_note.number == 2
+    assert "First[^1] Second[^2]" in markdown
+    assert "[^2]: Second detail" in markdown
+    assert "[^1]:" not in markdown
 
 
 def test_reads_docx_tables_inside_endnotes(tmp_path):
@@ -1379,6 +1886,63 @@ def test_reads_docx_comments_and_comment_reference_marker(tmp_path):
     assert doc.sections[0].elements[0].text == "Needs review[comment 1]"
     assert doc.sections[0].elements[1].type == "comment"
     assert doc.sections[0].elements[1].text == "Clarify this section"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "2026-08-22 브랜치 통합에서 Markdown 렌더는 정본의 _MdContext 설계를 택했다. 주석 라벨 형식이 plan 설계와 다르다."
+    ),
+    strict=False,
+)
+def test_reads_multiple_docx_comments_with_unique_numbers_authors_and_notes(tmp_path):
+    path = tmp_path / "multiple-comments.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:r><w:t>Reviews </w:t></w:r>
+              <w:r><w:commentReference w:id="7"/></w:r>
+              <w:r><w:t> and </w:t></w:r>
+              <w:r><w:commentReference w:id="9"/></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        """,
+        comments_xml="""
+        <w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:comment w:id="7" w:author="Alice">
+            <w:p><w:r><w:t>First review</w:t></w:r></w:p>
+          </w:comment>
+          <w:comment w:id="9" w:author="Bob">
+            <w:p><w:r><w:t>Second review</w:t></w:r></w:p>
+          </w:comment>
+        </w:comments>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    paragraph = doc.sections[0].elements[0]
+    comments = doc.find_all("comment")
+    markdown = to_markdown(doc)
+    payload_comments = to_dict(doc)["sections"][0]["elements"][1:]
+
+    assert paragraph.text == "Reviews [comment 1] and [comment 2]"
+    assert [run.note_reference_type for run in paragraph.runs] == [
+        "",
+        "comment",
+        "",
+        "comment",
+    ]
+    assert [comment.number for comment in comments] == [1, 2]
+    assert [comment.author for comment in comments] == ["Alice", "Bob"]
+    assert "Reviews [^comment-1] and [^comment-2]" in markdown
+    assert markdown.count("[^comment-1]: First review") == 1
+    assert markdown.count("[^comment-2]: Second review") == 1
+    assert "[^미주]" not in markdown
+    assert [item["number"] for item in payload_comments] == [1, 2]
+    assert [item["author"] for item in payload_comments] == ["Alice", "Bob"]
 
 
 def test_reads_docx_comment_range_as_inline_annotated_text(tmp_path):
@@ -1650,6 +2214,143 @@ def test_reads_docx_footer_paragraphs_inside_content_controls(tmp_path):
 
     assert elements[0].type == "footer"
     assert elements[0].text == "Page 2 of 2"
+
+
+def test_docx_deep_structure_branches_are_omitted_with_one_diagnostic(tmp_path):
+    path = tmp_path / "deep-structures.docx"
+    depth = 1100
+
+    def nested(tag, content):
+        return f"<w:{tag}>" * depth + content + f"</w:{tag}>" * depth
+
+    deep_block = nested("sdt", "<w:p><w:r><w:t>Deep block</w:t></w:r></w:p>")
+    deep_run = nested("smartTag", "<w:r><w:t>Deep run</w:t></w:r>")
+    deep_note = nested("sdt", "<w:p><w:r><w:t>Deep note</w:t></w:r></w:p>")
+    deep_footer = nested("smartTag", "<w:p><w:r><w:t>Deep footer</w:t></w:r></w:p>")
+
+    _write_docx(
+        path,
+        f"""
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <w:body>
+            {deep_block}
+            <w:p>{deep_run}</w:p>
+            <w:p>
+              <w:r><w:t>Safe body</w:t><w:footnoteReference w:id="2"/></w:r>
+            </w:p>
+            <w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr>
+          </w:body>
+        </w:document>
+        """,
+        document_rels_xml="""
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer.xml"/>
+        </Relationships>
+        """,
+        footnotes_xml=f"""
+        <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:footnote w:id="2">
+            {deep_note}
+            <w:p><w:r><w:t>Safe note</w:t></w:r></w:p>
+          </w:footnote>
+        </w:footnotes>
+        """,
+        extra_parts={
+            "word/footer.xml": f"""
+            <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              {deep_footer}
+              <w:p><w:r><w:t>Safe footer</w:t></w:r></w:p>
+            </w:ftr>
+            """,
+        },
+    )
+
+    doc = DOCXReader().read(str(path))
+    text = "\n".join(element.text for element in doc.sections[0].elements)
+    depth_errors = [error for error in doc.errors if "structure depth limit" in error]
+
+    assert "Safe body[1]" in text
+    assert "Safe note" in text
+    assert "Safe footer" in text
+    assert "Deep block" not in text
+    assert "Deep run" not in text
+    assert "Deep note" not in text
+    assert "Deep footer" not in text
+    assert depth_errors == ["ERR: DOCX structure depth limit exceeded (64)"]
+
+
+def _deep_sdt(content, depth=1100):
+    return "<w:sdt>" * depth + content + "</w:sdt>" * depth
+
+
+def _assert_deep_table_wrapper_is_omitted(path, table_xml, safe_text, deep_text):
+    _write_docx(
+        path,
+        f"""
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>{table_xml}</w:body>
+        </w:document>
+        """,
+    )
+
+    doc = DOCXReader().read(str(path))
+    table = doc.sections[0].elements[0]
+    depth_errors = [error for error in doc.errors if "structure depth limit" in error]
+
+    assert safe_text in table.rows[0][0].text
+    assert deep_text not in to_markdown(doc)
+    assert depth_errors == ["ERR: DOCX structure depth limit exceeded (64)"]
+
+
+def test_docx_deep_table_row_wrapper_omits_branch_and_keeps_following_row(tmp_path):
+    deep_row = _deep_sdt(
+        "<w:tr><w:tc><w:p><w:r><w:t>Deep row</w:t></w:r></w:p></w:tc></w:tr>",
+    )
+    safe_row = (
+        "<w:tr><w:tc><w:p><w:r><w:t>Safe row</w:t></w:r></w:p></w:tc></w:tr>"
+    )
+
+    _assert_deep_table_wrapper_is_omitted(
+        tmp_path / "deep-table-row-wrapper.docx",
+        f"<w:tbl>{deep_row}{safe_row}</w:tbl>",
+        "Safe row",
+        "Deep row",
+    )
+
+
+def test_docx_deep_table_cell_wrapper_omits_branch_and_keeps_following_cell(tmp_path):
+    deep_cell = _deep_sdt(
+        "<w:tc><w:p><w:r><w:t>Deep cell</w:t></w:r></w:p></w:tc>",
+    )
+    safe_cell = "<w:tc><w:p><w:r><w:t>Safe cell</w:t></w:r></w:p></w:tc>"
+
+    _assert_deep_table_wrapper_is_omitted(
+        tmp_path / "deep-table-cell-wrapper.docx",
+        f"<w:tbl><w:tr>{deep_cell}{safe_cell}</w:tr></w:tbl>",
+        "Safe cell",
+        "Deep cell",
+    )
+
+
+def test_docx_deep_cell_paragraph_wrapper_omits_branch_and_keeps_following_paragraph(
+    tmp_path,
+):
+    deep_paragraph = _deep_sdt(
+        "<w:p><w:r><w:t>Deep paragraph</w:t></w:r></w:p>",
+    )
+    safe_paragraph = "<w:p><w:r><w:t>Safe paragraph</w:t></w:r></w:p>"
+
+    _assert_deep_table_wrapper_is_omitted(
+        tmp_path / "deep-cell-paragraph-wrapper.docx",
+        (
+            "<w:tbl><w:tr><w:tc>"
+            f"{deep_paragraph}{safe_paragraph}"
+            "</w:tc></w:tr></w:tbl>"
+        ),
+        "Safe paragraph",
+        "Deep paragraph",
+    )
 
 
 def test_dochan_routes_docx_to_native_reader(tmp_path):

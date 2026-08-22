@@ -15,13 +15,15 @@ from typing import List
 from ..utils.safe_decompress import safe_zlib_decompress
 
 from ..constants import (
-    HWPTAG_DOCUMENT_PROPERTIES, HWPTAG_ID_MAPPINGS,
-    HWPTAG_BIN_DATA, HWPTAG_FACE_NAME, HWPTAG_CHAR_SHAPE,
-    HWPTAG_PARA_SHAPE, HWPTAG_STYLE, HWPTAG_BORDER_FILL,
+    HWPTAG_DOCUMENT_PROPERTIES, HWPTAG_BIN_DATA, HWPTAG_FACE_NAME, HWPTAG_CHAR_SHAPE,
+    HWPTAG_PARA_SHAPE, HWPTAG_STYLE,
 )
 from ..model.style import FaceName, ParaShape, StyleEntry
 from .records.char_shape import CharShape
 from .records.style import parse_style_record
+
+
+MAX_HWP_RECORDS = 200_000
 
 
 @dataclass
@@ -80,7 +82,7 @@ class DocInfoParser:
                 elif rec_tag == HWPTAG_BIN_DATA:
                     self._parse_bin_data(rec_data, doc_info)
             except Exception as e:
-                doc_info.errors.append(f"DocInfo 레코드 {rec_tag} 파싱 실패: {e}")
+                doc_info.errors.append(f"WARN: DocInfo 레코드 {rec_tag} 파싱 실패: {e}")
 
         doc_info.errors.extend(self.errors)
         return doc_info
@@ -90,6 +92,12 @@ class DocInfoParser:
         records = []
         i = 0
         while i < len(data) - 3:
+            if len(records) >= MAX_HWP_RECORDS:
+                self.errors.append(
+                    "ERR: HWP DocInfo record count exceeds limit: "
+                    f"more than {MAX_HWP_RECORDS}"
+                )
+                break
             try:
                 header = struct.unpack_from("<I", data, i)[0]
                 tag_id = header & 0x3FF
@@ -97,17 +105,34 @@ class DocInfoParser:
 
                 if size == 0xFFF:
                     if i + 8 > len(data):
-                        break
+                        raise ValueError("truncated extended record header")
                     size = struct.unpack_from("<I", data, i + 4)[0]
-                    rec_data = data[i + 8: i + 8 + size]
+                    payload_start = i + 8
+                    payload_end = payload_start + size
+                    if payload_end > len(data):
+                        raise ValueError(
+                            f"truncated record payload: declared={size}, "
+                            f"available={max(len(data) - payload_start, 0)}"
+                        )
+                    rec_data = data[payload_start:payload_end]
                     records.append((tag_id, rec_data))
-                    i += 8 + size
+                    i = payload_end
                 else:
-                    rec_data = data[i + 4: i + 4 + size]
+                    payload_start = i + 4
+                    payload_end = payload_start + size
+                    if payload_end > len(data):
+                        raise ValueError(
+                            f"truncated record payload: declared={size}, "
+                            f"available={max(len(data) - payload_start, 0)}"
+                        )
+                    rec_data = data[payload_start:payload_end]
                     records.append((tag_id, rec_data))
-                    i += 4 + size
+                    i = payload_end
+            except ValueError as e:
+                self.errors.append(f"ERR: DocInfo 레코드 읽기 실패 offset={i}: {e}")
+                break
             except Exception as e:
-                self.errors.append(f"DocInfo 레코드 읽기 실패 offset={i}: {e}")
+                self.errors.append(f"ERR: DocInfo 레코드 읽기 실패 offset={i}: {e}")
                 i += 4
         return records
 

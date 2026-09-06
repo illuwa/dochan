@@ -26,7 +26,6 @@ classifiers = [
 dependencies = [
     "olefile>=0.47",
     "lxml>=4.9",
-    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

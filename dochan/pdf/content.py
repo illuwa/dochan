@@ -2,13 +2,14 @@
 
 텍스트 행렬(Tm/Td/TD/T*)과 글리프 폭(WidthMap)으로 각 텍스트 조각의
 실제 x/y 를 누적한다. 이 좌표가 있어야 단어 간격, 열 경계(표), 읽기
-순서를 어림짐작이 아닌 실측으로 복원할 수 있다. 그래픽 연산자는 무시한다.
+순서를 복원한다. CTM과 괘선 경로를 같은 패스에서 해석한다.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .objects import DELIMITERS, WHITESPACE, PDFLexer, PDFName, PDFSyntaxError
 from .widths import WidthMap
+from .paths import PathCollector, Segment
 
 _OPERAND_START = b"(</[0123456789+-."
 
@@ -45,6 +46,15 @@ class Fragment:
     space_width: float  # 이 조각 폰트의 공백 1칸 device 폭 (간격 판정용)
     bold: bool = False
     italic: bool = False
+    order: int = 0
+
+
+@dataclass
+class PageContent:
+    """페이지 텍스트·괘선과 한도 경고."""
+    fragments: List[Fragment]
+    segments: List[Segment]
+    warnings: List[str] = field(default_factory=list)
 
 
 def _matmul(m1, m2):
@@ -97,7 +107,15 @@ class ContentTextExtractor:
     # ── 좌표 기반 조각 추출 ──
 
     def extract_fragments(self, content: bytes) -> List[Fragment]:
+        return self.extract_page(content).fragments
+
+    def extract_page(self, content: bytes) -> PageContent:
+        """그래픽 상태를 유지하며 텍스트와 괘선을 함께 해석한다."""
         lexer = PDFLexer(content)
+        ctm = (1, 0, 0, 1, 0, 0)
+        stack = []
+        overflow = 0
+        paths = PathCollector()
         frags: List[Fragment] = []
         operands: List[object] = []
         # 텍스트 상태
@@ -128,7 +146,19 @@ class ContentTextExtractor:
                 lexer.pos += 1
                 continue
 
-            if op == b"BT":
+            if op == b"q":
+                if len(stack) < 256:
+                    stack.append((ctm, font, fs, tc, tw, th, tl))
+                else:
+                    overflow += 1
+            elif op == b"Q":
+                if overflow:
+                    overflow -= 1
+                elif stack:
+                    ctm, font, fs, tc, tw, th, tl = stack.pop()
+            elif op == b"cm" and len(operands) >= 6:
+                ctm = _matmul(tuple(_num(o) for o in operands[-6:]), ctm)
+            elif op == b"BT":
                 tm = (1, 0, 0, 1, 0, 0)
                 tlm = (1, 0, 0, 1, 0, 0)
             elif op == b"Tf":
@@ -163,7 +193,7 @@ class ContentTextExtractor:
                 tm = tlm
             elif op == b"Tj":
                 if operands and isinstance(operands[-1], bytes):
-                    tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags)
+                    tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
             elif op in (b"'", b'"'):
                 tlm = _matmul((1, 0, 0, 1, 0, -tl), tlm)
                 tm = tlm
@@ -171,28 +201,30 @@ class ContentTextExtractor:
                     tw = _num(operands[-3])
                     tc = _num(operands[-2])
                 if operands and isinstance(operands[-1], bytes):
-                    tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags)
+                    tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
             elif op == b"TJ":
                 if operands and isinstance(operands[-1], list):
                     for item in operands[-1]:
                         if isinstance(item, bytes):
-                            tm = self._show(item, tm, font, fs, tc, tw, th, frags)
+                            tm = self._show(item, tm, font, fs, tc, tw, th, frags, ctm)
                         elif isinstance(item, (int, float)):
                             adj = -item / 1000.0 * fs * th
                             tm = _matmul((1, 0, 0, 1, adj, 0), tm)
             elif op == b"BI":
                 lexer.pos = self._skip_inline_image(content, lexer.pos)
+            else:
+                paths.operate(op, [_num(o) for o in operands], ctm)
             operands = []
-        return frags
+        return PageContent(frags, paths.segments, paths.warnings)
 
-    def _show(self, raw, tm, font, fs, tc, tw, th, frags):
+    def _show(self, raw, tm, font, fs, tc, tw, th, frags, ctm):
         if not raw:
             return tm
         if font is None:
             # Tf 미지정/미해석 폰트 — 텍스트 유실 방지용 기본 폰트
             font = FontInfo(decode=default_byte_decoder, widths=WidthMap({}, 500.0), code_bytes=1)
         text = font.decode(raw)
-        start_tm = tm
+        start_tm = _matmul(tm, ctm)
         # 조각 전체 device 폭을 계산하며 tm 을 전진
         total_adv = 0.0
         codes = self._iter_codes(raw, font.code_bytes)
@@ -200,17 +232,17 @@ class ContentTextExtractor:
             w0 = font.widths.advance(code) / 1000.0
             disp = (w0 * fs + tc + (tw if (font.code_bytes == 1 and code == 32) else 0.0)) * th
             total_adv += disp
-        scale = (start_tm[0] ** 2 + start_tm[1] ** 2) ** 0.5 or 1.0
+        scale = (start_tm[0] ** 2 + start_tm[1] ** 2) ** 0.5
         space_w = font.widths.advance(32) / 1000.0 * fs * th * scale
         if space_w <= 0:
             space_w = 0.25 * fs * scale
-        eff_size = fs * ((abs(start_tm[0] * start_tm[3] - start_tm[1] * start_tm[2])) ** 0.5 or 1.0)
+        eff_size = fs * ((abs(start_tm[0] * start_tm[3] - start_tm[1] * start_tm[2])) ** 0.5)
         if text.strip():
             frags.append(Fragment(
                 x=start_tm[4], y=start_tm[5],
-                width=total_adv * scale, size=eff_size,
+                width=abs(total_adv) * scale, size=eff_size,
                 text=text, space_width=space_w,
-                bold=font.bold, italic=font.italic,
+                bold=font.bold, italic=font.italic, order=len(frags),
             ))
         return _matmul((1, 0, 0, 1, total_adv, 0), tm)
 
@@ -240,8 +272,8 @@ class ContentTextExtractor:
     def _assemble_lines(self, frags: List[Fragment]) -> List["_Line"]:
         """콘텐츠 스트림 순서를 보존하며 같은 기준선 조각을 한 줄로 묶는다.
 
-        전역 y 정렬은 CTM(그래픽 행렬)을 반영하지 않아 각주/머리말이
-        본문 위로 튀는 등 읽기 순서를 망가뜨린다. 생성기가 의도한
+        전역 y 정렬은 각주/머리말을 본문 사이에 끼워 넣을 수 있다.
+        생성기가 의도한
         그리기 순서(대개 곧 읽기 순서)를 유지하고, y 가 크게 바뀔 때만
         줄을 나눈다. 줄 안에서만 x 로 정렬해 좌→우 배치를 바로잡는다.
         """
@@ -250,20 +282,21 @@ class ContentTextExtractor:
         rows: List[List[Fragment]] = []
         current: List[Fragment] = []
         current_y: Optional[float] = None
+        current_size = 0.0
         for frag in frags:
-            if current_y is None or abs(frag.y - current_y) <= _LINE_Y_TOLERANCE:
+            tolerance = max(_LINE_Y_TOLERANCE, 0.5 * current_size)
+            if current_y is None or abs(frag.y - current_y) <= tolerance:
                 current.append(frag)
                 current_y = frag.y if current_y is None else current_y
             else:
                 rows.append(current)
                 current = [frag]
                 current_y = frag.y
+                current_size = 0.0
+            current_size = max(current_size, frag.size)
         if current:
             rows.append(current)
-        # 줄 안에서 x 재정렬은 하지 않는다 — 생성기의 그리기 순서가 곧 읽기
-        # 순서이고, 불완전한 x(=CTM 미반영) 로 정렬하면 문자가 뒤섞인다.
-        # x 는 간격/열 판정에만 쓴다.
-        return [_Line(row) for row in rows]
+        return [_Line(sorted(row, key=lambda f: f.x)) for row in rows]
 
 
 @dataclass
@@ -277,6 +310,9 @@ class _Line:
     """한 기준선의 텍스트 — 세그먼트 좌표와 조립된 문자열."""
 
     def __init__(self, frags: List[Fragment]):
+        self.order = min(f.order for f in frags)
+        self.left = min(f.x for f in frags)
+        self.right = max(f.x + f.width for f in frags)
         self.y = frags[0].y
         self.size = max((f.size for f in frags), default=0.0)
         self.segments: List[_Segment] = []

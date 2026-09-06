@@ -93,3 +93,101 @@ def test_bold_italic_flags_from_font_carry_to_runs():
     assert ("normal", False, False) in flags
     assert ("bold", True, False) in flags
     assert ("italic", False, True) in flags
+
+
+def test_ctm_scale_translation_flip_and_restore():
+    import pytest
+
+    ex = ContentTextExtractor.from_fonts({"F1": _mono(width=500)})
+    frags = ex.extract_fragments(
+        b"Q q 2 0 0 -2 100 700 cm BT /F1 10 Tf 3 4 Td (AB) Tj ET Q "
+        b"BT /F1 10 Tf 3 4 Td (C) Tj ET"
+    )
+    assert (frags[0].x, frags[0].y, frags[0].width, frags[0].size,
+            frags[0].space_width) == pytest.approx((106, 692, 20, 20, 10))
+    assert (frags[1].x, frags[1].y) == (3, 4)
+    assert [f.order for f in frags] == [0, 1]
+
+
+def test_nested_graphics_states_and_overflow_restore_outer_state():
+    ex = ContentTextExtractor()
+    content = (b"q 1 0 0 1 10 0 cm " + b"q " * 300 + b"Q " * 300
+               + b"BT /F1 10 Tf (inner) Tj ET Q BT /F1 10 Tf (outer) Tj ET")
+    frags = ex.extract_fragments(content)
+    assert [f.x for f in frags] == [10, 0]
+
+
+def test_separate_ctm_blocks_sort_words_and_split_baselines():
+    ex = ContentTextExtractor()
+    assert ex.extract(
+        b"q 1 0 0 1 50 700 cm BT /F1 10 Tf (right) Tj ET Q "
+        b"q 1 0 0 1 10 700 cm BT /F1 10 Tf (left) Tj ET Q "
+        b"q 1 0 0 1 10 680 cm BT /F1 10 Tf (next) Tj ET Q"
+    ) == ["left right", "next"]
+
+
+def test_large_font_baseline_tolerance_scales():
+    ex = ContentTextExtractor()
+    assert ex.extract(b"BT /F1 20 Tf 0 100 Td (A) Tj 30 -6 Td (B) Tj ET") == ["A B"]
+
+
+def test_paths_paint_clip_rectangles_and_ctm():
+    ex = ContentTextExtractor()
+    page = ex.extract_page(
+        b"0 0 m 10 0 l S 0 0 100 100 re W n "
+        b"20 20 10 10 re S 0 0 100 100 re f 0 40 20 1 re f "
+        b"0 0 m 10 10 l S q 2 0 0 -2 10 100 cm 0 0 m 10 0 l S Q"
+    )
+    assert len(page.segments) == 10
+    assert (page.segments[-1].x0, page.segments[-1].y0,
+            page.segments[-1].x1, page.segments[-1].y1) == (10, 100, 30, 100)
+
+
+def test_segment_budget_preserves_text_and_warns():
+    page = ContentTextExtractor().extract_page(
+        b"0 0 m 10 0 l S " * 20001 + b"BT (alive) Tj ET"
+    )
+    assert len(page.segments) == 20000
+    assert len(page.warnings) == 1
+    assert page.fragments[0].text == "alive"
+
+
+def test_noncommuting_ctm_and_text_matrix_composition():
+    import pytest
+
+    frags = ContentTextExtractor().extract_fragments(
+        b'1 0 0 1 100 200 cm 2 0 0 3 0 0 cm '
+        b'BT /F1 10 Tf 0 1 -1 0 4 5 Tm (ab) Tj (c) Tj ET'
+    )
+    assert (frags[0].x, frags[0].y, frags[0].width) == pytest.approx((108, 215, 30))
+    assert frags[0].size == pytest.approx(10 * 6 ** 0.5)
+    assert (frags[1].x, frags[1].y) == pytest.approx((108, 245))
+
+
+def test_graphics_restore_text_parameters_but_not_text_matrix():
+    frags = ContentTextExtractor().extract_fragments(
+        b'BT /F1 10 Tf q /F1 20 Tf (a) Tj Q (b) Tj ET'
+    )
+    assert [f.size for f in frags] == [20, 10]
+    assert [f.x for f in frags] == [0, 10]
+
+
+def test_closepath_curves_paints_and_inline_image_skipping():
+    ex = ContentTextExtractor()
+    page = ex.extract_page(
+        b'0 0 m 10 0 l 10 10 l h B* '
+        b'20 0 m 20 10 l s '
+        b'30 0 m 30 2 30 8 30 10 c S '
+        b'40 0 m 40 2 40 10 v S 50 0 m 50 2 50 10 y S '
+        b'BI /W 1 /H 1 ID 0 0 m 100 0 l S EI BT (safe) Tj ET'
+    )
+    assert len(page.segments) == 7
+    assert page.fragments[0].text == 'safe'
+
+
+def test_huge_clip_path_does_not_emit_segments_or_budget_warning():
+    page = ContentTextExtractor().extract_page(
+        b'0 0 m ' + b'10 0 l 0 0 l ' * 10001 + b'W* n BT (safe) Tj ET'
+    )
+    assert page.segments == []
+    assert page.warnings == []

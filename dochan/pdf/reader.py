@@ -16,6 +16,8 @@ from .images import extract_image_bytes
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
 from .widths import WidthMap
+from .tables import TableBudget, build_tables
+from .layout import merge_lines
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -93,6 +95,7 @@ class PDFReader:
             doc.sections.append(outline_section)
 
         font_cache = {}
+        table_budget = TableBudget()
         for page_number, (page, resources) in enumerate(pages, start=1):
             section = Section(
                 provenance=Provenance(source_format="pdf", page=page_number)
@@ -100,36 +103,43 @@ class PDFReader:
             try:
                 content_parts = self._page_content_parts(pdf, page)
                 lines = []
+                groups = []
+                tables = []
+                page_content = None
                 if content_parts:
                     extractor = ContentTextExtractor.from_fonts(
                         self._font_infos(pdf, resources, font_cache)
                     )
-                    for part in content_parts:
-                        lines.extend(extractor.extract_lines(part))
+                    page_content = extractor.extract_page(b"\n".join(content_parts))
+                    pdf.warnings.extend(page_content.warnings)
+                    try:
+                        tables = build_tables(page_content.segments, page_content.fragments,
+                                              page_number=page_number, warnings=pdf.warnings,
+                                              budget=table_budget)
+                    except Exception as e:
+                        pdf.warnings.append(f"WARN: {page_number}페이지 표 복원 실패: {e!r}")
+                    groups = self._body_groups(extractor, page_content.fragments, tables)
+                    lines = [line for group in groups for line in group]
                 image_elems = self._page_images(pdf, resources, page_number)
-                if not lines and image_elems:
+                has_text = bool(page_content and page_content.fragments)
+                if not has_text and image_elems:
                     pdf.warnings.append(
                         f"WARN: {page_number}페이지: 텍스트 없음 — 이미지 기반(OCR 옵션으로 추출 가능)"
                     )
-                elif not lines and self._page_has_images(pdf, resources):
+                elif not has_text and self._page_has_images(pdf, resources):
                     pdf.warnings.append(
                         f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (이미지 추출 불가)"
                     )
                 median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
-                for ln in lines:
-                    if not ln.text:
-                        continue
-                    runs = [
-                        TextRun(text=text, bold=bold, italic=italic)
-                        for text, bold, italic in ln.runs if text
-                    ] or [TextRun(text=ln.text)]
-                    section.elements.append(
-                        Paragraph(
-                            runs=runs,
-                            heading_level=_heading_level_for_size(ln.text, ln.size, median_size),
-                            provenance=Provenance(source_format="pdf", page=page_number),
-                        )
-                    )
+                ordered = [(t.anchor_order, 0, t.table) for t in tables]
+                for group in groups:
+                    for block in merge_lines(group):
+                        paragraph = block.paragraph(page_number)
+                        paragraph.heading_level = _heading_level_for_size(
+                            block.text, block.size, median_size)
+                        ordered.append((block.order, 1, paragraph))
+                section.elements.extend(item for _, _, item in sorted(
+                    ordered, key=lambda event: (event[0], event[1])))
                 section.elements.extend(self._link_paragraphs(pdf, page, page_number))
                 section.elements.extend(image_elems)
                 for img in image_elems:
@@ -146,6 +156,34 @@ class PDFReader:
                 seen.add(warning)
                 doc.errors.append(warning)
         return doc
+
+    @staticmethod
+    def _body_groups(extractor, fragments, tables):
+        """표를 경계로 본문 흐름을 나누고 빈 표의 앵커를 정한다."""
+        groups = []
+        consumed = set().union(*(t.fragment_orders for t in tables))
+        for table in tables:
+            if table.anchor_order < 0:
+                table.anchor_order = next(
+                    (f.order for f in fragments if f.y < table.bbox[3]),
+                    len(fragments),
+                )
+        events = [(f.order, 1, f) for f in fragments
+                  if f.order not in consumed]
+        events.extend((t.anchor_order, 0, t) for t in tables)
+        pending = []
+        for _, kind, event in sorted(events, key=lambda e: (e[0], e[1])):
+            if kind:
+                pending.append(event)
+            else:
+                groups.append(extractor._assemble_lines(pending))
+                pending = []
+        groups.append(extractor._assemble_lines(pending))
+        # 크기 없는 비정상 텍스트는 좌표로 같은 줄임을 보장할 수 없다.
+        if fragments and all(f.size == 0 for f in fragments):
+            groups = [extractor._assemble_lines([f]) for f in fragments
+                      if f.order not in consumed]
+        return groups
 
     def _outline_section(self, pdf: PDFFile, pages) -> Optional[Section]:
         """카탈로그 /Outlines 북마크 트리를 목차 섹션으로 변환."""
@@ -344,13 +382,17 @@ class PDFReader:
                     return cmap.decode
         # ToUnicode 없는 CID 폰트를 cp1252 로 해석하면 NUL 등 제어문자가
         # 본문으로 새어 나간다 — 경고를 남기고 해당 텍스트는 버린다 (감수 M4)
-        encoding = font.get("Encoding")
+        encoding = pdf.resolve(font.get("Encoding"))
+        if isinstance(encoding, dict):
+            encoding = pdf.resolve(encoding.get("BaseEncoding"))
         encoding_name = str(encoding) if isinstance(encoding, PDFName) else ""
         if str(font.get("Subtype", "")) == "Type0" or encoding_name.startswith("Identity-"):
             pdf.warnings.append(
                 f"WARN: 폰트 {name}: ToUnicode 없는 CID 폰트 — 해당 텍스트를 추출할 수 없음"
             )
             return _drop_decoder
+        if encoding_name == "MacRomanEncoding":
+            return lambda raw: raw.decode("mac_roman", errors="replace")
         return default_byte_decoder
 
     def _page_images(self, pdf: PDFFile, resources, page_number: int) -> list:

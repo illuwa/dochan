@@ -196,7 +196,7 @@ def test_header_keeps_table_and_nested_image_blocks():
     """머리말 안 표, 그 셀 안 GSO 이미지까지 유지돼야 한다 (회계규칙 실측 구조)."""
     from dochan.constants import HWPTAG_TABLE
     from dochan.model.header_footer import HeaderFooter
-    from dochan.model.document import Document, Section
+    from dochan.model.document import Document
 
     pic_payload = bytes(71) + struct.pack("<H", 1)
     table_payload = bytes(4) + struct.pack("<HH", 1, 1)
@@ -351,7 +351,7 @@ def test_hyperlink_multiple_fields_map_in_order():
 
 def test_hyperlink_renders_as_markdown_link():
     """마크다운 출력에서 [텍스트](URL) 로 렌더된다 (HWPX 와 동일 경로)."""
-    from dochan.model.document import Document, Section
+    from dochan.model.document import Document
     from dochan.output.markdown import to_markdown
 
     text_payload = (
@@ -578,7 +578,7 @@ def test_memo_control_becomes_comment_footnote():
 
 def test_memo_renders_as_comment_definition_in_markdown():
     """마크다운에서 comment-N 라벨 정의로 렌더된다 (DOCX 주석과 같은 규약)."""
-    from dochan.model.document import Document, Section
+    from dochan.model.document import Document
     from dochan.output.markdown import to_markdown
 
     data = (

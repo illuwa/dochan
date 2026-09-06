@@ -13,7 +13,7 @@ hwp/section.py — 섹션 파서 (트리 구축 + 컨트롤 식별)
 
 import struct
 from dataclasses import dataclass, replace as _dc_replace
-from typing import List, Optional
+from typing import List
 
 from ..utils.safe_decompress import safe_zlib_decompress
 

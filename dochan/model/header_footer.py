@@ -1,6 +1,5 @@
 """Header/footer and note models."""
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .table import flatten_block_texts
 

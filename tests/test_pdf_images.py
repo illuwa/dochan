@@ -1,5 +1,4 @@
 """PDF 이미지 XObject 추출 + OCR 테스트."""
-import struct
 import zlib
 
 import pytest

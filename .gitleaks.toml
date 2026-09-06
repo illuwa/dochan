@@ -1,0 +1,11 @@
+# gitleaks 설정 — CI(.github/workflows/pypi-release.yml)와 로컬 secaudit 게이트가 공유한다.
+# 기본 규칙은 그대로 쓰고, 비밀이 아닌 공개 데이터만 허용 목록에 올린다.
+title = "dochan gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "공개 HWP 코퍼스 fixture 인덱스 — 국세청 파일 다운로드 URL 의 fileKey(32자 hex)는 공개 식별자이지 비밀이 아니다"
+paths = ['''docs/benchmarks/hwp-corpus-fixtures\.json''']
+regexes = ['''fileKey=[0-9a-f]{32}''']

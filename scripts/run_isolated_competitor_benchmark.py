@@ -356,7 +356,8 @@ def run_command(
             output=stdout,
             stderr=stderr,
         )
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    # 결과 객체 생성이지 프로세스 실행이 아니다 — subprocess 실행 감사 규칙의 오탐 (감사 완료)
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)  # nosemgrep
 
 
 def installed_package_versions(
@@ -455,7 +456,8 @@ def run_competitor(
     def remaining_timeout(command: List[str]) -> float:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise subprocess.TimeoutExpired(command, setup_timeout_seconds)
+            # 예외 객체 생성이지 프로세스 실행이 아니다 — subprocess 실행 감사 규칙의 오탐 (감사 완료)
+            raise subprocess.TimeoutExpired(command, setup_timeout_seconds)  # nosemgrep
         return remaining
 
     try:

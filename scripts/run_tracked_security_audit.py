@@ -71,6 +71,7 @@ class SnapshotStats:
     total_bytes: int
     missing_count: int
     skipped_baseline_count: int
+    skipped_symlink_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -81,8 +82,29 @@ class ScannerResult:
     output_too_large: bool = False
 
 
+# git 훅이 자식 프로세스에 물려주는 저장소 위치 변수. 그대로 두면 스냅샷 디렉터리에서
+# 실행한 git 이 원래 저장소의 인덱스·작업 트리를 건드린다.
+INHERITED_REPOSITORY_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INDEX_VERSION",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_NAMESPACE",
+)
+
+
+def _without_repository_env(env: dict[str, str]) -> dict[str, str]:
+    for key in INHERITED_REPOSITORY_ENV:
+        env.pop(key, None)
+    return env
+
+
 def _git_environment() -> dict[str, str]:
-    env = os.environ.copy()
+    env = _without_repository_env(os.environ.copy())
     env.update(
         {
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -280,6 +302,7 @@ def build_snapshot(
     total_bytes = 0
     missing_count = 0
     skipped_baseline_count = 0
+    skipped_symlink_count = 0
 
     for relative_text, relative in paths:
         if relative.parts == BASELINE_PARTS:
@@ -295,6 +318,17 @@ def build_snapshot(
         except OSError as exc:
             raise AuditWrapperError("a selected path could not be inspected") from exc
 
+        if stat.S_ISLNK(source_stat.st_mode):
+            # 저장소 안을 가리키는 링크(예: CLAUDE.md -> AGENTS.md)는 대상 파일이
+            # 이미 선택돼 있으므로 건너뛴다. 밖으로 나가는 링크는 따라가지 않고 거부한다.
+            try:
+                source.resolve(strict=True).relative_to(repo_real)
+            except (OSError, ValueError) as exc:
+                raise AuditWrapperError(
+                    "selected symlinks that leave the repository are not allowed"
+                ) from exc
+            skipped_symlink_count += 1
+            continue
         if not stat.S_ISREG(source_stat.st_mode):
             raise AuditWrapperError(
                 "selected symlinks, directories, and special files are not allowed"
@@ -326,6 +360,7 @@ def build_snapshot(
         total_bytes=total_bytes,
         missing_count=missing_count,
         skipped_baseline_count=skipped_baseline_count,
+        skipped_symlink_count=skipped_symlink_count,
     )
 
 
@@ -500,7 +535,7 @@ def _run_scanner(
     scanner_home: Path,
     timeout_seconds: float,
 ) -> ScannerResult:
-    scanner_environment = os.environ.copy()
+    scanner_environment = _without_repository_env(os.environ.copy())
     scanner_environment.update(
         {
             "SECAUDIT_HOME": str(scanner_home),

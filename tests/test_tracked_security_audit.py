@@ -577,3 +577,44 @@ def test_successful_scanner_exit_rejects_inconsistent_report_schema_without_raw_
     }
     assert reason not in captured.err
     assert RAW_SECRET not in captured.err
+
+
+def test_snapshot_skips_an_in_repo_symlink_without_following_it(tmp_path):
+    # 저장소 안의 파일을 가리키는 링크(예: CLAUDE.md -> AGENTS.md)는 대상이 이미
+    # 선택돼 있으므로 건너뛴다. 저장소 밖으로 나가는 링크는 여전히 거부한다.
+    repo = _init_repo(tmp_path / "repo")
+    target = repo / "AGENTS.md"
+    target.write_text("shared agent guide\n", encoding="utf-8")
+    (repo / "CLAUDE.md").symlink_to("AGENTS.md")
+    _git(repo, "add", "--", "AGENTS.md", "CLAUDE.md")
+
+    stats = build_snapshot(repo, tmp_path / "snapshot")
+
+    assert stats.skipped_symlink_count == 1
+    assert (tmp_path / "snapshot" / "AGENTS.md").is_file()
+    assert not (tmp_path / "snapshot" / "CLAUDE.md").exists()
+
+
+def test_snapshot_git_operations_ignore_inherited_hook_repository_env(tmp_path, monkeypatch):
+    # git 훅 안에서는 GIT_DIR/GIT_INDEX_FILE 이 상속된다. 이를 그대로 물려주면 스냅샷용
+    # git add 가 실제 저장소 인덱스에 실행돼 커밋 대상이 통째로 바뀐다.
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "selected.txt").write_text("safe\n", encoding="utf-8")
+    _git(repo, "add", "--", "selected.txt")
+    other = _init_repo(tmp_path / "other")
+    (other / "untouched.txt").write_text("do not stage me\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    monkeypatch.setenv("GIT_PREFIX", "")
+
+    stats = build_snapshot(repo, tmp_path / "snapshot")
+
+    for name in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX"):
+        monkeypatch.delenv(name)
+    assert stats.file_count == 1
+    assert (tmp_path / "snapshot" / "selected.txt").is_file()
+    staged_in_other = subprocess.run(
+        ["git", "ls-files", "--cached"], cwd=other, stdout=subprocess.PIPE, check=True
+    ).stdout
+    assert staged_in_other == b""

@@ -322,7 +322,8 @@ def test_run_command_terminates_process_group_on_timeout(tmp_path, monkeypatch):
         returncode = None
 
         def communicate(self, timeout):
-            raise subprocess.TimeoutExpired(command, timeout)
+            # 예외 객체 생성이지 프로세스 실행이 아니다 — subprocess 실행 감사 규칙의 오탐 (감사 완료)
+            raise subprocess.TimeoutExpired(command, timeout)  # nosemgrep
 
     monkeypatch.setattr(script.subprocess, "Popen", lambda *args, **kwargs: HangingProcess())
     monkeypatch.setattr(

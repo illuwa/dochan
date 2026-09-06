@@ -23,7 +23,7 @@
 
 - `doc` (문서) + `한` (韓, 한국) = **dochan** — "독한 파서"라는 더블 미닝
 - HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary + PDF(텍스트) 1차 지원
-- 155개 실문서로 검증, 평균 96.5점, 공개가능한 문서로 계속 학습시켜 개선할 예정
+- 동일 문서 HWP/HWPX/PDF 80쌍과 공개 HWP/HWPX 7,188개 회귀 코퍼스로 검증(2026-08 기준), 공개가능한 문서로 계속 학습시켜 개선할 예정
 - 공개 OOXML fixture 50개의 고정 SHA-256 corpus와 형식별 회귀 테스트로 지속 검증
 
 ```python

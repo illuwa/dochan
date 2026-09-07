@@ -9,8 +9,8 @@
   포함(`dochan/pdf/korean_spacing.json`), 런타임 의존성 없음. 리소스가 없으면 사전확률로 동작
 - 학습 스크립트 `scripts/build_korean_spacing_model.py`, 측정 지표 `join_accuracy`
   (`scripts/compare_pdf_pairs.py`)
-- 검증(79쌍, 표본 외): 결합 정확도 0.607 → 0.930, 토큰 유사도 0.938 → 0.961, 셀 일치율
-  0.894 → 0.902 (`docs/benchmarks/2026-09-07-korean-wrap-spacing-model.md`)
+- 검증(79쌍, 표본 외): 결합 정확도 0.607 → 0.932, 토큰 유사도 0.938 → 0.961, 셀 일치율
+  0.894 → 0.902. 배포 모델은 공개 코퍼스 2,538건(음절쌍 348만 개) 학습, 코퍼스 매니페스트 포함 (`docs/benchmarks/2026-09-07-korean-wrap-spacing-model.md`)
 - 설계 문서: `docs/superpowers/plans/2026-09-07-pdf-phase5-nesting-pagination-vertical-spacing.md`
   (중첩 표 트리·페이지 걸침 병합·세로쓰기·괘선 없는 표 해결 방안)
 

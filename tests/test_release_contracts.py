@@ -59,6 +59,11 @@ def test_default_config_is_declared_as_package_data():
     assert package_data is not None
     assert json.loads(package_data.group(1)) == ["config.yaml", "pdf/korean_spacing.json"]
     assert json.loads(_read("dochan/pdf/korean_spacing.json"))["version"] == 1
+    # 배포 모델이 실제로 로딩돼야 한다 — 로더는 형식이 어긋나면 조용히 빈 모델로 떨어지므로
+    from dochan.pdf.spacing import load_model
+
+    model = load_model(ROOT / "dochan" / "pdf" / "korean_spacing.json")
+    assert model.pairs and model.last and model.first
 
 
 def test_publish_job_smoke_tests_the_installed_wheel_outside_the_checkout():

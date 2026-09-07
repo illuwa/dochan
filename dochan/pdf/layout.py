@@ -14,6 +14,8 @@ _BLOCK_MARKER = re.compile(
     r'(\(\d+\)|\d+[.)]|[가-힣][.)]|[a-zA-Z][.)])(?=\s|$)|[-•▪◦※○●■□◇◆])'
 )
 _CJK = re.compile(r'[가-힣\u3400-\u9fff\uf900-\ufaff]')
+# 측정 전용 훅 (직전 줄 원문, 다음 줄, 공백 삽입 여부). 스레드 안전하지 않으며 라이브러리 동작을
+# 바꾸지 않는다 — 훅의 예외는 삼킨다.
 JOIN_OBSERVER: Optional[Callable[[str, str, bool], None]] = None
 
 
@@ -83,7 +85,10 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
             sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '
             if JOIN_OBSERVER is not None:
                 # 직전 '줄' 원문을 넘긴다 — 병합 블록을 넘기면 앞선 예측 구분자가 라벨 문맥에 섞인다
-                JOIN_OBSERVER(previous.text, line.text, bool(sep))
+                try:
+                    JOIN_OBSERVER(previous.text, line.text, bool(sep))
+                except Exception:  # 측정 훅의 실패가 문서 파싱을 중단시키면 안 된다
+                    pass
             block.text += sep + line.text
             if sep:
                 block.runs.append((sep, False, False))

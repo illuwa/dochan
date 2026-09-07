@@ -17,7 +17,9 @@ def test_count_text_counts_only_adjacent_hangul_with_optional_space():
     assert counts["first_total"] == Counter("사회의운영에관한")
     assert counts["last_space"] == Counter("의에")
     assert counts["first_space"] == Counter("운관")
-    assert count_text(unicodedata.normalize("NFD", "이사회의\n\t운영에  관한")) == counts
+    assert count_text(unicodedata.normalize("NFD", "이사회의  운영에   관한")) == counts
+    # 줄바꿈·탭은 공백이 아니라 세그먼트 경계다
+    assert ("의", "운") not in count_text("이사회의\n\t운영에 관한")["total"]
     assert not count_text("가,나|다1라|마漢바|사a아")["total"]
 
 
@@ -53,18 +55,32 @@ def test_build_model_applies_minimum_counts_and_marginals():
     assert empty["last"] == empty["first"] == empty["pairs"] == {}
 
 
-def test_count_file_skips_missing_empty_invalid_and_oversized(tmp_path):
-    assert _count_file(str(tmp_path / "missing.hwpx")) is None
+def test_count_file_reports_a_reason_for_missing_empty_invalid_and_oversized(tmp_path):
+    counts, reason = _count_file(str(tmp_path / "missing.hwpx"))
+    assert counts is None and reason.startswith("error:")
     invalid = tmp_path / "invalid.hwp"
     invalid.write_bytes(b"invalid")
-    assert _count_file(str(invalid)) is None
+    counts, reason = _count_file(str(invalid))
+    assert counts is None and reason  # 파서가 빈 문서로 강등하든 예외를 내든 사유가 남는다
     empty = tmp_path / "empty.hwpx"
     _write_hwpx(empty, _section(_text_para(" ")))
-    assert _count_file(str(empty)) is None
+    assert _count_file(str(empty)) == (None, "empty")
     huge = tmp_path / "huge.hwpx"
     with huge.open("wb") as handle:
         handle.truncate(50 * 1024 * 1024 + 1)
-    assert _count_file(str(huge)) is None
+    assert _count_file(str(huge)) == (None, "too_large")
+    good = tmp_path / "good.hwpx"
+    _write_hwpx(good, _section(_text_para("이사회의 운영")))
+    counts, reason = _count_file(str(good))
+    assert reason is None and counts["total"][("의", "운")] == 1
+
+
+def test_count_text_does_not_treat_paragraph_or_cell_boundaries_as_spaces():
+    # 문단(\n\n)·행(\n)·셀(\t) 경계는 어절 경계가 아니다 — 세그먼트 안에서만 센다
+    counts = count_text("가나\n\n다라\t마바")
+    assert counts["total"][("가", "나")] == 1 and counts["total"][("다", "라")] == 1
+    assert ("나", "다") not in counts["total"] and ("라", "마") not in counts["total"]
+    assert sum(counts["space"].values()) == 0
 
 
 def test_cli_builds_model_from_multiple_directories_case_insensitively(tmp_path, capsys):
@@ -80,9 +96,10 @@ def test_cli_builds_model_from_multiple_directories_case_insensitively(tmp_path,
     (second / "bad.HWP").write_bytes(b"broken")
     (second / "ignored.txt").write_text("ignored")
     output = tmp_path / "model.json"
+    report = tmp_path / "report.json"
     exit_code = main([str(first), str(second), "--output", str(output), "--workers", "2",
                       "--min-pair-count", "1", "--min-char-count", "2",
-                      "--exception-threshold", "0.2", "--limit", "0"])
+                      "--exception-threshold", "0.2", "--limit", "0", "--report", str(report)])
     captured = capsys.readouterr()
     assert exit_code == 0, captured.err
     model = json.loads(output.read_text(encoding="utf-8"))
@@ -91,6 +108,13 @@ def test_cli_builds_model_from_multiple_directories_case_insensitively(tmp_path,
     assert model["last"]["의"] == model["first"]["운"] == 1.0
     assert "parsed=2" in captured.out and "skipped=1" in captured.out
     assert "syllable_pairs=16" in captured.out
+    # 배포 아티팩트 감사용 코퍼스 매니페스트와 실패 사유 보고서
+    assert model["corpus"]["files"] == 3 and model["corpus"]["parsed"] == 2 and model["corpus"]["skipped"] == 1
+    assert len(model["corpus"]["names_sha256"]) == 64
+    written = json.loads(report.read_text(encoding="utf-8"))
+    assert sorted(written) == ["parsed", "skipped"]
+    assert [entry[0].endswith("bad.HWP") for entry in written["skipped"]] == [True]
+    assert written["skipped"][0][1]
 
 
 def test_exception_pairs_are_chosen_with_the_serialized_rounded_marginals():

@@ -123,3 +123,16 @@ def test_exact_marginal_tie_is_not_a_space():
     model = SpacingModel(prior=0.25, last={"다": 0.1}, first={"클": 0.75})
     assert not model.joins_with_space("다", "클")
     assert SpacingModel(prior=0.25, last={"다": 0.1}, first={"클": 0.76}).joins_with_space("다", "클")
+
+
+def test_observer_exception_does_not_break_merging(monkeypatch):
+    # 측정 훅은 라이브러리 동작을 바꾸면 안 된다 — 훅이 죽어도 병합은 계속된다
+    monkeypatch.setattr(layout, "load_model", lambda: SpacingModel(pairs={"의운": 0.9}))
+
+    def broken(*_args):
+        raise RuntimeError("observer failed")
+
+    monkeypatch.setattr(layout, "JOIN_OBSERVER", broken)
+    lines = assemble_lines([Fragment(0, 100 - 14 * i, 100, 10, text, 5, order=i)
+                            for i, text in enumerate(["이사회의", "운영"])])
+    assert [b.text for b in layout.merge_lines(lines)] == ["이사회의 운영"]

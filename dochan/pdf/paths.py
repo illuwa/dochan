@@ -1,10 +1,11 @@
 """콘텐츠 해석 중 장치 좌표의 수평·수직 괘선을 수집한다."""
 from dataclasses import dataclass
 from math import hypot, isfinite
+from typing import List, Optional
 
-MAX_SEGMENTS = 20_000
-_THIN = 2.0          # 이 두께 이하의 채움 도형은 선으로 본다 (장치 단위)
-_STRAIGHT = 1.0      # 곡선 제어점이 현에서 이만큼 이하로 벗어나면 직선으로 본다
+MAX_SEGMENTS = 20_000  # 페이지당 변(edge)·서브패스 수 상한 — 칠하기 없는 m/l 반복의 메모리 폭주 방지
+_THIN = 2.0            # 이 두께 이하의 채움 도형은 선으로 본다 (장치 단위)
+_STRAIGHT = 1.0        # 곡선 제어점이 현에서 이만큼 이하로 벗어나면 직선으로 본다
 
 
 @dataclass
@@ -19,8 +20,12 @@ class Segment:
         self.x0, self.x1 = sorted((self.x0, self.x1))
         self.y0, self.y1 = sorted((self.y0, self.y1))
 
+    @property
+    def length(self) -> float:
+        return hypot(self.x1 - self.x0, self.y1 - self.y0)
 
-def _axis_segment(p0, p1):
+
+def _axis_segment(p0, p1) -> Optional[Segment]:
     """두 점을 잇는 축 정렬 선분. 사선·아주 짧은 선·비정상 좌표는 None."""
     x0, y0 = p0
     x1, y1 = p1
@@ -31,13 +36,7 @@ def _axis_segment(p0, p1):
     return None
 
 
-def _thin(points):
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    return min(max(xs) - min(xs), max(ys) - min(ys)) <= _THIN
-
-
-def _deviation(p0, p1, control):
+def _deviation(p0, p1, control) -> float:
     """제어점이 현(p0→p1)에서 벗어난 거리."""
     (x0, y0), (x1, y1), (cx, cy) = p0, p1, control
     dx, dy = x1 - x0, y1 - y0
@@ -47,46 +46,76 @@ def _deviation(p0, p1, control):
     return abs(dx * (cy - y0) - dy * (cx - x0)) / length
 
 
+class _Subpath:
+    """서브패스 하나의 경계 상자와 변 목록. 점은 저장하지 않는다 — 메모리는 상수."""
+    __slots__ = ("x0", "y0", "x1", "y1", "edges")
+
+    def __init__(self, point):
+        self.x0 = self.x1 = point[0]
+        self.y0 = self.y1 = point[1]
+        self.edges: List[Segment] = []
+
+    def include(self, point) -> None:
+        x, y = point
+        if isfinite(x) and isfinite(y):
+            self.x0, self.x1 = min(self.x0, x), max(self.x1, x)
+            self.y0, self.y1 = min(self.y0, y), max(self.y1, y)
+
+    @property
+    def thin(self) -> bool:
+        return min(self.x1 - self.x0, self.y1 - self.y0) <= _THIN
+
+
 class PathCollector:
-    """서브패스 단위로 점과 변을 모으고, 칠하기 연산자에서 괘선만 내보낸다."""
+    """서브패스 단위로 경계 상자와 변을 모으고, 칠하기 연산자에서 괘선만 내보낸다."""
 
     def __init__(self):
-        self.segments = []
-        self.warnings = []
-        self._groups = []       # 현재 경로의 서브패스: (점 목록, 변 목록)
+        self.segments: List[Segment] = []
+        self.warnings: List[str] = []
+        self._groups: List[_Subpath] = []
+        self._current: Optional[_Subpath] = None
         self._edge_count = 0
         self._overflow = False
         self._point = None
         self._start = None
 
-    def _warn(self):
+    def _warn(self) -> None:
         if not self.warnings:
             self.warnings.append("WARN: PDF 선분 수 한도(20000) 초과 — 일부 괘선 생략")
 
-    def _move(self, point):
-        self._groups.append(([point], []))
+    def _move(self, point) -> None:
+        if len(self._groups) < MAX_SEGMENTS:
+            self._current = _Subpath(point)
+            self._groups.append(self._current)
+        else:
+            # 상한 이후의 서브패스는 버린다 — 현재 점만 따라가고 경고를 남긴다
+            self._current = None
+            self._overflow = True
+            self._warn()
         self._point = self._start = point
 
-    def _line(self, point, emit=True, extra_points=()):
+    def _line(self, point, emit=True, extra_points=()) -> None:
         if self._point is None:
             self._move(point)
             return
-        if not self._groups:
-            self._groups.append(([self._point], []))
-        points, edges = self._groups[-1]
-        points.extend(extra_points)
-        points.append(point)
-        if emit:
-            segment = _axis_segment(self._point, point)
-            if segment is not None:
-                if self._edge_count < MAX_SEGMENTS:
-                    edges.append(segment)
-                    self._edge_count += 1
-                else:
-                    self._overflow = True
+        if self._current is None and not self._overflow:
+            self._move(self._point)
+        subpath = self._current
+        if subpath is not None:
+            for extra in extra_points:
+                subpath.include(extra)
+            subpath.include(point)
+            if emit:
+                segment = _axis_segment(self._point, point)
+                if segment is not None:
+                    if self._edge_count < MAX_SEGMENTS:
+                        subpath.edges.append(segment)
+                        self._edge_count += 1
+                    else:
+                        self._overflow = True
         self._point = point
 
-    def _curve(self, controls, end):
+    def _curve(self, controls, end) -> None:
         """제어점이 현에 붙어 있을 때만 직선으로 취급한다. 굽은 곡선은 변을 만들지 않는다."""
         if self._point is None:
             self._move(end)
@@ -94,7 +123,7 @@ class PathCollector:
         straight = all(_deviation(self._point, end, c) <= _STRAIGHT for c in controls)
         self._line(end, emit=straight, extra_points=controls)
 
-    def operate(self, op, values, ctm):
+    def operate(self, op, values, ctm) -> None:
         def point(x, y):
             a, b, c, d, e, f = ctm
             return x * a + y * c + e, x * b + y * d + f
@@ -126,18 +155,21 @@ class PathCollector:
             if op != b"n":
                 self._paint(stroke=op not in (b"f", b"F", b"f*"))
             self._groups = []
+            self._current = None
             self._edge_count = 0
             self._overflow = False
             self._point = self._start = None
 
-    def _paint(self, stroke):
-        """획은 모든 변을, 채움은 얇은 서브패스(선처럼 그린 사각형)의 변만 내보낸다."""
+    def _paint(self, stroke: bool) -> None:
+        """획은 모든 변을, 채움은 얇은 서브패스(선처럼 그린 사각형)의 긴 변만 내보낸다."""
         if self._overflow:
             self._warn()
-        for points, edges in self._groups:
-            if not edges or not (stroke or _thin(points)):
+        for subpath in self._groups:
+            if not subpath.edges or not (stroke or subpath.thin):
                 continue
-            for segment in edges:
+            for segment in subpath.edges:
+                if not stroke and segment.length <= _THIN:
+                    continue  # 얇은 사각형의 짧은 변은 열·행 경계가 아니다
                 if len(self.segments) >= MAX_SEGMENTS:
                     self._warn()
                     return

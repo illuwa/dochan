@@ -6,8 +6,9 @@ from typing import List, Optional, Set, Tuple
 
 from ..conversion import Provenance
 from ..model.table import Cell, Table
-from .content import ContentTextExtractor, Fragment, Segment
+from .content import Fragment, assemble_lines
 from .layout import merge_lines
+from .paths import Segment
 
 MAX_PAGE_CELLS = 50_000
 MAX_DOCUMENT_CELLS = 200_000
@@ -181,9 +182,8 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number):
         if left + 0.5 <= x <= right - 0.5 and bottom + 0.5 <= y <= top - 0.5:
             by_cell[key].append(frag)
             consumed.add(frag.order)
-    extractor = ContentTextExtractor()
     for key, frags in by_cell.items():
-        lines = extractor._assemble_lines(sorted(frags, key=lambda f: (-f.y, f.x)))
+        lines = assemble_lines(sorted(frags, key=lambda f: (-f.y, f.x)))
         left, _, right, _ = boxes[key]
         r, c = divmod(key, cols)
         grid[r][c].paragraphs = [block.paragraph(page_number)
@@ -191,25 +191,30 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number):
     return consumed
 
 
-def _extend_to_rule_extents(xs, ys, horizontal, vertical, tolerance):
-    """바깥 괘선이 없는 표는 가로/세로 괘선이 뻗은 범위까지 열·행 경계를 보탠다.
+def _shared_extent(values, tolerance, outermost):
+    """두 개 이상의 괘선이 함께 닿는 가장 바깥 좌표. 하나만 튀어나온 이상치는 무시한다."""
+    ordered = sorted(values, reverse=outermost)
+    for first, second in zip(ordered, ordered[1:]):
+        if abs(first - second) <= tolerance:
+            return first
+    return None
 
-    개정 이력 표처럼 좌우 테두리를 생략한 표에서 첫/끝 열의 텍스트가 본문으로
-    새는 것을 막는다. 선 끝 오버슈트(선 굵기 수준)는 경계로 보지 않는다.
+
+def _extend_to_rule_extents(xs, horizontal, tolerance):
+    """바깥 세로 괘선이 없는 표는 가로 괘선이 뻗은 범위까지 열 경계를 보탠다.
+
+    개정 이력 표처럼 좌우 테두리를 생략한 표에서 첫/끝 열의 텍스트가 본문으로 새는
+    것을 막는다. 선 끝 오버슈트(선 굵기 수준)는 경계로 보지 않고, 괘선 하나만 길게
+    튀어나온 경우도 무시한다. 세로 방향(행)은 확장하지 않는다 — 실측 이득이 없고
+    세로선 오버슈트가 본문을 표로 빨아들일 수 있다.
     """
     margin = max(6.0, 4 * tolerance)
-    left = min(h[1] for h in horizontal)
-    right = max(h[2] for h in horizontal)
-    if xs[0] - left > margin:
+    left = _shared_extent([h[1] for h in horizontal], tolerance, outermost=False)
+    right = _shared_extent([h[2] for h in horizontal], tolerance, outermost=True)
+    if left is not None and xs[0] - left > margin:
         xs.insert(0, left)
-    if right - xs[-1] > margin:
+    if right is not None and right - xs[-1] > margin:
         xs.append(right)
-    bottom = min(v[1] for v in vertical)
-    top = max(v[2] for v in vertical)
-    if top - ys[0] > margin:
-        ys.insert(0, top)
-    if ys[-1] - bottom > margin:
-        ys.append(bottom)
 
 
 def _inside(inner, outer):
@@ -242,7 +247,7 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         if len(hs) < 2 or len(vs) < 2:
             continue
         xs, ys = sorted(set(v[0] for v in vs)), sorted(set(h[0] for h in hs), reverse=True)
-        _extend_to_rule_extents(xs, ys, hs, vs, tolerance)
+        _extend_to_rule_extents(xs, hs, tolerance)
         bbox = (xs[0], ys[-1], xs[-1], ys[0])
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             components.append((bbox, hs, vs, xs, ys))
@@ -272,6 +277,7 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         if budget is not None:
             budget.remaining -= cells
         used_orders.update(consumed)
-        outer_boxes.extend(boxes.values())
+        # 중첩 판정은 채택된 표의 전체 bbox 로 한다 — 셀마다 비교하면 성분 수 × 셀 수 로 자란다
+        outer_boxes.append(bbox)
         result.append(TableCandidate(Table(rows=grid), bbox, consumed, min(consumed, default=-1)))
     return sorted(result, key=lambda candidate: candidate.anchor_order)

@@ -328,7 +328,7 @@ def test_filled_polygon_rectangle_is_not_a_ruling_but_thin_one_is():
     big = ex.extract_page(b"0 0 m 100 0 l 100 60 l 0 60 l h f")
     assert big.segments == []
     thin = ex.extract_page(b"0 0 m 100 0 l 100 1 l 0 1 l h f")
-    assert len(thin.segments) == 4
+    assert len(thin.segments) == 2  # 긴 변만
     stroked = ex.extract_page(b"0 0 m 100 0 l 100 60 l 0 60 l h S")
     assert len(stroked.segments) == 4
 
@@ -339,3 +339,63 @@ def test_bowed_curves_do_not_become_rulings():
     assert bowed.segments == []
     almost_straight = ex.extract_page(b"0 0 m 30 0.2 70 0.2 100 0 c S")
     assert len(almost_straight.segments) == 1
+
+
+def test_unpainted_subpaths_are_bounded_and_warn():
+    # 칠하기 연산자 없이 m/l 만 반복하는 스트림이 메모리를 선형으로 먹지 않아야 한다 (Opus 감수 Critical)
+    from dochan.pdf.paths import MAX_SEGMENTS, PathCollector
+
+    collector = PathCollector()
+    identity = (1, 0, 0, 1, 0, 0)
+    for i in range(MAX_SEGMENTS + 50):
+        collector.operate(b"m", [i, i], identity)
+        collector.operate(b"l", [i + 5, i], identity)
+    assert len(collector._groups) == MAX_SEGMENTS
+    assert collector.warnings and '한도' in collector.warnings[0]
+
+
+def test_vertical_rule_overshoot_does_not_add_a_row():
+    # 세로 괘선 하나가 위로 튀어나와도 가짜 첫 행이 생겨 본문을 흡수하면 안 된다 (Opus 감수 Major)
+    from dochan.pdf.content import Segment
+    from dochan.pdf.tables import build_tables
+
+    segments = _grid() + [Segment(0, 60, 0, 90)]
+    frags = [_frag('바깥본문', 10, 75, 0), _frag('a', 10, 40, 1), _frag('b', 60, 40, 2),
+             _frag('c', 10, 10, 3), _frag('d', 60, 10, 4)]
+    candidate, = build_tables(segments, frags)
+    assert candidate.table.row_count == 2
+    assert 0 not in candidate.fragment_orders
+
+
+def test_single_outlier_horizontal_rule_does_not_add_a_column():
+    # 가로 괘선 하나만 왼쪽으로 길어도 열을 보태지 않는다 — 두 개 이상이 같은 범위에 닿아야 한다
+    from dochan.pdf.content import Segment
+    from dochan.pdf.tables import build_tables
+
+    segments = [s for s in _grid() if not (s.y0 == 60 and s.x0 == 0)] + [Segment(-30, 60, 50, 60)]
+    candidate, = build_tables(segments, [_frag('a', 10, 40, 0)])
+    assert candidate.table.col_count == 2
+
+
+def test_thin_filled_rectangle_emits_only_its_long_edges():
+    ex = ContentTextExtractor()
+    thin = ex.extract_page(b"0 40 20 1 re f")
+    assert len(thin.segments) == 2
+    assert all(s.x1 - s.x0 == 20 for s in thin.segments)
+
+
+def test_wrap_merge_compares_adjacent_fragment_sizes_not_line_max():
+    # 본문(14pt) 줄 끝의 작은 각주형 주석([개정 202, 9pt)이 다음 줄(3.12.19.], 9pt)과 이어져야 한다.
+    # 줄의 최대 크기(14)로 비교하면 병합이 막힌다 — 인접한 조각끼리 비교한다.
+    from dochan.pdf.layout import merge_lines
+
+    frags = [Fragment(70, 565, 400, 14.0, '소집하여야 한다.', 5, order=0),
+             Fragment(470, 565, 60, 9.0, '[개정 202', 4, order=1),
+             Fragment(70, 549, 36, 9.0, '3.12.19.]', 4, order=2)]
+    lines = ContentTextExtractor()._assemble_lines(frags)
+    assert [b.text for b in merge_lines(lines)] == ['소집하여야 한다.[개정 2023.12.19.]']
+    # 큰 제목 다음의 본문은 여전히 새 문단
+    frags = [Fragment(70, 700, 480, 20.0, '제1장 총칙', 8, order=0),
+             Fragment(70, 680, 100, 12.0, '이 규정은', 5, order=1)]
+    lines = ContentTextExtractor()._assemble_lines(frags)
+    assert [b.text for b in merge_lines(lines)] == ['제1장 총칙', '이 규정은']

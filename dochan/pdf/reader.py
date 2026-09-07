@@ -10,7 +10,7 @@ from typing import Callable, Dict, Optional
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
-from .content import ContentTextExtractor, FontInfo, default_byte_decoder
+from .content import ContentTextExtractor, FontInfo, assemble_lines, default_byte_decoder
 from .cmap import parse_tounicode
 from .images import extract_image_bytes
 from .objects import PDFName, PDFRef, PDFStream
@@ -177,12 +177,12 @@ class PDFReader:
             if kind:
                 pending.append(event)
             else:
-                groups.append(extractor._assemble_lines(pending))
+                groups.append(assemble_lines(pending))
                 pending = []
-        groups.append(extractor._assemble_lines(pending))
+        groups.append(assemble_lines(pending))
         # 크기 없는 비정상 텍스트는 좌표로 같은 줄임을 보장할 수 없다.
         if fragments and all(f.size == 0 for f in fragments):
-            groups = [extractor._assemble_lines([f]) for f in fragments
+            groups = [assemble_lines([f]) for f in fragments
                       if f.order not in consumed]
         return groups
 

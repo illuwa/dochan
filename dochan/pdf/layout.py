@@ -77,7 +77,7 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
             continue
         joins = (previous is not None and previous.right >= full_edge
                  and 0 < previous.y - line.y <= 1.8 * previous.size
-                 and 0.85 * previous.size <= line.size <= 1.15 * previous.size
+                 and 0.85 * previous.last_size <= line.first_size <= 1.15 * previous.last_size
                  and not _BLOCK_MARKER.match(line.text))
         if joins:
             block = blocks[-1]

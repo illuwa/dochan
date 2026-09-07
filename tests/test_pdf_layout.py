@@ -138,7 +138,8 @@ def test_paths_paint_clip_rectangles_and_ctm():
         b"20 20 10 10 re S 0 0 100 100 re f 0 40 20 1 re f "
         b"0 0 m 10 10 l S q 2 0 0 -2 10 100 cm 0 0 m 10 0 l S Q"
     )
-    assert len(page.segments) == 10
+    # 얇은 채움 사각형(0 40 20 1 re f)은 긴 변 2개만 괘선이 된다
+    assert len(page.segments) == 8
     assert (page.segments[-1].x0, page.segments[-1].y0,
             page.segments[-1].x1, page.segments[-1].y1) == (10, 100, 30, 100)
 

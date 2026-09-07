@@ -233,11 +233,11 @@ class ContentTextExtractor:
             w0 = font.widths.advance(code) / 1000.0
             disp = (w0 * fs + tc + (tw if (font.code_bytes == 1 and code == 32) else 0.0)) * th
             total_adv += disp
-        scale = (start_tm[0] ** 2 + start_tm[1] ** 2) ** 0.5
+        scale = (start_tm[0] ** 2 + start_tm[1] ** 2) ** 0.5 or 1.0
         space_w = font.widths.advance(32) / 1000.0 * fs * th * scale
         if space_w <= 0:
             space_w = 0.25 * fs * scale
-        eff_size = fs * ((abs(start_tm[0] * start_tm[3] - start_tm[1] * start_tm[2])) ** 0.5)
+        eff_size = fs * ((abs(start_tm[0] * start_tm[3] - start_tm[1] * start_tm[2])) ** 0.5 or 1.0)
         if text.strip():
             frags.append(Fragment(
                 x=start_tm[4], y=start_tm[5],
@@ -301,6 +301,11 @@ class ContentTextExtractor:
         return [_Line(_in_writing_order(row)) for row in rows]
 
 
+def assemble_lines(fragments: List[Fragment]) -> List["_Line"]:
+    """조각 목록을 같은 기준선끼리 묶어 줄로 만든다 (표 셀·본문 공통 공개 진입점)."""
+    return ContentTextExtractor()._assemble_lines(fragments)
+
+
 def _in_writing_order(row: List[Fragment]) -> List[Fragment]:
     """같은 줄의 조각을 쓰기 방향으로 정렬한다.
 
@@ -328,6 +333,9 @@ class _Line:
         self.right = max(f.x + f.width for f in frags)
         self.y = frags[0].y
         self.size = max((f.size for f in frags), default=0.0)
+        # 줄 병합의 크기 비교는 인접한 조각끼리 한다 (본문 끝의 작은 주석 ↔ 다음 줄)
+        self.first_size = frags[0].size
+        self.last_size = frags[-1].size
         self.segments: List[_Segment] = []
         parts: List[str] = []
         # 서식이 같은 인접 조각은 하나의 run 으로 묶는다 (부분 굵게 보존)

@@ -23,6 +23,7 @@ MAX_IMAGES_PER_PAGE = 64
 
 MAX_FILE_SIZE = 500 * 1024 * 1024
 MAX_CONTENT_PARTS = 256  # 페이지당 콘텐츠 스트림 수 — 반복 참조 CPU 증폭 방지
+MAX_PAGE_CONTENT_BYTES = 64 * 1024 * 1024  # 페이지 콘텐츠 결합 합계 — 같은 스트림 반복 참조 메모리 증폭 방지
 MAX_OUTLINE_ITEMS = 1000
 MAX_OUTLINE_DEPTH = 32
 
@@ -279,12 +280,21 @@ class PDFReader:
             )
             streams = streams[:MAX_CONTENT_PARTS]
         parts = []
+        total = 0
         for item in streams:
             stream = pdf.resolve(item)
             if isinstance(stream, PDFStream):
                 decoded = pdf.decode_stream_bytes(stream)
-                if decoded:
-                    parts.append(decoded)
+                if not decoded:
+                    continue
+                # 캐시된 같은 스트림을 수백 번 참조하면 결합 시 사본이 그만큼 생긴다
+                if total + len(decoded) > MAX_PAGE_CONTENT_BYTES:
+                    pdf.warnings.append(
+                        "WARN: 페이지 콘텐츠 합계 한도(64MB)를 초과 — 일부만 파싱"
+                    )
+                    break
+                total += len(decoded)
+                parts.append(decoded)
         return parts
 
     def _font_infos(self, pdf: PDFFile, resources, font_cache: dict) -> Dict[str, FontInfo]:

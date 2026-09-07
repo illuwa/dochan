@@ -1781,7 +1781,8 @@ def test_docx_note_reference_splits_mixed_run_and_preserves_literal_text_and_sty
     assert "note_reference_type" not in payload_runs[0]
     assert payload_runs[1]["note_reference_type"] == "footnote"
     assert payload_runs[1]["note_reference_number"] == 1
-    assert "***literal [1] / ***[^1]*** tail***" in to_markdown(doc)
+    # 런 가장자리 공백은 강조 마커 밖에 놓인다 ("*** tail***" 은 CommonMark 강조가 아니다)
+    assert "***literal [1] /*** [^1] ***tail***" in to_markdown(doc)
 
 
 def test_docx_empty_first_note_does_not_renumber_second_definition(tmp_path):

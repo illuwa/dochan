@@ -47,6 +47,7 @@ class Fragment:
     bold: bool = False
     italic: bool = False
     order: int = 0
+    dir_x: float = 1.0  # 장치 공간에서 텍스트 x축의 x 성분 — 음수면 오른쪽→왼쪽으로 진행
 
 
 @dataclass
@@ -243,6 +244,7 @@ class ContentTextExtractor:
                 width=abs(total_adv) * scale, size=eff_size,
                 text=text, space_width=space_w,
                 bold=font.bold, italic=font.italic, order=len(frags),
+                dir_x=start_tm[0],
             ))
         return _matmul((1, 0, 0, 1, total_adv, 0), tm)
 
@@ -296,7 +298,18 @@ class ContentTextExtractor:
             current_size = max(current_size, frag.size)
         if current:
             rows.append(current)
-        return [_Line(sorted(row, key=lambda f: f.x)) for row in rows]
+        return [_Line(_in_writing_order(row)) for row in rows]
+
+
+def _in_writing_order(row: List[Fragment]) -> List[Fragment]:
+    """같은 줄의 조각을 쓰기 방향으로 정렬한다.
+
+    180° 회전(CTM a<0)이면 x 내림차순, 세로쓰기(a≈0)면 그리기 순서를 유지한다.
+    """
+    direction = row[0].dir_x
+    if abs(direction) < 1e-9:
+        return list(row)
+    return sorted(row, key=lambda f: f.x if direction > 0 else -f.x)
 
 
 @dataclass

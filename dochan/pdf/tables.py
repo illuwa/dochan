@@ -12,6 +12,7 @@ from .layout import merge_lines
 MAX_PAGE_CELLS = 50_000
 MAX_DOCUMENT_CELLS = 200_000
 MAX_COMPONENT_LINES = 2_000
+MAX_INTERSECTION_CHECKS = 2_000_000  # 가로×세로 교차 검사 상한 — 촘촘한 괘선의 CPU 폭주 방지
 
 
 @dataclass
@@ -77,11 +78,16 @@ def _snap_runs(lines, tolerance):
 
 
 def _components(horizontal, vertical, tolerance):
+    """가로선과 세로선이 맞닿는 관계로 연결 성분을 만든다. 예산 초과 시 None."""
     union = _Union(len(horizontal) + len(vertical))
     xs = [v[0] for v in vertical]
+    checks = 0
     for i, (y, left, right) in enumerate(horizontal):
         lo = bisect_left(xs, left - tolerance)
         hi = bisect_right(xs, right + tolerance)
+        checks += hi - lo
+        if checks > MAX_INTERSECTION_CHECKS:
+            return None
         for j in range(lo, hi):
             _, bottom, top = vertical[j]
             if bottom - tolerance <= y <= top + tolerance:
@@ -185,6 +191,27 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number):
     return consumed
 
 
+def _extend_to_rule_extents(xs, ys, horizontal, vertical, tolerance):
+    """바깥 괘선이 없는 표는 가로/세로 괘선이 뻗은 범위까지 열·행 경계를 보탠다.
+
+    개정 이력 표처럼 좌우 테두리를 생략한 표에서 첫/끝 열의 텍스트가 본문으로
+    새는 것을 막는다. 선 끝 오버슈트(선 굵기 수준)는 경계로 보지 않는다.
+    """
+    margin = max(6.0, 4 * tolerance)
+    left = min(h[1] for h in horizontal)
+    right = max(h[2] for h in horizontal)
+    if xs[0] - left > margin:
+        xs.insert(0, left)
+    if right - xs[-1] > margin:
+        xs.append(right)
+    bottom = min(v[1] for v in vertical)
+    top = max(v[2] for v in vertical)
+    if top - ys[0] > margin:
+        ys.insert(0, top)
+    if ys[-1] - bottom > margin:
+        ys.append(bottom)
+
+
 def _inside(inner, outer):
     return (outer[0] <= inner[0] and outer[1] <= inner[1]
             and inner[2] <= outer[2] and inner[3] <= outer[3])
@@ -207,10 +234,15 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
     horizontal = _snap_runs(horizontal, tolerance)
     vertical = _snap_runs(vertical, tolerance)
     components = []
-    for hs, vs in _components(horizontal, vertical, tolerance):
+    grouped = _components(horizontal, vertical, tolerance)
+    if grouped is None:
+        _warn(warnings, 'WARN: PDF 괘선 교차 검사 수 한도(2000000) 초과 — 표 생략')
+        return []
+    for hs, vs in grouped:
         if len(hs) < 2 or len(vs) < 2:
             continue
         xs, ys = sorted(set(v[0] for v in vs)), sorted(set(h[0] for h in hs), reverse=True)
+        _extend_to_rule_extents(xs, ys, hs, vs, tolerance)
         bbox = (xs[0], ys[-1], xs[-1], ys[0])
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             components.append((bbox, hs, vs, xs, ys))

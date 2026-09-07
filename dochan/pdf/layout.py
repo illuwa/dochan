@@ -6,9 +6,11 @@ from typing import List, Optional, Tuple
 from ..conversion import Provenance
 from ..model.document import Paragraph, TextRun
 
+# 숫자·문자 표식은 뒤에 공백이 와야 한다 — 줄 끝에서 잘린 "2023.12.19." 의
+# 뒷부분("3.12.19.]")을 새 항목으로 오판하지 않기 위해서다.
 _BLOCK_MARKER = re.compile(
-    r'^(제\s*\d+\s*(조|항|호|장|절)|[①-⑳]|[⑴-⒇]|\(\d+\)|\d+[.)]|'
-    r'[가-힣][.)]|[a-zA-Z][.)]|[-•▪◦※○●■□◇◆])'
+    r'^(제\s*\d+\s*(조|항|호|장|절)|[①-⑳]|[⑴-⒇]|'
+    r'(\(\d+\)|\d+[.)]|[가-힣][.)]|[a-zA-Z][.)])(?=\s|$)|[-•▪◦※○●■□◇◆])'
 )
 _CJK = re.compile(r'[가-힣\u3400-\u9fff\uf900-\ufaff]')
 
@@ -47,6 +49,18 @@ def _trim_runs(runs):
     return runs
 
 
+def _joins_without_space(last: str, first: str) -> bool:
+    """줄 끝에서 잘린 한글 어절과 숫자는 공백 없이 잇는다.
+
+    한글은 글자 단위로 줄이 바뀌므로 어절 안에서 끊긴 경우가 많고,
+    "2023.12.19." 같은 숫자도 줄 끝에서 갈라진다. 그 외(영문 단어 사이 등)는
+    공백 하나로 잇는다.
+    """
+    if _CJK.fullmatch(last) and _CJK.fullmatch(first):
+        return True
+    return last.isdigit() and (first.isdigit() or first == '.')
+
+
 def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
     """같은 흐름의 꽉 찬 줄만 다음 줄과 이어 붙인다."""
     if not lines:
@@ -67,8 +81,7 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
                  and not _BLOCK_MARKER.match(line.text))
         if joins:
             block = blocks[-1]
-            sep = '' if (_CJK.fullmatch(block.text[-1:])
-                         and _CJK.fullmatch(line.text[:1])) else ' '
+            sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '
             block.text += sep + line.text
             if sep:
                 block.runs.append((sep, False, False))

@@ -201,18 +201,26 @@ def _run_to_md(run: TextRun) -> str:
     if not text:
         return ""
 
+    # 런 가장자리 공백은 마커 밖에 둔다 — "**굵게 **" 는 CommonMark 강조가 아니다.
+    lead = text[:len(text) - len(text.lstrip())]
+    trail = text[len(text.rstrip()):]
+    core = text.strip()
+    if not core:
+        return text
+
     # 서식 적용
     if run.bold and run.italic:
-        text = f"***{text}***"
+        core = f"***{core}***"
     elif run.bold:
-        text = f"**{text}**"
+        core = f"**{core}**"
     elif run.italic:
-        text = f"*{text}*"
+        core = f"*{core}*"
 
     if run.underline:
-        text = f"<u>{text}</u>"
+        core = f"<u>{core}</u>"
     if run.strikeout:
-        text = f"~~{text}~~"
+        core = f"~~{core}~~"
+    text = f"{lead}{core}{trail}"
     if run.superscript:
         text = f"<sup>{text}</sup>"
     if run.subscript:

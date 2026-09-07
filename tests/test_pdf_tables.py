@@ -255,3 +255,87 @@ def test_wrapped_paragraph_runs_use_exactly_one_separator():
         _frag('hello ', 10, 100, 0, 90), _frag(' world', 10, 86, 1, 40)])
     block, = merge_lines(lines)
     assert block.paragraph(1).text == block.text == 'hello world'
+
+
+def test_open_sided_table_extends_grid_to_rule_extents():
+    # 바깥 세로 괘선이 없는 표(개정 이력 표 등): 가로 괘선이 뻗은 범위까지 열을 만든다
+    from dochan.pdf.tables import build_tables
+
+    segments = _grid(3, omit=(('v', 0, 0), ('v', 1, 0), ('v', 0, 3), ('v', 1, 3)))
+    frags = [_frag(t, x, y, n) for n, (t, x, y) in enumerate(
+        [('연번', 10, 40), ('내용', 60, 40), ('일자', 110, 40),
+         ('1', 10, 10), ('제정', 60, 10), ('2007', 110, 10)])]
+    candidate, = build_tables(segments, frags)
+    assert candidate.table.col_count == 3
+    assert [[c.text for c in row] for row in candidate.table.rows] == [
+        ['연번', '내용', '일자'], ['1', '제정', '2007']]
+    assert candidate.fragment_orders == set(range(6))
+
+
+def test_number_split_across_lines_is_not_a_block_marker():
+    # "[개정 202" / "3.12.19.]" 처럼 줄 끝에서 잘린 숫자는 항목 표식이 아니다
+    from dochan.pdf.layout import merge_lines
+
+    ex = ContentTextExtractor()
+    lines = ex._assemble_lines([
+        _frag('의결한다.[개정 202', 0, 100, 0, width=200),
+        _frag('3.12.19.] 다음', 0, 88, 1, width=60),
+    ])
+    blocks = merge_lines(lines)
+    assert [b.text for b in blocks] == ['의결한다.[개정 2023.12.19.] 다음']
+    lines = ex._assemble_lines([
+        _frag('앞 문단이 꽉 찬 줄이다 끝', 0, 100, 0, width=200),
+        _frag('2. 새 항목', 0, 88, 1, width=60),
+    ])
+    assert [b.text for b in merge_lines(lines)] == ['앞 문단이 꽉 찬 줄이다 끝', '2. 새 항목']
+
+
+def test_repeated_content_references_are_capped_by_page_byte_budget(tmp_path, monkeypatch):
+    # /Contents 배열이 같은 스트림을 수백 번 참조하면 결합 시 메모리가 곱절로 는다 — 합계 상한
+    import dochan.pdf.reader as reader_mod
+
+    monkeypatch.setattr(reader_mod, 'MAX_PAGE_CONTENT_BYTES', 120)
+    content = b"BT /F1 12 Tf 72 720 Td (part) Tj ET"
+    objects = _minimal_objects(content)
+    objects[3] = "<< /Type /Page /Parent 2 0 R /Contents [" + " ".join(["5 0 R"] * 40) + "] >>"
+    path = tmp_path / "repeat.pdf"
+    path.write_bytes(_build_pdf(objects))
+    doc = PDFReader().read(str(path))
+    assert any('콘텐츠 합계' in e for e in doc.errors)
+    assert 'part' in doc.sections[0].elements[0].text
+
+
+def test_intersection_work_budget_skips_dense_rulings(monkeypatch):
+    import dochan.pdf.tables as tables_mod
+    from dochan.pdf.tables import build_tables
+
+    monkeypatch.setattr(tables_mod, 'MAX_INTERSECTION_CHECKS', 10)
+    warnings = []
+    assert build_tables(_grid(5, 5), [], warnings=warnings) == []
+    assert any('교차' in w for w in warnings)
+
+
+def test_rotated_180_text_keeps_writing_direction():
+    from test_pdf_layout import _mono
+
+    content = b"-1 0 0 -1 200 700 cm BT /F1 10 Tf (a) Tj (b) Tj (c) Tj ET"
+    ex = ContentTextExtractor.from_fonts({"F1": _mono()})
+    assert ex.extract(content) == ["abc"]
+
+
+def test_filled_polygon_rectangle_is_not_a_ruling_but_thin_one_is():
+    ex = ContentTextExtractor()
+    big = ex.extract_page(b"0 0 m 100 0 l 100 60 l 0 60 l h f")
+    assert big.segments == []
+    thin = ex.extract_page(b"0 0 m 100 0 l 100 1 l 0 1 l h f")
+    assert len(thin.segments) == 4
+    stroked = ex.extract_page(b"0 0 m 100 0 l 100 60 l 0 60 l h S")
+    assert len(stroked.segments) == 4
+
+
+def test_bowed_curves_do_not_become_rulings():
+    ex = ContentTextExtractor()
+    bowed = ex.extract_page(b"0 0 m 0 40 100 40 100 0 c S")
+    assert bowed.segments == []
+    almost_straight = ex.extract_page(b"0 0 m 30 0.2 70 0.2 100 0 c S")
+    assert len(almost_straight.segments) == 1

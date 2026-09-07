@@ -2,7 +2,6 @@
 import json
 import unicodedata
 from collections import Counter
-from pathlib import Path
 
 from scripts.build_korean_spacing_model import build_model, count_text, merge_counts, _count_file
 from test_hwpx_reader import _section, _text_para, _write_hwpx

@@ -304,6 +304,7 @@ def build_snapshot(
     skipped_baseline_count = 0
     skipped_symlink_count = 0
 
+    selected = {relative for _, relative in paths}
     for relative_text, relative in paths:
         if relative.parts == BASELINE_PARTS:
             skipped_baseline_count += 1
@@ -319,14 +320,19 @@ def build_snapshot(
             raise AuditWrapperError("a selected path could not be inspected") from exc
 
         if stat.S_ISLNK(source_stat.st_mode):
-            # 저장소 안을 가리키는 링크(예: CLAUDE.md -> AGENTS.md)는 대상 파일이
-            # 이미 선택돼 있으므로 건너뛴다. 밖으로 나가는 링크는 따라가지 않고 거부한다.
+            # 저장소 안의 '스캔 대상' 파일을 가리키는 링크(예: CLAUDE.md -> AGENTS.md)만
+            # 건너뛴다. 대상이 무시 파일이면 링크도 대상도 검사되지 않으므로 거부하고,
+            # 밖으로 나가는 링크는 따라가지 않고 거부한다.
             try:
-                source.resolve(strict=True).relative_to(repo_real)
+                target = source.resolve(strict=True).relative_to(repo_real)
             except (OSError, ValueError) as exc:
                 raise AuditWrapperError(
                     "selected symlinks that leave the repository are not allowed"
                 ) from exc
+            if PurePosixPath(*target.parts) not in selected:
+                raise AuditWrapperError(
+                    "selected symlinks must target a scanned repository file"
+                )
             skipped_symlink_count += 1
             continue
         if not stat.S_ISREG(source_stat.st_mode):

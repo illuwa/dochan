@@ -618,3 +618,17 @@ def test_snapshot_git_operations_ignore_inherited_hook_repository_env(tmp_path, 
         ["git", "ls-files", "--cached"], cwd=other, stdout=subprocess.PIPE, check=True
     ).stdout
     assert staged_in_other == b""
+
+
+def test_snapshot_rejects_in_repo_symlink_whose_target_is_not_scanned(tmp_path):
+    # 링크 대상이 무시(ignored)돼 스캔 대상에 없으면 링크도 대상도 검사되지 않는다 — 거부
+    repo = _init_repo(tmp_path / "repo")
+    generated = repo / "generated"
+    generated.mkdir()
+    (generated / "entry.py").write_text("print('hidden')\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("generated/\n", encoding="utf-8")
+    (repo / "entry.py").symlink_to("generated/entry.py")
+    _git(repo, "add", "--", ".gitignore", "entry.py")
+
+    with pytest.raises(AuditWrapperError, match="symlink"):
+        build_snapshot(repo, tmp_path / "snapshot")

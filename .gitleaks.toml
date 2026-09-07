@@ -1,11 +1,21 @@
 # gitleaks 설정 — CI(.github/workflows/pypi-release.yml)와 로컬 secaudit 게이트가 공유한다.
-# 기본 규칙은 그대로 쓰고, 비밀이 아닌 공개 데이터만 허용 목록에 올린다.
+# 기본 규칙은 그대로 쓰고, 비밀이 아닌 공개 데이터만 규칙 범위 허용 목록으로 처리한다.
 title = "dochan gitleaks config"
 
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "공개 HWP 코퍼스 fixture 인덱스 — 국세청 파일 다운로드 URL 의 fileKey(32자 hex)는 공개 식별자이지 비밀이 아니다"
-paths = ['''docs/benchmarks/hwp-corpus-fixtures\.json''']
-regexes = ['''fileKey=[0-9a-f]{32}''']
+# 공개 HWP 코퍼스 fixture 인덱스(docs/benchmarks/hwp-corpus-fixtures.json)의 국세청 파일
+# 다운로드 URL 에 든 fileKey(md5 꼴 32자 hex)는 공개 파일 식별자이지 비밀이 아니다.
+# 전역 [[allowlists]] 의 paths 는 이 버전에서 파일 전체를 면제해 버려(가짜 토큰 주입 실험으로
+# 확인) 규칙 범위 허용 목록에 AND 조건을 건다: 이 파일 + generic-api-key + secret 이 hex 일 때만.
+# 규칙이 secret 을 24~25자로 잘라 잡는 경우가 있어 길이는 16~32자로 둔다.
+[[rules]]
+id = "generic-api-key"
+
+    [[rules.allowlists]]
+    description = "국세청 nttFileDownload fileKey — 공개 파일 식별자"
+    condition = "AND"
+    paths = ['''docs/benchmarks/hwp-corpus-fixtures\.json''']
+    regexTarget = "secret"
+    regexes = ['''^[0-9a-f]{16,32}$''']

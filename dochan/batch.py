@@ -62,6 +62,16 @@ def _object_identity(value: os.stat_result) -> Tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _target_identity(value: os.stat_result) -> Tuple[int, int, int, int]:
+    """출력 대상 파일의 동일성 — (장치, inode, 크기, mtime).
+
+    Linux ext4 는 unlink 직후 같은 inode 번호를 재사용하므로 (장치, inode) 만으로는
+    발행 직전의 동시 교체를 놓친다. 크기와 mtime 을 더한다. ctime 은 백업 하드링크
+    생성만으로도 바뀌므로 제외한다.
+    """
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+
 def _source_identity(
     root_stat: os.stat_result,
     source_stat: os.stat_result,
@@ -558,7 +568,7 @@ def _atomic_write_text(
     temp_fd: Optional[int] = None
     backup_name: Optional[str] = None
     published_identity: Optional[Tuple[int, int]] = None
-    target_identity: Optional[Tuple[int, int]] = None
+    target_identity: Optional[Tuple[int, int, int, int]] = None
 
     try:
         directory_flags = (
@@ -629,7 +639,7 @@ def _atomic_write_text(
             if not stat.S_ISREG(target_stat.st_mode):
                 raise OSError(f"output target is not a regular file: {target}")
             target_mode = target_stat.st_mode & 0o777
-            target_identity = _object_identity(target_stat)
+            target_identity = _target_identity(target_stat)
 
         for protected_path in protected_paths:
             try:
@@ -637,7 +647,7 @@ def _atomic_write_text(
             except FileNotFoundError:
                 continue
             if target_identity is not None and (
-                _object_identity(protected_stat) == target_identity
+                _object_identity(protected_stat) == target_identity[:2]
             ):
                 raise ValueError(
                     "output path aliases a protected input: "
@@ -729,8 +739,8 @@ def _atomic_write_text(
                 follow_symlinks=False,
             )
             if (
-                _object_identity(backup_stat) != target_identity
-                or _object_identity(current_target) != target_identity
+                _target_identity(backup_stat) != target_identity
+                or _target_identity(current_target) != target_identity
             ):
                 raise OSError(f"output target changed before publication: {target}")
 

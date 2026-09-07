@@ -1,17 +1,59 @@
 # Changelog
 
-## [Unreleased]
+## [1.4.0] - 2026-09-07
 
-- Hardened HWP/HWPX and Office parsers with bounded decompression, archive,
-  XML, structure-depth, table, range, and cell-allocation limits.
-- Fixed batch output collisions, fatal-error exit status, atomic publishing,
-  note references, structured provenance/OCR output, and cross-validation
-  scoring for unavailable sources.
-- Made public fixture inputs immutable and competitor runs version-traceable
-  with pinned upstream revisions and top-level converters, integrity metadata,
-  download limits, and resolved dependency inventories.
-- Added locked Python 3.9–3.13 release tests, dependency/SAST/secret gates,
-  tag-to-wheel version verification, and reproducible release documentation.
+PDF 레이아웃 엔진을 CTM(그래픽 상태) 기반으로 다시 세워 한글 'PDF로 저장' 문서의
+문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀 포함)를 재구성한 릴리스.
+파서 전반의 자원 상한(하드닝), 배치 출력 안전성, 릴리스·보안 게이트 정비를 함께 담았다.
+모든 신규 기능은 동일 문서 HWPX↔PDF 실물 79쌍과 회귀 테스트로 검증했다.
+
+### 추가 (PDF — CTM 레이아웃 엔진 + 괘선 표 복원)
+
+- **CTM 반영 좌표 레이아웃**: `q`/`Q`/`cm` 그래픽 상태를 추적해 텍스트 조각을 장치
+  좌표로 배치. 한글 'PDF로 저장' 출력(모든 런을 `q … cm BT … ET Q` 로 감싸는 형식)에서
+  페이지 전체가 공백 없는 한 문단으로 뭉개지던 문제 해소. 줄 조립은 글자 크기 비례
+  허용오차, 줄 안은 쓰기 방향(180° 회전 포함) 기준 정렬
+- **벡터 괘선 표 복원**: 경로 연산자(`m`/`l`/`re` + `S` 등)에서 축 정렬 괘선만 수집
+  (클립 `W n`, 큰 채움 사각형, 굽은 곡선 제외) → 군집화 → 연결 성분 → 격자 →
+  가로/세로 병합 셀(L자형은 행별 분할) → 셀 텍스트 배치. 바깥 괘선이 없는 표는
+  괘선이 뻗은 범위까지 열·행을 확장. 페이지 5만·문서 20만 셀, 선분 2만 개,
+  교차 검사 200만 회, 페이지 콘텐츠 합계 64MB 상한
+- **문단 병합**: 꽉 찬 줄만 다음 줄과 이어 붙이고(한글·숫자 줄바꿈은 무공백, 그 외
+  공백), 조·항·번호·기호 항목 표식으로 시작하는 줄은 새 문단. 표 셀 안에도 동일 적용
+- **MacRomanEncoding 단순 폰트**: ToUnicode 없는 폰트의 “ ” 따옴표 등 복원
+  (기존 `Ò안보원Ó` → `“안보원”`)
+- 검증(`scripts/compare_pdf_pairs.py`, `docs/benchmarks/2026-09-07-pdf-layout-tables-real-doc-validation.md`):
+  동일 문서 HWPX↔PDF 79쌍 공백 토큰 유사도 0.032 → 0.938(최저 0.805), PDF 표 0 → 864개
+  (HWPX 845개), 셀 텍스트 일치율 0 → 0.894, 표 구조 완전 일치 0.620, 병합 셀 구성 일치 0.913.
+  회귀 테스트 55개 추가. 구현은 Codex 위임, codex 독립 리뷰(P1 3건·P2 4건)와 Opus 감수
+  (Critical 1·Major 3 등) 반영
+
+### 변경
+
+- **Markdown 강조 마커 공백**: 런 가장자리 공백을 `**`/`*` 마커 밖으로 옮겨
+  CommonMark 유효성 확보 (`**제3조(소집) **①` → `**제3조(소집)** ①`). 전 포맷 공통
+- **pyyaml 런타임 의존성 제거**: 어디에서도 import 하지 않던 의존성. `config.yaml` 은
+  패키지 데이터로 그대로 포함
+
+### 하드닝·배치·릴리스 (2026-08-22 통합분)
+
+- HWP/HWPX·Office 파서에 압축 해제·아카이브·XML·구조 깊이·표·범위·셀 할당 상한을
+  적용하고, OLE 스트림에 문서 단위 바이트 예산(bounded_io)을 도입
+- 배치: 출력 파일명 충돌·치명 오류 종료 코드·원자적 쓰기·경로/링크 검증 수정,
+  각주 참조·구조화 provenance/OCR 출력·교차 검증 점수 산정 수정
+- 공개 OOXML fixture 를 SHA-256 으로 고정하고 경쟁 도구 실행을 버전 추적 가능하게 정비
+- Python 3.9–3.13 잠금 테스트, 의존성/SAST/비밀 게이트, 태그↔wheel 버전 검증,
+  재현 가능한 릴리스 절차 문서화
+
+### CI·보안 게이트
+
+- gitleaks: 공개 코퍼스 fixture 인덱스의 국세청 `fileKey`(공개 식별자) 1,081건 오탐을
+  규칙 범위 허용 목록(해당 파일 AND hex secret)으로 처리, CI 와 로컬 게이트가 같은 설정 사용
+- semgrep: 결과·예외 객체 생성을 실행으로 본 subprocess 감사 오탐 3건 감사 완료 표시
+- tracked-security-audit: 저장소 안을 가리키는 심볼릭 링크(`CLAUDE.md → AGENTS.md`)에
+  모든 커밋이 막히던 문제와, pre-commit 훅이 물려주는 `GIT_DIR`/`GIT_INDEX_FILE` 로
+  스냅샷 `git add` 가 실제 인덱스를 오염시키던 문제 수정
+- 워크플로: main 푸시에도 테스트·보안 게이트 실행
 
 ## [1.3.0] - 2026-08-09
 

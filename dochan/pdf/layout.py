@@ -82,7 +82,8 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
             block = blocks[-1]
             sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '
             if JOIN_OBSERVER is not None:
-                JOIN_OBSERVER(block.text, line.text, bool(sep))
+                # 직전 '줄' 원문을 넘긴다 — 병합 블록을 넘기면 앞선 예측 구분자가 라벨 문맥에 섞인다
+                JOIN_OBSERVER(previous.text, line.text, bool(sep))
             block.text += sep + line.text
             if sep:
                 block.runs.append((sep, False, False))

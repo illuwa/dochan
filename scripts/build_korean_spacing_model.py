@@ -49,11 +49,15 @@ def merge_counts(counts):
 
 
 def build_model(counts, min_pair_count=5, min_char_count=20, exception_threshold=0.2):
-    """주변 확률과 차이가 있는 문자쌍만 남기고 소수 둘째 자리로 저장한다."""
+    """주변 확률과 차이가 있는 문자쌍만 남기고 소수 둘째 자리로 저장한다.
+
+    예외 쌍 선별은 런타임이 실제로 읽는 '반올림된' 주변 확률·사전확률로 판정한다.
+    반올림 전 값으로 고르면 저장된 모델의 판정이 학습 때와 달라질 수 있다.
+    """
     total = sum(counts["total"].values())
-    prior = sum(counts["space"].values()) / total if total else 0.29
+    prior = round(sum(counts["space"].values()) / total, 2) if total else 0.29
     marginals = {
-        side: {char: counts[side + "_space"][char] / count
+        side: {char: round(counts[side + "_space"][char] / count, 2)
                for char, count in sorted(counts[side + "_total"].items())
                if count >= min_char_count}
         for side in ("last", "first")
@@ -63,15 +67,14 @@ def build_model(counts, min_pair_count=5, min_char_count=20, exception_threshold
     for (last, first), count in sorted(counts["total"].items()):
         if count < min_pair_count:
             continue
-        probability = counts["space"][(last, first)] / count
+        probability = round(counts["space"][(last, first)] / count, 2)
         marginal = marginal_model.space_probability(last, first)
-        if ((probability > 0.5) != (marginal > 0.5)
+        pair_model = SpacingModel(prior=prior, pairs={last + first: probability})
+        if (pair_model.joins_with_space(last, first) != marginal_model.joins_with_space(last, first)
                 or abs(probability - marginal) >= exception_threshold):
-            pairs[last + first] = round(probability, 2)
-    return {"version": 1, "prior": round(prior, 2), "min_pair_count": min_pair_count,
-            "min_char_count": min_char_count,
-            **{side: {char: round(p, 2) for char, p in table.items()}
-               for side, table in marginals.items()}, "pairs": pairs}
+            pairs[last + first] = probability
+    return {"version": 1, "prior": prior, "min_pair_count": min_pair_count,
+            "min_char_count": min_char_count, **marginals, "pairs": pairs}
 
 
 def _count_file(file_path):

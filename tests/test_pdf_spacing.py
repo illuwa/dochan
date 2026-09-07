@@ -108,10 +108,18 @@ def test_observer_sees_previous_block_and_spacing_before_each_join(monkeypatch):
         for i, text in enumerate(["이사회의", "운영안", "보", "hello", "제2조 목적"])
     ])
     blocks = layout.merge_lines(lines)
+    # 관찰자는 병합된 블록이 아니라 직전 '줄' 원문을 받는다 — 앞선 예측 구분자가 라벨 문맥에 섞이지 않게
     assert observed == [("이사회의", "운영안", True),
-                        ("이사회의 운영안", "보", False),
-                        ("이사회의 운영안보", "hello", True)]
+                        ("운영안", "보", False),
+                        ("보", "hello", True)]
     assert blocks[0].text == blocks[0].paragraph().text == "이사회의 운영안보 hello"
     monkeypatch.setattr(layout, "JOIN_OBSERVER", None)
     assert layout.merge_lines(lines) == blocks
     assert len(observed) == 3
+
+
+def test_exact_marginal_tie_is_not_a_space():
+    # prior 0.25, last 0.1, first 0.75 → 수학적으로 정확히 0.5 (부동소수 반올림으로 0.5000…01 이 될 수 있다)
+    model = SpacingModel(prior=0.25, last={"다": 0.1}, first={"클": 0.75})
+    assert not model.joins_with_space("다", "클")
+    assert SpacingModel(prior=0.25, last={"다": 0.1}, first={"클": 0.76}).joins_with_space("다", "클")

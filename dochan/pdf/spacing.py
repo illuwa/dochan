@@ -30,7 +30,8 @@ class SpacingModel:
         return odds / (1 + odds)
 
     def joins_with_space(self, last: str, first: str) -> bool:
-        return self.space_probability(last, first) > 0.5
+        # 수학적 동률(정확히 0.5)은 부동소수 오차로 0.5000…01 이 될 수 있다 — 동률은 무공백으로 둔다
+        return self.space_probability(last, first) > 0.5 + 1e-9
 
 
 _DEFAULT_MODEL: Optional[SpacingModel] = None

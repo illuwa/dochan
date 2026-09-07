@@ -91,3 +91,21 @@ def test_cli_builds_model_from_multiple_directories_case_insensitively(tmp_path,
     assert model["last"]["의"] == model["first"]["운"] == 1.0
     assert "parsed=2" in captured.out and "skipped=1" in captured.out
     assert "syllable_pairs=16" in captured.out
+
+
+def test_exception_pairs_are_chosen_with_the_serialized_rounded_marginals():
+    # 반올림 전 주변 확률(0.502 → 공백)과 반올림 후(0.496 → 무공백)의 판정이 갈리는 쌍은
+    # 저장된 값으로 판정했을 때 예외가 되므로 반드시 남겨야 한다 (codex 리뷰)
+    from collections import Counter
+
+    from scripts.build_korean_spacing_model import build_model
+
+    counts = {
+        "total": Counter({("가", "나"): 20, ("다", "라"): 980}),
+        "space": Counter({("가", "나"): 13, ("다", "라"): 236}),
+        "last_total": Counter({"가": 1000}), "last_space": Counter({"가": 401}),
+        "first_total": Counter({"나": 1000}), "first_space": Counter({"나": 333}),
+    }
+    model = build_model(counts, min_pair_count=5, min_char_count=20, exception_threshold=0.2)
+    assert model["prior"] == 0.25 and model["last"]["가"] == 0.4 and model["first"]["나"] == 0.33
+    assert model["pairs"].get("가나") == 0.65

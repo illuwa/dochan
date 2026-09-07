@@ -9,6 +9,7 @@
 - cell_hit: HWPX 셀 텍스트 중 PDF 표 셀에 그대로 존재하는 비율 (표 텍스트 배치 품질)
 - signature_match: (행 수, 열 수, 병합 셀 span 다중집합)이 완전히 같은 HWPX 표 비율
 - merge_match: 같은 행·열 수의 PDF 표가 있는 병합 셀 표 중 span 다중집합까지 같은 비율
+- join_accuracy: 정답 문맥이 유일하게 결정되는 한글 줄 경계의 공백 판정 정확도
 """
 import argparse
 import difflib
@@ -85,14 +86,30 @@ def structure_matches(answer: List[tuple], candidate: List[tuple]) -> Tuple[int,
 
 def compare_pair(hwpx_path: str, pdf_path: str) -> Dict[str, object]:
     from dochan import Dochan
+    from dochan.pdf import layout
 
     answer = Dochan(hwpx_path)
-    candidate = Dochan(pdf_path)
+    joins = []
+
+    def observe(previous, following, spaced):
+        if previous and following and '가' <= previous[-1] <= '힣' and '가' <= following[0] <= '힣':
+            joins.append((previous[-3:], following[:3], spaced))
+
+    previous_observer = layout.JOIN_OBSERVER
+    layout.JOIN_OBSERVER = observe
+    try:
+        candidate = Dochan(pdf_path)
+    finally:
+        layout.JOIN_OBSERVER = previous_observer
+    answer_text = answer.to_plain_text()
+    accuracy, labeled = join_accuracy(answer_text, joins)
     answer_sigs, answer_cells = table_stats(answer.doc)
     candidate_sigs, candidate_cells = table_stats(candidate.doc)
     exact, merged_total, merged_dims, merged_exact = structure_matches(answer_sigs, candidate_sigs)
     return {
-        "tok_ratio": round(token_ratio(answer.to_plain_text(), candidate.to_plain_text()), 4),
+        "tok_ratio": round(token_ratio(answer_text, candidate.to_plain_text()), 4),
+        "join_accuracy": accuracy,
+        "labeled_joins": labeled,
         "hwpx_tables": len(answer_sigs),
         "pdf_tables": len(candidate_sigs),
         "cell_hit": cell_hit_rate(answer_cells, candidate_cells),
@@ -102,6 +119,21 @@ def compare_pair(hwpx_path: str, pdf_path: str) -> Dict[str, object]:
         "merged_exact": merged_exact,
         "pdf_errors": [e for e in candidate.errors if e.startswith("ERR")][:3],
     }
+
+
+def join_accuracy(answer: str, joins) -> Tuple[Optional[float], int]:
+    """공백 유무가 정답에서 유일하게 확인되는 문맥만 채점한다."""
+    answer = normalize_text(answer)
+    matches = labeled = 0
+    for tail, head, spaced in joins:
+        tail, head = unicodedata.normalize("NFC", tail), unicodedata.normalize("NFC", head)
+        without_space = tail + head in answer
+        with_space = tail + ' ' + head in answer
+        if without_space == with_space:
+            continue
+        labeled += 1
+        matches += spaced == with_space
+    return (matches / labeled if labeled else None), labeled
 
 
 def find_pairs(pairs_dir: str) -> List[Tuple[str, str, str]]:
@@ -120,8 +152,13 @@ def summarize(rows: Dict[str, Dict[str, object]]) -> Dict[str, object]:
     hwpx_tables = sum(r.get("hwpx_tables", 0) for r in rows.values())
     merged_total = sum(r.get("merged_tables", 0) for r in rows.values())
     merged_dims = sum(r.get("merged_dims_matched", 0) for r in rows.values())
+    labeled = sum(r.get("labeled_joins", 0) for r in rows.values())
+    matches = sum(r["join_accuracy"] * r.get("labeled_joins", 0)
+                  for r in rows.values() if r.get("join_accuracy") is not None)
     return {
         "pairs": len(rows),
+        "join_accuracy": round(matches / labeled, 4) if labeled else None,
+        "labeled_joins": labeled,
         "mean_tok_ratio": round(sum(ratios) / len(ratios), 4) if ratios else None,
         "min_tok_ratio": round(min(ratios), 4) if ratios else None,
         "hwpx_tables": hwpx_tables,

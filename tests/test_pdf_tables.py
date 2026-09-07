@@ -99,8 +99,12 @@ def test_grid_page_and_document_budgets_warn_and_skip():
     ('대한민국', '제2조 목적', '대한민국\n제2조 목적'),
     ('hello world', 'again', 'hello world again'),
 ])
-def test_wrap_merging(first, second, expected):
+def test_wrap_merging(first, second, expected, monkeypatch):
+    from dochan.pdf import layout
     from dochan.pdf.layout import merge_lines
+    from dochan.pdf.spacing import SpacingModel
+
+    monkeypatch.setattr(layout, 'load_model', lambda: SpacingModel(pairs={'국국': 0.1}))
 
     lines = ContentTextExtractor()._assemble_lines([
         _frag(first, 10, 100, 0, width=90), _frag(second, 10, 86, 1, width=40)])

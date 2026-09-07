@@ -51,7 +51,7 @@ include = ["dochan", "dochan.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-dochan = ["config.yaml"]
+dochan = ["config.yaml", "pdf/korean_spacing.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

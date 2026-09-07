@@ -1,10 +1,11 @@
 """페이지 본문과 표 셀에 공통으로 쓰는 줄바꿈 병합."""
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from ..conversion import Provenance
 from ..model.document import Paragraph, TextRun
+from .spacing import load_model
 
 # 숫자·문자 표식은 뒤에 공백이 와야 한다 — 줄 끝에서 잘린 "2023.12.19." 의
 # 뒷부분("3.12.19.]")을 새 항목으로 오판하지 않기 위해서다.
@@ -13,6 +14,7 @@ _BLOCK_MARKER = re.compile(
     r'(\(\d+\)|\d+[.)]|[가-힣][.)]|[a-zA-Z][.)])(?=\s|$)|[-•▪◦※○●■□◇◆])'
 )
 _CJK = re.compile(r'[가-힣\u3400-\u9fff\uf900-\ufaff]')
+JOIN_OBSERVER: Optional[Callable[[str, str, bool], None]] = None
 
 
 @dataclass
@@ -50,12 +52,9 @@ def _trim_runs(runs):
 
 
 def _joins_without_space(last: str, first: str) -> bool:
-    """줄 끝에서 잘린 한글 어절과 숫자는 공백 없이 잇는다.
-
-    한글은 글자 단위로 줄이 바뀌므로 어절 안에서 끊긴 경우가 많고,
-    "2023.12.19." 같은 숫자도 줄 끝에서 갈라진다. 그 외(영문 단어 사이 등)는
-    공백 하나로 잇는다.
-    """
+    """한글 경계는 통계로 판정하고, 한자·숫자는 기존 규칙으로 잇는다."""
+    if len(last) == len(first) == 1 and '가' <= last <= '힣' and '가' <= first <= '힣':
+        return not load_model().joins_with_space(last, first)
     if _CJK.fullmatch(last) and _CJK.fullmatch(first):
         return True
     return last.isdigit() and (first.isdigit() or first == '.')
@@ -82,6 +81,8 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
         if joins:
             block = blocks[-1]
             sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '
+            if JOIN_OBSERVER is not None:
+                JOIN_OBSERVER(block.text, line.text, bool(sep))
             block.text += sep + line.text
             if sep:
                 block.runs.append((sep, False, False))

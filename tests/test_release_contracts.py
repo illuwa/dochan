@@ -57,7 +57,8 @@ def test_default_config_is_declared_as_package_data():
 
     assert (ROOT / "dochan" / "config.yaml").is_file()
     assert package_data is not None
-    assert json.loads(package_data.group(1)) == ["config.yaml"]
+    assert json.loads(package_data.group(1)) == ["config.yaml", "pdf/korean_spacing.json"]
+    assert json.loads(_read("dochan/pdf/korean_spacing.json"))["version"] == 1
 
 
 def test_publish_job_smoke_tests_the_installed_wheel_outside_the_checkout():

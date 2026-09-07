@@ -38,7 +38,7 @@ print(doc.to_markdown())
 | 기능 | 설명 |
 |------|------|
 | **HWP + HWPX + Office + PDF** | HWP/HWPX, Office OOXML(.docx/.pptx/.xlsx), legacy Office(.doc/.ppt/.xls), PDF(.pdf)를 native parser로 파싱 |
-| **PDF 텍스트·표 추출** | CTM(그래픽 상태) 기반 좌표 레이아웃으로 문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀 포함)를 재구성. 페이지 번호 provenance, 한글 ToUnicode, 표준 암호화(빈 암호) 지원. 스캔 PDF 는 이미지 추출+OCR 로 처리 |
+| **PDF 텍스트·표 추출** | CTM(그래픽 상태) 기반 좌표 레이아웃으로 문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀 포함)를 재구성. 줄바꿈으로 갈라진 한글 어절은 문자 통계 모델로 공백을 복원. 페이지 번호 provenance, 한글 ToUnicode, 표준 암호화(빈 암호) 지원. 스캔 PDF 는 이미지 추출+OCR 로 처리 |
 | **Markdown 출력** | 제목, 표, 서식(bold/italic), 수식까지 AI가 바로 쓸 수 있는 Markdown |
 | **표 파싱** | 셀 병합, 중첩 표, 좌표 배치 지원 |
 | **서식 보존** | CharShape 기반 bold/italic/글자크기 → TextRun 연결 |

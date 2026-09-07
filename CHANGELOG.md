@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### 추가 (PDF — 한글 줄바꿈 결합 공백 통계 모델)
+
+- **문자 통계 기반 공백 판정**: 줄바꿈으로 갈라진 한글 두 글자를 이을 때 (앞 글자, 뒤 글자)
+  통계로 공백 여부를 판정한다. 공개 HWP/HWPX 코퍼스로 학습한 209KB 모델을 패키지 데이터로
+  포함(`dochan/pdf/korean_spacing.json`), 런타임 의존성 없음. 리소스가 없으면 사전확률로 동작
+- 학습 스크립트 `scripts/build_korean_spacing_model.py`, 측정 지표 `join_accuracy`
+  (`scripts/compare_pdf_pairs.py`)
+- 검증(79쌍, 표본 외): 결합 정확도 0.607 → 0.930, 토큰 유사도 0.938 → 0.961, 셀 일치율
+  0.894 → 0.902 (`docs/benchmarks/2026-09-07-korean-wrap-spacing-model.md`)
+- 설계 문서: `docs/superpowers/plans/2026-09-07-pdf-phase5-nesting-pagination-vertical-spacing.md`
+  (중첩 표 트리·페이지 걸침 병합·세로쓰기·괘선 없는 표 해결 방안)
+
 ## [1.4.0] - 2026-09-07
 
 PDF 레이아웃 엔진을 CTM(그래픽 상태) 기반으로 다시 세워 한글 'PDF로 저장' 문서의

@@ -12,7 +12,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
     <a href="https://github.com/illuwa/dochan/stargazers"><img src="https://img.shields.io/github/stars/illuwa/dochan?style=social" alt="GitHub Stars"></a>
   </p>
-    <p align="center"><strong>Current stable version: 1.3.0</strong></p>
+    <p align="center"><strong>Current stable version: 1.4.0</strong></p>
 </p>
 
 ---
@@ -22,7 +22,7 @@
 **dochan**(독한)은 한글(HWP/HWPX)과 Office 문서를 native로 파싱하여 AI/LLM이 바로 사용할 수 있는 Markdown으로 변환하는 Python 파서입니다.
 
 - `doc` (문서) + `한` (韓, 한국) = **dochan** — "독한 파서"라는 더블 미닝
-- HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary + PDF(텍스트) 1차 지원
+- HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary + PDF(텍스트·표·읽기 순서) 네이티브 지원
 - 동일 문서 HWP/HWPX/PDF 80쌍과 공개 HWP/HWPX 7,188개 회귀 코퍼스로 검증(2026-08 기준), 공개가능한 문서로 계속 학습시켜 개선할 예정
 - 공개 OOXML fixture 50개의 고정 SHA-256 corpus와 형식별 회귀 테스트로 지속 검증
 
@@ -38,7 +38,7 @@ print(doc.to_markdown())
 | 기능 | 설명 |
 |------|------|
 | **HWP + HWPX + Office + PDF** | HWP/HWPX, Office OOXML(.docx/.pptx/.xlsx), legacy Office(.doc/.ppt/.xls), PDF(.pdf)를 native parser로 파싱 |
-| **PDF 텍스트 추출** | 단순 디지털 PDF 의 페이지 텍스트 + 페이지 번호 provenance (한글 ToUnicode 지원). 암호화·스캔·레이아웃 재구성은 미지원(경고 처리) |
+| **PDF 텍스트·표 추출** | CTM(그래픽 상태) 기반 좌표 레이아웃으로 문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀 포함)를 재구성. 페이지 번호 provenance, 한글 ToUnicode, 표준 암호화(빈 암호) 지원. 스캔 PDF 는 이미지 추출+OCR 로 처리 |
 | **Markdown 출력** | 제목, 표, 서식(bold/italic), 수식까지 AI가 바로 쓸 수 있는 Markdown |
 | **표 파싱** | 셀 병합, 중첩 표, 좌표 배치 지원 |
 | **서식 보존** | CharShape 기반 bold/italic/글자크기 → TextRun 연결 |
@@ -164,8 +164,8 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 | 요소 | HWP | HWPX | DOC | PPT | XLS | DOCX | PPTX | XLSX | PDF |
 |------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | 텍스트 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 표 (단순) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| 표 (셀 병합) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| 표 (단순) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 표 (셀 병합) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 표 (중첩 텍스트) | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ⬜ | — | — |
 | 서식 (bold/italic) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 제목 감지 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | ✅ |
@@ -186,7 +186,7 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 | 여러 슬라이드 | — | — | — | ✅ | — | — | ✅ | — | — |
 | 레이아웃 상속 텍스트 | — | — | — | ⬜ | — | — | ✅ | — | — |
 | 발표자 노트 | — | — | — | ⬜ | — | — | ✅ | — | — |
-| 읽기 순서 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ✅ | — | ⬜ |
+| 읽기 순서 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ✅ | — | ✅ |
 | 그룹 도형 | — | — | — | ⬜ | — | — | ✅ | — | — |
 | 페이지 번호 provenance | — | — | — | — | — | — | — | — | ✅ |
 | 현대 PDF(1.5+) xref/객체 스트림 | — | — | — | — | — | — | — | — | ✅ |
@@ -231,6 +231,19 @@ dochan/
 │   ├── doc.py         #   DOC WordDocument 텍스트/기초 구조 파서
 │   ├── ppt.py         #   PPT slide/text/기초 구조 파서
 │   └── xls.py         #   XLS BIFF workbook/sheet/cell 파서
+├── pdf/               # 네이티브 PDF 파서
+│   ├── objects.py     #   객체 문법 파서
+│   ├── filters.py     #   Flate/ASCIIHex/ASCII85 + PNG predictor
+│   ├── structure.py   #   xref/트레일러/페이지 트리/객체 스트림
+│   ├── crypto.py      #   표준 보안 핸들러(RC4/AES)
+│   ├── cmap.py        #   ToUnicode CMap
+│   ├── widths.py      #   글리프 폭 맵
+│   ├── content.py     #   콘텐츠 스트림 해석(CTM·텍스트 좌표)
+│   ├── paths.py       #   경로 연산자 → 괘선 수집
+│   ├── tables.py      #   괘선 격자 → 표/병합 셀
+│   ├── layout.py      #   줄 → 문단 병합
+│   ├── images.py      #   이미지 XObject 추출
+│   └── reader.py      #   PDFReader (페이지 → Document)
 ├── model/             # Document 모델
 │   ├── document.py    #   Document, Section, Paragraph
 │   ├── table.py       #   Table, Cell
@@ -251,7 +264,7 @@ dochan은 신뢰할 수 없는 문서도 안전하게 처리합니다:
 - **Zip Bomb 방어**: raw zlib 출력 200MB, OOXML/HWPX XML part 32MB, 일반 part 100MB, archive 합계 512MB 상한
 - **XXE 차단**: XML 외부 엔티티 해석 비활성화
 - **Path Traversal 방지**: 배치 처리 시 경로 탈출 차단
-- **메모리 제한**: HWP·HWPX·DOCX·XLSX·XLS 문서당 표 셀 20만 개, HWP·DOCX 일반 구조 깊이 64, HWP·DOCX 표 깊이 32, PPTX 그룹 깊이 64 상한
+- **메모리 제한**: HWP·HWPX·DOCX·XLSX·XLS·PDF 문서당 표 셀 20만 개, HWP·DOCX 일반 구조 깊이 64, HWP·DOCX 표 깊이 32, PPTX 그룹 깊이 64 상한. PDF 는 페이지 콘텐츠 합계 64MB, 괘선 2만 개, 괘선 교차 검사 200만 회, 스트림 해제 200MB 추가 상한
 - **입력 검증**: FileHeader/스트림명/OOXML 패키지명/바이너리 바운드 체크
 
 ## Contributing

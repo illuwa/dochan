@@ -814,7 +814,7 @@ def _atomic_write_text(
                             dst_dir_fd=parent_fd,
                         )
                         backup_name = None
-                    elif _object_identity(current_target) == target_identity:
+                    elif _target_identity(current_target) == target_identity:
                         os.unlink(backup_name, dir_fd=parent_fd)
                         backup_name = None
             except FileNotFoundError:

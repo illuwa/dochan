@@ -15,8 +15,9 @@ import os
 import posixpath
 import re
 import zipfile
+from typing import BinaryIO, Optional, Sequence, Union
 
-from lxml import etree
+import lxml.etree as etree
 
 from ..model.document import Document, Section, Paragraph, TextRun
 from ..model.table import Table, Cell
@@ -26,6 +27,8 @@ from ..model.header_footer import HeaderFooter, Footnote
 from ..model.style import FaceName, ParaShape, StyleEntry
 from ..hwp.records.char_shape import CharShape
 from ..hwp.records.ctrl_header import field_command_to_url
+from . import charts
+from .revisions import RevisionProjector, validate_revision_mode
 
 # Zip bomb protection constants
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
@@ -65,6 +68,13 @@ MAX_ARCHIVE_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 10000
 MAX_SECTION_COUNT = 1000
 MAX_TABLE_SPAN = 200000
+
+# Count placements, not unique parts: repeated references also consume budgets.
+MAX_DOCUMENT_CHARTS = 256
+MAX_DOCUMENT_CHART_BYTES = 32 * 1024 * 1024
+MAX_DOCUMENT_CHART_SERIES = 1024
+MAX_DOCUMENT_CHART_POINTS = 200_000
+MAX_DOCUMENT_CHART_CELLS = 200_000
 
 
 class _SectionCountExceeded(ValueError):
@@ -110,6 +120,7 @@ NS = {
 # 우리는 그 단위를 해석하지 않는다. default 를 써야 HWP 바이너리 경로와 값이 일치한다.
 SUPPORTED_SWITCH_NAMESPACES = {
     'http://www.hancom.co.kr/hwpml/2016/paragraph',
+    'http://www.hancom.co.kr/hwpml/2016/ooxmlchart',
 }
 
 # <hp:run> 아래에 올 수 있는 도형 컨테이너. 내부에 <hp:drawText> 로 텍스트를 품는다.
@@ -134,10 +145,12 @@ class HWPXParser:
     def _reset(self):
         """인스턴스 상태 초기화. 같은 파서로 두 번 parse 해도 값이 섞이지 않게 한다."""
         self.errors = []
+        self._revisions = RevisionProjector(self.errors)
         self._bin_path_by_id = {}     # content.hpf 의 item id → zip 내 전체 경로
         self._bin_path_by_stem = {}   # 파일명(확장자 제외) → zip 내 전체 경로 (폴백)
         self._section_files = []
         self._char_shapes = []        # 본문 서식 조회용 (dict 목록)
+        self._char_shapes_by_id = {}  # charPr id → 본문 서식 (XML 등장 순서와 무관)
         self._para_prs = {}           # paraPr id → {'heading_type', 'heading_level'}
         self._styles = {}             # style id → {'name', 'eng_name', 'para_pr_id'}
         self._face_names = []
@@ -155,15 +168,34 @@ class HWPXParser:
         self._reported_ambiguous_bin_ids = set()
         self._table_cells_remaining = MAX_TABLE_CELLS
         self._table_cell_budget_exhausted = False
+        self._chart_archive = None
+        self._chart_cache = {}  # Immutable XML bytes/counts only; never shared models.
+        self._chart_seen = set()
+        self._chart_count = 0
+        self._chart_bytes = 0
+        self._chart_series = 0
+        self._chart_points = 0
+        self._chart_cells = 0
+        self._chart_document_cells = 0  # Actual table cells + grid fillers + charts.
 
-    def parse(self, file_path: str) -> Document:
-        """HWPX 파일 파싱"""
+    def parse(self, file_path: Union[str, os.PathLike[str], BinaryIO], *, include_assets: bool = True,
+              revision_mode: str = "preserve") -> Document:
+        """HWPX 경로 또는 seek 가능한 바이너리 스트림 파싱.
+
+        include_assets=False면 이미지 참조·대체 텍스트·캡션은 보존하고
+        이미지 바이너리 로딩만 생략한다. 옵션은 이번 호출에만 적용된다.
+        revision_mode는 preserve(기존 텍스트), final(삭제 제외),
+        original(삽입 제외). 해석 미확정 범위는 보존하고 errors에 기록한다.
+        """
+        validate_revision_mode(revision_mode)
         self._reset()
+        self._revisions = RevisionProjector(self.errors, revision_mode)
         doc = Document()
         doc.source_format = "hwpx"
 
         try:
             with zipfile.ZipFile(file_path, 'r') as zf:
+                self._chart_archive = zf
                 # 패키지 자체가 폭탄인지 먼저 본다 — 엔트리 수·해제 총량·중복 파트.
                 infos = zf.infolist()
                 if len(infos) > MAX_ARCHIVE_ENTRIES:
@@ -214,18 +246,24 @@ class HWPXParser:
                             self.errors.append(f"ERR: 섹션 {sf} 압축률 초과")
                             continue
                         xml_data = self._read_zip_part(zf, sf, MAX_XML_FILE_SIZE)
-                        section = self._parse_section_xml(xml_data)
+                        section = self._parse_section_xml(xml_data, part_name=sf)
                         doc.sections.append(section)
                     except Exception as e:
                         self.errors.append(f"ERR: 섹션 {sf} 파싱 실패: {e}")
 
                 # 이미지 바이너리 데이터 로드
-                self._load_image_data(zf, doc)
+                if include_assets:
+                    self._load_image_data(zf, doc)
 
         except zipfile.BadZipFile:
             self.errors.append("ERR: 유효하지 않은 HWPX 파일")
         except Exception as e:
             self.errors.append(f"ERR: HWPX 파싱 실패: {e}")
+        finally:
+            # No closed ZIP handle, source XML or lxml section nodes escape parse().
+            self._chart_archive = None
+            self._chart_cache.clear()
+            self._chart_seen.clear()
 
         # HWP 경로(reader.py)와 대칭이 되도록 서식 목록을 문서에 실어준다
         doc.char_shapes = self._char_shape_entries
@@ -245,6 +283,101 @@ class HWPXParser:
         if _compression_ratio_exceeded(info.file_size, info.compress_size):
             raise ValueError(f"{name} compression ratio exceeds limit")
         return zf.read(name)
+
+    # ── Chart/ parts (only read while the package is open) ──
+
+    def _chart_error(self, code: str, detail: str) -> None:
+        message = f"[chart:{code}] {detail}"
+        if message not in self.errors:
+            self.errors.append(message)
+
+    def _parse_chart_elem(self, elem) -> list:
+        self._chart_seen.add(elem)
+        self._chart_count += 1
+        if self._chart_count > MAX_DOCUMENT_CHARTS:
+            self._chart_error("document_limit", "chart placement count exceeded")
+            return []
+        if elem.tag != '{%s}chart' % NS['hp']:
+            self._chart_error("unsupported_namespace", "expected hp:chart QName")
+            return []
+
+        ref = elem.get('chartIDRef', '')
+        # Root-relative exact package names, never URLs/manifest IDs/normalized
+        # aliases. Reject traversal even if normpath would end inside Chart/.
+        if (not ref.startswith('Chart/') or not ref.endswith('.xml')
+                or len(ref) > 1024 or any(c in ref for c in '\\:%?#')
+                or any(ord(c) < 33 or ord(c) == 127 for c in ref)
+                or any(p in ('', '.', '..') for p in ref.split('/'))):
+            self._chart_error("invalid_reference", "expected an exact Chart/ XML package path")
+            return []
+        label = ref[:120]
+        actual = self._part_name_map.get(ref)
+        if actual is None:
+            self._chart_error("missing_part", label)
+            return []
+        if actual != ref:
+            self._chart_error("invalid_reference", "noncanonical ZIP chart part name")
+            return []
+        zf = self._chart_archive
+        if zf is None:
+            self._chart_error("part_read", "chart requires an open HWPX package")
+            return []
+
+        try:
+            info = zf.getinfo(actual)
+            if (info.file_size > charts.MAX_XML_BYTES
+                    or (info.file_size > 0 and info.compress_size <= 0)
+                    or _compression_ratio_exceeded(info.file_size, info.compress_size)):
+                self._chart_error("limit", label + ": ZIP size/compression ratio exceeded")
+                return []
+            if self._chart_bytes + info.file_size > MAX_DOCUMENT_CHART_BYTES:
+                self._chart_error("document_limit", "chart XML byte budget exceeded")
+                return []
+            self._chart_bytes += info.file_size
+            if actual not in self._chart_cache:
+                # ZipFile.read() has no bound. Check both metadata and bytes
+                # actually returned, including a one-byte overrun sentinel.
+                with zf.open(actual) as stream:
+                    data = stream.read(charts.MAX_XML_BYTES + 1)
+                if len(data) > charts.MAX_XML_BYTES:
+                    self._chart_error("limit", label + ": chart XML bytes exceeded")
+                    return []
+                if len(data) != info.file_size:
+                    self._chart_error("part_read", label + ": ZIP size mismatch")
+                    return []
+                series, points = _chart_input_counts(data)
+                self._chart_cache[actual] = (data, series, points)
+            data, series, points = self._chart_cache[actual]
+        except Exception:
+            # ZIP codecs have different exception classes (zlib/LZMA/CRC,
+            # encryption, unsupported methods). Isolate a damaged chart part
+            # without discarding its surrounding section text.
+            self._chart_error("part_read", label + ": unreadable/corrupt ZIP part")
+            return []
+
+        if (self._chart_series + series > MAX_DOCUMENT_CHART_SERIES
+                or self._chart_points + points > MAX_DOCUMENT_CHART_POINTS):
+            self._chart_error("document_limit", "chart series/point budget exceeded")
+            return []
+        # Count raw nodes even in unsupported groups and invalid/duplicate caches.
+        self._chart_series += series
+        self._chart_points += points
+        elements, warnings = charts.parse_chart_xml(data)
+        for warning in warnings:
+            self.errors.append(f"{warning} ({label}, chart #{self._chart_count})")
+        cells = sum(len(row) for item in elements if isinstance(item, Table) for row in item.rows)
+        if (self._chart_cells + cells > MAX_DOCUMENT_CHART_CELLS
+                or self._chart_document_cells + cells > MAX_DOCUMENT_CELLS
+                or cells > self._cell_budget or cells > self._table_cells_remaining):
+            self._chart_error("document_limit", "chart/document output cell budget exceeded")
+            return []
+        # charts.py bounds the temporary result to MAX_GRID_CELLS before we
+        # admit it to the document. Every call constructs fresh mutable models.
+        self._chart_cells += cells
+        self._chart_document_cells += cells
+        self._cell_budget -= cells
+        self._table_cells_remaining -= cells
+        return elements
 
     # ── content.hpf / BinData ──
 
@@ -336,6 +469,7 @@ class HWPXParser:
     def _parse_header_xml(self, zf: zipfile.ZipFile):
         """Contents/header.xml에서 글자모양/문단모양/스타일/글꼴 파싱"""
         self._char_shapes = []
+        self._char_shapes_by_id = {}
 
         names = zf.namelist()
         for candidate in ('Contents/header.xml', 'header.xml'):
@@ -347,6 +481,7 @@ class HWPXParser:
             # 서식은 부가 정보다. 여기서 무슨 일이 나든 본문 파싱을 막아서는 안 된다.
             try:
                 root = _parse_xml_tolerant(data)
+                self._revisions.read_header(root)
                 for elem in root.iter():
                     tag = _local_tag(elem.tag)
                     if tag == 'charPr' and elem.get('id') is not None:
@@ -415,6 +550,9 @@ class HWPXParser:
                 cs['strikeout'] = child.get('shape', 'NONE') != 'NONE'
 
         self._char_shapes.append(cs)
+        char_pr_id = _int_attr(elem, 'id', -1)
+        if char_pr_id >= 0:
+            self._char_shapes_by_id[char_pr_id] = cs
 
         entry = CharShape()
         entry.base_size = int(round(cs['size_pt'] * 100))  # size_pt 는 읽기 전용 프로퍼티
@@ -511,17 +649,29 @@ class HWPXParser:
                 return candidate
         return None
 
-    def _parse_section_xml(self, xml_data: bytes) -> Section:
+    def _parse_section_xml(self, xml_data: bytes, *, part_name: str = "section") -> Section:
         """섹션 XML → Section 모델"""
         if xml_data.count(b"<") > MAX_XML_ELEMENTS:
             raise ValueError("HWPX section XML element limit exceeded")
         section = Section()
         root = _parse_xml_tolerant(xml_data)
+        # The revision module deliberately projects text only. Present charts
+        # as opaque objects during that pass so ranges crossing a chart retain
+        # the established "object / unresolved content preserved" diagnostic.
+        chart_nodes = list(root.iter('{%s}chart' % NS['hp']))
+        for node in chart_nodes:
+            node.tag = '{%s}ole' % NS['hp']
+        try:
+            self._revisions.project_section(root, part_name)
+        finally:
+            for node in chart_nodes:
+                node.tag = '{%s}chart' % NS['hp']
+        self._chart_seen.clear()
 
         # ★ 최상위 <p>만 처리 (직접 자식)
         #   표 셀 안의 <p>는 _parse_table_cell에서 재귀 처리되므로
         #   root.iter()를 쓰면 중복됨
-        for child in root:
+        for child in _selected_children(root):
             tag = _local_tag(child.tag)
             if tag == 'p':
                 elements = self._parse_paragraph_elem(child)
@@ -531,6 +681,12 @@ class HWPXParser:
                 # (실측 leap-source.hwpx). DOCX 주석과 같은 comment 규약.
                 section.elements.extend(self._parse_memogroup(child))
 
+        # Selected charts in unknown containers must be visible as unsupported;
+        # unselected alternatives and revision-deleted nodes are not omissions.
+        for child in _selected_descendants(root):
+            if _local_tag(child.tag) == 'chart' and child not in self._chart_seen:
+                self._chart_error("unsupported_placement", part_name + ": chart in an unsupported container")
+        self._chart_seen.clear()
         return section
 
     def _parse_memogroup(self, memogroup_elem) -> list:
@@ -614,7 +770,7 @@ class HWPXParser:
         self._field_overflow = 0
         try:
             runs = []
-            for child in p_elem:
+            for child in _selected_children(p_elem):
                 tag = _local_tag(child.tag)
 
                 if tag == 'run':
@@ -639,7 +795,10 @@ class HWPXParser:
                             if para.text.strip():
                                 elements.append(para)
                             runs = []
-                        elements.append(ctrl_elem)
+                        if isinstance(ctrl_elem, list):
+                            elements.extend(ctrl_elem)
+                        else:
+                            elements.append(ctrl_elem)
 
             # 남은 텍스트
             if runs:
@@ -685,19 +844,13 @@ class HWPXParser:
         strikeout = False
 
         # CharShape lookup from charPrIDRef
-        cs_id_str = run_elem.get('charPrIDRef', '')
-        if cs_id_str and self._char_shapes:
-            try:
-                cs_id = int(cs_id_str)
-                if 0 <= cs_id < len(self._char_shapes):
-                    cs = self._char_shapes[cs_id]
-                    bold = cs['bold']
-                    italic = cs['italic']
-                    font_size_pt = cs['size_pt']
-                    underline = cs['underline']
-                    strikeout = cs['strikeout']
-            except (ValueError, IndexError):
-                pass
+        cs = self._char_shapes_by_id.get(_int_attr(run_elem, 'charPrIDRef', -1))
+        if cs is not None:
+            bold = cs['bold']
+            italic = cs['italic']
+            font_size_pt = cs['size_pt']
+            underline = cs['underline']
+            strikeout = cs['strikeout']
 
         def flush():
             """누적 텍스트를 TextRun 으로 확정한다. 링크 경계에서도 호출된다."""
@@ -714,7 +867,7 @@ class HWPXParser:
                     link=self._current_link(),
                 ))
 
-        for child in run_elem:
+        for child in _selected_children(run_elem):
             tag = _local_tag(child.tag)
 
             if tag in ('charPrIDRef', 'charPr'):
@@ -735,6 +888,9 @@ class HWPXParser:
             elif tag == 'equation':
                 flush()
                 results.append(_parse_equation_elem(child))
+            elif tag == 'chart':
+                flush()
+                results.extend(self._parse_chart_elem(child))
             elif tag == 'compose':
                 # 글자 겹치기 — 표시 문자는 composeText 속성에 있다
                 text_parts.append(child.get('composeText', '') or '')
@@ -782,14 +938,17 @@ class HWPXParser:
                             note_ref=self._note_seq,
                             font_size_pt=font_size_pt,
                         ))
-                    results.append(ctrl_result)
+                    if isinstance(ctrl_result, list):
+                        results.extend(ctrl_result)
+                    else:
+                        results.append(ctrl_result)
 
         flush()
         return results
 
     def _parse_ctrl(self, ctrl_elem):
         """<ctrl> 요소 → Table/Equation/Image 등"""
-        for child in ctrl_elem.iter():
+        for child in _selected_descendants(ctrl_elem):
             tag = _local_tag(child.tag)
 
             if tag == 'tbl':
@@ -798,6 +957,8 @@ class HWPXParser:
                 return _parse_equation_elem(child)
             elif tag == 'pic':
                 return self._parse_picture_elem(child)
+            elif tag == 'chart':
+                return self._parse_chart_elem(child)
             elif tag == 'header':
                 return self._parse_header_footer_elem(child, 'header')
             elif tag == 'footer':
@@ -825,7 +986,7 @@ class HWPXParser:
         if depth > MAX_DRAWING_DEPTH:
             return results
 
-        for child in elem:
+        for child in _selected_children(elem):
             tag = _local_tag(child.tag)
             if tag == 'drawText':
                 for sub in child:
@@ -838,6 +999,8 @@ class HWPXParser:
                 results.append(self._parse_table_elem(child))
             elif tag == 'pic':
                 results.append(self._parse_picture_elem(child))
+            elif tag == 'chart':
+                results.extend(self._parse_chart_elem(child))
             elif tag in DRAWING_TAGS:
                 results.extend(self._parse_drawing_elem(child, depth + 1))
 
@@ -884,7 +1047,7 @@ class HWPXParser:
         col_cnt = _int_attr(tbl_elem, 'colCnt', 0)
 
         anchors = []      # (row, col, row_span, col_span, Cell)
-        ordered = []      # 좌표가 없을 때의 폴백용
+        ordered = []      # 한 번 파싱한 행을 폴백에서도 그대로 사용
         has_coords = True
 
         for child in tbl_elem:
@@ -896,11 +1059,15 @@ class HWPXParser:
             if tag != 'tr':
                 continue
 
+            row_cells = []
             for tc in child:
                 if _local_tag(tc.tag) != 'tc':
                     continue
+                # 중첩 표/각주를 읽기 전에 예약해야 버려질 셀의 부작용이 없다.
+                if not self._reserve_table_cell():
+                    break
                 cell = self._parse_table_cell(tc)
-                ordered.append(cell)
+                row_cells.append(cell)
 
                 addr = _find_child(tc, 'cellAddr')
                 if addr is None:
@@ -912,55 +1079,44 @@ class HWPXParser:
                     has_coords = False
                     continue
                 anchors.append((row, col, cell.row_span, cell.col_span, cell))
+            ordered.append(row_cells)
+            if self._table_cell_budget_exhausted:
+                break
 
         declared = row_cnt * col_cnt
         if has_coords and anchors and row_cnt > 0 and col_cnt > 0:
             if declared > MAX_TABLE_CELLS:
                 # 선언된 격자가 너무 크다 — 실제 셀만으로 폴백한다
                 self.errors.append(f"표 크기 초과: {row_cnt}x{col_cnt}")
-                table.rows = self._fallback_rows(tbl_elem)
+                table.rows = ordered
                 return table
-            if declared > self._cell_budget:
+            extra_cells = max(0, declared - len(anchors))
+            if (declared > self._cell_budget
+                    or (self._chart_cells and self._chart_document_cells + extra_cells > MAX_DOCUMENT_CELLS)):
                 # 문서 전체 셀 예산 초과. 표를 여럿 두어 우회하는 메모리 폭탄을 막는다.
                 self.errors.append(
                     f"문서 셀 예산 초과 — 표 {row_cnt}x{col_cnt} 를 좌표 배치하지 않음"
                 )
-                table.rows = self._fallback_rows(tbl_elem)
+                table.rows = ordered
                 return table
-            for _ in anchors:
-                if not self._reserve_table_cell():
-                    break
             self._cell_budget -= declared
+            self._chart_document_cells += extra_cells
             table.rows, dropped = _build_grid(anchors, row_cnt, col_cnt)
             if dropped:
                 self.errors.append(
                     f"표 셀 {dropped}개가 격자({row_cnt}x{col_cnt}) 밖 좌표라 배치되지 못함"
                 )
         else:
-            table.rows = self._fallback_rows(tbl_elem)
+            table.rows = ordered
 
         return table
 
-    def _fallback_rows(self, tbl_elem) -> list:
-        """cellAddr 가 없는 비표준 입력용 — <tr> 안 <tc> 등장 순서로 배치."""
-        rows = []
-        for child in tbl_elem:
-            if _local_tag(child.tag) != 'tr':
-                continue
-            row = []
-            for tc in child:
-                if _local_tag(tc.tag) != 'tc':
-                    continue
-                if not self._reserve_table_cell():
-                    break
-                row.append(self._parse_table_cell(tc))
-            rows.append(row)
-            if self._table_cell_budget_exhausted:
-                break
-        return rows
-
     def _reserve_table_cell(self) -> bool:
         if self._table_cell_budget_exhausted:
+            return False
+        if self._chart_cells and self._chart_document_cells >= MAX_DOCUMENT_CELLS:
+            self._chart_error("document_limit", "chart/document output cell budget exceeded")
+            self._table_cell_budget_exhausted = True
             return False
         if self._table_cells_remaining <= 0:
             error = (
@@ -972,6 +1128,7 @@ class HWPXParser:
             self._table_cell_budget_exhausted = True
             return False
         self._table_cells_remaining -= 1
+        self._chart_document_cells += 1
         return True
 
     def _parse_table_cell(self, tc_elem) -> Cell:
@@ -1123,6 +1280,51 @@ def _int_attr(elem, name: str, default: int) -> int:
         return default
 
 
+def _chart_input_counts(data: bytes) -> tuple[int, int]:
+    """Preflight document work limits; charts.py owns all XML diagnostics.
+
+    Count all series/point nodes, including title caches and duplicate indices.
+    No DTD loading, entity expansion, network access or tolerant XML recovery.
+    """
+    safe = etree.XMLParser(resolve_entities=False, no_network=True,
+                           load_dtd=False, huge_tree=False, recover=False)
+    try:
+        root = etree.fromstring(data, parser=safe)
+    except (etree.XMLSyntaxError, ValueError):
+        return 0, 0
+    if root.getroottree().docinfo.doctype:
+        return 0, 0
+    namespace = '{http://schemas.openxmlformats.org/drawingml/2006/chart}'
+    return (sum(1 for _ in root.iter(namespace + 'ser')),
+            sum(1 for _ in root.iter(namespace + 'pt')))
+
+
+def _selected_children(parent):
+    """Flatten only selected switch branches, retaining XML document order."""
+    stack = [iter(parent)]
+    while stack:
+        child = next(stack[-1], None)
+        if child is None:
+            stack.pop()
+        elif child.tag == '{%s}switch' % NS['hp']:
+            branch = _choose_switch_branch(child)
+            if branch is not None:
+                stack.append(iter(branch))
+        else:
+            yield child
+
+
+def _selected_descendants(parent):
+    stack = [iter(_selected_children(parent))]
+    while stack:
+        child = next(stack[-1], None)
+        if child is None:
+            stack.pop()
+        else:
+            yield child
+            stack.append(iter(_selected_children(child)))
+
+
 def _choose_switch_branch(switch_elem):
     """<hp:switch> 에서 유효한 분기 하나만 고른다.
 
@@ -1271,7 +1473,9 @@ def _heading_level_from_style_name(name: str) -> int:
         return 0
 
 
-def _build_grid(anchors, row_cnt: int, col_cnt: int):
+def _build_grid(
+    anchors: Sequence[tuple[int, int, int, int, Cell]], row_cnt: int, col_cnt: int,
+) -> tuple[list[list[Cell]], int]:
     """앵커 셀을 좌표에 배치하고, 병합에 가려진 자리를 placeholder 로 채운다.
 
     rowSpan 이 덮는 칸은 나중에 오는 <tr> 에 걸리므로 반드시 2패스여야 한다.
@@ -1279,7 +1483,7 @@ def _build_grid(anchors, row_cnt: int, col_cnt: int):
 
     반환: (rows, dropped) — dropped 는 격자 밖 좌표라 배치하지 못한 앵커 수.
     """
-    grid = [[None] * col_cnt for _ in range(row_cnt)]
+    grid: list[list[Optional[Cell]]] = [[None] * col_cnt for _ in range(row_cnt)]
     dropped = 0
 
     # 1패스: 앵커 배치
@@ -1307,12 +1511,13 @@ def _build_grid(anchors, row_cnt: int, col_cnt: int):
                     grid[rr][cc] = Cell(row=rr, col=cc, row_span=0, col_span=0)
 
     # 남은 빈 칸은 평범한 빈 셀
-    for row in range(row_cnt):
-        for col in range(col_cnt):
-            if grid[row][col] is None:
-                grid[row][col] = Cell(row=row, col=col)
+    rows = [
+        [cell if cell is not None else Cell(row=row, col=col)
+         for col, cell in enumerate(cells)]
+        for row, cells in enumerate(grid)
+    ]
 
-    return grid, dropped
+    return rows, dropped
 
 def _normalize_part_name(name: str) -> str:
     """Return a canonical, relative POSIX path for one ZIP package part."""

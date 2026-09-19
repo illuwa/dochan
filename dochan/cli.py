@@ -25,6 +25,28 @@ def _positive_int(value):
     return parsed
 
 
+def _add_hwpx_options(parser):
+    parser.add_argument(
+        '--no-assets', action='store_true',
+        help='HWPX 이미지 바이너리 로딩 생략 (참조·캡션 보존, OCR 병용 불가)',
+    )
+    parser.add_argument(
+        '--revision-mode', choices=['preserve', 'final', 'original'],
+        default='preserve',
+        help='HWPX 변경 추적: preserve=모두 보존(기본), final=삭제 제외, original=삽입 제외',
+    )
+
+
+def _hwpx_options(args):
+    # 기본 호출에는 새 키워드를 추가하지 않아 기존 리더 호출과 호환된다.
+    options = {}
+    if args.no_assets:
+        options['include_assets'] = False
+    if args.revision_mode != 'preserve':
+        options['revision_mode'] = args.revision_mode
+    return options
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog='dochan',
@@ -39,6 +61,7 @@ def main(argv=None):
     conv.add_argument('-f', '--format', choices=['markdown', 'json', 'text'],
                       default='markdown', help='출력 형식 (기본: markdown)')
     conv.add_argument('--ocr', action='store_true', help='이미지 OCR 활성화')
+    _add_hwpx_options(conv)
 
     # batch
     bat = subparsers.add_parser('batch', help='디렉토리 일괄 변환')
@@ -47,6 +70,7 @@ def main(argv=None):
     bat.add_argument('-f', '--format', choices=['markdown', 'json', 'text'],
                      default='markdown', help='출력 형식')
     bat.add_argument('-w', '--workers', type=_positive_int, default=4, help='병렬 워커 수')
+    _add_hwpx_options(bat)
 
     # info
     inf = subparsers.add_parser('info', help='문서 메타데이터 출력')
@@ -76,7 +100,7 @@ def _cmd_convert(args):
         return 1
 
     try:
-        doc = Dochan(args.file, ocr=args.ocr)
+        doc = Dochan(args.file, ocr=args.ocr, **_hwpx_options(args))
 
         if args.format == 'json':
             content = doc.to_json()
@@ -130,15 +154,16 @@ def _cmd_batch(args):
             output_dir=args.output_dir,
             output_format=args.format,
             max_workers=args.workers,
+            **_hwpx_options(args),
         )
     except Exception as exc:
         print(f"에러: 배치 변환 실패: {exc}", file=sys.stderr)
         return 1
     print(f"\n완료: {summary.success}/{summary.total} 성공 ({summary.success_rate:.1f}%)")
     for result in summary.results:
-        if result.success and result.errors:
-            for warning in result.errors:
-                print(f"경고: {result.file_path}: {warning}", file=sys.stderr)
+        label = '경고' if result.success else '에러'
+        for error in result.errors:
+            print(f"{label}: {result.file_path}: {error}", file=sys.stderr)
     return 1 if summary.failed else 0
 
 

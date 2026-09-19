@@ -8,15 +8,17 @@ reader.py — 통합 진입점 (HWP/HWPX 자동 판별)
 
 import os
 import re
+
 import olefile
 
-from .model.document import Document
-from .hwp.header import FileHeader
-from .hwp.doc_info import DocInfoParser
-from .hwp.distdoc import decode_distribution_section
-from .hwp.section import SectionParser
 from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
+from .hwp.distdoc import decode_distribution_section
+from .hwp.doc_info import DocInfoParser
+from .hwp.header import FileHeader
+from .hwp.section import SectionParser
 from .hwpx.parser import HWPXParser
+from .hwpx.revisions import validate_revision_mode
+from .model.document import Document
 from .office_binary.doc import DOCReader
 from .office_binary.ppt import PPTReader
 from .office_binary.xls import XLSReader
@@ -24,20 +26,19 @@ from .ooxml.docx import DOCXReader
 from .ooxml.package import detect_ooxml_format
 from .ooxml.pptx import PPTXReader
 from .ooxml.xlsx import XLSXReader
-from .pdf.reader import PDFReader
+from .output.json_out import to_dict, to_json
 from .output.markdown import to_markdown
-from .output.json_out import to_json, to_dict
 from .output.plain_text import to_plain_text
+from .pdf.reader import PDFReader
 from .utils.bounded_io import (
-    BoundedIOError,
-    ByteBudget,
     MAX_OLE_DOCUMENT_SIZE,
     MAX_OLE_STREAM_SIZE,
+    BoundedIOError,
+    ByteBudget,
     ResourceLimitError,
     read_ole_stream,
     validate_file_size,
 )
-
 
 HWP_FILE_HEADER_SIZE = 256
 
@@ -45,15 +46,40 @@ HWP_FILE_HEADER_SIZE = 256
 class Dochan:
     """HWP/HWPX 통합 리더"""
 
-    def __init__(self, file_path: str, ocr: bool = False):
+    def __init__(self, file_path: str, ocr: bool = False, *, include_assets: bool = True,
+                 revision_mode: str = "preserve"):
         """
         Args:
             file_path: HWP/HWPX 파일 경로
             ocr: True면 이미지에서 텍스트 OCR 추출 (Tesseract 필요)
+            include_assets: False면 HWPX 이미지 바이너리만 로드하지 않고
+                참조·대체 텍스트·캡션은 보존한다. 기본 True는 기존 동작이다.
+                False는 확장자와 무관하게 HWPX로 식별되는 패키지만 지원한다.
+            revision_mode: preserve(기본 기존 텍스트), final(삭제 제외),
+                original(삽입 제외). 비기본 모드는 HWPX만 지원하며 미확정
+                범위·서식 변경은 보존하고 errors에 부분지원 사유를 기록한다.
+
+        Raises:
+            ValueError: include_assets=False인데 ocr=True이거나 입력이
+                HWPX로 식별되지 않는 경우 (다른 포맷·모호한 패키지 포함).
+                revision_mode가 잘못되었거나 비기본 모드에 HWPX가 아닌 입력.
         """
         self.file_path = file_path
+        # 옵션 오류는 문서 파싱 오류와 달리 호출자에게 직접 알린다.
+        validate_revision_mode(revision_mode)
+        if revision_mode != "preserve" and (
+            not self._is_hwpx_package() or detect_ooxml_format(file_path)
+        ):
+            raise ValueError("revision_mode other than 'preserve' is supported only for HWPX packages")
+        if not include_assets:
+            if ocr:
+                raise ValueError("ocr=True cannot be used with include_assets=False")
+            if not self._is_hwpx_package() or detect_ooxml_format(file_path):
+                raise ValueError("include_assets=False is supported only for HWPX packages")
         self.doc = Document()
         self._ocr = ocr
+        self._include_assets = include_assets
+        self._revision_mode = revision_mode
         self._parse()
         if ocr:
             self._run_ocr()
@@ -375,7 +401,8 @@ class Dochan:
     def _parse_hwpx(self):
         """HWPX (ZIP/XML) 파싱"""
         parser = HWPXParser()
-        self.doc = parser.parse(self.file_path)
+        self.doc = parser.parse(self.file_path, include_assets=self._include_assets,
+                                revision_mode=self._revision_mode)
 
     def _parse_xls(self):
         """XLS (BIFF/OLE) 파싱"""

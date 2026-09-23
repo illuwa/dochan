@@ -193,7 +193,10 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
     ascending_y = list(reversed(ys))
     consumed = set()
     for frag in fragments:
-        x, y = frag.x + frag.width / 2, frag.y + 0.35 * frag.size
+        scale = (frag.dir_x ** 2 + frag.dir_y ** 2) ** 0.5
+        dx, dy = (frag.dir_x / scale, frag.dir_y / scale) if scale else (1.0, 0.0)
+        x = frag.x + dx * frag.width / 2 - dy * 0.35 * frag.size
+        y = frag.y + dy * frag.width / 2 + dx * 0.35 * frag.size
         c = bisect_right(xs, x) - 1
         r = len(ys) - 2 - (bisect_right(ascending_y, y) - 1)
         if not (0 <= c < cols and 0 <= r < len(grid)):

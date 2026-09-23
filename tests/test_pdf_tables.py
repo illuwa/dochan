@@ -642,3 +642,30 @@ def test_wrap_merge_compares_adjacent_fragment_sizes_not_line_max():
              Fragment(70, 680, 100, 12.0, '이 규정은', 5, order=1)]
     lines = ContentTextExtractor()._assemble_lines(frags)
     assert [b.text for b in merge_lines(lines)] == ['제1장 총칙', '이 규정은']
+
+
+def test_vertical_full_columns_merge_but_short_column_stays_separate():
+    from dochan.pdf.layout import merge_lines
+
+    frags = [Fragment(x, 700, width, 10, text, 5, order=order,
+                      dir_x=0, dir_y=-1)
+             for order, (x, width, text) in enumerate([
+                 (300, 100, '가나다'), (286, 100, '라마바'), (272, 20, '끝')])]
+    lines = ContentTextExtractor()._assemble_lines(frags)
+    assert [line.direction for line in lines] == ['down'] * 3
+    assert [block.text for block in merge_lines(lines)] == ['가나다라마바', '끝']
+
+
+def test_rotated_header_reference_point_stays_in_top_left_cell(tmp_path):
+    from dochan.model.table import Table
+
+    content = (_table_content().split(b'BT')[0]
+               + b'q 0 -1 1 0 42 55 cm BT /F1 10 Tf (abcd) Tj (e) Tj ET Q '
+               + b'BT /F1 10 Tf 60 40 Td (R) Tj ET '
+               + b'BT /F1 10 Tf 10 10 Td (B) Tj ET')
+    doc = _read(tmp_path, content)
+    table, = doc.sections[0].elements
+    assert isinstance(table, Table)
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ['abcde', 'R'], ['B', '']]
+    assert not doc.errors

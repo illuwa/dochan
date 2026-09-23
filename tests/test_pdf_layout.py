@@ -192,3 +192,48 @@ def test_huge_clip_path_does_not_emit_segments_or_budget_warning():
     )
     assert page.segments == []
     assert page.warnings == []
+
+
+def test_ctm_writing_directions_and_flow_coordinates():
+    from dochan.pdf.content import across, along, writing_direction
+
+    ex = ContentTextExtractor.from_fonts({"F1": _mono()})
+    transforms = (
+        (b"1 0 0 1 300 700", "ltr", (300, 700), (1, 0)),
+        (b"-1 0 0 -1 300 700", "rtl", (-300, 700), (-1, 0)),
+        (b"0 -1 1 0 300 700", "down", (-700, 300), (0, -1)),
+        (b"0 1 -1 0 300 700", "up", (700, -300), (0, 1)),
+    )
+    for matrix, direction, coordinates, vector in transforms:
+        frag, = ex.extract_fragments(
+            b"q " + matrix + b" cm BT /F1 10 Tf (A) Tj ET Q"
+        )
+        assert writing_direction(frag) == direction
+        assert (along(frag), across(frag)) == coordinates
+        assert (frag.dir_x, frag.dir_y) == vector
+
+
+def test_vertical_columns_follow_writing_axis_and_stream_order():
+    font = _mono()
+    font.decode = lambda raw: raw.decode("ascii").translate(
+        str.maketrans("abcde", "가나다라마")
+    )
+    ex = ContentTextExtractor.from_fonts({"F1": font})
+    content = (b"q 0 -1 1 0 300 700 cm BT /F1 12 Tf "
+               b"(ab) Tj (c) Tj 0 -14 Td (de) Tj ET Q")
+    lines = ex.extract_lines(content)
+    assert [line.text for line in lines] == ["가나다", "라마"]
+    assert [line.direction for line in lines] == ["down", "down"]
+    assert lines[0].across > lines[1].across
+    assert lines[0].left == lines[0].along_start
+    assert lines[0].right == lines[0].along_end
+
+    gap = b"q 0 -1 1 0 300 700 cm BT /F1 12 Tf [(a) -1000 (b)] TJ ET Q"
+    assert ex.extract(gap) == ["가 나"]
+
+
+def test_vertical_up_sorts_fragments_along_positive_y():
+    ex = ContentTextExtractor.from_fonts({"F1": _mono()})
+    content = (b"q 0 1 -1 0 300 700 cm BT /F1 10 Tf "
+               b"6 0 Td (b) Tj -6 0 Td (a) Tj ET Q")
+    assert ex.extract(content) == ["ab"]

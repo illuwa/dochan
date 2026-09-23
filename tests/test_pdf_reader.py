@@ -401,3 +401,14 @@ def test_empty_middle_page_resets_continuation(tmp_path):
     assert len(doc.find_all("table")) == 2
 
 
+def test_mixed_horizontal_and_vertical_text_keeps_stream_order(tmp_path):
+    content = (
+        b"BT /F1 10 Tf 70 100 Td (Before) Tj ET "
+        b"q 0 -1 1 0 90 700 cm BT /F1 10 Tf (Vertical) Tj ET Q "
+        b"BT /F1 10 Tf 70 86 Td (After) Tj ET"
+    )
+    path = _write(tmp_path, "mixed.pdf", _build_pdf(_minimal_objects(content)))
+    doc = PDFReader().read(path)
+    assert [element.text for element in doc.sections[0].elements] == [
+        "Before", "Vertical", "After"]
+    assert not doc.errors

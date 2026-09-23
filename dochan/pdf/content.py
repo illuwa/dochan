@@ -48,6 +48,34 @@ class Fragment:
     italic: bool = False
     order: int = 0
     dir_x: float = 1.0  # 장치 공간에서 텍스트 x축의 x 성분 — 음수면 오른쪽→왼쪽으로 진행
+    dir_y: float = 0.0  # 장치 공간에서 텍스트 x축의 y 성분
+
+
+def writing_direction(frag: Fragment) -> str:
+    """장치 공간의 텍스트 x축을 네 가지 쓰기 방향으로 분류한다."""
+    if abs(frag.dir_x) >= abs(frag.dir_y):
+        return "ltr" if frag.dir_x >= 0 else "rtl"
+    return "down" if frag.dir_y < 0 else "up"
+
+
+def along(frag: Fragment) -> float:
+    """조각 시작점을 읽기 방향이 양수인 축에 투영한다."""
+    direction = writing_direction(frag)
+    if direction == "ltr":
+        return frag.x
+    if direction == "rtl":
+        return -frag.x
+    if direction == "down":
+        return -frag.y
+    return frag.y
+
+
+def across(frag: Fragment) -> float:
+    """다음 줄에서 값이 작아지는 줄 간 좌표를 돌려준다."""
+    direction = writing_direction(frag)
+    if direction in ("ltr", "rtl"):
+        return frag.y
+    return frag.x if direction == "down" else -frag.x
 
 
 @dataclass
@@ -244,7 +272,7 @@ class ContentTextExtractor:
                 width=abs(total_adv) * scale, size=eff_size,
                 text=text, space_width=space_w,
                 bold=font.bold, italic=font.italic, order=len(frags),
-                dir_x=start_tm[0],
+                dir_x=start_tm[0], dir_y=start_tm[1],
             ))
         return _matmul((1, 0, 0, 1, total_adv, 0), tm)
 
@@ -275,25 +303,32 @@ class ContentTextExtractor:
         """콘텐츠 스트림 순서를 보존하며 같은 기준선 조각을 한 줄로 묶는다.
 
         전역 y 정렬은 각주/머리말을 본문 사이에 끼워 넣을 수 있다.
-        생성기가 의도한
-        그리기 순서(대개 곧 읽기 순서)를 유지하고, y 가 크게 바뀔 때만
-        줄을 나눈다. 줄 안에서만 x 로 정렬해 좌→우 배치를 바로잡는다.
+        생성기가 의도한 그리기 순서를 유지하고, 쓰기 방향이나 줄 간 좌표가
+        크게 바뀔 때만 줄을 나눈다. 줄 안에서는 쓰기 축을 따라 정렬한다.
         """
         if not frags:
             return []
         rows: List[List[Fragment]] = []
         current: List[Fragment] = []
-        current_y: Optional[float] = None
+        current_across: Optional[float] = None
+        current_direction: Optional[str] = None
         current_size = 0.0
         for frag in frags:
+            direction = writing_direction(frag)
+            position = across(frag)
             tolerance = max(_LINE_Y_TOLERANCE, 0.5 * current_size)
-            if current_y is None or abs(frag.y - current_y) <= tolerance:
+            if (current_across is None or
+                    (direction == current_direction and
+                     abs(position - current_across) <= tolerance)):
                 current.append(frag)
-                current_y = frag.y if current_y is None else current_y
+                if current_across is None:
+                    current_across = position
+                    current_direction = direction
             else:
                 rows.append(current)
                 current = [frag]
-                current_y = frag.y
+                current_across = position
+                current_direction = direction
                 current_size = 0.0
             current_size = max(current_size, frag.size)
         if current:
@@ -307,14 +342,8 @@ def assemble_lines(fragments: List[Fragment]) -> List["_Line"]:
 
 
 def _in_writing_order(row: List[Fragment]) -> List[Fragment]:
-    """같은 줄의 조각을 쓰기 방향으로 정렬한다.
-
-    180° 회전(CTM a<0)이면 x 내림차순, 세로쓰기(a≈0)면 그리기 순서를 유지한다.
-    """
-    direction = row[0].dir_x
-    if abs(direction) < 1e-9:
-        return list(row)
-    return sorted(row, key=lambda f: f.x if direction > 0 else -f.x)
+    """같은 줄의 조각을 읽기 방향으로 정렬한다."""
+    return sorted(row, key=along)
 
 
 @dataclass
@@ -329,9 +358,13 @@ class _Line:
 
     def __init__(self, frags: List[Fragment]):
         self.order = min(f.order for f in frags)
-        self.left = min(f.x for f in frags)
-        self.right = max(f.x + f.width for f in frags)
-        self.y = frags[0].y
+        self.direction = writing_direction(frags[0])
+        self.along_start = min(along(f) for f in frags)
+        self.along_end = max(along(f) + f.width for f in frags)
+        self.across = across(frags[0])
+        self.left = self.along_start
+        self.right = self.along_end
+        self.y = self.across
         self.size = max((f.size for f in frags), default=0.0)
         # 줄 병합의 크기 비교는 인접한 조각끼리 한다 (본문 끝의 작은 주석 ↔ 다음 줄)
         self.first_size = frags[0].size
@@ -343,7 +376,8 @@ class _Line:
         prev_end: Optional[float] = None
         prev_space: float = 0.0
         for f in frags:
-            gap = (f.x - prev_end) if prev_end is not None else 0.0
+            start = along(f)
+            gap = (start - prev_end) if prev_end is not None else 0.0
             threshold = max(prev_space, f.space_width) * 0.5
             sep = ""
             if prev_end is not None and gap > threshold and parts and not parts[-1].endswith(" "):
@@ -353,8 +387,8 @@ class _Line:
                 self._append_run(sep, f.bold, f.italic)
             parts.append(f.text)
             self._append_run(f.text, f.bold, f.italic)
-            self.segments.append(_Segment(f.x, f.x + f.width, f.text))
-            prev_end = f.x + f.width
+            self.segments.append(_Segment(start, start + f.width, f.text))
+            prev_end = start + f.width
             prev_space = f.space_width
         self.text = "".join(parts).strip()
 

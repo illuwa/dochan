@@ -72,12 +72,22 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
     if inner_bounds is not None and len(lines) >= 2:
         left, right = inner_bounds
         full_edge = left + 0.90 * (right - left)
+    vertical_edges = {}
+    for direction in ("down", "up"):
+        columns = [line for line in lines if line.direction == direction]
+        if columns:
+            origin = min(line.left for line in columns)
+            vertical_edges[direction] = origin + 0.90 * (
+                max(line.right for line in columns) - origin)
     blocks = []
     previous = None
     for line in lines:
         if not line.text:
             continue
-        joins = (previous is not None and previous.right >= full_edge
+        edge = vertical_edges.get(previous.direction, full_edge) if previous else full_edge
+        joins = (previous is not None and previous.direction == line.direction
+                 and previous.right >= edge
+                 and (line.direction not in vertical_edges or line.right >= edge)
                  and 0 < previous.y - line.y <= 1.8 * previous.size
                  and 0.85 * previous.last_size <= line.first_size <= 1.15 * previous.last_size
                  and not _BLOCK_MARKER.match(line.text))

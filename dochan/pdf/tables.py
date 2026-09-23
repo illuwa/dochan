@@ -15,6 +15,7 @@ MAX_DOCUMENT_CELLS = 200_000
 MAX_COMPONENT_LINES = 2_000
 MAX_INTERSECTION_CHECKS = 2_000_000  # 가로×세로 교차 검사 상한 — 촘촘한 괘선의 CPU 폭주 방지
 MAX_NESTED_DEPTH = 32
+MAX_PAGE_COMPONENTS = 1_000  # 페이지당 표 후보 상한 — 부모 탐색이 후보 수²으로 자라는 것을 막는다
 
 
 @dataclass
@@ -206,13 +207,14 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
         left, _, right, _ = boxes[key]
         groups = [[]]
         for line in lines:
-            if groups[-1] and any(line.y <= y < groups[-1][-1].y
+            # 기준선이 중첩 표 윗변에 닿은 줄은 표 '위'의 줄이다 — 그 다음 줄부터 끊는다
+            if groups[-1] and any(line.y < y <= groups[-1][-1].y
                                   for y in (breaks or {}).get(key, ())):
                 groups.append([])
             groups[-1].append(line)
         for group in groups:
             for block in merge_lines(group, (left + 0.5, right - 0.5)):
-                events[key].append((block.y, block.order, block.paragraph(page_number)))
+                events[key].append((block.y, 0, block.order, block.paragraph(page_number)))
     return consumed, events
 
 
@@ -276,8 +278,19 @@ def _area(bbox):
     return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
 
 
-def _reserved_cells(node):
-    return node.cells + sum(_reserved_cells(child) for child in node.children)
+def _fragment_index(fragments):
+    """y 오름차순 색인 — 후보 bbox 범위의 조각만 bisect 로 잘라내기 위해 페이지당 한 번 만든다."""
+    ordered = sorted(fragments, key=lambda frag: frag.y)
+    margin = 0.35 * max((frag.size for frag in ordered), default=0.0)
+    return ordered, [frag.y for frag in ordered], margin
+
+
+def _fragments_inside(index, bbox):
+    """기준점(가로 중앙, 기준선 위 0.35·크기)이 bbox 안에 놓일 수 있는 조각만 돌려준다."""
+    ordered, ys, margin = index
+    lo, hi = bisect_left(ys, bbox[1] - margin), bisect_right(ys, bbox[3])
+    return [frag for frag in ordered[lo:hi]
+            if bbox[0] <= frag.x + frag.width / 2 <= bbox[2]]
 
 
 def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
@@ -310,9 +323,20 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             components.append((bbox, hs, vs, xs, ys))
     components.sort(key=lambda v: -_area(v[0]))
+    index = _fragment_index(fragments)
     remaining = MAX_PAGE_CELLS
+    reserved = 0  # 1단계 잠정 예약 — 실제 차감은 2단계 채택 시점에만 한다
     nodes = []
     for bbox, hs, vs, xs, ys in components:
+        if len(hs) + len(vs) > MAX_COMPONENT_LINES:
+            _warn(warnings, 'WARN: PDF 표 연결 성분의 선 수 한도(2000) 초과 — 표 생략')
+            continue
+        # 텍스트가 없는 작은 성분은 노드가 되기 전에 버린다 — 예산도 부모 탐색 비용도 쓰지 않는다
+        if (len(xs) < 3 or len(ys) < 3) and not _fragments_inside(index, bbox):
+            continue
+        if len(nodes) >= MAX_PAGE_COMPONENTS:
+            _warn(warnings, 'WARN: PDF 페이지 표 후보 수 한도(1000) 초과 — 작은 후보 생략')
+            break
         parent = min((node for node in nodes if _inside(bbox, node.bbox)),
                      key=lambda node: _area(node.bbox), default=None)
         owner_key = _owner_region(bbox, parent) if parent is not None else None
@@ -322,20 +346,15 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         if depth > MAX_NESTED_DEPTH:
             _warn(warnings, 'WARN: PDF 중첩 표 깊이 한도(32) 초과 — 표 생략')
             continue
-        if len(hs) + len(vs) > MAX_COMPONENT_LINES:
-            _warn(warnings, 'WARN: PDF 표 연결 성분의 선 수 한도(2000) 초과 — 표 생략')
-            continue
         cells = (len(xs) - 1) * (len(ys) - 1)
-        if cells > remaining:
+        if cells > remaining - reserved:
             _warn(warnings, 'WARN: PDF 페이지 표 셀 수 한도(50000) 초과 — 표 생략')
             continue
-        if budget is not None and cells > budget.remaining:
+        if budget is not None and cells > budget.remaining - reserved:
             _warn(warnings, 'WARN: PDF 문서 표 셀 수 한도(200000) 초과 — 표 생략')
             continue
         grid, owners, boxes = _make_grid(hs, vs, xs, ys, tolerance, page_number)
-        remaining -= cells
-        if budget is not None:
-            budget.remaining -= cells
+        reserved += cells
         nodes.append(_TableNode(bbox, xs, ys, grid, owners, boxes, cells,
                                 parent, owner_key, depth))
 
@@ -347,15 +366,16 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             breaks[child.owner_key].append(child.bbox[3])
         own_orders, events = _assign_text(
             node.grid, node.owners, node.boxes, node.xs, node.ys,
-            [frag for frag in fragments if frag.order not in used_orders], page_number,
-            breaks)
+            [frag for frag in _fragments_inside(index, node.bbox)
+             if frag.order not in used_orders],
+            page_number, breaks)
         for child in node.children:
-            events[child.owner_key].append((child.bbox[3], child.anchor_order,
+            events[child.owner_key].append((child.bbox[3], 1, child.anchor_order,
                                             Table(rows=child.grid)))
         for key, blocks in events.items():
             row, col = divmod(key, len(node.xs) - 1)
-            node.grid[row][col].paragraphs = [block for _, _, block in sorted(
-                blocks, key=lambda item: (-item[0], item[1]))]
+            node.grid[row][col].paragraphs = [block for _, _, _, block in sorted(
+                blocks, key=lambda item: (-item[0], item[1], item[2]))]
         subtree_orders = own_orders.union(*(child.fragment_orders for child in node.children))
         if node.parent is None:
             keep = bool(subtree_orders) or (len(node.xs) >= 3 and len(node.ys) >= 3)
@@ -366,12 +386,16 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             keep = text_cells >= 1 and (text_cells >= 2 or node.cells >= 4 or
                                              (node.cells == 1 and width >= 30 and height >= 12))
         if not keep:
-            used_orders.difference_update(subtree_orders)
-            refunded = _reserved_cells(node)
-            remaining += refunded
-            if budget is not None:
-                budget.remaining += refunded
+            # 거부된 노드의 텍스트는 상위로 돌려주고, 이미 채택된 자식은 조부모 셀로 올린다
+            used_orders.difference_update(own_orders)
+            for child in node.children:
+                child.parent, child.owner_key = node.parent, node.owner_key
+                if node.parent is not None:
+                    node.parent.children.append(child)
             continue
+        remaining -= node.cells
+        if budget is not None:
+            budget.remaining -= node.cells
         node.fragment_orders = subtree_orders
         node.anchor_order = min(subtree_orders, default=-1)
         used_orders.update(own_orders)

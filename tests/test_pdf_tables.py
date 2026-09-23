@@ -342,7 +342,8 @@ def test_nested_cells_count_toward_page_and_document_budgets(monkeypatch):
     assert any('문서 표 셀 수' in warning for warning in warnings)
 
 
-def test_rejected_middle_table_releases_child_budget_and_text():
+def test_rejected_middle_table_promotes_its_accepted_child_to_the_grandparent_cell():
+    # 폭 30 미만의 1×2 틀은 거부되지만, 그 안에서 채택된 1×1 표는 버리지 않고 조부모 셀로 올린다
     from dochan.model.table import Table
     from dochan.pdf.tables import TableBudget, build_tables
 
@@ -351,10 +352,73 @@ def test_rejected_middle_table_releases_child_budget_and_text():
                 + _boxed_grid(115, 85, 145, 103))
     budget = TableBudget(remaining=7)
     outer, = build_tables(segments, [_frag('deep', 120, 90, 0)], budget=budget)
-    assert budget.remaining == 3
+    assert budget.remaining == 2  # outer 4 + deep 1 — 거부된 중간 틀은 차감하지 않는다
     assert outer.fragment_orders == {0}
-    assert outer.table.rows[0][1].text == 'deep'
-    assert not any(isinstance(block, Table) for block in outer.table.rows[0][1].paragraphs)
+    cell = outer.table.rows[0][1]
+    nested = [block for block in cell.paragraphs if isinstance(block, Table)]
+    assert len(nested) == 1 and nested[0].rows[0][0].text == 'deep'
+    assert cell.text == 'deep'
+
+
+def test_empty_component_does_not_reserve_page_budget_ahead_of_a_real_table(monkeypatch):
+    # 텍스트 없는 1×40 띠(40셀)가 먼저 와도 뒤의 2×2 표(4셀)가 한도(42)에 밀려 버려지면 안 된다 (Opus 감수)
+    from dochan.pdf import tables
+
+    monkeypatch.setattr(tables, 'MAX_PAGE_CELLS', 42)
+    strip = _boxed_grid(0, 200, 800, 220, 40, 1)
+    warnings = []
+    frags = [_frag('a', 10, 40, 0), _frag('b', 60, 40, 1)]
+    candidates = tables.build_tables(strip + _grid(), frags, warnings=warnings)
+    assert [c.table.row_count for c in candidates] == [2]
+    assert warnings == []
+
+
+def test_paragraph_whose_baseline_touches_the_nested_table_top_comes_first():
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    segments = _boxed_grid(0, 0, 200, 120, 2, 2) + _boxed_grid(110, 75, 190, 100, 2, 2)
+    frags = [_frag('above', 115, 100, 0), _frag('in', 120, 85, 1), _frag('below', 115, 66, 2)]
+    outer, = build_tables(segments, frags)
+    blocks = outer.table.rows[0][1].paragraphs
+    kinds = ['T' if isinstance(b, Table) else b.text for b in blocks]
+    assert kinds == ['above', 'T', 'below']
+
+
+def test_component_cap_drops_smallest_candidates_with_a_warning(monkeypatch):
+    from dochan.pdf import tables
+
+    monkeypatch.setattr(tables, 'MAX_PAGE_COMPONENTS', 2)
+    segments, frags = [], []
+    for i, size in enumerate((100, 80, 60)):
+        segments += _boxed_grid(i * 300, 0, i * 300 + size, size, 2, 2)
+        frags.append(_frag(f't{i}', i * 300 + 5, 5, i))
+    warnings = []
+    candidates = tables.build_tables(segments, frags, warnings=warnings)
+    assert [c.fragment_orders for c in candidates] == [{0}, {1}]
+    assert any('후보 수' in w for w in warnings)
+
+
+def test_thousands_of_text_boxes_inside_one_frame_stay_fast():
+    # Opus 감수: 틀 안 상자 5,000개에서 8초 — 조각을 bbox 범위로 잘라 넘기고 후보 수를 제한한다
+    import time
+    from dochan.pdf.tables import build_tables
+
+    segments = _boxed_grid(0, 0, 1500, 1500)
+    frags = []
+    n = 0
+    for r in range(70):
+        for c in range(70):
+            x0, y0 = 10 + c * 21, 10 + r * 21
+            segments += _boxed_grid(x0, y0, x0 + 12, y0 + 12)
+            frags.append(_frag('x', x0 + 1, y0 + 3, n, width=6))
+            n += 1
+    started = time.perf_counter()
+    warnings = []
+    outer, = build_tables(segments, frags, warnings=warnings)
+    elapsed = time.perf_counter() - started
+    assert outer.fragment_orders == set(range(n))  # 상한 밖 상자의 텍스트도 틀 셀이 흡수한다
+    assert elapsed < 3.0, elapsed
 
 
 def test_multiple_tables_share_page_budget(monkeypatch):

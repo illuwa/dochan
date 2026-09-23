@@ -270,3 +270,29 @@ def test_uniform_font_size_produces_no_headings(tmp_path):
     doc = PDFReader().read(path)
 
     assert all(p.heading_level == 0 for p in doc.sections[0].elements)
+
+
+def test_nested_table_round_trips_reader_markdown_and_json(tmp_path):
+    from dochan.model.table import Table
+    from dochan.output.json_out import to_dict
+    from dochan.output.markdown import to_markdown
+
+    content = (
+        b'0 0 100 60 re S 50 0 m 50 60 l S 0 30 m 100 30 l S '
+        b'55 35 40 20 re S 75 35 m 75 55 l S 55 45 m 95 45 l S '
+        b'BT /F1 8 Tf 57 47 Td (A) Tj ET '
+        b'BT /F1 8 Tf 78 47 Td (B) Tj ET '
+        b'BT /F1 8 Tf 57 37 Td (C) Tj ET '
+        b'BT /F1 8 Tf 78 37 Td (D) Tj ET '
+    )
+    path = _write(tmp_path, 'nested.pdf', _build_pdf(_minimal_objects(content)))
+    doc = PDFReader().read(path)
+
+    outer, inner = doc.find_all('table')
+    assert doc.sections[0].elements == [outer]
+    assert isinstance(outer.rows[0][1].paragraphs[0], Table)
+    assert outer.rows[0][1].paragraphs[0] is inner
+    assert [[cell.text for cell in row] for row in inner.rows] == [['A', 'B'], ['C', 'D']]
+    assert 'A / B ; C / D' in to_markdown(doc)
+    nested = to_dict(doc)['sections'][0]['elements'][0]['rows'][0][1]['paragraphs'][0]
+    assert nested['type'] == 'table' and nested['row_count'] == nested['col_count'] == 2

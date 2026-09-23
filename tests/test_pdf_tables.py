@@ -27,6 +27,16 @@ def _frag(text, x, y, order=0, width=10):
     return Fragment(x, y, width, 10, text, 5, order=order)
 
 
+def _boxed_grid(left, bottom, right, top, cols=1, rows=1):
+    from dochan.pdf.content import Segment
+
+    xs = [left + (right - left) * c / cols for c in range(cols + 1)]
+    ys = [bottom + (top - bottom) * r / rows for r in range(rows + 1)]
+    lines = [Segment(left, y, right, y) for y in ys]
+    lines.extend(Segment(x, bottom, x, top) for x in xs)
+    return lines
+
+
 def test_full_grid_text_top_to_bottom_and_provenance():
     from dochan.pdf.tables import build_tables
 
@@ -172,14 +182,179 @@ def test_macroman_quotes(tmp_path, encoding):
 
 def test_detached_nested_table_keeps_only_outer_and_consumes_text():
     from dochan.pdf.tables import build_tables
-    from dochan.pdf.content import Segment
+    from dochan.model.table import Table
 
-    segments = _grid(1, 1) + [Segment(10, 5, 40, 5), Segment(10, 25, 40, 25),
-                             Segment(10, 5, 10, 25), Segment(40, 5, 40, 25)]
+    segments = _grid(1, 1) + _boxed_grid(10, 5, 40, 25)
     outer, = build_tables(segments, [_frag('inner', 15, 10, 7)])
     assert (outer.table.row_count, outer.table.col_count) == (1, 1)
+    nested, = outer.table.rows[0][0].paragraphs
+    assert isinstance(nested, Table)
+    assert nested.rows[0][0].text == 'inner'
     assert outer.table.rows[0][0].text == 'inner'
     assert outer.fragment_orders == {7}
+
+
+def test_detached_two_by_two_is_nested_without_duplicate_text():
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    fragments = [_frag('outer', 10, 40, 5)] + [
+        _frag(text, x, y, order, width=5)
+        for order, (text, x, y) in enumerate([
+            ('A', 58, 49), ('B', 78, 49), ('C', 58, 39), ('D', 78, 39)
+        ])
+    ]
+    outer, = build_tables(_grid() + _boxed_grid(55, 35, 95, 55, 2, 2), fragments)
+    assert (outer.table.row_count, outer.table.col_count) == (2, 2)
+    owner = outer.table.rows[0][1]
+    nested, = owner.paragraphs
+    assert isinstance(nested, Table)
+    assert [[cell.text for cell in row] for row in nested.rows] == [['A', 'B'], ['C', 'D']]
+    assert owner.text.count('A') == owner.text.count('B') == 1
+    assert owner.text.count('C') == owner.text.count('D') == 1
+    assert outer.fragment_orders == {0, 1, 2, 3, 5}
+    assert outer.anchor_order == 0
+
+
+def test_straddling_inner_component_is_skipped():
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    outer, = build_tables(_grid() + _boxed_grid(40, 35, 60, 55),
+                          [_frag('left', 42, 40, 0, 4), _frag('right', 54, 40, 1, 4)])
+    assert not any(isinstance(block, Table)
+                   for row in outer.table.rows for cell in row for block in cell.paragraphs)
+    assert outer.fragment_orders == {0, 1}
+
+
+def test_inner_can_cross_placeholder_cells_of_one_merged_region():
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    outer, = build_tables(_grid(omit=(('v', 0, 1),))
+                          + _boxed_grid(35, 35, 65, 55),
+                          [_frag('merged', 40, 42, 0, 5)])
+    assert outer.table.rows[0][0].col_span == 2
+    assert isinstance(outer.table.rows[0][0].paragraphs[0], Table)
+    assert outer.table.rows[0][0].text == 'merged'
+
+
+def test_cell_paragraphs_order_text_around_nested_table():
+    from dochan.model.document import Paragraph
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    fragments = [_frag('above', 10, 80, 3), _frag('below', 10, 10, 4)]
+    fragments += [_frag('A', 30, 55, 0, 5), _frag('B', 60, 55, 1, 5)]
+    outer, = build_tables(_boxed_grid(0, 0, 100, 100)
+                          + _boxed_grid(20, 30, 80, 70, 2, 1), fragments)
+    blocks = outer.table.rows[0][0].paragraphs
+    assert [type(block) for block in blocks] == [Paragraph, Table, Paragraph]
+    assert [block.text for block in blocks if isinstance(block, Paragraph)] == ['above', 'below']
+
+
+def test_nested_table_breaks_otherwise_joinable_surrounding_lines():
+    from dochan.model.document import Paragraph
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    fragments = [_frag('above', 5, 53, 0, 90),
+                 _frag('inside', 30, 44, 1, 10),
+                 _frag('below', 5, 36, 2, 30)]
+    outer, = build_tables(_boxed_grid(0, 0, 100, 100)
+                          + _boxed_grid(20, 40, 80, 52), fragments)
+    blocks = outer.table.rows[0][0].paragraphs
+    assert [type(block) for block in blocks] == [Paragraph, Table, Paragraph]
+    assert [block.text for block in blocks if isinstance(block, Paragraph)] == ['above', 'below']
+
+
+def test_two_levels_of_nesting_and_depth_cap(monkeypatch):
+    from dochan.model.table import Table
+    from dochan.pdf import tables
+
+    segments = (_boxed_grid(0, 0, 200, 120, 2, 2)
+                + _boxed_grid(110, 65, 190, 110, 2, 2)
+                + _boxed_grid(115, 90, 145, 105))
+    fragments = [_frag('middle', 155, 90, 1), _frag('deep', 120, 92, 0)]
+    outer, = tables.build_tables(segments, fragments)
+    middle, = [block for block in outer.table.rows[0][1].paragraphs
+               if isinstance(block, Table)]
+    deep, = [block for row in middle.rows for cell in row
+             for block in cell.paragraphs if isinstance(block, Table)]
+    assert deep.rows[0][0].text == 'deep'
+    assert outer.fragment_orders == {0, 1}
+
+    monkeypatch.setattr(tables, 'MAX_NESTED_DEPTH', 1)
+    warnings = []
+    capped, = tables.build_tables(segments, fragments, warnings=warnings)
+    middle, = [block for block in capped.table.rows[0][1].paragraphs
+               if isinstance(block, Table)]
+    assert not any(isinstance(block, Table) for row in middle.rows
+                   for cell in row for block in cell.paragraphs)
+    assert middle.rows[0][0].text == 'deep'
+    assert len(warnings) == 1 and '깊이' in warnings[0]
+
+
+def test_nested_acceptance_filter_keeps_large_text_box_only():
+    from dochan.model.table import Table
+    from dochan.pdf.tables import build_tables
+
+    outer, = build_tables(_boxed_grid(0, 0, 100, 100, 2, 2)
+                          + _boxed_grid(55, 55, 95, 85, 2, 1), [])
+    assert not any(isinstance(block, Table) for row in outer.table.rows
+                   for cell in row for block in cell.paragraphs)
+
+    large, = build_tables(_boxed_grid(0, 0, 100, 100, 2, 2)
+                          + _boxed_grid(55, 55, 95, 85), [_frag('large', 60, 65, 0)])
+    assert isinstance(large.table.rows[0][1].paragraphs[0], Table)
+
+    small, = build_tables(_boxed_grid(0, 0, 100, 100, 2, 2)
+                          + _boxed_grid(60, 60, 70, 70), [_frag('tiny', 60, 61, 0, 3)])
+    assert small.table.rows[0][1].text == 'tiny'
+    assert not any(isinstance(block, Table) for block in small.table.rows[0][1].paragraphs)
+
+
+def test_nested_cells_count_toward_page_and_document_budgets(monkeypatch):
+    from dochan.model.table import Table
+    from dochan.pdf import tables
+
+    segments = _grid() + _boxed_grid(55, 35, 95, 55, 2, 2)
+    fragments = [_frag('inner', 60, 46, 0, 5)]
+    monkeypatch.setattr(tables, 'MAX_PAGE_CELLS', 7)
+    warnings = []
+    outer, = tables.build_tables(segments, fragments, warnings=warnings)
+    assert not any(isinstance(block, Table) for row in outer.table.rows
+                   for cell in row for block in cell.paragraphs)
+    assert outer.table.rows[0][1].text == 'inner'
+    assert any('페이지 표 셀 수' in warning for warning in warnings)
+
+    monkeypatch.setattr(tables, 'MAX_PAGE_CELLS', 50_000)
+    budget = tables.TableBudget(remaining=8)
+    outer, = tables.build_tables(segments, fragments, budget=budget)
+    assert isinstance(outer.table.rows[0][1].paragraphs[0], Table)
+    assert budget.remaining == 0
+
+    rejected = tables.TableBudget(remaining=7)
+    warnings = []
+    outer, = tables.build_tables(segments, fragments, budget=rejected, warnings=warnings)
+    assert rejected.remaining == 3
+    assert outer.table.rows[0][1].text == 'inner'
+    assert any('문서 표 셀 수' in warning for warning in warnings)
+
+
+def test_rejected_middle_table_releases_child_budget_and_text():
+    from dochan.model.table import Table
+    from dochan.pdf.tables import TableBudget, build_tables
+
+    segments = (_boxed_grid(0, 0, 200, 120, 2, 2)
+                + _boxed_grid(110, 65, 190, 110, 2, 1)
+                + _boxed_grid(115, 85, 145, 103))
+    budget = TableBudget(remaining=7)
+    outer, = build_tables(segments, [_frag('deep', 120, 90, 0)], budget=budget)
+    assert budget.remaining == 3
+    assert outer.fragment_orders == {0}
+    assert outer.table.rows[0][1].text == 'deep'
+    assert not any(isinstance(block, Table) for block in outer.table.rows[0][1].paragraphs)
 
 
 def test_multiple_tables_share_page_budget(monkeypatch):

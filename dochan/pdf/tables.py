@@ -1,8 +1,8 @@
-"""벡터 괘선으로 PDF 표를 복원한다. 중첩 표는 바깥 표의 평면 격자로 취급한다."""
+"""벡터 괘선으로 PDF 표와 셀 안의 독립 중첩 표를 복원한다."""
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import List, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
 from ..model.table import Cell, Table
@@ -14,6 +14,7 @@ MAX_PAGE_CELLS = 50_000
 MAX_DOCUMENT_CELLS = 200_000
 MAX_COMPONENT_LINES = 2_000
 MAX_INTERSECTION_CHECKS = 2_000_000  # 가로×세로 교차 검사 상한 — 촘촘한 괘선의 CPU 폭주 방지
+MAX_NESTED_DEPTH = 32
 
 
 @dataclass
@@ -28,6 +29,23 @@ class TableCandidate:
 class TableBudget:
     """여러 페이지가 공유하는 남은 셀 수."""
     remaining: int = MAX_DOCUMENT_CELLS
+
+
+@dataclass
+class _TableNode:
+    bbox: Tuple[float, float, float, float]
+    xs: List[float]
+    ys: List[float]
+    grid: List[List[Cell]]
+    owners: List[int]
+    boxes: Dict[int, Tuple[float, float, float, float]]
+    cells: int
+    parent: Optional['_TableNode'] = None
+    owner_key: Optional[int] = None
+    depth: int = 0
+    fragment_orders: Set[int] = field(default_factory=set)
+    anchor_order: int = -1
+    children: List['_TableNode'] = field(default_factory=list)
 
 
 def _warn(warnings, message):
@@ -166,7 +184,7 @@ def _make_grid(horizontal, vertical, xs, ys, tolerance, page_number):
     return grid, owners, boxes
 
 
-def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number):
+def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=None):
     by_cell = defaultdict(list)
     cols = len(xs) - 1
     ascending_y = list(reversed(ys))
@@ -182,13 +200,20 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number):
         if left + 0.5 <= x <= right - 0.5 and bottom + 0.5 <= y <= top - 0.5:
             by_cell[key].append(frag)
             consumed.add(frag.order)
+    events = defaultdict(list)
     for key, frags in by_cell.items():
         lines = assemble_lines(sorted(frags, key=lambda f: (-f.y, f.x)))
         left, _, right, _ = boxes[key]
-        r, c = divmod(key, cols)
-        grid[r][c].paragraphs = [block.paragraph(page_number)
-                                 for block in merge_lines(lines, (left + 0.5, right - 0.5))]
-    return consumed
+        groups = [[]]
+        for line in lines:
+            if groups[-1] and any(line.y <= y < groups[-1][-1].y
+                                  for y in (breaks or {}).get(key, ())):
+                groups.append([])
+            groups[-1].append(line)
+        for group in groups:
+            for block in merge_lines(group, (left + 0.5, right - 0.5)):
+                events[key].append((block.y, block.order, block.paragraph(page_number)))
+    return consumed, events
 
 
 def _shared_extent(values, tolerance, outermost):
@@ -222,13 +247,46 @@ def _inside(inner, outer):
             and inner[2] <= outer[2] and inner[3] <= outer[3])
 
 
+def _owner_region(bbox, parent):
+    """네 모서리가 같은 병합 셀 영역 안에 있으면 그 소유자 키를 돌려준다."""
+    left, bottom, right, top = bbox
+    xs, ys = parent.xs, parent.ys
+    ascending_y = list(reversed(ys))
+    columns = (bisect_right(xs, left) - 1, bisect_left(xs, right) - 1)
+    rows = (len(ys) - 2 - (bisect_right(ascending_y, bottom) - 1),
+            len(ys) - 2 - (bisect_left(ascending_y, top) - 1))
+    if any(not 0 <= col < len(xs) - 1 for col in columns):
+        return None
+    if any(not 0 <= row < len(ys) - 1 for row in rows):
+        return None
+    keys = {parent.owners[row * (len(xs) - 1) + col]
+            for row in rows for col in columns}
+    if len(keys) != 1:
+        return None
+    key = keys.pop()
+    return key if _inside(bbox, parent.boxes[key]) else None
+
+
+def _text_cell_count(node):
+    return sum(bool(cell.text) for row in node.grid for cell in row
+               if not cell.is_merged_away)
+
+
+def _area(bbox):
+    return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+
+
+def _reserved_cells(node):
+    return node.cells + sum(_reserved_cells(child) for child in node.children)
+
+
 def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
                  page_number: Optional[int] = None, warnings: Optional[List[str]] = None,
                  budget: Optional[TableBudget] = None) -> List[TableCandidate]:
     """괘선 연결 성분에서 병합 셀을 갖춘 표 후보를 만든다.
 
     page_number/warnings/budget은 선택 인자라 기존 두 인자 호출도 가능하다.
-    셀 안에 따로 그린 중첩 표는 독립 표로 내보내지 않는다.
+    셀 안의 독립 괘선 성분은 해당 셀의 중첩 표로 넣는다.
     """
     horizontal, vertical = [], []
     for s in segments:
@@ -251,12 +309,18 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         bbox = (xs[0], ys[-1], xs[-1], ys[0])
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             components.append((bbox, hs, vs, xs, ys))
-    components.sort(key=lambda v: -(v[0][2] - v[0][0]) * (v[0][3] - v[0][1]))
+    components.sort(key=lambda v: -_area(v[0]))
     remaining = MAX_PAGE_CELLS
-    result, outer_boxes = [], []
-    used_orders = set()
+    nodes = []
     for bbox, hs, vs, xs, ys in components:
-        if any(_inside(bbox, box) for box in outer_boxes):
+        parent = min((node for node in nodes if _inside(bbox, node.bbox)),
+                     key=lambda node: _area(node.bbox), default=None)
+        owner_key = _owner_region(bbox, parent) if parent is not None else None
+        if parent is not None and owner_key is None:
+            continue
+        depth = parent.depth + 1 if parent is not None else 0
+        if depth > MAX_NESTED_DEPTH:
+            _warn(warnings, 'WARN: PDF 중첩 표 깊이 한도(32) 초과 — 표 생략')
             continue
         if len(hs) + len(vs) > MAX_COMPONENT_LINES:
             _warn(warnings, 'WARN: PDF 표 연결 성분의 선 수 한도(2000) 초과 — 표 생략')
@@ -269,15 +333,51 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             _warn(warnings, 'WARN: PDF 문서 표 셀 수 한도(200000) 초과 — 표 생략')
             continue
         grid, owners, boxes = _make_grid(hs, vs, xs, ys, tolerance, page_number)
-        consumed = _assign_text(grid, owners, boxes, xs, ys,
-                                [f for f in fragments if f.order not in used_orders], page_number)
-        if not consumed and (len(xs) < 3 or len(ys) < 3):
-            continue
         remaining -= cells
         if budget is not None:
             budget.remaining -= cells
-        used_orders.update(consumed)
-        # 중첩 판정은 채택된 표의 전체 bbox 로 한다 — 셀마다 비교하면 성분 수 × 셀 수 로 자란다
-        outer_boxes.append(bbox)
-        result.append(TableCandidate(Table(rows=grid), bbox, consumed, min(consumed, default=-1)))
+        nodes.append(_TableNode(bbox, xs, ys, grid, owners, boxes, cells,
+                                parent, owner_key, depth))
+
+    used_orders = set()
+    result = []
+    for node in sorted(nodes, key=lambda item: _area(item.bbox)):
+        breaks = defaultdict(list)
+        for child in node.children:
+            breaks[child.owner_key].append(child.bbox[3])
+        own_orders, events = _assign_text(
+            node.grid, node.owners, node.boxes, node.xs, node.ys,
+            [frag for frag in fragments if frag.order not in used_orders], page_number,
+            breaks)
+        for child in node.children:
+            events[child.owner_key].append((child.bbox[3], child.anchor_order,
+                                            Table(rows=child.grid)))
+        for key, blocks in events.items():
+            row, col = divmod(key, len(node.xs) - 1)
+            node.grid[row][col].paragraphs = [block for _, _, block in sorted(
+                blocks, key=lambda item: (-item[0], item[1]))]
+        subtree_orders = own_orders.union(*(child.fragment_orders for child in node.children))
+        if node.parent is None:
+            keep = bool(subtree_orders) or (len(node.xs) >= 3 and len(node.ys) >= 3)
+        else:
+            text_cells = _text_cell_count(node)
+            width = node.bbox[2] - node.bbox[0]
+            height = node.bbox[3] - node.bbox[1]
+            keep = text_cells >= 1 and (text_cells >= 2 or node.cells >= 4 or
+                                             (node.cells == 1 and width >= 30 and height >= 12))
+        if not keep:
+            used_orders.difference_update(subtree_orders)
+            refunded = _reserved_cells(node)
+            remaining += refunded
+            if budget is not None:
+                budget.remaining += refunded
+            continue
+        node.fragment_orders = subtree_orders
+        node.anchor_order = min(subtree_orders, default=-1)
+        used_orders.update(own_orders)
+        if node.parent is None:
+            result.append(TableCandidate(Table(rows=node.grid), node.bbox,
+                                         subtree_orders, node.anchor_order))
+        else:
+            node.parent.children.append(node)
     return sorted(result, key=lambda candidate: candidate.anchor_order)

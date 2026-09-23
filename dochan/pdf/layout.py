@@ -26,6 +26,7 @@ class TextBlock:
     size: float
     order: int
     runs: List[Tuple[str, bool, bool]] = field(default_factory=list)
+    y: float = 0.0
 
     def paragraph(self, page_number: Optional[int] = None) -> Paragraph:
         provenance = Provenance(source_format='pdf', page=page_number)
@@ -94,6 +95,7 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
                 block.runs.append((sep, False, False))
             block.runs.extend(_trim_runs(line.runs))
         else:
-            blocks.append(TextBlock(line.text, line.size, line.order, _trim_runs(line.runs)))
+            blocks.append(TextBlock(line.text, line.size, line.order,
+                                    _trim_runs(line.runs), line.y))
         previous = line
     return blocks

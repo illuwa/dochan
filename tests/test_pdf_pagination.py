@@ -52,11 +52,12 @@ def test_body_between_ignores_consumed_and_blank_fragments():
 
 
 def test_repeated_header_checks_text_and_span_pattern():
-    prev = Table(rows=[[_cell(" Head  one ", 0, 0), _cell("B", 0, 1)]])
-    same = Table(rows=[[_cell("Head one", 0, 0, page=2), _cell("B", 0, 1, page=2)]])
-    different_text = Table(rows=[[_cell("Other", 0, 0), _cell("B", 0, 1)]])
+    data = lambda page=None: [_cell("x", 1, 0, page=page), _cell("y", 1, 1, page=page)]  # noqa: E731
+    prev = Table(rows=[[_cell(" Head  one ", 0, 0), _cell("B", 0, 1)], data()])
+    same = Table(rows=[[_cell("Head one", 0, 0, page=2), _cell("B", 0, 1, page=2)], data(2)])
+    different_text = Table(rows=[[_cell("Other", 0, 0), _cell("B", 0, 1)], data()])
     different_span = Table(rows=[[_cell("Head one", 0, 0, col_span=2),
-                                 _cell("B", 0, 1)]])
+                                 _cell("B", 0, 1)], data()])
     assert header_repeated(prev, same)
     assert not header_repeated(prev, different_text)
     assert not header_repeated(prev, different_span)
@@ -93,3 +94,64 @@ def test_page_bounds_direct_inherited_malformed_and_inverted():
     page["MediaBox"] = [0, 10, 600]
     assert page_bounds(pdf, page) == (0.0, 842.0)
     assert pdf.resolve(PDFRef(2, 0))["MediaBox"] == [0, 10, 595, 900]
+
+
+def _rows(*texts_rows):
+    from dochan.model.table import Cell
+    from dochan.model.document import Paragraph, TextRun
+
+    rows = []
+    for r, texts in enumerate(texts_rows):
+        rows.append([Cell(paragraphs=[Paragraph(runs=[TextRun(text=t)])] if t else [], row=r, col=c)
+                     for c, t in enumerate(texts)])
+    return rows
+
+
+def test_multi_row_repeated_header_is_dropped_whole():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import merge_continued, repeated_header_rows
+
+    prev = Table(rows=_rows(("H", "Top"), ("", "Sub"), ("a", "b")))
+    prev.rows[0][0].row_span = 2
+    prev.rows[1][0].row_span = prev.rows[1][0].col_span = 0
+    nxt = Table(rows=_rows(("H", "Top"), ("", "Sub"), ("c", "d")))
+    nxt.rows[0][0].row_span = 2
+    nxt.rows[1][0].row_span = nxt.rows[1][0].col_span = 0
+    assert repeated_header_rows(prev, nxt) == 2
+    merge_continued(prev, nxt, 2)
+    assert [[c.text for c in row] for row in prev.rows] == [["H", "Top"], ["", "Sub"], ["a", "b"], ["c", "d"]]
+    assert [c.row for c in prev.rows[-1]] == [3, 3]
+
+
+def test_empty_first_rows_are_not_a_repeated_header():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import repeated_header_rows
+
+    prev = Table(rows=_rows(("", ""), ("a", "b")))
+    nxt = Table(rows=_rows(("", ""), ("c", "d")))
+    assert repeated_header_rows(prev, nxt) == 0
+
+
+def test_header_only_next_table_is_not_a_repeat():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import repeated_header_rows
+
+    prev = Table(rows=_rows(("H", "T"), ("a", "b")))
+    nxt = Table(rows=_rows(("H", "T")))
+    assert repeated_header_rows(prev, nxt) == 0
+
+
+def test_continues_requires_the_gap_below_the_tail_to_be_smaller_than_the_next_row():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import HeadInfo, TailInfo, continues
+    from dochan.pdf.tables import TableCandidate
+
+    def cand(ys):
+        return TableCandidate(Table(rows=_rows(("a", "b"), ("c", "d"))), (0, ys[-1], 100, ys[0]), set(), 0,
+                              xs=(0.0, 50.0, 100.0), ys=tuple(ys))
+
+    head = HeadInfo(cand((140.0, 110.0, 80.0)), starts_top=True)  # 첫 행 높이 30
+    assert continues(TailInfo(cand((180.0, 150.0, 120.0)), True, gap_below=20.0, page_height=200.0), head)
+    assert not continues(TailInfo(cand((180.0, 150.0, 120.0)), True, gap_below=60.0, page_height=200.0), head)
+    # 페이지 높이의 12% 까지는 행 높이와 무관하게 허용
+    assert continues(TailInfo(cand((180.0, 150.0, 120.0)), True, gap_below=90.0, page_height=842.0), head)

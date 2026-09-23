@@ -193,10 +193,7 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
     ascending_y = list(reversed(ys))
     consumed = set()
     for frag in fragments:
-        scale = (frag.dir_x ** 2 + frag.dir_y ** 2) ** 0.5
-        dx, dy = (frag.dir_x / scale, frag.dir_y / scale) if scale else (1.0, 0.0)
-        x = frag.x + dx * frag.width / 2 - dy * 0.35 * frag.size
-        y = frag.y + dy * frag.width / 2 + dx * 0.35 * frag.size
+        x, y = _reference_point(frag)
         c = bisect_right(xs, x) - 1
         r = len(ys) - 2 - (bisect_right(ascending_y, y) - 1)
         if not (0 <= c < cols and 0 <= r < len(grid)):
@@ -284,18 +281,49 @@ def _area(bbox):
 
 
 def _fragment_index(fragments):
-    """y 오름차순 색인 — 후보 bbox 범위의 조각만 bisect 로 잘라내기 위해 페이지당 한 번 만든다."""
+    """y 오름차순 색인 — 후보 bbox 범위의 조각만 bisect 로 잘라내기 위해 페이지당 한 번 만든다.
+
+    기준점은 가로 조각에서 기준선보다 0.35·크기 위에, 회전 조각에서는 폭의 절반까지 위아래로
+    벗어날 수 있으므로 그만큼의 여유를 y 범위 양쪽에 둔다.
+    """
     ordered = sorted(fragments, key=lambda frag: frag.y)
-    margin = 0.35 * max((frag.size for frag in ordered), default=0.0)
-    return ordered, [frag.y for frag in ordered], margin
+    below = above = 0.0
+    for frag in ordered:
+        rotated = abs(frag.dir_y) > abs(frag.dir_x)
+        below = max(below, 0.35 * frag.size + (0.5 * frag.width if rotated else 0.0))
+        if rotated:
+            above = max(above, 0.5 * frag.width + 0.35 * frag.size)
+    return ordered, [frag.y for frag in ordered], (below, above)
+
+
+def _reference_point(frag):
+    """조각의 셀 배정 기준점 — 쓰기 축으로 폭의 절반, 수직축으로 크기의 0.35 만큼 이동한 점."""
+    scale = (frag.dir_x ** 2 + frag.dir_y ** 2) ** 0.5
+    dx, dy = (frag.dir_x / scale, frag.dir_y / scale) if scale else (1.0, 0.0)
+    return (frag.x + dx * frag.width / 2 - dy * 0.35 * frag.size,
+            frag.y + dy * frag.width / 2 + dx * 0.35 * frag.size)
 
 
 def _fragments_inside(index, bbox):
-    """기준점(가로 중앙, 기준선 위 0.35·크기)이 bbox 안에 놓일 수 있는 조각만 돌려준다."""
-    ordered, ys, margin = index
-    lo, hi = bisect_left(ys, bbox[1] - margin), bisect_right(ys, bbox[3])
+    """기준점이 bbox 안에 놓일 수 있는 조각의 상위집합 (y 는 색인으로, x 는 기준점으로 거른다)."""
+    ordered, ys, (below, above) = index
+    lo, hi = bisect_left(ys, bbox[1] - below), bisect_right(ys, bbox[3] + above)
     return [frag for frag in ordered[lo:hi]
-            if bbox[0] <= frag.x + frag.width / 2 <= bbox[2]]
+            if bbox[0] <= _reference_point(frag)[0] <= bbox[2]]
+
+
+def _has_fragment_inside(index, bbox):
+    """기준점이 정확히 bbox 안에 있는 조각이 하나라도 있는가 (조기 거부용 정밀 판정)."""
+    for frag in _fragments_inside(index, bbox):
+        _, y = _reference_point(frag)
+        if bbox[1] <= y <= bbox[3]:
+            return True
+    return False
+
+
+def _empty_form(xs, ys, cells):
+    """텍스트 없이도 표로 인정하는 빈 서식 격자인가."""
+    return len(xs) >= 3 and len(ys) >= 3 and cells >= 6
 
 
 def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
@@ -337,7 +365,8 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             _warn(warnings, 'WARN: PDF 표 연결 성분의 선 수 한도(2000) 초과 — 표 생략')
             continue
         # 텍스트가 없는 작은 성분은 노드가 되기 전에 버린다 — 예산도 부모 탐색 비용도 쓰지 않는다
-        if (len(xs) < 3 or len(ys) < 3) and not _fragments_inside(index, bbox):
+        has_text = _has_fragment_inside(index, bbox)
+        if not has_text and (len(xs) < 3 or len(ys) < 3):
             continue
         if len(nodes) >= MAX_PAGE_COMPONENTS:
             _warn(warnings, 'WARN: PDF 페이지 표 후보 수 한도(1000) 초과 — 작은 후보 생략')
@@ -347,11 +376,14 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         owner_key = _owner_region(bbox, parent) if parent is not None else None
         if parent is not None and owner_key is None:
             continue
+        # 중첩 후보는 텍스트 셀이 있거나 빈 서식 격자여야 채택되므로, 둘 다 아니면 예산을 점유하기 전에 버린다
+        cells = (len(xs) - 1) * (len(ys) - 1)
+        if parent is not None and not has_text and not _empty_form(xs, ys, cells):
+            continue
         depth = parent.depth + 1 if parent is not None else 0
         if depth > MAX_NESTED_DEPTH:
             _warn(warnings, 'WARN: PDF 중첩 표 깊이 한도(32) 초과 — 표 생략')
             continue
-        cells = (len(xs) - 1) * (len(ys) - 1)
         if cells > remaining - reserved:
             _warn(warnings, 'WARN: PDF 페이지 표 셀 수 한도(50000) 초과 — 표 생략')
             continue
@@ -388,17 +420,21 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             text_cells = _text_cell_count(node)
             width = node.bbox[2] - node.bbox[0]
             height = node.bbox[3] - node.bbox[1]
-            keep = text_cells >= 1 and (text_cells >= 2 or node.cells >= 4 or
-                                             (node.cells == 1 and width >= 30 and height >= 12))
+            keep = (text_cells >= 1 and (text_cells >= 2 or node.cells >= 4 or
+                                              (node.cells == 1 and width >= 30 and height >= 12))
+                    or (text_cells == 0 and _empty_form(node.xs, node.ys, node.cells)))
         if not keep:
-            # 거부된 노드의 텍스트는 상위로 돌려주고, 이미 채택된 자식은 조부모 셀로 올린다
+            # 거부된 노드의 텍스트는 상위로 돌려주고, 이미 채택된 자식은 조부모 셀(없으면 최상위)로 올린다
             used_orders.difference_update(own_orders)
             for child in node.children:
                 child.parent, child.owner_key = node.parent, node.owner_key
                 if node.parent is not None:
                     node.parent.children.append(child)
+                else:
+                    result.append(TableCandidate(Table(rows=child.grid), child.bbox,
+                                                 child.fragment_orders, child.anchor_order,
+                                                 tuple(child.xs), tuple(child.ys)))
             continue
-        remaining -= node.cells
         if budget is not None:
             budget.remaining -= node.cells
         node.fragment_orders = subtree_orders

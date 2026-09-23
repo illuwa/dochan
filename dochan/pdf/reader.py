@@ -18,8 +18,9 @@ from .structure import PDFFile
 from .widths import WidthMap
 from .tables import TableBudget, build_tables
 from .layout import merge_lines
-from .pagination import (HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
-                         continues, header_repeated, merge_continued, page_bounds)
+from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
+                         continues, merge_continued, page_bounds, page_rotation,
+                         repeated_header_rows)
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -136,25 +137,28 @@ class PDFReader:
                     )
                 median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
                 merged_head = None
-                if tables:
+                if tables and page_rotation(pdf, page) in (90, 270):
+                    tail = None  # 회전된 페이지는 위·아래 판정이 무의미하다
+                elif tables:
                     bottom, top = page_bounds(pdf, page)
+                    body_bottom, body_top = bottom + HEADER_FOOTER_ZONE, top - HEADER_FOOTER_ZONE
                     consumed = set().union(*(t.fragment_orders for t in tables))
-                    first = min(tables, key=lambda t: t.anchor_order)
-                    last = max(tables, key=lambda t: t.anchor_order)
+                    # 꼬리·머리 후보는 그리기 순서가 아니라 위치로 고른다
+                    first = max(tables, key=lambda t: t.bbox[3])
+                    last = min(tables, key=lambda t: t.bbox[1])
                     fragments = page_content.fragments if page_content else []
-                    starts_top = not body_between(
-                        fragments, consumed, first.bbox[3], top - HEADER_FOOTER_ZONE)
+                    starts_top = (body_top - first.bbox[3] <= EDGE_FRACTION * (top - bottom)
+                                  and not body_between(fragments, consumed, first.bbox[3], body_top))
                     # 표가 머리말 영역에만 있지 않고, 표 아래에 본문이 없으면 다음 쪽으로 이어질 수 있다
-                    reaches_bottom = (last.bbox[1] < top - HEADER_FOOTER_ZONE
-                                      and not body_between(
-                                          fragments, consumed,
-                                          bottom + HEADER_FOOTER_ZONE, last.bbox[1]))
+                    reaches_bottom = (last.bbox[1] < body_top
+                                      and not body_between(fragments, consumed, body_bottom, last.bbox[1]))
                     if tail is not None and continues(tail, HeadInfo(first, starts_top)):
                         merged_head = first
                         merge_continued(tail.candidate.table, first.table,
-                                        header_repeated(tail.candidate.table, first.table))
+                                        repeated_header_rows(tail.candidate.table, first.table))
                         first.table = tail.candidate.table
-                    tail = TailInfo(last, reaches_bottom) if reaches_bottom else None
+                    tail = (TailInfo(last, True, gap_below=last.bbox[1] - body_bottom,
+                                     page_height=top - bottom) if reaches_bottom else None)
                 else:
                     tail = None
                 ordered = [(t.anchor_order, 0, t.table) for t in tables if t is not merged_head]

@@ -669,3 +669,29 @@ def test_rotated_header_reference_point_stays_in_top_left_cell(tmp_path):
     assert [[cell.text for cell in row] for row in table.rows] == [
         ['abcde', 'R'], ['B', '']]
     assert not doc.errors
+
+
+def test_empty_nested_candidate_is_rejected_before_reserving_budget(monkeypatch):
+    # 텍스트 없는 2×2 안쪽 상자(4셀)가 예산을 잠정 점유해 뒤의 진짜 표를 밀어내면 안 된다 (codex 리뷰)
+    from dochan.pdf import tables
+
+    monkeypatch.setattr(tables, 'MAX_PAGE_CELLS', 9)
+    segments = (_boxed_grid(0, 0, 200, 120, 2, 2) + _boxed_grid(110, 65, 190, 115, 2, 2)
+                + _boxed_grid(300, 0, 340, 20, 2, 1))
+    frags = [_frag('a', 10, 100, 0), _frag('b', 305, 5, 1)]
+    warnings = []
+    candidates = tables.build_tables(segments, frags, warnings=warnings)
+    assert sorted(c.table.row_count * c.table.col_count for c in candidates) == [2, 4]
+    assert warnings == []
+
+
+def test_empty_form_grid_inside_an_empty_frame_is_promoted_to_top_level():
+    # 봉투 서식처럼 텍스트 없는 1×1 틀 안의 빈 2×5 격자: 틀은 거부돼도 격자는 살아남아야 한다
+    from dochan.pdf.tables import build_tables
+
+    segments = _boxed_grid(100, 370, 510, 520) + _boxed_grid(130, 410, 480, 480, 5, 2)
+    # 틀 바로 위(윗변 밖)의 텍스트는 틀 안이 아니다
+    frags = [_frag('바깥', 200, 525, 0, width=20)]
+    candidates = build_tables(segments, frags)
+    assert [(c.table.row_count, c.table.col_count) for c in candidates] == [(2, 5)]
+    assert candidates[0].fragment_orders == set()

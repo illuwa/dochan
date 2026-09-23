@@ -412,3 +412,75 @@ def test_mixed_horizontal_and_vertical_text_keeps_stream_order(tmp_path):
     assert [element.text for element in doc.sections[0].elements] == [
         "Before", "Vertical", "After"]
     assert not doc.errors
+
+
+def _ruled(bottom, top, top_row, bottom_row, cols=2):
+    """200pt 페이지용: (bottom, top) 사이의 2행 표와 셀 텍스트를 그린다."""
+    content = b"0 %d 100 %d re S " % (bottom, top - bottom)
+    for col in range(1, cols):
+        x = round(100 * col / cols)
+        content += b"%d %d m %d %d l S " % (x, bottom, x, top)
+    middle = (bottom + top) // 2
+    content += b"0 %d m 100 %d l S " % (middle, middle)
+    for row, y in ((top_row, (middle + top) // 2), (bottom_row, (bottom + middle) // 2)):
+        for col, label in enumerate(row):
+            content += b"BT /F1 10 Tf %d %d Td (%s) Tj ET " % (
+                round(100 * col / cols) + 5, y, label.encode("ascii"))
+    return content
+
+
+def _read_pages_with(tmp_path, contents, page_extra=""):
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 200 200] "
+           "/Resources << /Font << /F1 20 0 R >> >> >>" % (
+               " ".join("%d 0 R" % (3 + i) for i in range(len(contents))), len(contents)),
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    for index, content in enumerate(contents):
+        objects[3 + index] = "<< /Type /Page /Parent 2 0 R %s /Contents %d 0 R >>" % (page_extra, 10 + index)
+        objects[10 + index] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
+    return PDFReader().read(_write(tmp_path, "pages2.pdf", _build_pdf(objects)))
+
+
+def test_tail_far_above_the_page_bottom_is_not_merged(tmp_path):
+    # 표 아래 60pt 가 비어 있어도(본문 하단 60 → 표 하단 120) 다음 행이 들어갈 공간이 남았으면 연속이 아니다
+    doc = _read_pages_with(tmp_path, [
+        _ruled(120, 180, ("A", "B"), ("C", "D")),
+        _ruled(80, 140, ("E", "F"), ("G", "H")) + b"BT /F1 10 Tf 10 40 Td (After) Tj ET ",
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_head_far_below_the_page_top_is_not_merged(tmp_path):
+    doc = _read_pages_with(tmp_path, [
+        _ruled(60, 120, ("A", "B"), ("C", "D")),
+        _ruled(40, 100, ("E", "F"), ("G", "H")),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_tail_is_the_lowest_table_not_the_last_drawn(tmp_path):
+    # 1쪽: 아래쪽 3열 표를 먼저 그리고 위쪽 2열 표를 나중에 그린다 → 꼬리 후보는 위치상 아래 표(3열)
+    lower = _ruled(60, 95, ("a", "b", "c"), ("d", "e", "f"), cols=3)
+    upper = _ruled(100, 135, ("A", "B"), ("C", "D"))
+    doc = _read_pages_with(tmp_path, [
+        lower + upper,
+        _ruled(80, 140, ("E", "F"), ("G", "H")) + b"BT /F1 10 Tf 10 40 Td (After) Tj ET ",
+    ])
+    assert len(doc.find_all("table")) == 3
+
+
+def test_rotated_page_never_merges(tmp_path):
+    doc = _read_pages_with(tmp_path, [
+        _ruled(60, 120, ("A", "B"), ("C", "D")),
+        _ruled(80, 140, ("E", "F"), ("G", "H")),
+    ], page_extra="/Rotate 90")
+    assert len(doc.find_all("table")) == 2
+
+
+def test_huge_mediabox_integer_falls_back_without_losing_the_page(tmp_path):
+    objects = _minimal_objects(b"BT /F1 12 Tf 72 720 Td (Hello) Tj ET")
+    objects[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 1%s] /Contents 5 0 R >>" % ("0" * 400)
+    doc = PDFReader().read(_write(tmp_path, "huge.pdf", _build_pdf(objects)))
+    assert doc.sections[0].elements[0].text == "Hello"

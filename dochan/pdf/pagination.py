@@ -10,10 +10,15 @@ HEADER_FOOTER_ZONE = 60.0
 _DEFAULT_BOUNDS = (0.0, 842.0)
 
 
+EDGE_FRACTION = 0.12  # 페이지 높이의 이 비율 안이면 행 높이와 무관하게 가장자리에 닿은 것으로 본다
+
+
 @dataclass
 class TailInfo:
     candidate: TableCandidate
     reaches_bottom: bool
+    gap_below: float = 0.0      # 표 하단 ~ 본문 하단 사이 빈 공간
+    page_height: float = 842.0
 
 
 @dataclass
@@ -22,26 +27,44 @@ class HeadInfo:
     starts_top: bool
 
 
-def page_bounds(pdf, page: dict) -> Tuple[float, float]:
-    """페이지 트리에서 MediaBox의 아래/위 y 좌표를 찾는다."""
+def _inherited(pdf, page: dict, key: str):
+    """페이지 트리를 거슬러 올라가며 상속 가능한 항목을 찾는다 (순환·깊이 방어)."""
     visited = set()
     node = page
     for _ in range(33):
         if not isinstance(node, dict) or id(node) in visited:
-            break
+            return None
         visited.add(id(node))
-        if "MediaBox" in node:
-            box = pdf.resolve(node["MediaBox"])
-            if not isinstance(box, list) or len(box) != 4:
-                return _DEFAULT_BOUNDS
-            values = [pdf.resolve(value) for value in box]
-            if any(isinstance(value, bool) or not isinstance(value, (int, float))
-                   or not math.isfinite(value) for value in values):
-                return _DEFAULT_BOUNDS
-            bottom, top = sorted((float(values[1]), float(values[3])))
-            return bottom, max(top, bottom + 1.0)
+        if key in node:
+            return pdf.resolve(node[key])
         node = pdf.resolve(node.get("Parent"))
-    return _DEFAULT_BOUNDS
+    return None
+
+
+def page_bounds(pdf, page: dict) -> Tuple[float, float]:
+    """페이지 트리에서 MediaBox의 아래/위 y 좌표를 찾는다. 손상값은 기본 크기로 대체."""
+    box = _inherited(pdf, page, "MediaBox")
+    if not isinstance(box, list) or len(box) != 4:
+        return _DEFAULT_BOUNDS
+    try:
+        values = [float(pdf.resolve(value)) for value in box]
+        if any(isinstance(value, bool) for value in box) or not all(math.isfinite(v) for v in values):
+            return _DEFAULT_BOUNDS
+    except (TypeError, ValueError, OverflowError):  # 거대 정수·비수치 값
+        return _DEFAULT_BOUNDS
+    bottom, top = sorted((values[1], values[3]))
+    return bottom, max(top, bottom + 1.0)
+
+
+def page_rotation(pdf, page: dict) -> int:
+    """/Rotate (상속) 를 0/90/180/270 으로 정규화한다. 손상값은 0."""
+    value = _inherited(pdf, page, "Rotate")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    try:
+        return int(round(float(value) / 90.0)) * 90 % 360
+    except (ValueError, OverflowError):
+        return 0
 
 
 def body_between(fragments, consumed, y_low: float, y_high: float) -> bool:
@@ -56,31 +79,61 @@ def same_columns(xs_a, xs_b, tolerance: float = 1.5) -> bool:
             and all(abs(a - b) <= tolerance for a, b in zip(xs_a, xs_b)))
 
 
-def header_repeated(prev_table: Table, next_table: Table) -> bool:
-    """첫 행의 표시 텍스트와 병합 형태가 같은지 확인."""
+def _row_key(row):
+    return [(" ".join(cell.text.split()), cell.row_span, cell.col_span) for cell in row]
+
+
+def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
+    """뒤 표 첫머리에 반복된 제목 행 수. 제목 높이는 첫 행 셀의 최대 row_span 이다.
+
+    비교 행에 텍스트가 하나도 없으면(빈 행끼리 일치) 반복으로 보지 않고, 뒤 표가 제목 행만으로
+    이뤄져 있으면 버릴 데이터가 없으므로 0 을 돌려준다.
+    """
     if not prev_table.rows or not next_table.rows:
-        return False
-    prev, next_row = prev_table.rows[0], next_table.rows[0]
-    return (len(prev) == len(next_row)
-            and all(" ".join(a.text.split()) == " ".join(b.text.split())
-                    and (a.row_span, a.col_span) == (b.row_span, b.col_span)
-                    for a, b in zip(prev, next_row)))
+        return 0
+    height = max(1, max((cell.row_span for cell in prev_table.rows[0]), default=1))
+    if len(prev_table.rows) < height or len(next_table.rows) <= height:
+        return 0
+    prev_rows = [_row_key(row) for row in prev_table.rows[:height]]
+    next_rows = [_row_key(row) for row in next_table.rows[:height]]
+    if prev_rows != next_rows or not any(text for row in prev_rows for text, _, _ in row):
+        return 0
+    return height
 
 
-def merge_continued(prev_table: Table, next_table: Table, drop_header: bool) -> None:
-    """이어지는 행의 셀 좌표를 옮겨 앞 표에 붙인다."""
-    offset = len(prev_table.rows)
+def header_repeated(prev_table: Table, next_table: Table) -> bool:
+    """첫 제목 행(들)이 반복됐는지 — repeated_header_rows 의 불리언 형태."""
+    return repeated_header_rows(prev_table, next_table) > 0
+
+
+def merge_continued(prev_table: Table, next_table: Table, drop_rows) -> None:
+    """이어지는 행의 셀 좌표를 옮겨 앞 표에 붙인다. drop_rows 는 버릴 반복 제목 행 수(불리언은 1행)."""
+    drop = int(drop_rows)
+    offset = len(prev_table.rows) - drop
     for row_index, row in enumerate(next_table.rows):
-        if drop_header and row_index == 0:
+        if row_index < drop:
             continue
         for cell in row:
             cell.row = offset + (cell.row if cell.row is not None else row_index)
-            if drop_header:
-                cell.row -= 1
         prev_table.rows.append(row)
 
 
+def first_data_row_height(head: HeadInfo, drop_rows: int) -> float:
+    """뒤 표에서 제목 행을 제외한 첫 행의 높이 (ys 는 내림차순)."""
+    ys = head.candidate.ys
+    index = min(drop_rows, max(len(ys) - 2, 0))
+    if len(ys) < 2:
+        return 0.0
+    return ys[index] - ys[index + 1]
+
+
 def continues(prev_tail: TailInfo, head: HeadInfo, tolerance: float = 1.5) -> bool:
-    """양쪽 표가 본문 경계에 닿고 열 경계가 일치하는지 확인."""
-    return (prev_tail.reaches_bottom and head.starts_top
-            and same_columns(prev_tail.candidate.xs, head.candidate.xs, tolerance))
+    """양쪽 표가 본문 경계에 닿고 열 경계가 일치하며, 앞 표 아래 남은 공간에 다음 행이 들어갈 수
+    없었을 때만 연속으로 본다 (남은 공간 < 다음 데이터 행 높이, 또는 페이지 높이의 12% 이내)."""
+    if not (prev_tail.reaches_bottom and head.starts_top
+            and same_columns(prev_tail.candidate.xs, head.candidate.xs, tolerance)):
+        return False
+    drop = repeated_header_rows(prev_tail.candidate.table, head.candidate.table)
+    allowed = max(first_data_row_height(head, drop) + tolerance,
+                  EDGE_FRACTION * prev_tail.page_height)
+    return prev_tail.gap_below <= allowed

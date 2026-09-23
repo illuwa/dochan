@@ -24,6 +24,8 @@ class TableCandidate:
     bbox: Tuple[float, float, float, float]
     fragment_orders: Set[int]
     anchor_order: int
+    xs: Tuple[float, ...] = ()
+    ys: Tuple[float, ...] = ()
 
 
 @dataclass
@@ -401,7 +403,8 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         used_orders.update(own_orders)
         if node.parent is None:
             result.append(TableCandidate(Table(rows=node.grid), node.bbox,
-                                         subtree_orders, node.anchor_order))
+                                         subtree_orders, node.anchor_order,
+                                         tuple(node.xs), tuple(node.ys)))
         else:
             node.parent.children.append(node)
     return sorted(result, key=lambda candidate: candidate.anchor_order)

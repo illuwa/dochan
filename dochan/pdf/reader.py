@@ -18,6 +18,8 @@ from .structure import PDFFile
 from .widths import WidthMap
 from .tables import TableBudget, build_tables
 from .layout import merge_lines
+from .pagination import (HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
+                         continues, header_repeated, merge_continued, page_bounds)
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -97,6 +99,7 @@ class PDFReader:
 
         font_cache = {}
         table_budget = TableBudget()
+        tail = None
         for page_number, (page, resources) in enumerate(pages, start=1):
             section = Section(
                 provenance=Provenance(source_format="pdf", page=page_number)
@@ -132,7 +135,29 @@ class PDFReader:
                         f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (이미지 추출 불가)"
                     )
                 median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
-                ordered = [(t.anchor_order, 0, t.table) for t in tables]
+                merged_head = None
+                if tables:
+                    bottom, top = page_bounds(pdf, page)
+                    consumed = set().union(*(t.fragment_orders for t in tables))
+                    first = min(tables, key=lambda t: t.anchor_order)
+                    last = max(tables, key=lambda t: t.anchor_order)
+                    fragments = page_content.fragments if page_content else []
+                    starts_top = not body_between(
+                        fragments, consumed, first.bbox[3], top - HEADER_FOOTER_ZONE)
+                    # 표가 머리말 영역에만 있지 않고, 표 아래에 본문이 없으면 다음 쪽으로 이어질 수 있다
+                    reaches_bottom = (last.bbox[1] < top - HEADER_FOOTER_ZONE
+                                      and not body_between(
+                                          fragments, consumed,
+                                          bottom + HEADER_FOOTER_ZONE, last.bbox[1]))
+                    if tail is not None and continues(tail, HeadInfo(first, starts_top)):
+                        merged_head = first
+                        merge_continued(tail.candidate.table, first.table,
+                                        header_repeated(tail.candidate.table, first.table))
+                        first.table = tail.candidate.table
+                    tail = TailInfo(last, reaches_bottom) if reaches_bottom else None
+                else:
+                    tail = None
+                ordered = [(t.anchor_order, 0, t.table) for t in tables if t is not merged_head]
                 for group in groups:
                     for block in merge_lines(group):
                         paragraph = block.paragraph(page_number)
@@ -147,6 +172,7 @@ class PDFReader:
                     if img.image_data:
                         doc.assets.append(img)
             except Exception as e:
+                tail = None
                 pdf.warnings.append(f"WARN: {page_number}페이지 파싱 실패: {e!r}")
             doc.sections.append(section)
 

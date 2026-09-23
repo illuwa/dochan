@@ -296,3 +296,108 @@ def test_nested_table_round_trips_reader_markdown_and_json(tmp_path):
     assert 'A / B ; C / D' in to_markdown(doc)
     nested = to_dict(doc)['sections'][0]['elements'][0]['rows'][0][1]['paragraphs'][0]
     assert nested['type'] == 'table' and nested['row_count'] == nested['col_count'] == 2
+
+
+def _table_page(top_row, bottom_row, *, first=False, body_below=False,
+                low_tail=False, low_head=False, body_above=False, cols=2):
+    """200pt 페이지의 위/아래 표와 주변 본문을 그린다."""
+    bottom, top = ((20, 70) if low_tail else (80, 140)) if first else (
+        (40, 120) if low_head else (80, 160))
+    content = b""
+    if first:
+        content += b"BT /F1 10 Tf 10 180 Td (Before) Tj ET "
+    if body_above:
+        content += b"BT /F1 10 Tf 10 130 Td (Above) Tj ET "
+    content += b"0 %d 100 %d re S " % (bottom, top - bottom)
+    for col in range(1, cols):
+        x = round(100 * col / cols)
+        content += b"%d %d m %d %d l S " % (x, bottom, x, top)
+    middle = (bottom + top) // 2
+    content += b"0 %d m 100 %d l S " % (middle, middle)
+    for row, y in ((top_row, (middle + top) // 2),
+                   (bottom_row, (bottom + middle) // 2)):
+        for col, label in enumerate(row):
+            x = round(100 * col / cols) + 5
+            content += b"BT /F1 10 Tf %d %d Td (%s) Tj ET " % (
+                x, y, label.encode("ascii"))
+    if body_below:
+        content += b"BT /F1 10 Tf 10 70 Td (Between) Tj ET "
+    if not first:
+        content += b"BT /F1 10 Tf 10 40 Td (After) Tj ET "
+    return content
+
+
+def _read_table_pages(tmp_path, contents):
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 200 200] "
+           "/Resources << /Font << /F1 20 0 R >> >> >>" % (
+               " ".join("%d 0 R" % (3 + i) for i in range(len(contents))), len(contents)),
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    for index, content in enumerate(contents):
+        objects[3 + index] = "<< /Type /Page /Parent 2 0 R /Contents %d 0 R >>" % (10 + index)
+        objects[10 + index] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
+    return PDFReader().read(_write(tmp_path, "pages.pdf", _build_pdf(objects)))
+
+
+def test_continued_table_merges_rows_and_preserves_body_order(tmp_path):
+    from dochan.output.markdown import to_markdown
+
+    doc = _read_table_pages(tmp_path, [
+        _table_page(("A", "B"), ("C", "D"), first=True),
+        _table_page(("E", "F"), ("G", "H")),
+    ])
+    table, = doc.find_all("table")
+    assert [[c.text for c in row] for row in table.rows] == [
+        ["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]]
+    assert all(c.provenance.page == 2 for row in table.rows[2:] for c in row)
+    assert [type(elem).__name__ for elem in doc.sections[0].elements] == ["Paragraph", "Table"]
+    assert [elem.text for elem in doc.sections[1].elements] == ["After"]
+    assert to_markdown(doc).count("| A | B |") == 1
+    assert to_markdown(doc).count("| E | F |") == 1
+
+
+def test_body_below_first_table_prevents_merge(tmp_path):
+    doc = _read_table_pages(tmp_path, [
+        _table_page(("A", "B"), ("C", "D"), first=True, body_below=True),
+        _table_page(("E", "F"), ("G", "H")),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_body_above_second_table_prevents_merge(tmp_path):
+    doc = _read_table_pages(tmp_path, [
+        _table_page(("A", "B"), ("C", "D"), first=True),
+        _table_page(("E", "F"), ("G", "H"), low_head=True, body_above=True),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_different_column_grid_prevents_merge(tmp_path):
+    doc = _read_table_pages(tmp_path, [
+        _table_page(("A", "B"), ("C", "D"), first=True),
+        _table_page(("E", "F", "G"), ("H", "I", "J"), cols=3),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_repeated_header_is_dropped_when_tables_merge(tmp_path):
+    doc = _read_table_pages(tmp_path, [
+        _table_page(("A", "B"), ("C", "D"), first=True),
+        _table_page(("A", "B"), ("E", "F")),
+    ])
+    table, = doc.find_all("table")
+    assert [[c.text for c in row] for row in table.rows] == [
+        ["A", "B"], ["C", "D"], ["E", "F"]]
+
+
+def test_empty_middle_page_resets_continuation(tmp_path):
+    doc = _read_table_pages(tmp_path, [
+        _table_page(("A", "B"), ("C", "D"), first=True),
+        b"BT /F1 10 Tf 10 100 Td (Middle) Tj ET",
+        _table_page(("E", "F"), ("G", "H")),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+

@@ -138,3 +138,33 @@ def test_compare_pair_observes_hangul_and_restores_previous_hook(monkeypatch, fa
         assert row["join_accuracy"] == 1.0 and row["labeled_joins"] == 1
         assert recorded == [("사회의", "운영에", True)]
     assert layout.JOIN_OBSERVER is previous_hook
+
+
+def test_nested_signatures_report_only_tables_inside_cells():
+    from scripts.compare_pdf_pairs import nested_signatures
+
+    inner = _table(1, 2)
+    outer = _table(2, 2)
+    outer.rows[0][0].paragraphs = [Paragraph(runs=[TextRun(text="머리")]), inner]
+    doc = Document()
+    doc.sections.append(Section(elements=[outer, _table(3, 3)]))
+    assert nested_signatures(doc) == [(1, 2, ())]
+    # 깊이 2 도 센다
+    innermost = _table(1, 1)
+    inner.rows[0][1].paragraphs = [innermost]
+    assert sorted(nested_signatures(doc)) == [(1, 1, ()), (1, 2, ())]
+
+
+def test_summarize_reports_nested_match_and_counts():
+    rows = {
+        "a": {"tok_ratio": 0.9, "hwpx_tables": 2, "pdf_tables": 2, "cell_hit": 0.5,
+              "signature_exact": 1, "merged_tables": 0, "merged_dims_matched": 0, "merged_exact": 0,
+              "hwpx_nested": 3, "pdf_nested": 4, "nested_exact": 2},
+        "b": {"tok_ratio": 0.8, "hwpx_tables": 1, "pdf_tables": 1, "cell_hit": None,
+              "signature_exact": 1, "merged_tables": 0, "merged_dims_matched": 0, "merged_exact": 0,
+              "hwpx_nested": 1, "pdf_nested": 0, "nested_exact": 0},
+    }
+    summary = summarize(rows)
+    assert summary["hwpx_nested"] == 4 and summary["pdf_nested"] == 4
+    assert summary["nested_match"] == 0.5
+    assert summarize({})["nested_match"] is None

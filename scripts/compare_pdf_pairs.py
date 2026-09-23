@@ -10,6 +10,7 @@
 - signature_match: (행 수, 열 수, 병합 셀 span 다중집합)이 완전히 같은 HWPX 표 비율
 - merge_match: 같은 행·열 수의 PDF 표가 있는 병합 셀 표 중 span 다중집합까지 같은 비율
 - join_accuracy: 정답 문맥이 유일하게 결정되는 한글 줄 경계의 공백 판정 정확도
+- nested_match: 다른 표의 셀 안에 있는(깊이≥1) HWPX 표 중 PDF 에도 같은 서명의 중첩 표가 있는 비율
 """
 import argparse
 import difflib
@@ -44,6 +45,41 @@ def table_signature(table) -> Tuple[int, int, Tuple[Tuple[int, int], ...]]:
         if cell.row_span > 1 or cell.col_span > 1
     )
     return (table.row_count, table.col_count, tuple(spans))
+
+
+MAX_NESTING_DEPTH = 32  # dochan.model.table.MAX_FLATTEN_DEPTH 와 같은 값
+
+
+def nested_signatures(doc) -> List[tuple]:
+    """다른 표의 셀 안에 있는(깊이 1 이상) 표의 서명. find_all 은 깊이를 구분하지 않으므로 직접 걷는다."""
+    from dochan.model.table import Table
+
+    found: List[tuple] = []
+
+    def walk(blocks, depth):
+        if depth > MAX_NESTING_DEPTH:
+            return
+        for block in blocks:
+            if isinstance(block, Table):
+                if depth >= 1:
+                    found.append(table_signature(block))
+                for row in block.rows:
+                    for cell in row:
+                        walk(cell.paragraphs, depth + 1)
+
+    for section in doc.sections:
+        walk(section.elements, 0)
+    return found
+
+
+def multiset_matches(answer: List[tuple], candidate: List[tuple]) -> int:
+    pool = Counter(candidate)
+    matched = 0
+    for signature in answer:
+        if pool[signature] > 0:
+            pool[signature] -= 1
+            matched += 1
+    return matched
 
 
 def table_stats(doc) -> Tuple[List[tuple], List[str]]:
@@ -106,7 +142,12 @@ def compare_pair(hwpx_path: str, pdf_path: str) -> Dict[str, object]:
     answer_sigs, answer_cells = table_stats(answer.doc)
     candidate_sigs, candidate_cells = table_stats(candidate.doc)
     exact, merged_total, merged_dims, merged_exact = structure_matches(answer_sigs, candidate_sigs)
+    answer_nested = nested_signatures(answer.doc)
+    candidate_nested = nested_signatures(candidate.doc)
     return {
+        "hwpx_nested": len(answer_nested),
+        "pdf_nested": len(candidate_nested),
+        "nested_exact": multiset_matches(answer_nested, candidate_nested),
         "tok_ratio": round(token_ratio(answer_text, candidate.to_plain_text()), 4),
         "join_accuracy": accuracy,
         "labeled_joins": labeled,
@@ -152,6 +193,7 @@ def summarize(rows: Dict[str, Dict[str, object]]) -> Dict[str, object]:
     hwpx_tables = sum(r.get("hwpx_tables", 0) for r in rows.values())
     merged_total = sum(r.get("merged_tables", 0) for r in rows.values())
     merged_dims = sum(r.get("merged_dims_matched", 0) for r in rows.values())
+    hwpx_nested = sum(r.get("hwpx_nested", 0) for r in rows.values())
     labeled = sum(r.get("labeled_joins", 0) for r in rows.values())
     matches = sum(r["join_accuracy"] * r.get("labeled_joins", 0)
                   for r in rows.values() if r.get("join_accuracy") is not None)
@@ -170,6 +212,10 @@ def summarize(rows: Dict[str, Dict[str, object]]) -> Dict[str, object]:
         if merged_dims else None,
         "merged_tables": merged_total,
         "merged_dims_matched": merged_dims,
+        "hwpx_nested": hwpx_nested,
+        "pdf_nested": sum(r.get("pdf_nested", 0) for r in rows.values()),
+        "nested_match": round(sum(r.get("nested_exact", 0) for r in rows.values()) / hwpx_nested, 4)
+        if hwpx_nested else None,
     }
 
 

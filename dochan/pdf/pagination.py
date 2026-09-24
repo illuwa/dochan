@@ -10,6 +10,7 @@ HEADER_FOOTER_ZONE = 60.0
 _DEFAULT_BOUNDS = (0.0, 842.0)
 
 
+MAX_HEADER_ROWS = 4  # 반복 제목으로 인정하는 최대 행 수
 EDGE_FRACTION = 0.12  # 페이지 높이의 이 비율 안이면 행 높이와 무관하게 가장자리에 닿은 것으로 본다
 
 
@@ -47,8 +48,11 @@ def page_bounds(pdf, page: dict) -> Tuple[float, float]:
     if not isinstance(box, list) or len(box) != 4:
         return _DEFAULT_BOUNDS
     try:
-        values = [float(pdf.resolve(value)) for value in box]
-        if any(isinstance(value, bool) for value in box) or not all(math.isfinite(v) for v in values):
+        resolved = [pdf.resolve(value) for value in box]
+        if any(isinstance(value, bool) for value in resolved):
+            return _DEFAULT_BOUNDS
+        values = [float(value) for value in resolved]
+        if not all(math.isfinite(v) for v in values):
             return _DEFAULT_BOUNDS
     except (TypeError, ValueError, OverflowError):  # 거대 정수·비수치 값
         return _DEFAULT_BOUNDS
@@ -91,12 +95,19 @@ def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
     """
     if not prev_table.rows or not next_table.rows:
         return 0
-    height = max(1, max((cell.row_span for cell in prev_table.rows[0]), default=1))
-    if len(prev_table.rows) < height or len(next_table.rows) <= height:
-        return 0
-    prev_rows = [_row_key(row) for row in prev_table.rows[:height]]
-    next_rows = [_row_key(row) for row in next_table.rows[:height]]
-    if prev_rows != next_rows or not any(text for row in prev_rows for text, _, _ in row):
+    span_height = max(1, max((cell.row_span for cell in prev_table.rows[0]), default=1))
+    # 앞 행부터 차례로 비교해 일치하는 연속 행 수를 제목 높이로 삼는다 (열 병합만 쓰는 2단 제목 포함).
+    # 뒤 표에는 제목 뒤에 데이터 행이 하나는 남아야 한다.
+    limit = min(MAX_HEADER_ROWS, len(prev_table.rows), len(next_table.rows) - 1)
+    height = 0
+    for index in range(limit):
+        if _row_key(prev_table.rows[index]) != _row_key(next_table.rows[index]):
+            break
+        height = index + 1
+    if height < span_height:
+        return 0  # row_span 으로 묶인 제목이 일부만 반복되면 제목 반복이 아니다
+    rows = [_row_key(row) for row in prev_table.rows[:height]]
+    if not any(text for row in rows for text, _, _ in row):
         return 0
     return height
 

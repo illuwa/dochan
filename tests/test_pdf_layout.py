@@ -200,7 +200,7 @@ def test_ctm_writing_directions_and_flow_coordinates():
     ex = ContentTextExtractor.from_fonts({"F1": _mono()})
     transforms = (
         (b"1 0 0 1 300 700", "ltr", (300, 700), (1, 0)),
-        (b"-1 0 0 -1 300 700", "rtl", (-300, 700), (-1, 0)),
+        (b"-1 0 0 -1 300 700", "rtl", (-300, -700), (-1, 0)),  # 180°: 다음 줄은 위(y 증가) → across = -y
         (b"0 -1 1 0 300 700", "down", (-700, 300), (0, -1)),
         (b"0 1 -1 0 300 700", "up", (700, -300), (0, 1)),
     )
@@ -237,3 +237,27 @@ def test_vertical_up_sorts_fragments_along_positive_y():
     content = (b"q 0 1 -1 0 300 700 cm BT /F1 10 Tf "
                b"6 0 Td (b) Tj -6 0 Td (a) Tj ET Q")
     assert ex.extract(content) == ["ab"]
+
+
+def test_rotated_side_label_does_not_disable_paragraph_merging():
+    # 여백의 세로 라벨 하나가 가로 문단의 '꽉 찬 줄' 기준을 부풀리면 안 된다 (Opus 감수)
+    from dochan.pdf.content import Fragment, assemble_lines
+    from dochan.pdf.layout import merge_lines
+
+    frags = [Fragment(20, 700, 480, 10, 'a' * 96, 5, order=0),
+             Fragment(20, 686, 480, 10, 'b' * 96, 5, order=1),
+             Fragment(20, 672, 100, 10, 'c' * 20, 5, order=2),
+             Fragment(20, 400, 300, 10, 'SIDE', 5, order=3, dir_x=0.0, dir_y=1.0, up_x=-1.0, up_y=0.0)]
+    blocks = merge_lines(assemble_lines(frags))
+    assert [b.text for b in blocks] == ['a' * 96 + ' ' + 'b' * 96 + ' ' + 'c' * 20, 'SIDE']
+
+
+def test_upside_down_full_lines_merge():
+    # 180° 텍스트: 다음 줄은 위쪽(y 증가)에 있고 쓰기 축은 -x
+    from dochan.pdf.content import Fragment, assemble_lines
+    from dochan.pdf.layout import merge_lines
+
+    frags = [Fragment(500, 300, 480, 10, 'x' * 96, 5, order=0, dir_x=-1.0, dir_y=0.0, up_x=0.0, up_y=-1.0),
+             Fragment(500, 314, 480, 10, 'y' * 96, 5, order=1, dir_x=-1.0, dir_y=0.0, up_x=0.0, up_y=-1.0)]
+    blocks = merge_lines(assemble_lines(frags))
+    assert [b.text for b in blocks] == ['x' * 96 + ' ' + 'y' * 96]

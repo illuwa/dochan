@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
 from ..model.table import Cell, Table
-from .content import Fragment, assemble_lines
+from .content import Fragment, across, along, assemble_lines
 from .layout import merge_lines
 from .paths import Segment
 
@@ -205,13 +205,14 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
             consumed.add(frag.order)
     events = defaultdict(list)
     for key, frags in by_cell.items():
-        lines = assemble_lines(sorted(frags, key=lambda f: (-f.y, f.x)))
+        # 읽기 순서: 줄 간 좌표 내림차순, 줄 안은 쓰기 축 순 (가로쓰기의 (-y, x) 와 같고 세로쓰기도 맞다)
+        lines = assemble_lines(sorted(frags, key=lambda f: (-across(f), along(f))))
         left, _, right, _ = boxes[key]
         groups = [[]]
         for line in lines:
             # 기준선이 중첩 표 윗변에 닿은 줄은 표 '위'의 줄이다 — 그 다음 줄부터 끊는다
-            if groups[-1] and any(line.y < y <= groups[-1][-1].y
-                                  for y in (breaks or {}).get(key, ())):
+            if groups[-1] and line.direction in ('ltr', 'rtl') and any(
+                    line.y < y <= groups[-1][-1].y for y in (breaks or {}).get(key, ())):
                 groups.append([])
             groups[-1].append(line)
         for group in groups:
@@ -280,45 +281,40 @@ def _area(bbox):
     return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
 
 
-def _fragment_index(fragments):
-    """y 오름차순 색인 — 후보 bbox 범위의 조각만 bisect 로 잘라내기 위해 페이지당 한 번 만든다.
-
-    기준점은 가로 조각에서 기준선보다 0.35·크기 위에, 회전 조각에서는 폭의 절반까지 위아래로
-    벗어날 수 있으므로 그만큼의 여유를 y 범위 양쪽에 둔다.
-    """
-    ordered = sorted(fragments, key=lambda frag: frag.y)
-    below = above = 0.0
-    for frag in ordered:
-        rotated = abs(frag.dir_y) > abs(frag.dir_x)
-        below = max(below, 0.35 * frag.size + (0.5 * frag.width if rotated else 0.0))
-        if rotated:
-            above = max(above, 0.5 * frag.width + 0.35 * frag.size)
-    return ordered, [frag.y for frag in ordered], (below, above)
-
-
 def _reference_point(frag):
-    """조각의 셀 배정 기준점 — 쓰기 축으로 폭의 절반, 수직축으로 크기의 0.35 만큼 이동한 점."""
+    """조각의 셀 배정 기준점 — 쓰기 축으로 폭의 절반, 글자 위쪽 축으로 크기의 0.35 만큼 이동한 점.
+
+    위쪽 축은 텍스트 행렬의 두 번째 기저(up_x, up_y)다. 쓰기 축을 90° 돌린 벡터를 쓰면 좌우
+    반사 행렬에서 부호가 뒤집힌다.
+    """
     scale = (frag.dir_x ** 2 + frag.dir_y ** 2) ** 0.5
     dx, dy = (frag.dir_x / scale, frag.dir_y / scale) if scale else (1.0, 0.0)
-    return (frag.x + dx * frag.width / 2 - dy * 0.35 * frag.size,
-            frag.y + dy * frag.width / 2 + dx * 0.35 * frag.size)
+    up_x, up_y = getattr(frag, 'up_x', 0.0), getattr(frag, 'up_y', 1.0)
+    up_scale = (up_x ** 2 + up_y ** 2) ** 0.5
+    ux, uy = (up_x / up_scale, up_y / up_scale) if up_scale else (-dy, dx)
+    return (frag.x + dx * frag.width / 2 + ux * 0.35 * frag.size,
+            frag.y + dy * frag.width / 2 + uy * 0.35 * frag.size)
+
+
+def _fragment_index(fragments):
+    """기준점 y 오름차순 색인 — 후보 bbox 범위의 조각만 bisect 로 잘라내기 위해 페이지당 한 번 만든다.
+
+    기준점을 여기서 한 번만 계산해 두므로 후보마다 조각 좌표를 다시 셈하지 않는다.
+    """
+    points = sorted(((_reference_point(frag), frag) for frag in fragments), key=lambda item: item[0][1])
+    return points, [point[1] for point, _ in points]
 
 
 def _fragments_inside(index, bbox):
-    """기준점이 bbox 안에 놓일 수 있는 조각의 상위집합 (y 는 색인으로, x 는 기준점으로 거른다)."""
-    ordered, ys, (below, above) = index
-    lo, hi = bisect_left(ys, bbox[1] - below), bisect_right(ys, bbox[3] + above)
-    return [frag for frag in ordered[lo:hi]
-            if bbox[0] <= _reference_point(frag)[0] <= bbox[2]]
+    """기준점이 bbox 안에 있는 조각 (y 는 색인으로 잘라내고 x 는 기준점으로 거른다)."""
+    points, ys = index
+    lo, hi = bisect_left(ys, bbox[1]), bisect_right(ys, bbox[3])
+    return [frag for (x, _), frag in points[lo:hi] if bbox[0] <= x <= bbox[2]]
 
 
 def _has_fragment_inside(index, bbox):
-    """기준점이 정확히 bbox 안에 있는 조각이 하나라도 있는가 (조기 거부용 정밀 판정)."""
-    for frag in _fragments_inside(index, bbox):
-        _, y = _reference_point(frag)
-        if bbox[1] <= y <= bbox[3]:
-            return True
-    return False
+    """기준점이 bbox 안에 있는 조각이 하나라도 있는가 (조기 거부용)."""
+    return bool(_fragments_inside(index, bbox))
 
 
 def _empty_form(xs, ys, cells):

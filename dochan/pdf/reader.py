@@ -137,8 +137,8 @@ class PDFReader:
                     )
                 median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
                 merged_head = None
-                if tables and page_rotation(pdf, page) in (90, 270):
-                    tail = None  # 회전된 페이지는 위·아래 판정이 무의미하다
+                if tables and page_rotation(pdf, page) != 0:
+                    tail = None  # 회전된 페이지는 위·아래 판정이 무의미하다 (180° 는 위아래가 뒤집힌다)
                 elif tables:
                     bottom, top = page_bounds(pdf, page)
                     body_bottom, body_top = bottom + HEADER_FOOTER_ZONE, top - HEADER_FOOTER_ZONE
@@ -147,17 +147,19 @@ class PDFReader:
                     first = max(tables, key=lambda t: t.bbox[3])
                     last = min(tables, key=lambda t: t.bbox[1])
                     fragments = page_content.fragments if page_content else []
-                    starts_top = (body_top - first.bbox[3] <= EDGE_FRACTION * (top - bottom)
+                    # 후보는 본문 띠(머리말·꼬리말 영역 사이)에 걸쳐 있어야 하고, 가장자리 거리는 0 이상으로 본다
+                    in_body = lambda t: t.bbox[1] < body_top and t.bbox[3] > body_bottom  # noqa: E731
+                    starts_top = (in_body(first)
+                                  and max(0.0, body_top - first.bbox[3]) <= EDGE_FRACTION * (top - bottom)
                                   and not body_between(fragments, consumed, first.bbox[3], body_top))
-                    # 표가 머리말 영역에만 있지 않고, 표 아래에 본문이 없으면 다음 쪽으로 이어질 수 있다
-                    reaches_bottom = (last.bbox[1] < body_top
+                    reaches_bottom = (in_body(last)
                                       and not body_between(fragments, consumed, body_bottom, last.bbox[1]))
                     if tail is not None and continues(tail, HeadInfo(first, starts_top)):
                         merged_head = first
                         merge_continued(tail.candidate.table, first.table,
                                         repeated_header_rows(tail.candidate.table, first.table))
                         first.table = tail.candidate.table
-                    tail = (TailInfo(last, True, gap_below=last.bbox[1] - body_bottom,
+                    tail = (TailInfo(last, True, gap_below=max(0.0, last.bbox[1] - body_bottom),
                                      page_height=top - bottom) if reaches_bottom else None)
                 else:
                     tail = None

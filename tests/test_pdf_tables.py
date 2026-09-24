@@ -695,3 +695,45 @@ def test_empty_form_grid_inside_an_empty_frame_is_promoted_to_top_level():
     candidates = build_tables(segments, frags)
     assert [(c.table.row_count, c.table.col_count) for c in candidates] == [(2, 5)]
     assert candidates[0].fragment_orders == set()
+
+
+def test_upside_down_text_just_above_a_box_top_is_assigned_to_the_box():
+    # 180° 텍스트는 기준점이 기준선 아래로 내려간다 — y=103 조각의 기준점(99.5)이 상단 100 안이다
+    from dochan.pdf.tables import build_tables
+
+    frag = Fragment(60, 103, 20, 10, 'flip', 5, order=0, dir_x=-1.0, dir_y=0.0, up_x=0.0, up_y=-1.0)
+    candidate, = build_tables(_boxed_grid(0, 0, 100, 100), [frag])
+    assert candidate.table.rows[0][0].text == 'flip'
+
+
+def test_diagonal_fragment_inside_a_box_is_found():
+    from dochan.pdf.tables import _fragment_index, _fragments_inside
+
+    frag = Fragment(20, 90, 200, 10, 'slant', 5, order=0, dir_x=0.866, dir_y=0.5, up_x=-0.5, up_y=0.866)
+    index = _fragment_index([frag])
+    assert _fragments_inside(index, (0, 100, 400, 300)) == [frag]
+
+
+def test_mirrored_text_reference_point_uses_the_text_y_axis():
+    # 좌우 반사 [-1 0 0 1]: 쓰기 축은 왼쪽, 수직축은 여전히 위 → 기준선 48 의 글자는 경계 50 위의 셀에 속한다
+    from dochan.pdf.tables import build_tables
+
+    frag = Fragment(70, 48, 20, 10, 'mirror', 5, order=0, dir_x=-1.0, dir_y=0.0, up_x=0.0, up_y=1.0)
+    candidate, = build_tables(_grid(cols=2, rows=2), [frag])  # 행 경계 y=30 (0..60 을 두 행으로)
+    assert candidate.table.rows[0][1].text == 'mirror'
+
+
+def test_vertical_columns_inside_a_cell_keep_reading_order():
+    # 글자마다 Tj 를 쓰는 세로 두 열(오른쪽 열 먼저)이 셀 안에서 글자 단위로 흩어지면 안 된다 (Opus 감수)
+    from dochan.pdf.tables import build_tables
+
+    frags = []
+    n = 0
+    for col_x, text in ((80, '가나다'), (66, '라마바')):
+        for i, ch in enumerate(text):
+            frags.append(Fragment(col_x, 95 - 12 * i, 12, 10, ch, 5, order=n, dir_x=0.0, dir_y=-1.0,
+                                  up_x=1.0, up_y=0.0))
+            n += 1
+    candidate, = build_tables(_boxed_grid(0, 0, 100, 100), frags)
+    # 오른쪽 열 → 왼쪽 열 순서로 읽히고, 꽉 찬 두 열은 한 문단으로 이어진다
+    assert [p.text for p in candidate.table.rows[0][0].paragraphs] == ['가나다라마바']

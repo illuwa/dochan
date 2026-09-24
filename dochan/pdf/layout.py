@@ -67,13 +67,16 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
     """같은 흐름의 꽉 찬 줄만 다음 줄과 이어 붙인다."""
     if not lines:
         return []
-    right = max(line.right for line in lines)
-    full_edge = 0.90 * right
+    # 가로쓰기(ltr)의 '꽉 찬 줄' 기준은 페이지 왼쪽 원점 기준 절대값(기존 동작). 다른 방향은
+    # 쓰기 축 좌표가 음수이거나 페이지 폭과 무관하므로 그 흐름의 시작점 기준 상대값을 쓴다.
+    # 회전 라벨 하나가 가로 문단의 기준을 부풀리지 않도록 방향별로 따로 계산한다.
+    horizontal = [line for line in lines if line.direction == "ltr"]
+    full_edge = 0.90 * max((line.right for line in horizontal), default=0.0)
     if inner_bounds is not None and len(lines) >= 2:
         left, right = inner_bounds
         full_edge = left + 0.90 * (right - left)
     vertical_edges = {}
-    for direction in ("down", "up"):
+    for direction in ("rtl", "down", "up"):
         columns = [line for line in lines if line.direction == direction]
         if columns:
             origin = min(line.left for line in columns)

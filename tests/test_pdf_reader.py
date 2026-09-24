@@ -484,3 +484,28 @@ def test_huge_mediabox_integer_falls_back_without_losing_the_page(tmp_path):
     objects[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 1%s] /Contents 5 0 R >>" % ("0" * 400)
     doc = PDFReader().read(_write(tmp_path, "huge.pdf", _build_pdf(objects)))
     assert doc.sections[0].elements[0].text == "Hello"
+
+
+def test_table_wholly_inside_the_header_zone_is_not_a_continuation_head(tmp_path):
+    # 2쪽 표가 머리말 영역(상단 60pt) 안에만 있으면 본문 상단 거리가 음수라도 머리 후보가 아니다
+    doc = _read_pages_with(tmp_path, [
+        _ruled(60, 120, ("A", "B"), ("C", "D")),
+        _ruled(160, 190, ("E", "F"), ("G", "H")),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_table_wholly_inside_the_footer_zone_is_not_a_continuation_tail(tmp_path):
+    doc = _read_pages_with(tmp_path, [
+        _ruled(10, 50, ("A", "B"), ("C", "D")),
+        _ruled(80, 140, ("E", "F"), ("G", "H")),
+    ])
+    assert len(doc.find_all("table")) == 2
+
+
+def test_rotated_180_page_never_merges(tmp_path):
+    doc = _read_pages_with(tmp_path, [
+        _ruled(60, 120, ("A", "B"), ("C", "D")),
+        _ruled(80, 140, ("E", "F"), ("G", "H")),
+    ], page_extra="/Rotate 180")
+    assert len(doc.find_all("table")) == 2

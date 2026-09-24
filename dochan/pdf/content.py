@@ -49,6 +49,8 @@ class Fragment:
     order: int = 0
     dir_x: float = 1.0  # 장치 공간에서 텍스트 x축의 x 성분 — 음수면 오른쪽→왼쪽으로 진행
     dir_y: float = 0.0  # 장치 공간에서 텍스트 x축의 y 성분
+    up_x: float = 0.0   # 장치 공간에서 텍스트 y축(글자의 위쪽) — 반사 행렬에서는 쓰기 축을 돌린 것과 다르다
+    up_y: float = 1.0
 
 
 def writing_direction(frag: Fragment) -> str:
@@ -71,10 +73,12 @@ def along(frag: Fragment) -> float:
 
 
 def across(frag: Fragment) -> float:
-    """다음 줄에서 값이 작아지는 줄 간 좌표를 돌려준다."""
+    """다음 줄에서 값이 작아지는 줄 간 좌표를 돌려준다 (180° 텍스트는 다음 줄이 위에 있다)."""
     direction = writing_direction(frag)
-    if direction in ("ltr", "rtl"):
+    if direction == "ltr":
         return frag.y
+    if direction == "rtl":
+        return -frag.y
     return frag.x if direction == "down" else -frag.x
 
 
@@ -273,6 +277,7 @@ class ContentTextExtractor:
                 text=text, space_width=space_w,
                 bold=font.bold, italic=font.italic, order=len(frags),
                 dir_x=start_tm[0], dir_y=start_tm[1],
+                up_x=start_tm[2], up_y=start_tm[3],
             ))
         return _matmul((1, 0, 0, 1, total_adv, 0), tm)
 

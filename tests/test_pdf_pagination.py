@@ -155,3 +155,30 @@ def test_continues_requires_the_gap_below_the_tail_to_be_smaller_than_the_next_r
     assert not continues(TailInfo(cand((180.0, 150.0, 120.0)), True, gap_below=60.0, page_height=200.0), head)
     # 페이지 높이의 12% 까지는 행 높이와 무관하게 허용
     assert continues(TailInfo(cand((180.0, 150.0, 120.0)), True, gap_below=90.0, page_height=842.0), head)
+
+
+def test_two_row_header_using_only_col_span_is_dropped_whole():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import repeated_header_rows
+
+    def header_table(data_row):
+        table = Table(rows=_rows(("점수", "", "등급", ""), ("국어", "영어", "A", "B"), data_row))
+        table.rows[0][0].col_span = table.rows[0][2].col_span = 2
+        table.rows[0][1].row_span = table.rows[0][1].col_span = 0
+        table.rows[0][3].row_span = table.rows[0][3].col_span = 0
+        return table
+
+    prev = header_table(("90", "80", "a", "b"))
+    nxt = header_table(("70", "60", "c", "d"))
+    assert repeated_header_rows(prev, nxt) == 2
+
+
+def test_partially_repeated_row_span_header_is_not_dropped():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import repeated_header_rows
+
+    prev = Table(rows=_rows(("H", "Top"), ("", "Sub"), ("a", "b")))
+    prev.rows[0][0].row_span = 2
+    nxt = Table(rows=_rows(("H", "Top"), ("x", "y"), ("c", "d")))
+    nxt.rows[0][0].row_span = 2
+    assert repeated_header_rows(prev, nxt) == 0

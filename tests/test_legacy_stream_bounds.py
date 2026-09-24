@@ -408,6 +408,64 @@ def test_hwp_bindata_decompressed_bytes_obey_aggregate_limit():
         )
 
 
+class _BinDataOle(_SizedOle):
+    def __init__(self, streams):
+        super().__init__(b"")
+        self.streams = streams
+
+    def listdir(self):
+        return [["BinData", name] for name in self.streams]
+
+    def get_size(self, name):
+        return len(self.streams[name.split("/", 1)[1]])
+
+    def openstream(self, name):
+        self.opened.append(name)
+        return _TrackingStream(self.streams[name.split("/", 1)[1]])
+
+
+def test_hwp_bindata_compressed_document_accepts_mixed_streams():
+    bmp = b"BM" + bytes(range(64))
+    compressed_bmp = zlib.compress(bmp)[2:-4]
+    png = b"\x89PNG\r\n\x1a\n" + b"raw image bytes"
+    ole = _BinDataOle({"BIN0001.bmp": compressed_bmp, "BIN0002.png": png})
+
+    items = extract_bin_data(ole, True)
+
+    assert set(items) == {1, 2}
+    assert items[1].data == bmp
+    assert items[2].data == png
+    assert items[1].extension == "bmp"
+    assert items[2].extension == "png"
+
+
+def test_hwp_bindata_compressed_document_keeps_non_deflate_stream_as_is():
+    raw = bytes(range(128, 144))
+
+    items = extract_bin_data(_BinDataOle({"BIN0001.bin": raw}), True)
+
+    assert items[1].data == raw
+
+
+def test_hwp_bindata_other_zlib_failure_skips_only_current_item(monkeypatch):
+    from dochan.hwp import bin_data
+
+    original_read = bin_data.read_ole_stream
+
+    def read_with_failure(ole, name, **kwargs):
+        if name.endswith("BIN0001.bin"):
+            raise zlib.error("bad stream")
+        return original_read(ole, name, **kwargs)
+
+    monkeypatch.setattr(bin_data, "read_ole_stream", read_with_failure)
+    ole = _BinDataOle({"BIN0001.bin": b"bad", "BIN0002.bin": b"good"})
+
+    items = extract_bin_data(ole, False)
+
+    assert set(items) == {2}
+    assert items[2].data == b"good"
+
+
 def test_extensionless_ole_routes_from_workbook_stream(monkeypatch, tmp_path):
     class WorkbookOle:
         def __init__(self, path):

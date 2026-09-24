@@ -5,6 +5,7 @@ OLE 스토리지의 BinData/ 하위에 저장된 바이너리 데이터를 추�
 
 import logging
 import struct
+import zlib
 import olefile
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -87,7 +88,7 @@ def extract_bin_data(
                             raw_data,
                             max_size=min(item_limit, extracted_budget.remaining),
                         )
-                    except ValueError as e:
+                    except (ValueError, zlib.error) as e:
                         if "Decompressed size exceeds limit" in str(e):
                             raise ResourceLimitError(
                                 f"{stream_name} exceeds extracted BinData budget"
@@ -104,7 +105,7 @@ def extract_bin_data(
 
             except BoundedIOError:
                 raise
-            except (ValueError, struct.error, UnicodeDecodeError, OSError) as e:
+            except (ValueError, struct.error, UnicodeDecodeError, OSError, zlib.error) as e:
                 logger.warning("BinData 항목 '%s' 파싱 실패: %s", storage_name, e)
                 continue
 

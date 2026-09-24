@@ -45,15 +45,17 @@ HWP_FILE_HEADER_SIZE = 256
 class Dochan:
     """HWP/HWPX 통합 리더"""
 
-    def __init__(self, file_path: str, ocr: bool = False):
+    def __init__(self, file_path: str, ocr: bool = False, pdf_text_tables: bool = False):
         """
         Args:
             file_path: HWP/HWPX 파일 경로
             ocr: True면 이미지에서 텍스트 OCR 추출 (Tesseract 필요)
+            pdf_text_tables: True면 PDF의 괘선 없는 표 복원
         """
         self.file_path = file_path
         self.doc = Document()
         self._ocr = ocr
+        self._pdf_text_tables = pdf_text_tables
         self._parse()
         if ocr:
             self._run_ocr()
@@ -403,7 +405,7 @@ class Dochan:
 
     def _parse_pdf(self):
         """PDF (네이티브 파서) 파싱"""
-        self.doc = PDFReader().read(self.file_path)
+        self.doc = PDFReader(text_tables=self._pdf_text_tables).read(self.file_path)
 
     def _parse_pdf_family(self):
         """확장자가 .pdf 인 파일 파싱.

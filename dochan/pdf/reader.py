@@ -17,6 +17,7 @@ from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
 from .widths import WidthMap
 from .tables import TableBudget, build_tables
+from .text_tables import detect_text_tables
 from .layout import merge_lines
 from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
                          continues, merge_continued, page_bounds, page_rotation,
@@ -65,6 +66,9 @@ def _pdf_text_string(value) -> str:
 class PDFReader:
     format_name = "pdf"
     extensions = (".pdf",)
+
+    def __init__(self, text_tables: bool = False):
+        self.text_tables = text_tables
 
     def read(self, file_path: str) -> Document:
         doc = Document(source_format="pdf")
@@ -165,11 +169,33 @@ class PDFReader:
                     tail = None
                 ordered = [(t.anchor_order, 0, t.table) for t in tables if t is not merged_head]
                 for group in groups:
-                    for block in merge_lines(group):
-                        paragraph = block.paragraph(page_number)
-                        paragraph.heading_level = _heading_level_for_size(
-                            block.text, block.size, median_size)
-                        ordered.append((block.order, 1, paragraph))
+                    if self.text_tables:
+                        try:
+                            detected = detect_text_tables(group, page_number)
+                        except Exception as e:
+                            pdf.warnings.append(f"WARN: {page_number}페이지 텍스트 표 복원 실패: {e!r}")
+                            detected = []
+                        consumed = set()
+                        for table, indices in detected:
+                            consumed.update(indices)
+                            ordered.append((group[min(indices)].order, 0, table))
+                        # 표 앞뒤 문단을 별개 흐름으로 병합한다.
+                        chunks = [[]]
+                        for index, line in enumerate(group):
+                            if index in consumed:
+                                if chunks[-1]:
+                                    chunks.append([])
+                            else:
+                                chunks[-1].append(line)
+                        body_groups = chunks
+                    else:
+                        body_groups = [group]
+                    for body_group in body_groups:
+                        for block in merge_lines(body_group):
+                            paragraph = block.paragraph(page_number)
+                            paragraph.heading_level = _heading_level_for_size(
+                                block.text, block.size, median_size)
+                            ordered.append((block.order, 1, paragraph))
                 section.elements.extend(item for _, _, item in sorted(
                     ordered, key=lambda event: (event[0], event[1])))
                 section.elements.extend(self._link_paragraphs(pdf, page, page_number))

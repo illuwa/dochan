@@ -39,6 +39,7 @@ def main(argv=None):
     conv.add_argument('-f', '--format', choices=['markdown', 'json', 'text'],
                       default='markdown', help='출력 형식 (기본: markdown)')
     conv.add_argument('--ocr', action='store_true', help='이미지 OCR 활성화')
+    conv.add_argument('--pdf-text-tables', action='store_true', help='PDF 괘선 없는 표 복원')
 
     # batch
     bat = subparsers.add_parser('batch', help='디렉토리 일괄 변환')
@@ -76,7 +77,10 @@ def _cmd_convert(args):
         return 1
 
     try:
-        doc = Dochan(args.file, ocr=args.ocr)
+        if args.pdf_text_tables:
+            doc = Dochan(args.file, ocr=args.ocr, pdf_text_tables=True)
+        else:
+            doc = Dochan(args.file, ocr=args.ocr)
 
         if args.format == 'json':
             content = doc.to_json()

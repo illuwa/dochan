@@ -602,6 +602,15 @@ def test_cli_convert_warning_only_is_successful(monkeypatch, tmp_path, capsys):
     assert "WARN: recovered content" in captured.err
 
 
+def test_cli_convert_accepts_pdf_text_tables_flag(tmp_path, capsys):
+    from test_pdf_structure import _build_pdf, _minimal_objects
+
+    source = tmp_path / "document.pdf"
+    source.write_bytes(_build_pdf(_minimal_objects(b"BT (Converted) Tj ET")))
+    assert main(["convert", str(source), "--pdf-text-tables"]) == 0
+    assert "Converted" in capsys.readouterr().out
+
+
 def test_cli_convert_rejects_output_aliasing_input(monkeypatch, tmp_path, capsys):
     _install_fake_reader(monkeypatch)
     source = tmp_path / "document.hwp"

@@ -25,6 +25,30 @@ def test_reads_single_page_text(tmp_path):
     assert doc.sections[0].provenance.page == 1
 
 
+def test_ruleless_table_is_opt_in_and_keeps_stream_order(tmp_path):
+    from dochan import Dochan
+    from dochan.model.table import Table
+
+    content = b"BT /F1 10 Tf 20 760 Td (Before) Tj ET "
+    for row, labels in enumerate(((b"A", b"One"), (b"B", b"Two"),
+                                  (b"C", b"Three"))):
+        for col, label in enumerate(labels):
+            content += b"BT /F1 10 Tf %d %d Td (%s) Tj ET " % (
+                20 + col * 100, 730 - row * 20, label)
+    content += b"BT /F1 10 Tf 20 650 Td (After) Tj ET"
+    path = _write(tmp_path, "ruleless.pdf", _build_pdf(_minimal_objects(content)))
+
+    plain = PDFReader().read(path)
+    assert plain.find_all("table") == []
+    flagged = PDFReader(text_tables=True).read(path)
+    before, table, after = flagged.sections[0].elements
+    assert isinstance(table, Table)
+    assert (before.text, after.text) == ("Before", "After")
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["A", "One"], ["B", "Two"], ["C", "Three"]]
+    assert len(Dochan(path, pdf_text_tables=True).find_all("table")) == 1
+
+
 def test_reads_multiple_pages_in_order(tmp_path):
     c1 = b"BT (Page one) Tj ET"
     c2 = b"BT (Page two) Tj ET"

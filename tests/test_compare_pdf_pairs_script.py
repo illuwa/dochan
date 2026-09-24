@@ -168,3 +168,42 @@ def test_summarize_reports_nested_match_and_counts():
     assert summary["hwpx_nested"] == 4 and summary["pdf_nested"] == 4
     assert summary["nested_match"] == 0.5
     assert summarize({})["nested_match"] is None
+
+
+def test_compare_pair_passes_text_table_option_only_when_enabled(monkeypatch):
+    import dochan
+    from scripts import compare_pdf_pairs
+
+    calls = []
+
+    class TinyDocument:
+        doc = Document()
+        errors = []
+
+        def __init__(self, path, **kwargs):
+            calls.append((path, kwargs))
+
+        def to_plain_text(self):
+            return "text"
+
+    monkeypatch.setattr(dochan, "Dochan", TinyDocument)
+    compare_pdf_pairs.compare_pair("answer.hwpx", "candidate.pdf", pdf_text_tables=True)
+    assert calls == [("answer.hwpx", {}),
+                     ("candidate.pdf", {"pdf_text_tables": True})]
+
+
+def test_main_forwards_pdf_text_tables_flag(monkeypatch, capsys):
+    from scripts import compare_pdf_pairs
+
+    calls = []
+    monkeypatch.setattr(compare_pdf_pairs, "find_pairs",
+                        lambda _directory: [("sample", "answer.hwpx", "candidate.pdf")])
+
+    def fake_compare(_hwpx, _pdf, pdf_text_tables=False):
+        calls.append(pdf_text_tables)
+        return {"pdf_tables": 1}
+
+    monkeypatch.setattr(compare_pdf_pairs, "compare_pair", fake_compare)
+    assert compare_pdf_pairs.main(["pairs", "--pdf-text-tables"]) == 0
+    assert calls == [True]
+    capsys.readouterr()

@@ -120,7 +120,8 @@ def structure_matches(answer: List[tuple], candidate: List[tuple]) -> Tuple[int,
     return exact, merged_total, merged_dims, merged_exact
 
 
-def compare_pair(hwpx_path: str, pdf_path: str) -> Dict[str, object]:
+def compare_pair(hwpx_path: str, pdf_path: str,
+                 pdf_text_tables: bool = False) -> Dict[str, object]:
     from dochan import Dochan
     from dochan.pdf import layout
 
@@ -134,7 +135,8 @@ def compare_pair(hwpx_path: str, pdf_path: str) -> Dict[str, object]:
     previous_observer = layout.JOIN_OBSERVER
     layout.JOIN_OBSERVER = observe
     try:
-        candidate = Dochan(pdf_path)
+        candidate = (Dochan(pdf_path, pdf_text_tables=True) if pdf_text_tables
+                     else Dochan(pdf_path))
     finally:
         layout.JOIN_OBSERVER = previous_observer
     answer_text = answer.to_plain_text()
@@ -223,13 +225,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pairs_dir", help="HWPX/PDF 쌍이 든 디렉터리")
     parser.add_argument("--output", help="쌍별 결과 JSON 경로")
+    parser.add_argument("--pdf-text-tables", action="store_true", help="PDF 괘선 없는 표 복원")
     args = parser.parse_args(argv)
 
     started = time.time()
     rows: Dict[str, Dict[str, object]] = {}
     for key, hwpx_path, pdf_path in find_pairs(args.pairs_dir):
         try:
-            rows[key] = compare_pair(hwpx_path, pdf_path)
+            rows[key] = compare_pair(hwpx_path, pdf_path,
+                                     pdf_text_tables=args.pdf_text_tables)
         except Exception as exc:  # 측정 도구는 한 문서 실패로 전체를 멈추지 않는다
             rows[key] = {"error": repr(exc)}
     summary = summarize(rows)

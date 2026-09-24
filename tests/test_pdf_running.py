@@ -11,8 +11,12 @@ def line(text, y, size=10, segments=()):
                            segments=segments)
 
 
-def page(number, *lines, rotation=0):
-    return SimpleNamespace(page_number=number, groups=[list(lines)], bounds=(0, 200),
+def page(number, *lines, rotation=0, body=True):
+    """실물 페이지처럼 가장자리 블록과 멀리 떨어진 본문 줄을 기본으로 둔다 (body 를 끄면 생략)."""
+    lines = list(lines)
+    if body:
+        lines.append(line("Far body %d" % number, 100))
+    return SimpleNamespace(page_number=number, groups=[lines], bounds=(0, 200),
                            rotation=rotation)
 
 
@@ -158,6 +162,38 @@ def test_margin_gap_minority_does_not_rescue_body_line():
     drops, emitted = detect_running(pages)
     assert emitted == []
     assert all(not items for items in drops.values())
+
+
+def test_short_pages_without_text_below_the_block_abstain():
+    """블록 아래에 줄이 없으면 간격을 판단할 수 없으므로 기권한다 — 반복 본문 줄이 머리글이 되지 않는다."""
+    pages = [page(n, line("Introduction", 190), line("Body %d" % n, 178), line("More %d" % n, 166),
+                  body=False) for n in (1, 2)]
+    drops, emitted = detect_running(pages)
+    assert emitted == []
+    assert all(not items for items in drops.values())
+
+
+def test_abstaining_pages_do_not_vote_for_the_majority():
+    pages = [page(1, line("Introduction", 190), body=False),
+             page(2, line("Introduction", 190), body=False),
+             page(3, line("Introduction", 190), line("Body 3", 178), line("More 3", 166),
+                  line("End 3", 154), body=False)]
+    drops, emitted = detect_running(pages)
+    assert emitted == []
+    assert all(not items for items in drops.values())
+
+
+def test_rotated_pages_do_not_raise_the_threshold():
+    pages = [page(1, line("Running", 190)), page(2, line("Running", 190))] + [
+        page(n, line("Rotated %d" % n, 190), rotation=90) for n in range(3, 9)]
+    drops, emitted = detect_running(pages)
+    assert [hf.text for _, hf in emitted] == ["Running"]
+    assert len(drops[1]) == len(drops[2]) == 1 and not any(drops[n] for n in range(3, 9))
+
+
+@pytest.mark.parametrize("text", ["페이지 1", "쪽 1", "页 3"])
+def test_prefixed_page_number_forms(text):
+    assert is_page_number_like(text)
 
 
 @pytest.mark.parametrize("space_width", [0, 5])

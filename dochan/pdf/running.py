@@ -5,7 +5,7 @@ import re
 import statistics
 import unicodedata
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
 from ..model.document import Paragraph, TextRun
@@ -19,7 +19,7 @@ _PAGE_NUMBER = re.compile(
     r"(?:[-–—]\s*)?(?:\d{1,4}|[(\[]\d{1,4}[)\]]|"
     r"\d{1,4}\s*/\s*\d{1,4}|"
     r"(?:page|p\.?)\s*\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?|"
-    r"\d{1,4}\s*(?:쪽|페이지|页))(?:\s*[-–—])?",
+    r"\d{1,4}\s*(?:쪽|페이지|页)|(?:쪽|페이지|页)\s*\d{1,4})(?:\s*[-–—])?",
     re.IGNORECASE,
 )
 _ARTICLE_HEADING = re.compile(r"제\s*\d+\s*조(?:\s*\([^)]*\))?")
@@ -74,8 +74,11 @@ def edge_block(lines, bounds, zone: str) -> list:
     return block
 
 
-def margin_gap_ok(lines, block, zone: str) -> bool:
-    """가장자리 블록이 나머지 본문과 2×크기 이상 떨어져 있는가 (여백 안의 줄인가)."""
+def margin_gap_ok(lines, block, zone: str) -> Optional[bool]:
+    """가장자리 블록이 나머지 본문과 2×크기 이상 떨어져 있는가 (여백 안의 줄인가).
+
+    블록 너머에 줄이 없으면 판단할 근거가 없으므로 None(기권)을 돌려준다.
+    """
     if not block:
         return False
     block_ids = {id(line) for line in block}
@@ -88,19 +91,22 @@ def margin_gap_ok(lines, block, zone: str) -> bool:
         remainder = [line for line in lines if line.direction == "ltr"
                      and id(line) not in block_ids and line.y > edge_y]
     if not remainder:
-        return True
+        return None
     if zone == "header":
         gap = edge_y - max(line.y for line in remainder)
     else:
         gap = min(line.y for line in remainder) - edge_y
-    return gap >= MARGIN_GAP_FACTOR * max(line.size for line in block)
+    block_size = max((line.size if math.isfinite(line.size) else 0.0) for line in block)
+    return gap >= MARGIN_GAP_FACTOR * block_size
 
 
 def detect_running(pages) -> Tuple[Dict[int, Set[int]], List[Tuple[int, HeaderFooter]]]:
     """페이지별 제거할 줄 객체와 첫 출현 페이지의 머리글/바닥글을 돌려준다."""
     drops: Dict[int, Set[int]] = {page.page_number: set() for page in pages}
     occurrences = defaultdict(list)
-    text_pages = sum(bool(any(group for group in page.groups)) for page in pages)
+    # 회전 페이지는 후보를 내지 않으므로 임계값의 분모에서도 뺀다.
+    text_pages = sum(bool(any(group for group in page.groups))
+                     for page in pages if page.rotation == 0)
     if text_pages < 2:
         return drops, []
     for page in pages:
@@ -130,8 +136,9 @@ def detect_running(pages) -> Tuple[Dict[int, Set[int]], List[Tuple[int, HeaderFo
             continue
         # 여백 간격은 키(문서) 단위로 본다: 과반의 출현에서 본문과 떨어져 있으면 반복 머리글이고,
         # 그때는 본문에 바짝 붙은 몇 쪽의 출현도 함께 뺀다. 매 쪽 본문에 붙어 있으면 본문 줄이다.
-        pages_with_gap = {number for number, _, gap_ok in found if gap_ok}
-        if len(pages_with_gap) < threshold or len(pages_with_gap) * 2 < len(pages_seen):
+        pages_with_gap = {number for number, _, gap_ok in found if gap_ok is True}
+        pages_voting = {number for number, _, gap_ok in found if gap_ok is not None}
+        if len(pages_with_gap) < threshold or len(pages_with_gap) * 2 < len(pages_voting):
             continue
         found = [(number, line) for number, line, _ in found]
         if key[2]:

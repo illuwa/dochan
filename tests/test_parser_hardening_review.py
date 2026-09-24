@@ -11,6 +11,7 @@ from dochan.constants import (
     HWPTAG_CTRL_HEADER,
     HWPTAG_LIST_HEADER,
     HWPTAG_PARA_HEADER,
+    HWPTAG_PARA_TEXT,
     HWPTAG_TABLE,
 )
 from dochan.hwp.doc_info import DocInfoParser
@@ -317,6 +318,99 @@ def _hwp_cell_with_paragraph(paragraph, *, row=0, col=0, row_span=1, col_span=1)
     }
 
 
+def _hwp_text_paragraph(text):
+    payload = text.encode("utf-16-le") + struct.pack("<H", 13)
+    return {
+        "record": RawRecord(HWPTAG_PARA_HEADER, 2, 22, bytes(22)),
+        "children": [{
+            "record": RawRecord(HWPTAG_PARA_TEXT, 3, len(payload), payload),
+            "children": [],
+        }],
+    }
+
+
+def _hwp_nested_fixture():
+    nested = _hwp_table_control_node(1, 2, [])
+    nested["children"].extend([
+        _hwp_cell_with_paragraph(_hwp_text_paragraph("a"), col=0),
+        _hwp_cell_with_paragraph(_hwp_text_paragraph("b"), col=1),
+    ])
+    outer_cell = _hwp_cell_with_paragraph(_hwp_text_paragraph("앞"))
+    outer_cell["children"].extend([
+        _hwp_paragraph_with_control(nested, level=2),
+        _hwp_text_paragraph("뒤"),
+    ])
+    outer = _hwp_table_control_node(1, 1, [])
+    outer["children"].append(outer_cell)
+    return outer
+
+
+def test_hwp_nested_table_keeps_block_order_and_all_outputs():
+    from dochan.model.document import Document, Paragraph, Section
+    from dochan.output.json_out import to_dict
+    from dochan.output.markdown import to_markdown
+
+    parser = SectionParser()
+    outer = parser._parse_table(_hwp_nested_fixture())
+    doc = Document(sections=[Section(elements=[outer])])
+    blocks = outer.rows[0][0].paragraphs
+
+    assert [type(block) for block in blocks] == [Paragraph, Table, Paragraph]
+    assert [blocks[0].text, blocks[2].text] == ["앞", "뒤"]
+    assert outer.rows[0][0].text.count("a") == 1
+    assert outer.rows[0][0].text.count("b") == 1
+    assert len(doc.find_all("table")) == 2
+    assert to_markdown(doc) == "| 앞 a / b 뒤 |\n| --- |"
+    cell_dict = to_dict(doc)["sections"][0]["elements"][0]["rows"][0][0]
+    assert [block["type"] for block in cell_dict["paragraphs"]] == [
+        "paragraph", "table", "paragraph",
+    ]
+    assert cell_dict["paragraphs"][1]["rows"][0][1]["text"] == "b"
+    assert parser._section_cells == parser._document_cells == 3
+    assert parser.errors == []
+
+
+def test_hwp_nested_depth_limit_drops_child_and_keeps_outer_text(monkeypatch):
+    parser = SectionParser()
+    monkeypatch.setattr(parser, "MAX_TABLE_DEPTH", 1)
+
+    outer = parser._parse_table(_hwp_nested_fixture())
+
+    assert outer.row_count == outer.col_count == 1
+    assert [block.text for block in outer.rows[0][0].paragraphs] == ["앞", "뒤"]
+    assert parser.errors == ["ERR: HWP table nesting exceeds depth limit: 2 > 1"]
+    assert parser._section_cells == parser._document_cells == 1
+
+
+def test_hwp_nested_document_budget_drops_only_child(monkeypatch):
+    parser = SectionParser()
+    monkeypatch.setattr(parser, "MAX_DOCUMENT_CELLS", 2)
+
+    outer = parser._parse_table(_hwp_nested_fixture())
+
+    assert [block.text for block in outer.rows[0][0].paragraphs] == ["앞", "뒤"]
+    assert parser.errors == [
+        "ERR: HWP document cell allocation exceeds limit: 1 + 2 > 2"
+    ]
+    assert parser._section_cells == parser._document_cells == 1
+
+
+def test_hwp_empty_nested_fallback_is_not_kept(monkeypatch):
+    parser = SectionParser()
+    outer = _hwp_nested_fixture()
+    original = parser._parse_paragraph_group
+
+    def empty_nested(paragraph):
+        if paragraph["children"] and paragraph["children"][0]["record"].tag_id == HWPTAG_CTRL_HEADER:
+            return [Table()]
+        return original(paragraph)
+
+    monkeypatch.setattr(parser, "_parse_paragraph_group", empty_nested)
+    table = parser._parse_table(outer)
+
+    assert [block.text for block in table.rows[0][0].paragraphs] == ["앞", "뒤"]
+
+
 def test_hwp_section_cell_budget_exact_limit_preserves_safe_tables(monkeypatch):
     parser = SectionParser()
     monkeypatch.setattr(parser, "MAX_SECTION_CELLS", 4, raising=False)
@@ -382,7 +476,9 @@ def test_hwp_nested_table_cell_budget_cannot_be_bypassed(monkeypatch):
 
     table = parser._parse_table(outer)
 
-    assert table.rows == []
+    assert table.row_count == 1
+    assert table.rows[0][0].paragraphs == []
+    assert parser._section_cells == parser._document_cells == 1
     assert parser.errors == [
         "ERR: HWP section cell allocation exceeds limit: 1 + 2 > 2"
     ]
@@ -395,7 +491,7 @@ def test_hwp_failed_nested_table_rolls_back_budget_for_safe_sibling(monkeypatch)
     parent_cell = _hwp_cell_with_paragraph(_hwp_paragraph_with_control(nested))
     unsafe_outer = _hwp_table_control_node(1, 1, [])
     unsafe_outer["children"].append(parent_cell)
-    safe_sibling = _hwp_table_control_node(1, 2, [])
+    safe_sibling = _hwp_table_control_node(1, 1, [])
 
     section = parser._tree_to_section(
         [
@@ -404,7 +500,8 @@ def test_hwp_failed_nested_table_rolls_back_budget_for_safe_sibling(monkeypatch)
         ]
     )
 
-    assert [table.col_count for table in section.elements] == [2]
+    assert [table.col_count for table in section.elements] == [1, 1]
+    assert parser._section_cells == parser._document_cells == 2
     assert parser.errors == [
         "ERR: HWP section cell allocation exceeds limit: 1 + 2 > 2"
     ]
@@ -434,7 +531,9 @@ def test_hwp_table_depth_first_excess_is_fatal_once(monkeypatch):
 
     table = parser._parse_table(outer)
 
-    assert table.rows == []
+    assert table.row_count == 1
+    assert table.rows[0][0].paragraphs == []
+    assert parser._section_cells == parser._document_cells == 1
     assert parser.errors == ["ERR: HWP table nesting exceeds depth limit: 2 > 1"]
 
 

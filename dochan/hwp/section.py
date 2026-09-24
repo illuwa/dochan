@@ -808,15 +808,19 @@ class SectionParser:
         # 셀 내부 재귀 파싱 — 문단 + 중첩 컨트롤 모두
         for child in lh_node['children']:
             if child['record'].tag_id == HWPTAG_PARA_HEADER:
-                elems = self._parse_paragraph_group(child)
+                try:
+                    elems = self._parse_paragraph_group(child)
+                except _HWPStructureError as exc:
+                    # 중첩 표의 자원 트랜잭션은 자체 예산을 되돌렸다.
+                    # 실패한 셀 내용만 버리고 바깥 표와 다른 셀은 살린다.
+                    self._append_fatal_once(exc.key, exc.message)
+                    continue
                 for e in elems:
                     if hasattr(e, 'runs'):  # Paragraph (도형 내부 텍스트 포함)
                         info['paragraphs'].append(e)
                     elif hasattr(e, 'rows'):  # 중첩 Table
-                        # 중첩 표의 셀 텍스트를 문단으로 풀어서 추가
-                        for row in e.rows:
-                            for cell in row:
-                                info['paragraphs'].extend(cell.paragraphs)
+                        if e.rows:  # 실패 폴백 Table() 은 내용이 없다.
+                            info['paragraphs'].append(e)
                     elif isinstance(e, Image):
                         # 셀 안 이미지도 유지 (HWPX 와 동일 — BinData 연결 대상)
                         info['paragraphs'].append(e)

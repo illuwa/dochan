@@ -141,6 +141,25 @@ def test_header_with_margin_gap_is_detected():
     assert all(len(items) == 1 for items in drops.values())
 
 
+def test_margin_gap_is_judged_per_key_by_majority_of_pages():
+    """과반의 쪽에서 본문과 떨어져 있으면 반복 머리글이고, 바짝 붙은 소수의 쪽에서도 함께 뺀다."""
+    pages = [page(1, line("Running", 190), line("Body 1", 160)),
+             page(2, line("Running", 190), line("Body 2", 160)),
+             page(3, line("Running", 190), line("Body 3", 176))]  # 3쪽만 간격 14 < 20
+    drops, emitted = detect_running(pages)
+    assert [hf.text for _, hf in emitted] == ["Running"]
+    assert all(len(items) == 1 for items in drops.values())
+
+
+def test_margin_gap_minority_does_not_rescue_body_line():
+    pages = [page(1, line("Intro", 190), line("Body 1", 160), line("More 1", 148))] + [
+        page(n, line("Intro", 190), line("Body %d" % n, 178), line("More %d" % n, 166),
+             line("End %d" % n, 154)) for n in (2, 3, 4)]  # 2–4쪽은 본문이 바로 이어짐
+    drops, emitted = detect_running(pages)
+    assert emitted == []
+    assert all(not items for items in drops.values())
+
+
 @pytest.mark.parametrize("space_width", [0, 5])
 def test_three_column_repeated_edge_line_is_not_running(space_width):
     segments = [SimpleNamespace(x0=x, x1=x + 20, space_width=space_width)

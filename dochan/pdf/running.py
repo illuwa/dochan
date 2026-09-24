@@ -12,6 +12,7 @@ from ..model.document import Paragraph, TextRun
 from ..model.header_footer import HeaderFooter
 
 EDGE_FRACTION_RUNNING = 0.12
+MARGIN_GAP_FACTOR = 2.0  # 가장자리 블록과 본문 사이 최소 간격 (글자 크기 배수)
 _WHITESPACE = re.compile(r"\s+")
 _DIGITS = re.compile(r"\d+")
 _PAGE_NUMBER = re.compile(
@@ -70,24 +71,29 @@ def edge_block(lines, bounds, zone: str) -> list:
         if block and abs(line.y - block[-1].y) > 1.5 * block[-1].size:
             break
         block.append(line)
-    if block:
-        block_ids = {id(line) for line in block}
-        if zone == "header":
-            edge_y = min(line.y for line in block)
-            remainder = [line for line in lines if line.direction == "ltr"
-                         and id(line) not in block_ids and line.y < edge_y]
-        else:
-            edge_y = max(line.y for line in block)
-            remainder = [line for line in lines if line.direction == "ltr"
-                         and id(line) not in block_ids and line.y > edge_y]
-        if remainder:
-            if zone == "header":
-                gap = edge_y - max(line.y for line in remainder)
-            else:
-                gap = min(line.y for line in remainder) - edge_y
-            if gap < 2.0 * max(line.size for line in block):
-                return []
     return block
+
+
+def margin_gap_ok(lines, block, zone: str) -> bool:
+    """가장자리 블록이 나머지 본문과 2×크기 이상 떨어져 있는가 (여백 안의 줄인가)."""
+    if not block:
+        return False
+    block_ids = {id(line) for line in block}
+    if zone == "header":
+        edge_y = min(line.y for line in block)
+        remainder = [line for line in lines if line.direction == "ltr"
+                     and id(line) not in block_ids and line.y < edge_y]
+    else:
+        edge_y = max(line.y for line in block)
+        remainder = [line for line in lines if line.direction == "ltr"
+                     and id(line) not in block_ids and line.y > edge_y]
+    if not remainder:
+        return True
+    if zone == "header":
+        gap = edge_y - max(line.y for line in remainder)
+    else:
+        gap = min(line.y for line in remainder) - edge_y
+    return gap >= MARGIN_GAP_FACTOR * max(line.size for line in block)
 
 
 def detect_running(pages) -> Tuple[Dict[int, Set[int]], List[Tuple[int, HeaderFooter]]]:
@@ -103,22 +109,31 @@ def detect_running(pages) -> Tuple[Dict[int, Set[int]], List[Tuple[int, HeaderFo
         lines = [line for group in page.groups for line in group
                  if line.text and line.direction == "ltr"]
         for zone in ("header", "footer"):
-            for line in edge_block(lines, page.bounds, zone):
+            block = edge_block(lines, page.bounds, zone)
+            gap_ok = margin_gap_ok(lines, block, zone)
+            for line in block:
                 if (_ARTICLE_HEADING.fullmatch(normalize_text(line.text))
                         or _table_like(line)):
                     continue
-                occurrences[line_key(zone, line)].append((page.page_number, line))
+                occurrences[line_key(zone, line)].append((page.page_number, line, gap_ok))
 
     threshold = max(2, math.ceil(0.3 * text_pages))
     first_lines = defaultdict(list)
     for key, found in occurrences.items():
         median_size = statistics.median(line.size if math.isfinite(line.size) else 0.0
-                                        for _, line in found)
-        found = [(number, line) for number, line in found
+                                        for _, line, _ in found)
+        found = [(number, line, gap_ok) for number, line, gap_ok in found
                  if abs((line.size if math.isfinite(line.size) else 0.0)
                         - median_size) <= 1.0]
-        if len({number for number, _ in found}) < threshold:
+        pages_seen = {number for number, _, _ in found}
+        if len(pages_seen) < threshold:
             continue
+        # 여백 간격은 키(문서) 단위로 본다: 과반의 출현에서 본문과 떨어져 있으면 반복 머리글이고,
+        # 그때는 본문에 바짝 붙은 몇 쪽의 출현도 함께 뺀다. 매 쪽 본문에 붙어 있으면 본문 줄이다.
+        pages_with_gap = {number for number, _, gap_ok in found if gap_ok}
+        if len(pages_with_gap) < threshold or len(pages_with_gap) * 2 < len(pages_seen):
+            continue
+        found = [(number, line) for number, line, _ in found]
         if key[2]:
             numbered = [(number, line, _DIGITS.search(line.text)) for number, line in found]
             found = [(number, line) for number, line, match in numbered if match]

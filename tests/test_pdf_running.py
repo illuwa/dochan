@@ -6,8 +6,9 @@ from dochan.pdf.running import (edge_block, detect_running, is_page_number_like,
                                 line_key)
 
 
-def line(text, y, size=10):
-    return SimpleNamespace(text=text, y=y, size=size, direction="ltr")
+def line(text, y, size=10, segments=()):
+    return SimpleNamespace(text=text, y=y, size=size, direction="ltr",
+                           segments=segments)
 
 
 def page(number, *lines, rotation=0):
@@ -103,3 +104,67 @@ def test_multiline_header_emits_one_element_with_visual_order():
         (1, "header", "ACME\nConfidential")]
     assert len(emitted[0][1].paragraphs) == 2
     assert all(len(items) == 2 for items in drops.values())
+
+
+def test_literal_hash_cannot_share_page_number_key():
+    assert line_key("footer", line("- 1 -", 10)) != line_key(
+        "footer", line("- # -", 10))
+    drops, emitted = detect_running([page(1, line("- 1 -", 10)),
+                                     page(2, line("- # -", 10))])
+    assert drops == {1: set(), 2: set()}
+    assert emitted == []
+
+
+def test_close_body_lines_are_not_a_running_header():
+    pages = [page(n, line("Introduction", 190), line("Body %d" % n, 178),
+                  line("More %d" % n, 166), line("End %d" % n, 154))
+             for n in (1, 2)]
+    drops, emitted = detect_running(pages)
+    assert emitted == []
+    assert all(not items for items in drops.values())
+
+
+def test_close_body_lines_are_not_a_running_footer():
+    pages = [page(n, line("End %d" % n, 46), line("More %d" % n, 34),
+                  line("Body %d" % n, 22), line("Appendix", 10))
+             for n in (1, 2)]
+    drops, emitted = detect_running(pages)
+    assert emitted == []
+    assert all(not items for items in drops.values())
+
+
+def test_header_with_margin_gap_is_detected():
+    pages = [page(n, line("Introduction", 190), line("Body %d" % n, 160))
+             for n in (1, 2)]
+    drops, emitted = detect_running(pages)
+    assert [hf.text for _, hf in emitted] == ["Introduction"]
+    assert all(len(items) == 1 for items in drops.values())
+
+
+@pytest.mark.parametrize("space_width", [0, 5])
+def test_three_column_repeated_edge_line_is_not_running(space_width):
+    segments = [SimpleNamespace(x0=x, x1=x + 20, space_width=space_width)
+                for x in (20, 100, 180)]
+    pages = [page(n, line("Item Qty Price", 190, segments=segments),
+                  line("Body %d" % n, 140)) for n in (1, 2, 3)]
+    drops, emitted = detect_running(pages)
+    assert emitted == []
+    assert all(not items for items in drops.values())
+
+
+def test_close_font_sizes_group_across_rounding_boundary():
+    pages = [page(n, line("Running", 190, size))
+             for n, size in enumerate((10.24, 10.26, 10.3), 1)]
+    drops, emitted = detect_running(pages)
+    assert [hf.text for _, hf in emitted] == ["Running"]
+    assert all(len(items) == 1 for items in drops.values())
+
+
+def test_outlier_title_size_is_preserved():
+    pages = [page(1, line("Running", 190, 20)),
+             page(2, line("Running", 190, 10)),
+             page(3, line("Running", 190, 10))]
+    drops, emitted = detect_running(pages)
+    assert [hf.text for _, hf in emitted] == ["Running"]
+    assert not drops[1]
+    assert len(drops[2]) == len(drops[3]) == 1

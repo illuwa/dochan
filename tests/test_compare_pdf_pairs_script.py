@@ -103,6 +103,35 @@ def test_header_footer_metric_matches_multiline_content_by_line():
     assert hf_hit == 1.0
 
 
+def test_header_footer_false_positive_counts_extra_pdf_lines(monkeypatch):
+    import dochan
+    from scripts.compare_pdf_pairs import compare_pair
+
+    def document(*lines):
+        return Document(sections=[Section(elements=[HeaderFooter(
+            type="header", paragraphs=[Paragraph(runs=[TextRun(text=line)])
+            for line in lines])])])
+
+    answer = document("Shared", "Page 1")
+    candidate = document("Shared", "Extra", "Page 2")
+
+    class FakeDochan:
+        errors = []
+
+        def __init__(self, path):
+            self.doc = answer if path.endswith(".hwpx") else candidate
+
+        def to_plain_text(self):
+            return "Shared"
+
+    monkeypatch.setattr(dochan, "Dochan", FakeDochan)
+    row = compare_pair("answer.hwpx", "candidate.pdf")
+    assert row["pdf_hf_extra"] == 1
+    assert row["hf_hit"] == 1.0
+    assert summarize({"pair": row})["hf_false"] == 1
+    assert summarize({"other": {"pdf_hf_extra": 0}})["hf_false"] == 0
+
+
 def test_join_accuracy_labels_only_unambiguous_normalized_contexts():
     from scripts.compare_pdf_pairs import join_accuracy
 

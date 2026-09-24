@@ -11,6 +11,7 @@
 - merge_match: 같은 행·열 수의 PDF 표가 있는 병합 셀 표 중 span 다중집합까지 같은 비율
 - join_accuracy: 정답 문맥이 유일하게 결정되는 한글 줄 경계의 공백 판정 정확도
 - nested_match: 다른 표의 셀 안에 있는(깊이≥1) HWPX 표 중 PDF 에도 같은 서명의 중첩 표가 있는 비율
+- hf_false: HWPX 에 없는 PDF 머리글/바닥글 줄 수 합계 (페이지 번호 제외)
 """
 import argparse
 import difflib
@@ -162,6 +163,7 @@ def compare_pair(hwpx_path: str, pdf_path: str,
         "hwpx_hf": sorted(hwpx_hf),
         "pdf_hf": sorted(pdf_hf),
         "hf_hit": round(len(hwpx_hf & pdf_hf) / len(hwpx_hf), 4) if hwpx_hf else None,
+        "pdf_hf_extra": len(pdf_hf - hwpx_hf),
         "hwpx_nested": len(answer_nested),
         "pdf_nested": len(candidate_nested),
         "nested_exact": multiset_matches(answer_nested, candidate_nested),
@@ -219,6 +221,7 @@ def summarize(rows: Dict[str, Dict[str, object]]) -> Dict[str, object]:
         "pairs": len(rows),
         "mean_hf_hit": round(sum(hf_hits) / len(hf_hits), 4) if hf_hits else None,
         "docs_with_hf": len(hf_hits),
+        "hf_false": sum(r.get("pdf_hf_extra", 0) for r in rows.values()),
         "join_accuracy": round(matches / labeled, 4) if labeled else None,
         "labeled_joins": labeled,
         "mean_tok_ratio": round(sum(ratios) / len(ratios), 4) if ratios else None,

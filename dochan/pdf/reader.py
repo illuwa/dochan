@@ -43,7 +43,7 @@ class _PageDraft:
     groups: list = field(default_factory=list)
     ordered: list = field(default_factory=list)
     median_size: float = 0.0
-    bounds: tuple = (0.0, 0.0)
+    bounds: tuple = (0.0, 842.0)
     rotation: int = 0
     links: list = field(default_factory=list)
     images: list = field(default_factory=list)
@@ -130,9 +130,10 @@ class PDFReader:
             section = Section(
                 provenance=Provenance(source_format="pdf", page=page_number)
             )
-            draft = _PageDraft(section=section, page_number=page_number,
-                               bounds=page_bounds(pdf, page), rotation=page_rotation(pdf, page))
+            draft = _PageDraft(section=section, page_number=page_number)
             try:
+                draft.bounds = page_bounds(pdf, page)
+                draft.rotation = page_rotation(pdf, page)
                 content_parts = self._page_content_parts(pdf, page)
                 lines = []
                 groups = []
@@ -256,6 +257,12 @@ class PDFReader:
             self._finalize_draft(draft, dropped, warnings)
         except Exception as e:
             warnings.append(f"WARN: {draft.page_number}페이지 파싱 실패: {e!r}")
+            elements = draft.section.elements
+            present = {id(element) for element in elements}
+            for element in draft.links + draft.images:
+                if id(element) not in present:
+                    elements.append(element)
+                    present.add(id(element))
 
     def _finalize_draft(self, draft: _PageDraft, dropped: set, warnings: list) -> None:
         """검출 결과를 적용한 뒤 기존 페이지별 문단/텍스트 표 흐름을 완성한다."""

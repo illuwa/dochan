@@ -89,6 +89,20 @@ def _running_pages(tmp_path, headers, rotations=()):
     return PDFReader().read(_write(tmp_path, "running.pdf", _build_pdf(objects)))
 
 
+def _custom_running_pages(tmp_path, contents):
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 600 800] "
+           "/Resources << /Font << /F1 20 0 R >> >> >>" % (
+               " ".join("%d 0 R" % (3 + i) for i in range(len(contents))), len(contents)),
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    for index, content in enumerate(contents):
+        objects[3 + index] = "<< /Type /Page /Parent 2 0 R /Contents %d 0 R >>" % (10 + index)
+        objects[10 + index] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
+    return PDFReader().read(_write(tmp_path, "custom-running.pdf", _build_pdf(objects)))
+
+
 def test_running_header_and_page_number_become_section_elements(tmp_path):
     from dochan.output.markdown import to_markdown
 
@@ -99,6 +113,54 @@ def test_running_header_and_page_number_become_section_elements(tmp_path):
     assert [[elem.text for elem in section.elements] for section in doc.sections[1:]] == [
         ["Body2"], ["Body3"]]
     assert to_markdown(doc).count("<!-- header: Running -->") == 1
+
+
+def test_page_number_and_literal_hash_footers_keep_both_body_lines(tmp_path):
+    contents = [b"BT /F1 10 Tf 30 400 Td (Body1) Tj ET "
+                b"BT /F1 10 Tf 30 40 Td (- 1 -) Tj ET",
+                b"BT /F1 10 Tf 30 400 Td (Body2) Tj ET "
+                b"BT /F1 10 Tf 30 40 Td (- # -) Tj ET"]
+    doc = _custom_running_pages(tmp_path, contents)
+    assert doc.find_all("header_footer") == []
+    assert [[elem.text for elem in section.elements] for section in doc.sections] == [
+        ["Body1", "- 1 -"], ["Body2", "- # -"]]
+
+
+def test_repeated_body_title_with_normal_line_spacing_is_kept(tmp_path):
+    contents = [b" ".join([
+        b"BT /F1 10 Tf 30 %d Td (%s) Tj ET" % (y, text)
+        for y, text in ((730, b"Introduction"), (718, b"Body%d" % n),
+                        (706, b"More%d" % n), (694, b"End%d" % n))])
+        for n in (1, 2)]
+    doc = _custom_running_pages(tmp_path, contents)
+    assert doc.find_all("header_footer") == []
+    assert all("Introduction" in "\n".join(elem.text for elem in section.elements)
+               for section in doc.sections)
+
+
+def test_repeated_title_with_three_line_height_gap_is_header(tmp_path):
+    contents = [b"BT /F1 10 Tf 30 730 Td (Introduction) Tj ET "
+                b"BT /F1 10 Tf 30 700 Td (Body%d) Tj ET" % n
+                for n in (1, 2)]
+    doc = _custom_running_pages(tmp_path, contents)
+    assert [(hf.type, hf.text) for hf in doc.find_all("header_footer")] == [
+        ("header", "Introduction")]
+    assert all("Introduction" not in "\n".join(elem.text for elem in section.elements
+                                                if elem.__class__.__name__ == "Paragraph")
+               for section in doc.sections)
+
+
+def test_repeated_three_column_line_stays_body(tmp_path):
+    contents = [b" ".join([
+        b"BT /F1 10 Tf 30 730 Td (Item) Tj ET",
+        b"BT /F1 10 Tf 130 730 Td (Qty) Tj ET",
+        b"BT /F1 10 Tf 230 730 Td (Price) Tj ET",
+        b"BT /F1 10 Tf 30 680 Td (Body%d) Tj ET" % n,
+    ]) for n in (1, 2, 3)]
+    doc = _custom_running_pages(tmp_path, contents)
+    assert doc.find_all("header_footer") == []
+    assert all("Item Qty Price" in "\n".join(elem.text for elem in section.elements)
+               for section in doc.sections)
 
 
 def test_nonrepeating_top_lines_remain_body(tmp_path):
@@ -179,6 +241,50 @@ def test_failed_page_discards_its_draft(tmp_path, monkeypatch):
     assert [elem.text for elem in doc.sections[0].elements] == ["First", "Body1", "1"]
     assert doc.sections[1].elements == []
     assert "WARN: 2페이지 파싱 실패: RuntimeError('broken links')" in doc.errors
+
+
+def test_finalize_failure_keeps_registered_image_and_link(tmp_path, monkeypatch):
+    from dochan.model.document import Paragraph, TextRun
+    from dochan.model.image import Image
+    from dochan.pdf import reader
+
+    image = Image(image_data=b"image bytes", image_format="png")
+    link = Paragraph(runs=[TextRun(text="<https://example.com>",
+                                   link="https://example.com")])
+    monkeypatch.setattr(PDFReader, "_page_images", lambda self, pdf, resources, number: [image])
+    monkeypatch.setattr(PDFReader, "_link_paragraphs", lambda self, pdf, page, number: [link])
+
+    def fail(_group):
+        raise RuntimeError("merge failed")
+
+    monkeypatch.setattr(reader, "merge_lines", fail)
+    content = b"BT /F1 10 Tf 72 720 Td (Body) Tj ET"
+    doc = PDFReader().read(_write(tmp_path, "finalize.pdf", _build_pdf(_minimal_objects(content))))
+    assert doc.sections[0].elements == [link, image]
+    assert doc.assets == [image]
+    assert "WARN: 1페이지 파싱 실패: RuntimeError('merge failed')" in doc.errors
+
+
+def test_page_bounds_failure_yields_failed_page_with_default_bounds(tmp_path, monkeypatch):
+    from dochan.pdf import reader
+
+    seen = []
+
+    def fail_bounds(_pdf, _page):
+        raise RuntimeError("bounds failed")
+
+    def inspect_drafts(drafts):
+        seen.extend(drafts)
+        return {draft.page_number: set() for draft in drafts}, []
+
+    monkeypatch.setattr(reader, "page_bounds", fail_bounds)
+    monkeypatch.setattr(reader, "detect_running", inspect_drafts)
+    content = b"BT /F1 10 Tf 72 720 Td (Body) Tj ET"
+    doc = PDFReader().read(_write(tmp_path, "bounds.pdf", _build_pdf(_minimal_objects(content))))
+    assert len(doc.sections) == 1
+    assert doc.sections[0].elements == []
+    assert seen[0].bounds == (0.0, 842.0)
+    assert "WARN: 1페이지 파싱 실패: RuntimeError('bounds failed')" in doc.errors
 
 
 def test_rotated_second_page_does_not_create_running_header(tmp_path):

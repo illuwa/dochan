@@ -5,7 +5,7 @@
 ### 추가 (PDF — 한글 줄바꿈 결합 공백 통계 모델)
 
 - **문자 통계 기반 공백 판정**: 줄바꿈으로 갈라진 한글 두 글자를 이을 때 (앞 글자, 뒤 글자)
-  통계로 공백 여부를 판정한다. 공개 HWP/HWPX 코퍼스로 학습한 209KB 모델을 패키지 데이터로
+  통계로 공백 여부를 판정한다. 공개 HWP/HWPX 코퍼스로 학습한 모델(최종 524KB)을 패키지 데이터로
   포함(`dochan/pdf/korean_spacing.json`), 런타임 의존성 없음. 리소스가 없으면 사전확률로 동작
 - 학습 스크립트 `scripts/build_korean_spacing_model.py`, 측정 지표 `join_accuracy`
   (`scripts/compare_pdf_pairs.py`)
@@ -29,11 +29,13 @@
 - **세로쓰기·회전 텍스트 읽기 순서**: 텍스트 조각에 쓰기 축·위쪽 축 벡터를 두고 ltr/rtl/down/up
   으로 분류, 방향별 줄 조립과 쓰기 축 정렬, 회전 조각의 셀 배정 기준점. 실물 세로쓰기 문서가
   없어 합성 픽스처로만 검증(README 표시는 보류), 가로 문서 출력은 이전과 동일
-- **괘선 없는 표 옵션(기본 꺼짐)**: `Dochan(path, pdf_text_tables=True)`, `PDFReader(text_tables=True)`,
-  `dochan convert --pdf-text-tables`. 연속 줄의 텍스트 시작 위치 반복으로 표를 추정하며 글머리
-  목록은 제외. 옵션이 꺼진 기본 출력은 바뀌지 않는다
+- **괘선 없는 표 옵션(실험적, 기본 꺼짐)**: `Dochan(path, pdf_text_tables=True)`, `PDFReader(text_tables=True)`,
+  `dochan convert --pdf-text-tables`. 연속 줄의 텍스트 시작 위치 반복으로 표를 추정하며 자간을
+  벌린 라벨은 칸으로 합치고 번호·기호 목록은 제외. 정답 근거가 없어 실험적 기능이며 옵션이
+  꺼진 기본 출력은 바뀌지 않는다
 - 측정 지표 `nested_match` 추가, `compare_pdf_pairs --pdf-text-tables`
 - 검증(79쌍, 옵션 꺼짐): nested_match 0 → 0.364(24/66 — 괘선으로 도달 가능한 24개 전부),
+  괘선 없는 표 옵션은 켜도 다른 지표 변화 없이 표 +7,
   signature_match 0.620 → 0.649, cell_hit 0.902 → 0.912, 진짜 연속 표 3건 병합, 가로 문서 지표
   무변화 (`docs/benchmarks/2026-09-24-pdf-phase5-nested-pagination-vertical.md`).
   각 단계 codex 리뷰·Opus 감수 반영

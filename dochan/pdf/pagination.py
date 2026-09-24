@@ -88,27 +88,33 @@ def _row_key(row):
 
 
 def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
-    """뒤 표 첫머리에 반복된 제목 행 수. 제목 높이는 첫 행 셀의 최대 row_span 이다.
+    """뒤 표 첫머리에 반복된 제목 행 수.
 
-    비교 행에 텍스트가 하나도 없으면(빈 행끼리 일치) 반복으로 보지 않고, 뒤 표가 제목 행만으로
-    이뤄져 있으면 버릴 데이터가 없으므로 0 을 돌려준다.
+    제목 높이는 첫 행 셀의 최대 row_span 이다. 그보다 아래 행은 앞 행에 열 병합 그룹 제목
+    (col_span > 1)이 있고, 행이 일치하며, 살아 있는 셀마다 텍스트가 있을 때만 하위 제목으로
+    인정한다 — 우연히 같은 데이터 행이나 빈 서식 행을 제목으로 흡수하지 않기 위해서다.
+    뒤 표에는 제목 뒤에 데이터 행이 하나는 남아야 한다.
     """
     if not prev_table.rows or not next_table.rows:
         return 0
     span_height = max(1, max((cell.row_span for cell in prev_table.rows[0]), default=1))
-    # 앞 행부터 차례로 비교해 일치하는 연속 행 수를 제목 높이로 삼는다 (열 병합만 쓰는 2단 제목 포함).
-    # 뒤 표에는 제목 뒤에 데이터 행이 하나는 남아야 한다.
     limit = min(MAX_HEADER_ROWS, len(prev_table.rows), len(next_table.rows) - 1)
-    height = 0
-    for index in range(limit):
-        if _row_key(prev_table.rows[index]) != _row_key(next_table.rows[index]):
-            break
-        height = index + 1
-    if height < span_height:
-        return 0  # row_span 으로 묶인 제목이 일부만 반복되면 제목 반복이 아니다
-    rows = [_row_key(row) for row in prev_table.rows[:height]]
-    if not any(text for row in rows for text, _, _ in row):
+    if span_height > limit:
         return 0
+    prev_keys = [_row_key(row) for row in prev_table.rows[:limit]]
+    next_keys = [_row_key(row) for row in next_table.rows[:limit]]
+    if prev_keys[:span_height] != next_keys[:span_height]:
+        return 0
+    if not any(text for row in prev_keys[:span_height] for text, _, _ in row):
+        return 0
+    height = span_height
+    while height < limit:
+        grouped = any(cell.col_span > 1 for cell in prev_table.rows[height - 1])
+        row = prev_table.rows[height]
+        full_text = all(cell.text.strip() for cell in row if not cell.is_merged_away)
+        if not (grouped and full_text and prev_keys[height] == next_keys[height]):
+            break
+        height += 1
     return height
 
 

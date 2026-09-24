@@ -182,3 +182,22 @@ def test_partially_repeated_row_span_header_is_not_dropped():
     nxt = Table(rows=_rows(("H", "Top"), ("x", "y"), ("c", "d")))
     nxt.rows[0][0].row_span = 2
     assert repeated_header_rows(prev, nxt) == 0
+
+
+def test_identical_first_data_row_is_not_treated_as_header():
+    # 두 페이지의 첫 데이터 행이 우연히 같아도(Anonymous | 0) 제목이 아니다 (관문 리뷰 P1)
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import repeated_header_rows
+
+    prev = Table(rows=_rows(("Name", "Age"), ("Anonymous", "0"), ("x", "1")))
+    nxt = Table(rows=_rows(("Name", "Age"), ("Anonymous", "0"), ("y", "2")))
+    assert repeated_header_rows(prev, nxt) == 1
+
+
+def test_empty_form_rows_after_a_header_are_not_absorbed():
+    from dochan.model.table import Table
+    from dochan.pdf.pagination import repeated_header_rows
+
+    prev = Table(rows=_rows(("번호", "내용"), ("", ""), ("", ""), ("", "")))
+    nxt = Table(rows=_rows(("번호", "내용"), ("", ""), ("", ""), ("", "x")))
+    assert repeated_header_rows(prev, nxt) == 1

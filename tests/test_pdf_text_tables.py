@@ -78,3 +78,48 @@ def test_row_and_group_caps():
     detected = detect_text_tables(lines)
     assert detected and all(table.row_count <= 500 for table, _ in detected)
     assert detect_text_tables(lines * 10) == []
+
+
+def test_character_spaced_label_cells_are_merged_not_split_into_columns():
+    # 글자마다 따로 놓인 "성명 / 홍길동" (자간 벌림) 이 글자별 열이 되면 안 된다 (관문 감수)
+    fragments = []
+    for row, name in enumerate(("홍길동", "김철수", "이영희")):
+        y = 700 - 14 * row
+        x = 20
+        for ch in "성명":
+            fragments.append(Fragment(x, y, 10, 10, ch, 5, order=len(fragments)))
+            x += 12
+        x = 120
+        for ch in name:
+            fragments.append(Fragment(x, y, 10, 10, ch, 5, order=len(fragments)))
+            x += 12
+    table, consumed = detect_text_tables(assemble_lines(fragments))[0]
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["성명", "홍길동"], ["성명", "김철수"], ["성명", "이영희"]]
+
+
+def test_numbered_and_hangul_lists_are_not_tables():
+    assert detect_text_tables(_lines([("1.", "첫째 항목"), ("2.", "둘째 항목"), ("3.", "셋째 항목")])) == []
+    assert detect_text_tables(_lines([("가.", "첫째"), ("나.", "둘째"), ("다.", "셋째")])) == []
+    assert detect_text_tables(_lines([("①", "첫째"), ("②", "둘째"), ("③", "셋째")])) == []
+
+
+def test_text_left_of_the_first_column_is_kept_in_the_first_cell():
+    lines = _lines([("A1", "B1", "C1"), ("A2", "B2", "C2"), ("A3", "B3", "C3")])
+    extra = assemble_lines([Fragment(5, 700 - 14 * 3, 20, 10, "LOST", 5, order=100),
+                            Fragment(100, 700 - 14 * 3, 20, 10, "A4", 5, order=101),
+                            Fragment(180, 700 - 14 * 3, 20, 10, "B4", 5, order=102)])
+    table, consumed = detect_text_tables(lines + extra)[0]
+    assert consumed == {0, 1, 2, 3}
+    assert "LOST" in " ".join(cell.text for row in table.rows for cell in row)
+
+
+def test_large_table_detection_stays_fast():
+    import time
+
+    lines = _lines([tuple("r%dc%d" % (r, c) for c in range(20)) for r in range(500)])
+    started = time.perf_counter()
+    table, consumed = detect_text_tables(lines)[0]
+    elapsed = time.perf_counter() - started
+    assert table.row_count == 500 and table.col_count == 20
+    assert elapsed < 1.5, elapsed

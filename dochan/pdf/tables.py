@@ -313,8 +313,10 @@ def _fragments_inside(index, bbox):
 
 
 def _has_fragment_inside(index, bbox):
-    """기준점이 bbox 안에 있는 조각이 하나라도 있는가 (조기 거부용)."""
-    return bool(_fragments_inside(index, bbox))
+    """기준점이 bbox 안에 있는 조각이 하나라도 있는가 (조기 거부용, 첫 발견에서 멈춘다)."""
+    points, ys = index
+    lo, hi = bisect_left(ys, bbox[1]), bisect_right(ys, bbox[3])
+    return any(bbox[0] <= x <= bbox[2] for (x, _), _ in points[lo:hi])
 
 
 def _empty_form(xs, ys, cells):

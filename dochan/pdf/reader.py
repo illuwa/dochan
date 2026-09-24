@@ -33,6 +33,7 @@ MAX_PAGE_CONTENT_BYTES = 64 * 1024 * 1024  # 페이지 콘텐츠 결합 합계 �
 MAX_OUTLINE_ITEMS = 1000
 MAX_OUTLINE_DEPTH = 32
 MAX_RUNNING_TEXT_PAGES = 5000
+MAX_RUNNING_LINES = 200_000
 
 
 @dataclass
@@ -43,6 +44,7 @@ class _PageDraft:
     ordered: list = field(default_factory=list)
     median_size: float = 0.0
     bounds: tuple = (0.0, 0.0)
+    rotation: int = 0
     links: list = field(default_factory=list)
     images: list = field(default_factory=list)
 
@@ -123,12 +125,13 @@ class PDFReader:
         drafts = []
         running_disabled = False
         text_pages = 0
+        running_lines = 0
         for page_number, (page, resources) in enumerate(pages, start=1):
             section = Section(
                 provenance=Provenance(source_format="pdf", page=page_number)
             )
             draft = _PageDraft(section=section, page_number=page_number,
-                               bounds=page_bounds(pdf, page))
+                               bounds=page_bounds(pdf, page), rotation=page_rotation(pdf, page))
             try:
                 content_parts = self._page_content_parts(pdf, page)
                 lines = []
@@ -198,10 +201,16 @@ class PDFReader:
                         doc.assets.append(img)
             except Exception as e:
                 tail = None
+                draft.groups = []
+                draft.ordered = []
+                draft.links = []
+                draft.images = []
                 pdf.warnings.append(f"WARN: {page_number}페이지 파싱 실패: {e!r}")
             if any(draft.groups):
                 text_pages += 1
-            if text_pages > MAX_RUNNING_TEXT_PAGES and not running_disabled:
+            if not running_disabled:
+                running_lines += sum(len(group) for group in draft.groups)
+            if (text_pages > MAX_RUNNING_TEXT_PAGES or running_lines > MAX_RUNNING_LINES) and not running_disabled:
                 running_disabled = True
                 for held in drafts:
                     self._safe_finalize_draft(held, set(), pdf.warnings)
@@ -214,13 +223,23 @@ class PDFReader:
                 drafts.append(draft)
 
         if not running_disabled:
-            drops, emitted = detect_running(drafts)
-            elements_by_page = {}
-            for number, element in emitted:
-                elements_by_page.setdefault(number, []).append(element)
+            inserted = []
+            try:
+                drops, emitted = detect_running(drafts)
+                elements_by_page = {}
+                for number, element in emitted:
+                    elements_by_page.setdefault(number, []).append(element)
+                for draft in drafts:
+                    elements = draft.section.elements
+                    inserted.append((elements, len(elements)))
+                    elements.extend(elements_by_page.get(draft.page_number, []))
+            except Exception as e:
+                pdf.warnings.append(f"WARN: 반복 머리글/바닥글 검출 실패: {e!r}")
+                for elements, original_length in inserted:
+                    del elements[original_length:]
+                drops = {}
             for draft in drafts:
-                removed = drops[draft.page_number]
-                draft.section.elements.extend(elements_by_page.get(draft.page_number, []))
+                removed = drops.get(draft.page_number, set())
                 self._safe_finalize_draft(draft, removed, pdf.warnings)
                 doc.sections.append(draft.section)
 

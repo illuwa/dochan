@@ -37,7 +37,8 @@ def header_footer_texts(doc) -> set:
     from dochan.pdf.running import is_page_number_like
 
     return {text for hf in doc.find_all("header_footer")
-            for text in [normalize_text(hf.text)]
+            for line in hf.text.splitlines()
+            for text in [normalize_text(line)]
             if text and not is_page_number_like(text)}
 
 

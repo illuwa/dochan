@@ -70,7 +70,7 @@ def test_reads_multiple_pages_in_order(tmp_path):
     assert doc.sections[1].elements[0].provenance.page == 2
 
 
-def _running_pages(tmp_path, headers):
+def _running_pages(tmp_path, headers, rotations=()):
     objects = {
         1: "<< /Type /Catalog /Pages 2 0 R >>",
         2: "<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 600 800] "
@@ -82,7 +82,9 @@ def _running_pages(tmp_path, headers):
         content = (b"BT /F1 10 Tf 30 730 Td (%s) Tj ET " % header.encode("ascii") +
                    b"BT /F1 10 Tf 30 400 Td (Body%d) Tj ET " % (index + 1) +
                    b"BT /F1 10 Tf 30 40 Td (%d) Tj ET" % (index + 1))
-        objects[3 + index] = "<< /Type /Page /Parent 2 0 R /Contents %d 0 R >>" % (10 + index)
+        rotation = " /Rotate %d" % rotations[index] if rotations else ""
+        objects[3 + index] = "<< /Type /Page /Parent 2 0 R /Contents %d 0 R%s >>" % (
+            10 + index, rotation)
         objects[10 + index] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
     return PDFReader().read(_write(tmp_path, "running.pdf", _build_pdf(objects)))
 
@@ -114,6 +116,84 @@ def test_running_detection_limit_keeps_all_page_text(tmp_path, monkeypatch):
     assert doc.find_all("header_footer") == []
     assert [[elem.text for elem in section.elements] for section in doc.sections] == [
         ["Running", "Body1", "1"], ["Running", "Body2", "2"]]
+
+
+def test_running_line_limit_keeps_all_page_text(tmp_path, monkeypatch):
+    from dochan.pdf import reader
+
+    monkeypatch.setattr(reader, "MAX_RUNNING_LINES", 5)
+    doc = _running_pages(tmp_path, ["Running", "Running"])
+    assert doc.find_all("header_footer") == []
+    assert [[elem.text for elem in section.elements] for section in doc.sections] == [
+        ["Running", "Body1", "1"], ["Running", "Body2", "2"]]
+
+
+def test_running_detector_failure_keeps_every_page(tmp_path, monkeypatch):
+    from dochan.pdf import reader
+
+    def fail(_drafts):
+        raise RuntimeError("detector failed")
+
+    monkeypatch.setattr(reader, "detect_running", fail)
+    doc = _running_pages(tmp_path, ["Running", "Running"])
+    assert doc.find_all("header_footer") == []
+    assert [[elem.text for elem in section.elements] for section in doc.sections] == [
+        ["Running", "Body1", "1"], ["Running", "Body2", "2"]]
+    assert "WARN: 반복 머리글/바닥글 검출 실패: RuntimeError('detector failed')" in doc.errors
+
+
+def test_running_element_insertion_failure_rolls_back_and_keeps_text(tmp_path, monkeypatch):
+    from dochan.pdf import reader
+
+    original_section = reader.Section
+
+    class FailingElements(list):
+        def extend(self, items):
+            super().extend(items)
+            if any(item.__class__.__name__ == "HeaderFooter" for item in items):
+                raise RuntimeError("insertion failed")
+
+    def section_with_failing_elements(*args, **kwargs):
+        section = original_section(*args, **kwargs)
+        section.elements = FailingElements()
+        return section
+
+    monkeypatch.setattr(reader, "Section", section_with_failing_elements)
+    doc = _running_pages(tmp_path, ["Running", "Running"])
+    assert doc.find_all("header_footer") == []
+    assert [[elem.text for elem in section.elements] for section in doc.sections] == [
+        ["Running", "Body1", "1"], ["Running", "Body2", "2"]]
+    assert "WARN: 반복 머리글/바닥글 검출 실패: RuntimeError('insertion failed')" in doc.errors
+
+
+def test_failed_page_discards_its_draft(tmp_path, monkeypatch):
+    original = PDFReader._link_paragraphs
+
+    def fail_second(self, pdf, page, page_number):
+        if page_number == 2:
+            raise RuntimeError("broken links")
+        return original(self, pdf, page, page_number)
+
+    monkeypatch.setattr(PDFReader, "_link_paragraphs", fail_second)
+    doc = _running_pages(tmp_path, ["First", "Second"])
+    assert [elem.text for elem in doc.sections[0].elements] == ["First", "Body1", "1"]
+    assert doc.sections[1].elements == []
+    assert "WARN: 2페이지 파싱 실패: RuntimeError('broken links')" in doc.errors
+
+
+def test_rotated_second_page_does_not_create_running_header(tmp_path):
+    doc = _running_pages(tmp_path, ["Running", "Running"], rotations=(0, 180))
+    assert doc.find_all("header_footer") == []
+    assert [[elem.text for elem in section.elements] for section in doc.sections] == [
+        ["Running", "Body1", "1"], ["Running", "Body2", "2"]]
+
+
+def test_rotated_middle_page_keeps_its_text_and_other_headers_detected(tmp_path):
+    doc = _running_pages(tmp_path, ["Running"] * 3, rotations=(0, 180, 0))
+    assert [(hf.type, hf.text) for hf in doc.find_all("header_footer")
+            if hf.type == "header"] == [("header", "Running")]
+    assert [elem.text for elem in doc.sections[1].elements] == ["Running", "Body2", "2"]
+    assert [elem.text for elem in doc.sections[2].elements] == ["Body3"]
 
 
 def test_flate_compressed_content(tmp_path):

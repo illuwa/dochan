@@ -86,6 +86,23 @@ def test_header_footer_metric_normalizes_and_ignores_page_numbers():
     assert summarize({"a": {"hf_hit": 1.0}, "b": {"hf_hit": None}})["docs_with_hf"] == 1
 
 
+def test_header_footer_metric_matches_multiline_content_by_line():
+    from scripts.compare_pdf_pairs import header_footer_texts
+
+    hwpx = Document(sections=[Section(elements=[HeaderFooter(type="header", paragraphs=[
+        Paragraph(runs=[TextRun(text="ACME")]),
+        Paragraph(runs=[TextRun(text="Confidential")]),
+    ])])])
+    pdf = Document(sections=[Section(elements=[HeaderFooter(type="header", paragraphs=[
+        Paragraph(runs=[TextRun(text="ACME\nConfidential")]),
+    ])])])
+    expected = header_footer_texts(hwpx)
+    actual = header_footer_texts(pdf)
+    assert expected == actual == {"ACME", "Confidential"}
+    hf_hit = round(len(expected & actual) / len(expected), 4)
+    assert hf_hit == 1.0
+
+
 def test_join_accuracy_labels_only_unambiguous_normalized_contexts():
     from scripts.compare_pdf_pairs import join_accuracy
 

@@ -808,11 +808,16 @@ class SectionParser:
         # 셀 내부 재귀 파싱 — 문단 + 중첩 컨트롤 모두
         for child in lh_node['children']:
             if child['record'].tag_id == HWPTAG_PARA_HEADER:
+                starting_cells = self._section_cells
+                starting_document_cells = self._document_cells
                 try:
                     elems = self._parse_paragraph_group(child)
                 except _HWPStructureError as exc:
-                    # 중첩 표의 자원 트랜잭션은 자체 예산을 되돌렸다.
-                    # 실패한 셀 내용만 버리고 바깥 표와 다른 셀은 살린다.
+                    # 실패한 문단 그룹만 버리고 바깥 표와 다른 셀은 살린다. 실패한 표는
+                    # 자기 예산을 되돌렸지만, 같은 그룹에서 먼저 성공한 중첩 표의 예약은
+                    # 내용과 함께 버려지므로 그룹 시작 시점으로 되돌린다.
+                    self._section_cells = starting_cells
+                    self._document_cells = starting_document_cells
                     self._append_fatal_once(exc.key, exc.message)
                     continue
                 for e in elems:

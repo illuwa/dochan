@@ -12,7 +12,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
     <a href="https://github.com/illuwa/dochan/stargazers"><img src="https://img.shields.io/github/stars/illuwa/dochan?style=social" alt="GitHub Stars"></a>
   </p>
-    <p align="center"><strong>Current stable version: 1.5.1</strong></p>
+    <p align="center"><strong>Current stable version: 1.6.0</strong></p>
 </p>
 
 ---
@@ -176,7 +176,7 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 | 이미지 대체 텍스트 | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — | — |
 | 표/그림 캡션 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ⬜ | — | — |
 | 이미지 OCR | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ |
-| 머리글/바닥글 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ⬜ |
+| 머리글/바닥글 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ✅ |
 | 각주/미주 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ⬜ |
 | 주석/코멘트 | ✅ | ✅ | ⬜ | — | — | ✅ | — | ✅ | ⬜ |
 | 변경 추적 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |

@@ -23,17 +23,17 @@ from scripts.compare_pdf_pairs import (
 
 
 def find_pairs(directories: List[str]) -> List[Tuple[str, str, str]]:
-    """NFC 로 같은 이름인 HWPX/HWP 파일 쌍을 경로 순서대로 찾는다."""
+    """NFC 로 같은 이름인 HWPX/HWP 파일 쌍을 경로 순서대로 찾는다 (확장자 대소문자 무시)."""
     pairs: List[Tuple[str, str, str]] = []
     for directory in directories:
         names = sorted(os.listdir(directory))
         hwp_by_stem = {}
         for name in names:
-            if name.endswith(".hwp"):
+            if name.lower().endswith(".hwp"):
                 stem = unicodedata.normalize("NFC", name[:-4])
                 hwp_by_stem.setdefault(stem, os.path.join(directory, name))
         for name in names:
-            if not name.endswith(".hwpx"):
+            if not name.lower().endswith(".hwpx"):
                 continue
             stem = unicodedata.normalize("NFC", name[:-5])
             hwp_path = hwp_by_stem.get(stem)

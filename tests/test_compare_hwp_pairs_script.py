@@ -85,3 +85,11 @@ def test_summarize_all_keys_and_null_denominators():
     for key in ("mean_tok_ratio", "min_tok_ratio", "signature_match",
                 "mean_cell_hit", "nested_match", "mean_format_match"):
         assert empty[key] is None
+
+
+def test_find_pairs_ignores_extension_case(tmp_path):
+    (tmp_path / "문서.HWPX").write_bytes(b"")
+    (tmp_path / "문서.HWP").write_bytes(b"")
+    pairs = find_pairs([str(tmp_path)])
+    assert [stem for stem, _, _ in pairs] == ["문서"]
+    assert pairs[0][1].endswith("문서.HWPX") and pairs[0][2].endswith("문서.HWP")

@@ -117,3 +117,11 @@ def test_malformed_boundaries_never_duplicate_or_drop_text(pairs_data, expected)
 def test_runs_keep_text_when_doc_info_is_missing():
     para = _paragraph(_text("abcdefgh"), _pairs((0, 0), (3, 1)))
     assert "".join(run.text for run in para.runs) == "abcdefgh"
+
+
+def test_trailing_high_surrogate_becomes_replacement_char():
+    """레코드 끝에 짝 없는 high surrogate 가 남으면 대체 문자로 바꾼다 (Opus 감수 P3)."""
+    result = parse_para_text(b"A\x00\x00\xd8")
+    assert result["text"] == "A\ufffd"
+    assert result["raw_to_text"] == [0, 1, 2]
+    result["text"].encode("utf-8")  # 인코딩 가능해야 한다

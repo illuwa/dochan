@@ -36,10 +36,10 @@ def parse_para_text(data: bytes) -> dict:
 
         if char_code >= 32:
             # 일반 문자 (UTF-16LE)
-            if 0xD800 <= char_code <= 0xDBFF and i + 3 < len(data):
+            if 0xD800 <= char_code <= 0xDBFF:
                 # High surrogate: 다음 16비트 유닛과 결합해 BMP 밖 코드포인트 복원
-                low = struct.unpack_from("<H", data, i + 2)[0]
-                if 0xDC00 <= low <= 0xDFFF:
+                low = struct.unpack_from("<H", data, i + 2)[0] if i + 3 < len(data) else None
+                if low is not None and 0xDC00 <= low <= 0xDFFF:
                     cp = 0x10000 + (char_code - 0xD800) * 0x400 + (low - 0xDC00)
                     text_parts.append(chr(cp))
                     char_index += 1

@@ -32,6 +32,15 @@ def normalize_text(text: str) -> str:
     return _WS.sub(" ", unicodedata.normalize("NFC", text)).strip()
 
 
+def header_footer_texts(doc) -> set:
+    """페이지 번호를 제외한 고유 머리글/바닥글 텍스트."""
+    from dochan.pdf.running import is_page_number_like
+
+    return {text for hf in doc.find_all("header_footer")
+            for text in [normalize_text(hf.text)]
+            if text and not is_page_number_like(text)}
+
+
 def token_ratio(left: str, right: str) -> float:
     a = normalize_text(left).split(" ")
     b = normalize_text(right).split(" ")
@@ -146,7 +155,12 @@ def compare_pair(hwpx_path: str, pdf_path: str,
     exact, merged_total, merged_dims, merged_exact = structure_matches(answer_sigs, candidate_sigs)
     answer_nested = nested_signatures(answer.doc)
     candidate_nested = nested_signatures(candidate.doc)
+    hwpx_hf = header_footer_texts(answer.doc)
+    pdf_hf = header_footer_texts(candidate.doc)
     return {
+        "hwpx_hf": sorted(hwpx_hf),
+        "pdf_hf": sorted(pdf_hf),
+        "hf_hit": round(len(hwpx_hf & pdf_hf) / len(hwpx_hf), 4) if hwpx_hf else None,
         "hwpx_nested": len(answer_nested),
         "pdf_nested": len(candidate_nested),
         "nested_exact": multiset_matches(answer_nested, candidate_nested),
@@ -191,6 +205,7 @@ def find_pairs(pairs_dir: str) -> List[Tuple[str, str, str]]:
 
 def summarize(rows: Dict[str, Dict[str, object]]) -> Dict[str, object]:
     ratios = [r["tok_ratio"] for r in rows.values() if "tok_ratio" in r]
+    hf_hits = [r["hf_hit"] for r in rows.values() if r.get("hf_hit") is not None]
     hits = [r["cell_hit"] for r in rows.values() if r.get("cell_hit") is not None]
     hwpx_tables = sum(r.get("hwpx_tables", 0) for r in rows.values())
     merged_total = sum(r.get("merged_tables", 0) for r in rows.values())
@@ -201,6 +216,8 @@ def summarize(rows: Dict[str, Dict[str, object]]) -> Dict[str, object]:
                   for r in rows.values() if r.get("join_accuracy") is not None)
     return {
         "pairs": len(rows),
+        "mean_hf_hit": round(sum(hf_hits) / len(hf_hits), 4) if hf_hits else None,
+        "docs_with_hf": len(hf_hits),
         "join_accuracy": round(matches / labeled, 4) if labeled else None,
         "labeled_joins": labeled,
         "mean_tok_ratio": round(sum(ratios) / len(ratios), 4) if ratios else None,

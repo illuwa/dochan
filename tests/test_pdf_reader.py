@@ -70,6 +70,52 @@ def test_reads_multiple_pages_in_order(tmp_path):
     assert doc.sections[1].elements[0].provenance.page == 2
 
 
+def _running_pages(tmp_path, headers):
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [%s] /Count %d /MediaBox [0 0 600 800] "
+           "/Resources << /Font << /F1 20 0 R >> >> >>" % (
+               " ".join("%d 0 R" % (3 + i) for i in range(len(headers))), len(headers)),
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    for index, header in enumerate(headers):
+        content = (b"BT /F1 10 Tf 30 730 Td (%s) Tj ET " % header.encode("ascii") +
+                   b"BT /F1 10 Tf 30 400 Td (Body%d) Tj ET " % (index + 1) +
+                   b"BT /F1 10 Tf 30 40 Td (%d) Tj ET" % (index + 1))
+        objects[3 + index] = "<< /Type /Page /Parent 2 0 R /Contents %d 0 R >>" % (10 + index)
+        objects[10 + index] = b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
+    return PDFReader().read(_write(tmp_path, "running.pdf", _build_pdf(objects)))
+
+
+def test_running_header_and_page_number_become_section_elements(tmp_path):
+    from dochan.output.markdown import to_markdown
+
+    doc = _running_pages(tmp_path, ["Running", "Running", "Running"])
+    assert [(hf.type, hf.text) for hf in doc.find_all("header_footer")] == [
+        ("header", "Running"), ("footer", "1")]
+    assert [elem.text for elem in doc.sections[0].elements] == ["Running", "1", "Body1"]
+    assert [[elem.text for elem in section.elements] for section in doc.sections[1:]] == [
+        ["Body2"], ["Body3"]]
+    assert to_markdown(doc).count("<!-- header: Running -->") == 1
+
+
+def test_nonrepeating_top_lines_remain_body(tmp_path):
+    doc = _running_pages(tmp_path, ["First", "Second"])
+    assert doc.find_all("header") == []
+    assert [[elem.text for elem in section.elements if elem.__class__.__name__ == "Paragraph"]
+            for section in doc.sections] == [["First", "Body1"], ["Second", "Body2"]]
+
+
+def test_running_detection_limit_keeps_all_page_text(tmp_path, monkeypatch):
+    from dochan.pdf import reader
+
+    monkeypatch.setattr(reader, "MAX_RUNNING_TEXT_PAGES", 1)
+    doc = _running_pages(tmp_path, ["Running", "Running"])
+    assert doc.find_all("header_footer") == []
+    assert [[elem.text for elem in section.elements] for section in doc.sections] == [
+        ["Running", "Body1", "1"], ["Running", "Body2", "2"]]
+
+
 def test_flate_compressed_content(tmp_path):
     body = zlib.compress(b"BT (Compressed) Tj ET")
     objects = _minimal_objects()

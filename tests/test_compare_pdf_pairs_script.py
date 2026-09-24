@@ -3,6 +3,7 @@ import unicodedata
 import pytest
 
 from dochan.model.document import Document, Paragraph, Section, TextRun
+from dochan.model.header_footer import HeaderFooter
 from dochan.model.table import Cell, Table
 from scripts.compare_pdf_pairs import (
     cell_hit_rate,
@@ -69,6 +70,20 @@ def test_summarize_reports_rates_and_handles_errors():
     assert summary["signature_match"] == 0.5
     assert summary["merge_match"] == 1.0
     assert summarize({})["mean_tok_ratio"] is None
+    assert summary["mean_hf_hit"] is None and summary["docs_with_hf"] == 0
+
+
+def test_header_footer_metric_normalizes_and_ignores_page_numbers():
+    from scripts.compare_pdf_pairs import header_footer_texts
+
+    doc = Document(sections=[Section(elements=[
+        HeaderFooter(type="header", paragraphs=[Paragraph(runs=[TextRun(text="  가나  다 ")])]),
+        HeaderFooter(type="footer", paragraphs=[Paragraph(runs=[TextRun(text="Page 3")])]),
+    ])])
+    assert header_footer_texts(doc) == {"가나 다"}
+    assert summarize({"a": {"hf_hit": 1.0}, "b": {"hf_hit": 0.5},
+                      "c": {"hf_hit": None}})["mean_hf_hit"] == 0.75
+    assert summarize({"a": {"hf_hit": 1.0}, "b": {"hf_hit": None}})["docs_with_hf"] == 1
 
 
 def test_join_accuracy_labels_only_unambiguous_normalized_contexts():
@@ -136,6 +151,8 @@ def test_compare_pair_observes_hangul_and_restores_previous_hook(monkeypatch, fa
     else:
         row = compare_pdf_pairs.compare_pair("answer.hwpx", "candidate.pdf")
         assert row["join_accuracy"] == 1.0 and row["labeled_joins"] == 1
+        assert row["hwpx_hf"] == row["pdf_hf"] == []
+        assert row["hf_hit"] is None
         assert recorded == [("사회의", "운영에", True)]
     assert layout.JOIN_OBSERVER is previous_hook
 

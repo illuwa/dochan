@@ -5,6 +5,7 @@ Phase 1 범위: 고전 xref 테이블, Flate/ASCIIHex/ASCII85 필터,
 스캔 전용 페이지는 명확한 경고로 보고한다.
 """
 import os
+from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
 from ..conversion import Provenance
@@ -22,6 +23,7 @@ from .layout import merge_lines
 from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
                          continues, merge_continued, page_bounds, page_rotation,
                          repeated_header_rows)
+from .running import detect_running
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -30,6 +32,19 @@ MAX_CONTENT_PARTS = 256  # 페이지당 콘텐츠 스트림 수 — 반복 참�
 MAX_PAGE_CONTENT_BYTES = 64 * 1024 * 1024  # 페이지 콘텐츠 결합 합계 — 같은 스트림 반복 참조 메모리 증폭 방지
 MAX_OUTLINE_ITEMS = 1000
 MAX_OUTLINE_DEPTH = 32
+MAX_RUNNING_TEXT_PAGES = 5000
+
+
+@dataclass
+class _PageDraft:
+    section: Section
+    page_number: int
+    groups: list = field(default_factory=list)
+    ordered: list = field(default_factory=list)
+    median_size: float = 0.0
+    bounds: tuple = (0.0, 0.0)
+    links: list = field(default_factory=list)
+    images: list = field(default_factory=list)
 
 
 def _drop_decoder(raw: bytes) -> str:
@@ -105,10 +120,15 @@ class PDFReader:
         font_cache = {}
         table_budget = TableBudget()
         tail = None
+        drafts = []
+        running_disabled = False
+        text_pages = 0
         for page_number, (page, resources) in enumerate(pages, start=1):
             section = Section(
                 provenance=Provenance(source_format="pdf", page=page_number)
             )
+            draft = _PageDraft(section=section, page_number=page_number,
+                               bounds=page_bounds(pdf, page))
             try:
                 content_parts = self._page_content_parts(pdf, page)
                 lines = []
@@ -168,45 +188,41 @@ class PDFReader:
                 else:
                     tail = None
                 ordered = [(t.anchor_order, 0, t.table) for t in tables if t is not merged_head]
-                for group in groups:
-                    if self.text_tables:
-                        try:
-                            detected = detect_text_tables(group, page_number)
-                        except Exception as e:
-                            pdf.warnings.append(f"WARN: {page_number}페이지 텍스트 표 복원 실패: {e!r}")
-                            detected = []
-                        consumed = set()
-                        for table, indices in detected:
-                            consumed.update(indices)
-                            ordered.append((group[min(indices)].order, 0, table))
-                        # 표 앞뒤 문단을 별개 흐름으로 병합한다.
-                        chunks = [[]]
-                        for index, line in enumerate(group):
-                            if index in consumed:
-                                if chunks[-1]:
-                                    chunks.append([])
-                            else:
-                                chunks[-1].append(line)
-                        body_groups = chunks
-                    else:
-                        body_groups = [group]
-                    for body_group in body_groups:
-                        for block in merge_lines(body_group):
-                            paragraph = block.paragraph(page_number)
-                            paragraph.heading_level = _heading_level_for_size(
-                                block.text, block.size, median_size)
-                            ordered.append((block.order, 1, paragraph))
-                section.elements.extend(item for _, _, item in sorted(
-                    ordered, key=lambda event: (event[0], event[1])))
-                section.elements.extend(self._link_paragraphs(pdf, page, page_number))
-                section.elements.extend(image_elems)
+                draft.groups = groups
+                draft.ordered = ordered
+                draft.median_size = median_size
+                draft.links = self._link_paragraphs(pdf, page, page_number)
+                draft.images = image_elems
                 for img in image_elems:
                     if img.image_data:
                         doc.assets.append(img)
             except Exception as e:
                 tail = None
                 pdf.warnings.append(f"WARN: {page_number}페이지 파싱 실패: {e!r}")
-            doc.sections.append(section)
+            if any(draft.groups):
+                text_pages += 1
+            if text_pages > MAX_RUNNING_TEXT_PAGES and not running_disabled:
+                running_disabled = True
+                for held in drafts:
+                    self._safe_finalize_draft(held, set(), pdf.warnings)
+                    doc.sections.append(held.section)
+                drafts.clear()
+            if running_disabled:
+                self._safe_finalize_draft(draft, set(), pdf.warnings)
+                doc.sections.append(section)
+            else:
+                drafts.append(draft)
+
+        if not running_disabled:
+            drops, emitted = detect_running(drafts)
+            elements_by_page = {}
+            for number, element in emitted:
+                elements_by_page.setdefault(number, []).append(element)
+            for draft in drafts:
+                removed = drops[draft.page_number]
+                draft.section.elements.extend(elements_by_page.get(draft.page_number, []))
+                self._safe_finalize_draft(draft, removed, pdf.warnings)
+                doc.sections.append(draft.section)
 
         # 같은 경고가 페이지 수만큼 중복 누적되지 않게 순서 보존 dedup
         seen = set()
@@ -215,6 +231,48 @@ class PDFReader:
                 seen.add(warning)
                 doc.errors.append(warning)
         return doc
+
+    def _safe_finalize_draft(self, draft: _PageDraft, dropped: set, warnings: list) -> None:
+        try:
+            self._finalize_draft(draft, dropped, warnings)
+        except Exception as e:
+            warnings.append(f"WARN: {draft.page_number}페이지 파싱 실패: {e!r}")
+
+    def _finalize_draft(self, draft: _PageDraft, dropped: set, warnings: list) -> None:
+        """검출 결과를 적용한 뒤 기존 페이지별 문단/텍스트 표 흐름을 완성한다."""
+        ordered = draft.ordered
+        for group in draft.groups:
+            group = [line for line in group if id(line) not in dropped]
+            if self.text_tables:
+                try:
+                    detected = detect_text_tables(group, draft.page_number)
+                except Exception as e:
+                    warnings.append(f"WARN: {draft.page_number}페이지 텍스트 표 복원 실패: {e!r}")
+                    detected = []
+                consumed = set()
+                for table, indices in detected:
+                    consumed.update(indices)
+                    ordered.append((group[min(indices)].order, 0, table))
+                chunks = [[]]
+                for index, line in enumerate(group):
+                    if index in consumed:
+                        if chunks[-1]:
+                            chunks.append([])
+                    else:
+                        chunks[-1].append(line)
+                body_groups = chunks
+            else:
+                body_groups = [group]
+            for body_group in body_groups:
+                for block in merge_lines(body_group):
+                    paragraph = block.paragraph(draft.page_number)
+                    paragraph.heading_level = _heading_level_for_size(
+                        block.text, block.size, draft.median_size)
+                    ordered.append((block.order, 1, paragraph))
+        draft.section.elements.extend(item for _, _, item in sorted(
+            ordered, key=lambda event: (event[0], event[1])))
+        draft.section.elements.extend(draft.links)
+        draft.section.elements.extend(draft.images)
 
     @staticmethod
     def _body_groups(extractor, fragments, tables):

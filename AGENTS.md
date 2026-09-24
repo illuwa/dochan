@@ -28,6 +28,9 @@ python -m pytest tests/test_pdf_reader.py -q   # 단일 파일
 - 실물 검증 자원: 동일 문서 HWP/HWPX/PDF 쌍은 `test_pairs/`(dev/personal 쪽),
   공개 HWP/HWPX 코퍼스 7,188개는 `corpus/hwp-public/`(gitignore, 재다운로드는
   `scripts/download_public_hwp_corpus.py`). HWPX 파서 결과를 정답지로 삼는다.
+- HWP(바이너리) 파서를 고치면 같은 문서의 HWPX 를 정답으로 `python -m scripts.compare_hwp_pairs test_pairs/`
+  로 전후 비교한다 (PDF 는 `scripts/compare_pdf_pairs.py`). 저장소 밖 내부 실물 문서는 파일명·내용을
+  코드·테스트·문서·커밋에 절대 올리지 않는다.
 
 ## 릴리스
 

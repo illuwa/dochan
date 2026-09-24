@@ -90,10 +90,10 @@ def _row_key(row):
 def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
     """뒤 표 첫머리에 반복된 제목 행 수.
 
-    제목 높이는 첫 행 셀의 최대 row_span 이다. 그보다 아래 행은 앞 행에 열 병합 그룹 제목
-    (col_span > 1)이 있고, 행이 일치하며, 살아 있는 셀마다 텍스트가 있을 때만 하위 제목으로
-    인정한다 — 우연히 같은 데이터 행이나 빈 서식 행을 제목으로 흡수하지 않기 위해서다.
-    뒤 표에는 제목 뒤에 데이터 행이 하나는 남아야 한다.
+    제목 높이는 첫 행 셀의 최대 row_span 으로만 정한다. 열 병합만 쓰는 2단 제목의 둘째 행은
+    구조만으로는 우연히 같은 데이터 행과 구별할 수 없으므로 제목으로 보지 않는다(둘째 행이
+    데이터처럼 남는 쪽이 데이터 행을 지우는 쪽보다 낫다). 뒤 표에는 제목 뒤에 데이터 행이
+    하나는 남아야 한다.
     """
     if not prev_table.rows or not next_table.rows:
         return 0
@@ -107,15 +107,7 @@ def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
         return 0
     if not any(text for row in prev_keys[:span_height] for text, _, _ in row):
         return 0
-    height = span_height
-    while height < limit:
-        grouped = any(cell.col_span > 1 for cell in prev_table.rows[height - 1])
-        row = prev_table.rows[height]
-        full_text = all(cell.text.strip() for cell in row if not cell.is_merged_away)
-        if not (grouped and full_text and prev_keys[height] == next_keys[height]):
-            break
-        height += 1
-    return height
+    return span_height
 
 
 def header_repeated(prev_table: Table, next_table: Table) -> bool:

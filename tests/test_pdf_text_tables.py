@@ -123,3 +123,25 @@ def test_large_table_detection_stays_fast():
     elapsed = time.perf_counter() - started
     assert table.row_count == 500 and table.col_count == 20
     assert elapsed < 10.0, elapsed  # 회귀(제곱 시간) 시 4초 이상; CI 러너 플레이크를 피하려 넉넉히 둔다
+
+
+def test_space_encoded_at_a_fragment_boundary_is_kept_in_the_cell():
+    # "New " + "York" 처럼 조각 경계에 든 공백은 셀 텍스트에 남아야 한다 (codex P2)
+    fragments = []
+    for row, tail in enumerate("ABC"):
+        y = 700 - 14 * row
+        fragments.append(Fragment(20, y, 22, 10, "New ", 5, order=len(fragments)))
+        fragments.append(Fragment(42, y, 20, 10, "York", 5, order=len(fragments)))
+        fragments.append(Fragment(120, y, 10, 10, tail, 5, order=len(fragments)))
+    table, _ = detect_text_tables(assemble_lines(fragments))[0]
+    assert [cell.text for cell in table.rows[0]] == ["New York", "A"]
+
+
+def test_prose_with_word_gaps_below_twice_the_real_space_width_is_not_a_table():
+    # 조각의 실제 공백 폭(6)이 크면 10pt 간격은 단어 사이일 뿐이다 — 대용값(5) 기준으로 표가 되면 안 된다
+    fragments = []
+    for row, (a, b) in enumerate((("이 문장은", "표가 아니다"), ("다음 줄도", "마찬가지다"), ("세 번째", "줄이다"))):
+        y = 700 - 14 * row
+        fragments.append(Fragment(20, y, 40, 10, a, 6, order=len(fragments)))
+        fragments.append(Fragment(70, y, 40, 10, b, 6, order=len(fragments)))
+    assert detect_text_tables(assemble_lines(fragments)) == []

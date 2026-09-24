@@ -356,6 +356,7 @@ class _Segment:
     x0: float
     x1: float
     text: str
+    space_width: float = 0.0  # 이 조각 폰트의 공백 1칸 폭 (텍스트 표 옵션의 칸 병합용)
 
 
 class _Line:
@@ -392,7 +393,7 @@ class _Line:
                 self._append_run(sep, f.bold, f.italic)
             parts.append(f.text)
             self._append_run(f.text, f.bold, f.italic)
-            self.segments.append(_Segment(start, start + f.width, f.text))
+            self.segments.append(_Segment(start, start + f.width, f.text, f.space_width))
             prev_end = start + f.width
             prev_space = f.space_width
         self.text = "".join(parts).strip()

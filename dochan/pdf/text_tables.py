@@ -22,18 +22,27 @@ def _space_width(line) -> float:
 
 
 def _cells(line) -> List[Tuple[float, float, str]]:
-    """인접 세그먼트를 칸으로 합친다 — 간격이 공백 폭의 2배 이상이면 새 칸, 절반보다 크면 칸 안의 공백."""
-    space = _space_width(line)
+    """인접 세그먼트를 칸으로 합친다.
+
+    간격이 (조각의 실제) 공백 폭의 2배 이상이면 새 칸, 절반보다 크면 칸 안의 공백이다 —
+    줄 조립(_Line)과 같은 기준이라 산문이 표로 오인되지 않는다. 조각 경계에 든 원문 공백은 남긴다.
+    """
+    fallback = _space_width(line)
     cells: List[Tuple[float, float, str]] = []
+    previous_space = fallback
     for segment in line.segments:
-        text = segment.text.strip()
-        if cells and segment.x0 - cells[-1][1] < 2 * space:
+        space = max(segment.space_width, 0.0) or fallback
+        threshold = max(previous_space, space)
+        if cells and segment.x0 - cells[-1][1] < 2 * threshold:
             x0, x1, previous = cells[-1]
-            sep = " " if previous and text and segment.x0 - x1 > 0.5 * space else ""
-            cells[-1] = (x0, max(x1, segment.x1), previous + sep + text)
+            gap = segment.x0 - x1
+            sep = " " if (gap > 0.5 * threshold and previous and not previous.endswith(" ")
+                          and not segment.text.startswith(" ")) else ""
+            cells[-1] = (x0, max(x1, segment.x1), previous + sep + segment.text)
         else:
-            cells.append((segment.x0, segment.x1, text))
-    return cells
+            cells.append((segment.x0, segment.x1, segment.text))
+        previous_space = space
+    return [(x0, x1, " ".join(text.split())) for x0, x1, text in cells]
 
 
 def _row_cells(line) -> Optional[List[Tuple[float, float, str]]]:

@@ -11,16 +11,16 @@ def parse_para_char_shape(data: bytes) -> List[Tuple[int, int]]:
     PARA_CHAR_SHAPE 레코드 파싱
 
     반환: [(position, char_shape_id), ...] 쌍 목록
-    position: 텍스트 내 WCHAR 단위 시작 위치
+    각 항목은 8바이트: UINT32 position (원시 WCHAR 위치) + UINT32 char_shape_id.
+    실물 레코드 hexdump ``00000000 0a000000 0d000000 09000000`` 는
+    (0, 10), (13, 9)를 뜻한다. 끝에 남는 8바이트 미만의 데이터는 무시한다.
     char_shape_id: DocInfo의 CharShape 배열 인덱스
     """
     pairs = []
     i = 0
-    while i + 5 < len(data):
-        pos = struct.unpack_from("<I", data, i)[0]
-        cs_id = struct.unpack_from("<H", data, i + 4)[0]
-        pairs.append((pos, cs_id))
-        i += 6  # 4(pos) + 2(id) = 6바이트씩
+    while i + 8 <= len(data):
+        pairs.append(struct.unpack_from("<II", data, i))
+        i += 8
     return pairs
 
 

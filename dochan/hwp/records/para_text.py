@@ -14,6 +14,7 @@ def parse_para_text(data: bytes) -> dict:
         'text': str,              # 추출된 텍스트
         'ctrl_positions': list,   # 확장 컨트롤 위치 목록 [(char_index, char_code)]
         'field_marks': list,      # 필드 경계 [(text_offset, 'start', ctrlId) | (text_offset, 'end', None)]
+        'raw_to_text': list,      # 원시 WCHAR 경계별 반환 텍스트 오프셋
     }
 
     field_marks 의 text_offset 은 반환 text 문자열 안의 오프셋이다 (char_index 와
@@ -24,10 +25,13 @@ def parse_para_text(data: bytes) -> dict:
     text_parts = []
     ctrl_positions = []
     field_marks = []
+    raw_to_text = [0]
     char_index = 0
     i = 0
 
     while i < len(data) - 1:
+        start_i = i
+        start_text_offset = len(text_parts)
         char_code = struct.unpack_from("<H", data, i)[0]
 
         if char_code >= 32:
@@ -40,6 +44,7 @@ def parse_para_text(data: bytes) -> dict:
                     text_parts.append(chr(cp))
                     char_index += 1
                     i += 4
+                    raw_to_text.extend((start_text_offset, len(text_parts)))
                     continue
                 # 짝 없는 high surrogate → 대체 문자
                 text_parts.append('\ufffd')
@@ -89,8 +94,15 @@ def parse_para_text(data: bytes) -> dict:
             char_index += 1
             i += advance
 
+        # 구간 내부의 WCHAR 경계는 출력 전 위치를 가리키고, 마지막
+        # 경계는 해당 문자/제어 문자를 소비한 뒤의 출력 위치를 가리킨다.
+        raw_width = (i - start_i) // 2
+        raw_to_text.extend([start_text_offset] * (raw_width - 1))
+        raw_to_text.append(len(text_parts))
+
     return {
         'text': ''.join(text_parts),
         'ctrl_positions': ctrl_positions,
         'field_marks': field_marks,
+        'raw_to_text': raw_to_text,
     }

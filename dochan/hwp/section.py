@@ -371,15 +371,19 @@ class SectionParser:
             text = text_result['text']
             cs_pairs = parse_para_char_shape(char_shape_data) if char_shape_data else []
 
-            if cs_pairs and self.doc_info and hasattr(self.doc_info, 'char_shapes'):
+            if cs_pairs:
                 runs = []
-                for idx, (pos, cs_id) in enumerate(cs_pairs):
-                    end_pos = cs_pairs[idx + 1][0] if idx + 1 < len(cs_pairs) else len(text)
-                    run_text = text[pos:end_pos]
-                    if not run_text:
-                        continue
+                raw_to_text = text_result['raw_to_text']
+                start = 0
+                current_id = cs_pairs[0][1]
+
+                def append_run(end, cs_id):
+                    if end == start:
+                        return
+                    run_text = text[start:end]
                     run = TextRun(text=run_text)
-                    if 0 <= cs_id < len(self.doc_info.char_shapes):
+                    if (self.doc_info and hasattr(self.doc_info, 'char_shapes') and
+                            0 <= cs_id < len(self.doc_info.char_shapes)):
                         cs = self.doc_info.char_shapes[cs_id]
                         run.bold = cs.bold
                         run.italic = cs.italic
@@ -389,6 +393,15 @@ class SectionParser:
                         run.superscript = cs.superscript
                         run.subscript = cs.subscript
                     runs.append(run)
+
+                for pos, cs_id in cs_pairs:
+                    end = min(raw_to_text[min(pos, len(raw_to_text) - 1)], len(text))
+                    if end < start:
+                        continue
+                    append_run(end, current_id)
+                    start = end
+                    current_id = cs_id
+                append_run(len(text), current_id)
                 para.runs = runs if runs else [TextRun(text=text)]
             else:
                 para.runs = [TextRun(text=text)]

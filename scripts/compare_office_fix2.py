@@ -58,6 +58,10 @@ def _probe(task):
             "markdown_characters": len(markdown),
             "markdown_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
             "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "format_sha256": hashlib.sha256(json.dumps([
+                (r.text, r.bold, r.italic, r.underline, r.font_size_pt, r.superscript, r.subscript)
+                for r in runs], ensure_ascii=True).encode("utf-8")).hexdigest(),
+            "image_sha256": [hashlib.sha256(i.image_data).hexdigest() for i in images if i.has_data],
             "words": dict(Counter(re.findall(r"\w+", text))),
         })
     except Exception as exc:
@@ -85,10 +89,14 @@ def compare(before, after):
                "fixed_fatal": a["fatal"] and not b["fatal"],
                "markdown_changed": a.get("markdown_sha256") != b.get("markdown_sha256"),
                "text_changed": a.get("text_sha256") != b.get("text_sha256"),
+               "format_changed": a.get("format_sha256") != b.get("format_sha256"),
+               "errors_changed": a.get("errors") != b.get("errors"),
+               "images_changed": a.get("image_sha256") != b.get("image_sha256"),
                "lost_words": dict(lost), "lost_word_count": sum(lost.values()),
                "deltas": {key: b.get(key, 0) - a.get(key, 0) for key in
                           ("characters", "images", "image_references", "linked_runs", "internal_links")}}
-        if any(row[key] for key in ("new_fatal", "fixed_fatal", "markdown_changed", "text_changed")):
+        if any(row[key] for key in ("new_fatal", "fixed_fatal", "markdown_changed", "text_changed",
+                                   "format_changed", "errors_changed", "images_changed")):
             changes.append(row)
     summary = {}
     for fmt in sorted({row["format"] for row in new.values()}):

@@ -218,7 +218,8 @@ class PDFReader:
                     try:
                         tables = build_tables(page_content.segments, page_content.fragments,
                                               page_number=page_number, warnings=pdf.warnings,
-                                              budget=table_budget)
+                                              budget=table_budget,
+                                              short_segments=page_content.short_segments)
                     except Exception as e:
                         pdf.warnings.append(f"WARN: {page_number}페이지 표 복원 실패: {e!r}")
                     protected_orders = set().union(*(t.fragment_orders for t in tables))

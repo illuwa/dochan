@@ -26,12 +26,16 @@ class Segment:
 
 
 def _axis_segment(p0, p1) -> Optional[Segment]:
-    """두 점을 잇는 축 정렬 선분. 사선·아주 짧은 선·비정상 좌표는 None."""
+    """두 점을 잇는 축 정렬 선분. 사선·길이 0·비정상 좌표는 None."""
     x0, y0 = p0
     x1, y1 = p1
     if not all(isfinite(v) for v in (x0, y0, x1, y1)):
         return None
-    if (abs(x1 - x0) <= 0.6 or abs(y1 - y0) <= 0.6) and hypot(x1 - x0, y1 - y0) >= 1:
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    length = hypot(dx, dy)
+    # 1pt 미만도 실제 stroke 조각일 수 있다. 짧은 사선이 기존 0.6pt 축
+    # 허용오차에 통째로 들어오지 않도록, 이 크기에서는 정확한 축 정렬만 받는다.
+    if length > 0 and (min(dx, dy) == 0 or (length >= 1 and min(dx, dy) <= 0.6)):
         return Segment(x0, y0, x1, y1)
     return None
 
@@ -71,6 +75,9 @@ class PathCollector:
 
     def __init__(self):
         self.segments: List[Segment] = []
+        self.short_segments: List[Segment] = []
+        self._short_count = 0
+        self._short_disabled = False
         self.warnings: List[str] = []
         self._groups: List[_Subpath] = []
         self._current: Optional[_Subpath] = None
@@ -108,7 +115,17 @@ class PathCollector:
             if emit:
                 segment = _axis_segment(self._point, point)
                 if segment is not None:
-                    if self._edge_count < MAX_SEGMENTS:
+                    if segment.length < 1:
+                        # 보조 점선은 기존 괘선의 예산을 소모하지 않는다. 한도를
+                        # 넘으면 보강만 포기하고 기존의 긴 괘선·출력을 보존한다.
+                        if not self._short_disabled:
+                            self._short_count += 1
+                            if self._short_count <= MAX_SEGMENTS:
+                                subpath.edges.append(segment)
+                            else:
+                                self._short_disabled = True
+                                self.short_segments.clear()
+                    elif self._edge_count < MAX_SEGMENTS:
                         subpath.edges.append(segment)
                         self._edge_count += 1
                     else:
@@ -170,6 +187,10 @@ class PathCollector:
             for segment in subpath.edges:
                 if not stroke and segment.length <= _THIN:
                     continue  # 얇은 사각형의 짧은 변은 열·행 경계가 아니다
+                if segment.length < 1:
+                    if not self._short_disabled:
+                        self.short_segments.append(segment)
+                    continue
                 if len(self.segments) >= MAX_SEGMENTS:
                     self._warn()
                     return

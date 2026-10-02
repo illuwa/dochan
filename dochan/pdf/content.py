@@ -181,6 +181,7 @@ class PageContent:
     warnings: List[str] = field(default_factory=list)
     marked_ids: set = field(default_factory=set)
     duplicate_marked_ids: set = field(default_factory=set)
+    short_segments: List[Segment] = field(default_factory=list)
 
 
 def _matmul(m1, m2):
@@ -380,7 +381,8 @@ class ContentTextExtractor:
                 (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))]
         if len(safe) != len(frags):
             paths.warnings.append("WARN: PDF 비유한 텍스트 좌표 — 해당 조각 건너뜀")
-        return PageContent(safe, paths.segments, paths.warnings, marked_ids, duplicate_marked_ids)
+        return PageContent(safe, paths.segments, paths.warnings, marked_ids,
+                           duplicate_marked_ids, paths.short_segments)
 
     def _show(self, raw, tm, font, fs, tc, tw, th, frags, ctm):
         if not raw:

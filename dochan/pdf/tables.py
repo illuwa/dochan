@@ -2,6 +2,7 @@
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field
+from math import isclose
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
@@ -9,6 +10,7 @@ from ..model.table import Cell, Table
 from .content import Fragment, across, along, assemble_lines
 from .layout import merge_lines
 from .paths import Segment
+from .connected_tables import split_connected
 
 MAX_PAGE_CELLS = 50_000
 MAX_DOCUMENT_CELLS = 200_000
@@ -324,9 +326,66 @@ def _empty_form(xs, ys, cells):
     return len(xs) >= 3 and len(ys) >= 3 and cells >= 6
 
 
+def _short_dash_runs(segments, tolerance):
+    """일정 길이와 두 번 이상 반복되는 양의 간격이 있는 stroke만 보강한다."""
+    axes = defaultdict(set)
+    for segment in segments or ():
+        if not 0 < segment.length < 1:
+            continue
+        if segment.x0 == segment.x1:
+            axes[('v', segment.x0)].add((segment.y0, segment.y1))
+        elif segment.y0 == segment.y1:
+            axes[('h', segment.y0)].add((segment.x0, segment.x1))
+    result = {'h': defaultdict(list), 'v': defaultdict(list)}
+    for (axis, coord), parts in axes.items():
+        run = []
+        gap = None
+        for lo, hi in sorted(parts):
+            next_gap = lo - run[-1][1] if run else None
+            equal = (run and 0 < next_gap <= tolerance
+                     and isclose(hi - lo, run[0][1] - run[0][0], abs_tol=1e-7)
+                     and (gap is None or isclose(next_gap, gap, abs_tol=1e-7)))
+            if not equal:
+                if len(run) >= 3:
+                    result[axis][coord].append((run[0][0], run[-1][1]))
+                run, gap = [], None
+            if run:
+                gap = next_gap
+            run.append((lo, hi))
+        if len(run) >= 3:
+            result[axis][coord].append((run[0][0], run[-1][1]))
+    return result
+
+
+def _supplement_rules(horizontal, vertical, xs, ys, dash_runs):
+    """기존 격자 축과 범위만 보강한다. 새 축·성분·테두리를 만들지 않는다."""
+    hs, vs = list(horizontal), list(vertical)
+    for y in ys[1:-1]:
+        for lo, hi in dash_runs['h'].get(y, ()):
+            if xs[0] <= lo < hi <= xs[-1]:
+                hs.append((y, lo, hi))
+    for x in xs[1:-1]:
+        for lo, hi in dash_runs['v'].get(x, ()):
+            if ys[-1] <= lo < hi <= ys[0]:
+                vs.append((x, lo, hi))
+    def union_overlaps(rules):
+        result = []
+        for coord, lo, hi in sorted(rules):
+            if result and result[-1][0] == coord and lo <= result[-1][2]:
+                result[-1] = (coord, result[-1][1], max(hi, result[-1][2]))
+            else:
+                result.append((coord, lo, hi))
+        return result
+
+    # 좌표를 다시 snap하지 않는다. 같은 축의 겹친 구간만 합쳐 _covered가
+    # 원래 괘선과 점선 보강의 동일 피복을 두 번 세지 않게 한다.
+    return union_overlaps(hs), union_overlaps(vs)
+
+
 def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
                  page_number: Optional[int] = None, warnings: Optional[List[str]] = None,
-                 budget: Optional[TableBudget] = None) -> List[TableCandidate]:
+                 budget: Optional[TableBudget] = None,
+                 short_segments: Optional[List[Segment]] = None) -> List[TableCandidate]:
     """괘선 연결 성분에서 병합 셀을 갖춘 표 후보를 만든다.
 
     page_number/warnings/budget은 선택 인자라 기존 두 인자 호출도 가능하다.
@@ -340,12 +399,43 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             vertical.append(((s.x0 + s.x1) / 2, s.y0, s.y1))
     horizontal = _snap_runs(horizontal, tolerance)
     vertical = _snap_runs(vertical, tolerance)
+    dash_runs = _short_dash_runs(short_segments, tolerance)
     components = []
+    index = _fragment_index(fragments)
     grouped = _components(horizontal, vertical, tolerance)
     if grouped is None:
         _warn(warnings, 'WARN: PDF 괘선 교차 검사 수 한도(2000000) 초과 — 표 생략')
         return []
-    for hs, vs in grouped:
+    separated = []
+    boxes = {}
+    for i, (hs, vs) in enumerate(grouped):
+        if len(hs) >= 2 and len(vs) >= 2:
+            xs = sorted(set(v[0] for v in vs))
+            _extend_to_rule_extents(xs, hs, tolerance)
+            boxes[i] = (xs[0], min(h[0] for h in hs), xs[-1], max(h[0] for h in hs))
+    for i, (hs, vs) in enumerate(grouped):
+        # 독립 성분 안의 연결형은 깊이·부모 셀 채택까지 얽힌다. 그 경우는
+        # 기존 경로를 유지하고 최상위 성분만 두 노드로 분리한다.
+        eligible = (len(grouped) < MAX_PAGE_COMPONENTS and MAX_NESTED_DEPTH >= 1
+                    and i in boxes and not any(
+                        _inside(boxes[i], box) for j, box in boxes.items() if i != j))
+        split = (split_connected(hs, vs, tolerance, index, warnings=warnings)
+                 if eligible else [(hs, vs)])
+        separated.extend(split)
+    if len(separated) > len(grouped):
+        # 페이지의 다른 성분까지 합산하여 부모만 예약되고 자식이 탈락하는
+        # 부분 적용을 막는다. 부족하면 이 페이지의 분리 전 격자를 유지한다.
+        needed = 0
+        for hs, vs in separated:
+            if len(hs) < 2 or len(vs) < 2:
+                continue
+            xs = sorted(set(v[0] for v in vs))
+            _extend_to_rule_extents(xs, hs, tolerance)
+            needed += (len(xs) - 1) * (len(set(h[0] for h in hs)) - 1)
+        if (len(separated) > MAX_PAGE_COMPONENTS or needed > MAX_PAGE_CELLS
+                or (budget is not None and needed > budget.remaining)):
+            separated = grouped
+    for hs, vs in separated:
         if len(hs) < 2 or len(vs) < 2:
             continue
         xs, ys = sorted(set(v[0] for v in vs)), sorted(set(h[0] for h in hs), reverse=True)
@@ -354,7 +444,6 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             components.append((bbox, hs, vs, xs, ys))
     components.sort(key=lambda v: -_area(v[0]))
-    index = _fragment_index(fragments)
     remaining = MAX_PAGE_CELLS
     reserved = 0  # 1단계 잠정 예약 — 실제 차감은 2단계 채택 시점에만 한다
     nodes = []
@@ -388,7 +477,9 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         if budget is not None and cells > budget.remaining - reserved:
             _warn(warnings, 'WARN: PDF 문서 표 셀 수 한도(200000) 초과 — 표 생략')
             continue
-        grid, owners, boxes = _make_grid(hs, vs, xs, ys, tolerance, page_number)
+        grid_hs, grid_vs = (_supplement_rules(hs, vs, xs, ys, dash_runs)
+                            if has_text else (hs, vs))
+        grid, owners, boxes = _make_grid(grid_hs, grid_vs, xs, ys, tolerance, page_number)
         reserved += cells
         nodes.append(_TableNode(bbox, xs, ys, grid, owners, boxes, cells,
                                 parent, owner_key, depth))

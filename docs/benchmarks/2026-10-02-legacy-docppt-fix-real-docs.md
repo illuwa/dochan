@@ -187,7 +187,7 @@ ruff check dochan scripts tests
 PPT는 보유한 공개 221개 전부를 조사했다. 파서 오류 28개와 빈 출력 14개를 제외하면 179개뿐이므로 **PPT 성공 출력 200개 조건은 충족하지 못했다.** 빈 출력까지 포함한 파싱 성공은 193개이다. 다른 6형식은 각각 성공 출력 200개를 충족했다. 프로브 종료 코드 1은 이 표본 부족을 알리는 것으로, 성공으로 덮어쓰지 않았다. 추가 공개 정상 PPT 표본 확보가 필요하다. 형식별 제외 수는 DOCX 17, PPTX 23, HWP 6, HWPX 27, PDF 141, DOC 78, PPT 42개이며 성공 수에 넣지 않았다.
 
 ```bash
-/usr/bin/python3 -m scripts.probe_markdown_commonmark /Users/illuwa/dev/personal/dochan/corpus --output .codex-work/markdown-commonmark-r2.json
+/usr/bin/python3 -m scripts.probe_markdown_commonmark corpus --output .codex-work/markdown-commonmark-r2.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ruff check dochan scripts tests
 ```

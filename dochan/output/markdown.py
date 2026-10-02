@@ -271,17 +271,70 @@ def _run_to_md(run: TextRun) -> str:
 
 
 def _emphasis_lines(text: str, marker: str) -> str:
-    """제목·빈 줄 경계에서도 강조를 닫고, 각 줄의 공백은 마커 밖에 둔다."""
+    """일반 줄 경계에서만 강조를 닫는다. 인라인 링크 내부는 보존한다."""
     lines = []
-    for line in text.split('\n'):
+    for line in _emphasis_parts(text):
         core = line.strip()
         if core:
             lead = line[:len(line) - len(line.lstrip())]
             trail = line[len(line.rstrip()):]
+            # An odd terminal backslash would escape the first closing star.
+            # Preserve existing escape pairs and quote only the unmatched one.
+            if (len(core) - len(core.rstrip('\\'))) % 2:
+                core += '\\'
             lines.append(f'{lead}{marker}{core}{marker}{trail}')
         else:
             lines.append(line)
     return '\n'.join(lines)
+
+
+def _emphasis_parts(text: str):
+    """Split outside generated [label](target) / ![alt](target) constructs.
+
+    Pair delimiters once, then skip complete links. Both passes are linear,
+    including malformed input; no recursive parse or repeated suffix search.
+    Escaped brackets, nested labels/targets and angle targets are retained.
+    This protects writer input syntax, rather than implementing CommonMark.
+    """
+    if '\n' not in text or '[' not in text:
+        yield from text.split('\n')
+        return
+    stacks = {'[': [], '(': []}
+    pairs = {}
+    quote = ''
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ''
+            continue
+        if stacks['('] and (char == '<' or
+                            (char in '\"\'' and text[index - 1].isspace())):
+            quote = '>' if char == '<' else char
+        elif char in stacks:
+            stacks[char].append(index)
+        elif char in '])':
+            opening = '[' if char == ']' else '('
+            if stacks[opening]:
+                pairs[stacks[opening].pop()] = index
+    start = index = 0
+    while index < len(text):
+        close = pairs.get(index)
+        if (text[index] == '[' and close is not None
+                and text[close + 1:close + 2] == '(' and close + 1 in pairs):
+            index = pairs[close + 1] + 1
+            continue
+        if text[index] == '\n':
+            yield text[start:index]
+            start = index + 1
+        index += 1
+    yield text[start:]
 
 
 def _link_to_md(text: str, url: str) -> str:

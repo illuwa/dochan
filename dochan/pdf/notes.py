@@ -488,7 +488,8 @@ def _detect_chapter_endnotes(drafts, entries, begin, dropped, first_number, warn
         for d, line in section[start + 1:stop]:
             if abs(line.size - chapter.size) <= .1:
                 body_bottoms[d.page_number] = min(body_bottoms.get(d.page_number, line.y), line.y)
-        for d, line in section[start + 1:stop]:
+        for index in range(start + 1, stop):
+            d, line = section[index]
             if (not all(math.isfinite(v) for v in (line.size, line.y, line.left, line.right))
                     or line.direction != "ltr"):
                 return first_number
@@ -497,10 +498,22 @@ def _detect_chapter_endnotes(drafts, entries, begin, dropped, first_number, warn
                          or line.left < chapter.left - GEOMETRY_TOLERANCE
                          or line.left > body_right + GEOMETRY_TOLERANCE
                          or line.y <= d.bounds[0] + HEADER_FOOTER_ZONE
-                         or line.y >= d.bounds[1] - HEADER_FOOTER_ZONE
                          or (_heading_key(re.sub(r"\d+", "", line.text)) in ("", notes_key)
                              and line.y < body_bottoms.get(d.page_number, d.bounds[0])))):
                 continue
+            if (abs(line.size - chapter.size) > .1
+                    and line.y >= d.bounds[1] - HEADER_FOOTER_ZONE):
+                # 반복 머리말은 detect_running이 만든 dropped로 이미 제외됐다.
+                # 남은 상단 줄은 같은 페이지의 인접 줄과 문단이 이어져야 한다.
+                # 불확실한 줄만 건너뛰면 미주가 잘리므로 구역 전체를 보류한다.
+                neighbors = section[max(start + 1, index - 1):index]
+                neighbors += section[index + 1:min(stop, index + 2)]
+                if not any(other_draft is d
+                           and abs(other.size - line.size) <= .1
+                           and abs(other.left - line.left) <= GEOMETRY_TOLERANCE
+                           and 0 < abs(other.y - line.y) <= line.size * 2
+                           for other_draft, other in neighbors):
+                    return first_number
             match = _ENDNOTE_DEFINITION.match(line.text)
             if match:
                 label = match.group(1)

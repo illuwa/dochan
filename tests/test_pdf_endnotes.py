@@ -268,3 +268,49 @@ def test_chapter_endnotes_preserve_folios_and_outside_column_proof_marks():
     assert detect_endnotes(drafts, drops, 1) == 3
     assert id(margin) not in drops[4]
     assert id(folio) not in drops[4]
+
+
+def test_chapter_endnotes_include_small_top_paragraph_without_truncation():
+    drafts = chapter_pages()
+    drafts[-1].page_number = 6
+    continuation = draft(5, [fragment("Quoted first line", 50, 750, 9, 0),
+                             fragment("Quoted second line", 50, 738, 9, 1)])
+    drafts.insert(-1, continuation)
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 3
+    assert drafts[3].notes[-1].text == (
+        "Second chapter definition\nQuoted first line\nQuoted second line")
+    assert drops[5] == {id(line) for line in continuation.groups[0]}
+
+
+def test_chapter_endnotes_defer_ambiguous_small_top_line_atomically():
+    drafts = chapter_pages()
+    drafts[-1].page_number = 6
+    drafts.insert(-1, draft(5, [fragment("Possible header", 50, 750, 9, 0),
+                                fragment("Separated text", 50, 700, 9, 1)]))
+    original_runs = [list(line.runs) for d in drafts for group in d.groups for line in group]
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 1
+    assert not any(d.notes for d in drafts)
+    assert drops == {}
+    assert [line.runs for d in drafts for group in d.groups for line in group] == original_runs
+
+
+def test_chapter_endnotes_respect_detected_running_header_before_top_paragraph():
+    from dochan.pdf.running import detect_running
+
+    drafts = chapter_pages()
+    drafts[-1].page_number = 6
+    continuation = draft(5, [fragment("Running header", 50, 780, 8, 0),
+                             fragment("Quoted first line", 50, 750, 9, 1),
+                             fragment("Quoted second line", 50, 738, 9, 2)])
+    drafts.insert(-1, continuation)
+    header = continuation.groups[0][0]
+    for d in drafts[:2]:
+        d.groups[0].insert(0, assemble_lines([fragment("Running header", 50, 780, 8, 20)])[0])
+    drops, _emitted = detect_running(drafts)
+    assert id(header) in drops[5]
+    assert detect_endnotes(drafts, drops, 1) == 3
+    assert drafts[3].notes[-1].text == (
+        "Second chapter definition\nQuoted first line\nQuoted second line")
+    assert drops[5] == {id(line) for line in continuation.groups[0]}

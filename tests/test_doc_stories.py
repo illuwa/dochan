@@ -126,7 +126,9 @@ def test_doc_story_textbox_range_inserted_once_at_anchor_not_trailer():
     binary = Binary(body + boxes, {56: plc([0, 8, 16, 999], b'\0' * 66)},
                     {'main': (0, len(body)), 'textbox': (len(body), len(body + boxes))})
     stories = Stories(binary, Document())
-    callback = lambda start, end: render(binary, stories, start, end)
+    def callback(start, end):
+        return render(binary, stories, start, end)
+
     assert [p.text for p in stories.textbox(0, callback)] == ['Box one']
     assert stories.textbox(0, callback) == []
     _, trailing = stories.extras(callback)

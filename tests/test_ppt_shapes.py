@@ -16,9 +16,9 @@ def shape(spid, bounds, child=False, group=False, table=False, local=None,
     bits = flags | (2 if child else 0) | (1 if group else 0)
     data = atom(0xF00A, struct.pack("<II", spid, bits), instance=shape_type)
     if bounds is not None:
-        l, t, r, b = bounds
-        data += (atom(0xF00F, struct.pack("<4i", l, t, r, b)) if child
-                 else atom(0xF010, struct.pack("<4h", t, l, r, b)))
+        left, top, right, bottom = bounds
+        data += (atom(0xF00F, struct.pack("<4i", left, top, right, bottom)) if child
+                 else atom(0xF010, struct.pack("<4h", top, left, right, bottom)))
     if local is not None:
         data += atom(0xF009, struct.pack("<4i", *local))
     if table:

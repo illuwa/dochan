@@ -255,5 +255,5 @@ def test_reader_classifies_zip_package_once(hwpx_path, monkeypatch):
 
     monkeypatch.setattr(reader_module, "detect_ooxml_format", counting_detect)
     monkeypatch.setattr(Dochan, "_is_hwpx_package", counting_is_hwpx)
-    reader = Dochan(str(hwpx_path), include_assets=False, revision_mode="final")
+    Dochan(str(hwpx_path), include_assets=False, revision_mode="final")
     assert calls == {"ooxml": 1, "hwpx": 1}

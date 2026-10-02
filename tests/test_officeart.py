@@ -1,5 +1,4 @@
 """OfficeArt 계약은 코퍼스 없이 조립한 레코드로 검증한다."""
-import io
 import struct
 import zlib
 

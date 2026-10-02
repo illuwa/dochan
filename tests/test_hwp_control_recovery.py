@@ -1,10 +1,9 @@
 """손상된 중첩 컨트롤만 버리고 같은 문단의 내용과 예약을 보존한다."""
 
-import struct
 
 import pytest
 
-from dochan.constants import HWPTAG_CTRL_HEADER, HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT
+from dochan.constants import HWPTAG_PARA_HEADER
 from dochan.hwp.doc_info import DocInfo
 from dochan.hwp.section import RawRecord, SectionParser
 from dochan.model.table import Table

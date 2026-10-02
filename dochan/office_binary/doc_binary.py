@@ -7,7 +7,7 @@ import bisect
 import re
 import struct
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Iterator, Optional
 
 MAX_CP = 16 * 1024 * 1024
 MAX_RECORDS = 200000

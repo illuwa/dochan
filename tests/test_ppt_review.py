@@ -8,8 +8,6 @@ from dochan.conversion import Provenance
 from dochan.model.document import Document
 from dochan.office_binary.ppt import PPTReader, parse_ppt_document_stream
 from dochan.office_binary.ppt_render import _Renderer
-from dochan.office_binary.ppt_text import TextBlock
-from dochan.office_binary.officeart import parse_records
 from test_ppt_structure import record, presentation, sheet, shape, slide_list
 from test_ppt_text import block, interaction
 

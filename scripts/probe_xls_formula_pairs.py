@@ -13,7 +13,6 @@ import struct
 import subprocess
 from lxml import etree as ET
 
-_SAFE_XML = ET.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -23,6 +22,8 @@ from dochan.office_binary.xls import (
     XLSReader, _cell_ref, _decode_formula_token_stream, _iter_records, _read_boundsheet_name,
 )
 from dochan.utils.bounded_io import MAX_OLE_STREAM_SIZE, read_ole_stream
+
+_SAFE_XML = ET.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
 
 NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 RID = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'

@@ -29,6 +29,7 @@ from ..hwp.records.char_shape import CharShape
 from ..hwp.records.ctrl_header import field_command_to_url
 from . import charts
 from .revisions import RevisionProjector, validate_revision_mode
+from ..constants import MAX_OUTLINE_HEADING_LEVEL
 
 # Zip bomb protection constants
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
@@ -58,8 +59,7 @@ MAX_META_FILE_SIZE = 32 * 1024 * 1024
 
 # OUTLINE 레벨을 Markdown 헤딩으로 승격할 상한.
 # 한글 규정문서는 '개요 5' 같은 깊은 레벨을 평범한 본문 열거 항목에 쓰는 일이 잦아서,
-# 전 레벨을 승격하면 목록이 통째로 헤딩이 된다.
-from ..constants import MAX_OUTLINE_HEADING_LEVEL
+# 전 레벨을 승격하면 목록이 통째로 헤딩이 된다. 상한은 constants.MAX_OUTLINE_HEADING_LEVEL 이다.
 
 # 패키지 자체의 폭주 방어 — 엔트리 수·해제 총량·XML 크기·섹션 수 상한
 MAX_XML_FILE_SIZE = 32 * 1024 * 1024

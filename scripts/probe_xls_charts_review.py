@@ -148,7 +148,6 @@ def compare(actual, expected):
         return 'exact' if actual == ('TRUE' if value else 'FALSE') else 'mismatch'
     if ctype not in (2, 3):
         return 'exact' if actual == str(value) else 'mismatch'
-    original = actual
     actual = actual.strip().replace(',', '').replace('$', '').replace('€', '').replace('£', '')
     if actual.startswith('(') and actual.endswith(')'):
         actual = '-' + actual[1:-1]

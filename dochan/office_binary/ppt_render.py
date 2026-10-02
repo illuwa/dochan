@@ -6,7 +6,7 @@ from dataclasses import replace
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
-from .officeart import Limits, Record, parse_records, read_bstore, read_shapes, walk_records
+from .officeart import Limits, parse_records, read_bstore, read_shapes, walk_records
 from .ppt_structure import resolve_presentation, warn
 from .ppt_text import TextBlock, read_hyperlinks, render_text, shape_hyperlink, text_blocks
 from .ppt_shapes import positioned_shapes, table_from_shape

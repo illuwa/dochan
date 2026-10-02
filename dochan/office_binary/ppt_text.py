@@ -8,7 +8,7 @@ import heapq
 import re
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from ..model.document import Paragraph, TextRun
 from .officeart import Record, walk_records

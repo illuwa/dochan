@@ -20,7 +20,7 @@ from dochan.pdf.reader import PDFReader
 from dochan.pdf.structure import PDFFile
 from dochan.pdf.tables import TableBudget, build_tables
 from scripts.compare_pdf_pairs import (find_pairs, multiset_matches, nested_signatures,
-                                       normalize_text, table_signature)
+                                       normalize_text)
 
 MAX_PROBE_FRAGMENTS = 50000
 MAX_PROBE_FILES = 10000

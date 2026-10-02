@@ -381,8 +381,8 @@ def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
 
     시각 일련값이 하루 이상이면 정수 일수를 잃지 않도록 날짜를 붙인다.
     이는 시각 서식만 표시하는 Excel과 의도적으로 다른 출력이다.
-    단순 경과 시간은 총 단위를 표시한다. 소수 초·단일 s 시각·음수
-    날짜/시각/경과 시간과 미지원 경과 서식은 원시 값으로 남긴다.
+    경과 시간은 총 단위와 리터럴을 표시하고 소수 초는 세 자리까지 지원한다.
+    음수 날짜/시각과 1900 체계 음수 경과, 미지원 조합은 원시 값으로 남긴다.
     """
     if not format_code or format_code.lower() == "general" or len(format_code) > MAX_NUMBER_FORMAT_LENGTH:
         return value

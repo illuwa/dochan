@@ -1594,42 +1594,54 @@ class XLSXReader:
             # Keep the raw value until that display operation is supported.
             if re.search(r"[0#?],+(?![0#?,])", self._format_code_tokens(sections[position])):
                 return value
+            section = sections[position]
+            temporal_metadata = self._format_metadata(section)
             metadata = self._format_metadata(fmt)
-            clean = self._format_code_tokens(fmt).lower()
+            clean = self._format_code_tokens(section).lower()
+            if section == '""':
+                return ""
+            # Select temporal tokens before classification; retain the existing
+            # numeric section/parenthesis contract for non-temporal formats.
+            if (temporal_metadata.kind in ("date", "time", "duration")
+                    or metadata.kind in ("date", "time", "duration")):
+                metadata = temporal_metadata
             if (metadata.kind == "decimal" and re.search(r"[0#?].*/.*[0#?]", clean)
                     and "_?" in re.findall(r'"[^"]*"|[\\_*].', fmt)):
                 # Unsupported fraction patterns must not become rounded whole
                 # numbers when a padding placeholder (_?) is discarded.
                 return value
-            # Negative temporal values have no supported display contract.
-            # Elapsed formats use total units, independently of the date epoch.
             if metadata.kind == "duration":
-                formatted = self._excel_duration(number, sections[position]) if number >= 0 else None
+                formatted = self._excel_duration(number, section) if (
+                    number >= 0 or getattr(self, "_date_1904", False)) else None
                 return formatted if formatted is not None else value
-            # Preserve subsecond and single-second wall-clock formats until
-            # the normalized time API can represent them faithfully.
-            if metadata.kind in ("date", "time", "duration") and (
-                number < 0
-                or re.search(r"(?<!s)s(?!s)|s+\.0+", clean)
-            ):
+            if metadata.kind in ("date", "time") and number < 0:
                 return value
             if conditional_integer:
                 return str(Decimal(value).quantize(Decimal(1), rounding=ROUND_HALF_UP))
             if metadata.kind == "time":
-                formatted = self._excel_time(number, include_seconds="ss" in clean)
-                return formatted[3:] if "h" not in clean and "ss" in clean else formatted
+                formatted = self._clock_display(number, section)
+                return formatted if formatted is not None else value
             if metadata.kind == "date":
-                has_time = "h" in clean or "ss" in clean
+                has_time = "h" in clean or "s" in clean
+                precision = self._second_precision(clean)
+                if precision is None:
+                    return value
                 if has_time:
-                    # Round the whole serial once so midnight carries into the
-                    # date too; rounding its fractional day alone loses a day.
-                    number = round(number * 86400) / 86400
-                if not getattr(self, "_date_1904", False) and 60 <= number < 61:
+                    ticks = self._temporal_ticks(number, precision)
+                    # Use the rounded integral day for the date; float datetime
+                    # microseconds can otherwise carry across midnight twice.
+                    day = ticks // (86400 * 10 ** precision)
+                else:
+                    day = number
+                if not getattr(self, "_date_1904", False) and 60 <= day < 61:
                     formatted = "1900-02-29"
                 else:
-                    formatted = self._excel_date(number).strftime("%Y-%m-%d")
+                    formatted = self._excel_date(day).strftime("%Y-%m-%d")
                 if has_time:
-                    formatted += " " + self._excel_time(number, include_seconds="ss" in clean)
+                    clock_fmt = "hh:mm:ss" if "s" in clean else "hh:mm"
+                    if precision:
+                        clock_fmt += "." + "0" * precision
+                    formatted += " " + self._clock_display(number, clock_fmt)
                 return formatted
             if metadata.kind == "zero_fill":
                 formatted = self._zero_filled_number(number, metadata.pattern)
@@ -1787,38 +1799,96 @@ class XLSXReader:
             base = datetime(1899, 12, 30)
         return base + timedelta(days=serial)
 
+    @staticmethod
+    def _temporal_ticks(serial: float, precision: int = 0) -> int:
+        # Normalize the total seconds to Excel's 15 significant digits, then
+        # round once at the displayed precision (including half-second ties).
+        seconds = Decimal(format(abs(serial) * 86400, ".15g"))
+        with localcontext() as context:
+            context.prec = 340
+            return int((seconds * 10 ** precision).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+    @staticmethod
+    def _second_precision(clean: str) -> Optional[int]:
+        match = re.search(r"s\]?(\.0+)", clean, re.I)
+        precision = len(match[1]) - 1 if match else 0
+        return precision if precision <= 3 else None
+
     def _excel_time(self, serial: float, include_seconds: bool = False) -> str:
-        total_seconds = int(round((serial % 1) * 86400))
-        total_seconds %= 86400
+        total_seconds = self._temporal_ticks(serial) % 86400
         hours, remainder = divmod(total_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}" if include_seconds else f"{hours:02d}:{minutes:02d}"
 
+    def _clock_display(self, serial: float, fmt: str) -> Optional[str]:
+        clean = self._format_code_tokens(fmt).lower()
+        precision = self._second_precision(clean)
+        if precision is None:
+            return None
+        # Existing normalized wall-clock display remains HH:MM[:SS]. Render
+        # explicit seconds-only, single-s and subsecond patterns at their widths.
+        explicit = precision or re.search(r"(?<!s)s(?!s)", clean) or ("h" not in clean and "m" not in clean)
+        if not explicit:
+            result = self._excel_time(serial, include_seconds="s" in clean)
+            return result[3:] if "h" not in clean and "s" in clean else result
+        return self._render_time_tokens(serial, fmt, elapsed=False)
+
     def _excel_duration(self, serial: float, fmt: str) -> Optional[str]:
-        """Display simple elapsed units; leave unsupported patterns untouched."""
-        match = re.fullmatch(
-            r'((?:"[^"]*")*)\[(h+|m+|s+)\](?::(m{1,2}|s{1,2}))?'
-            r'(?::(s{1,2}))?((?:"[^"]*")*)', fmt, re.IGNORECASE,
-        )
-        if match is None:
+        return self._render_time_tokens(serial, fmt, elapsed=True)
+
+    def _render_time_tokens(self, serial: float, fmt: str, elapsed: bool) -> Optional[str]:
+        tokens = re.findall(r'"[^"]*"|[\\_*].|\[[^\]]*\]|h+|m+|s+|\.0+|.', fmt, re.I)
+        units = [token.lower() for token in tokens
+                 if re.fullmatch(r"\[(?:h+|m+|s+)\]|h+|m+|s+", token, re.I)]
+        if not units:
             return None
-        prefix, unit, tail, seconds, suffix = match.groups()
-        unit, tail = unit.lower(), (tail or "").lower()
-        if ((unit[0] == "h" and tail not in ("", "m", "mm"))
-                or (unit[0] == "m" and (tail not in ("", "s", "ss") or seconds))
-                or (unit[0] == "s" and (tail or seconds))):
+        if elapsed:
+            if not units[0].startswith("[") or any("[" in unit for unit in units[1:]):
+                return None
+            first = units[0][1:-1]
+            tail = [unit[0] for unit in units[1:]]
+            allowed = {"h": ([], ["m"], ["m", "s"]), "m": ([], ["s"]), "s": ([],)}
+            if tail not in allowed[first[0]] or any(len(unit) > 2 for unit in units[1:]):
+                return None
+        elif any("[" in unit or len(unit) > 2 for unit in units):
             return None
-        # Round once to the nearest second, then truncate any undisplayed
-        # smaller units. Do not wrap at midnight or slice a wall-clock string.
-        total_seconds = int(round(serial * 86400))
-        divisor = {"h": 3600, "m": 60, "s": 1}[unit[0]]
-        result = str(total_seconds // divisor).zfill(len(unit))
-        if tail:
-            component = (total_seconds // 60 if tail[0] == "m" else total_seconds) % 60
-            result += ":" + str(component).zfill(len(tail))
-        if seconds:
-            result += ":" + str(total_seconds % 60).zfill(len(seconds))
-        return prefix.replace('"', "") + result + suffix.replace('"', "")
+        precision = self._second_precision(self._format_code_tokens(fmt))
+        if precision is None:
+            return None
+        ticks = self._temporal_ticks(serial, precision)
+        seconds, fraction = divmod(ticks, 10 ** precision)
+        result = []
+        previous_unit = ""
+        for token in tokens:
+            lower = token.lower()
+            if token.startswith('"'):
+                result.append(token[1:-1])
+            elif token.startswith("\\"):
+                result.append(token[1:])
+            elif token.startswith("_"):
+                result.append(" ")
+            elif token.startswith("*"):
+                continue
+            elif re.fullmatch(r"\[(h+|m+|s+)\]", lower):
+                unit = lower[1:-1]
+                result.append(str(seconds // {"h": 3600, "m": 60, "s": 1}[unit[0]]).zfill(len(unit)))
+                previous_unit = unit[0]
+            elif token.startswith("["):
+                continue  # color, condition and locale annotations
+            elif re.fullmatch(r"h+|m+|s+", lower):
+                component = seconds // {"h": 3600, "m": 60, "s": 1}[lower[0]]
+                component %= 24 if lower[0] == "h" else 60
+                result.append(str(component).zfill(len(lower)))
+                previous_unit = lower[0]
+            elif re.fullmatch(r"\.0+", token):
+                if previous_unit != "s" or len(token) - 1 != precision:
+                    return None
+                result.append("." + str(fraction).zfill(precision))
+            elif token in (":", " ", "-", "/", ",", "."):
+                result.append(token)
+            else:
+                return None
+        return ("-" if serial < 0 else "") + "".join(result)
 
     def _zero_filled_number(self, number: float, pattern: str) -> str:
         sign = "-" if number < 0 else ""

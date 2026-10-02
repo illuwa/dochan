@@ -1,92 +1,81 @@
-# 차트 세부 4차 리뷰 실물 검증
+# 차트 세부 5차 리뷰 실물 검증
 
-2026-10-03에 공개 POI·LibreOffice·hwp-public 코퍼스를 읽기 전용으로 검사했다. 이번 비교 기준은 `62b8c3e`다. 기준 코드를 `git archive`로 분리하고 같은 입력을 기준본과 수정본의 `Dochan.to_markdown()` 및 `Dochan.to_dict()`에 각각 전달했다. 이전 보고서의 `107e18d` 대비 3,545셀·43파일 변경 수치는 이번 비교 수치가 아니다. 원본 문서와 내부 문서는 복사하지 않았다.
+2026-10-03에 공개 POI·LibreOffice·hwp-public 코퍼스를 읽기 전용으로 검사했다. 시작 HEAD는 `8340045`이며, 회귀 판정 기준은 `107e18d`(1.7.0)이다. 1.7.0 코드를 `git archive`로 분리하여 기준본과 수정본에서 Markdown·JSON을 새로 생성했다. 내부 문서와 원본 코퍼스는 복사하지 않았다.
 
-## 출력 정책
+## 구현과 출력 계약
 
-`_x`와 `*x`, 따옴표 리터럴 및 역슬래시 이스케이프는 서식 분류에서 제외한다. XLSX 시트의 공백 폭 토큰은 공백 하나로 표시하고 채움 토큰은 제거한다. 따옴표 안의 밑줄·별표는 문자이므로 보존한다. 기존 숫자 정밀도·통화·부호 계약은 유지한다.
+시간 분류와 미지원 토큰 검사는 선택한 구역만 사용한다. 양수 `0.5`에 `h:mm;h:m:s` 또는 `h:mm;[h]:mm`를 적용하면 `12:00`이다. 사용하지 않는 음수 구역이 양수 표시를 원시값으로 바꾸지 않는다.
 
-3차 지시의 경과 시간 원시 폴백 정책은 4차 지시에서 정정됐다. 시트와 네 차트 리더에서 `[h+]`, `[h+]:mm`, `[h+]:mm:ss`, `[m+]`, `[m+]:ss`, `[s+]`는 총 단위로 표시한다. 대괄호 안 글자 수만큼 0을 채우고 뒤 m/s는 한 글자면 채우지 않으며 두 글자면 2자리로 표시한다. 구분자는 콜론이며 앞뒤 따옴표 리터럴을 보존한다. 전체 일련값을 초로 반올림한 뒤 표시 단위 아래는 버린다. 예를 들어 `[h]:mm` 0.04는 `0:57`, `[mm]:ss` 0.0423은 `60:55`, `[h]:mm:ss` 1.5는 `36:00:00`이다. 소수 초, 단일 s를 포함한 시계 시각, 음수 날짜·시각·경과 시간 및 그 밖의 경과 조합은 원시 값으로 남긴다. XLSX 시트 백분율은 15유효자리 기준으로 정규화한 뒤 Decimal HALF_UP을 적용한다. 차트 백분율은 계속 원시 숫자다.
+경과 시간의 색·지역·조건 대괄호를 표시에서 제외하고, 단위 사이의 따옴표·역슬래시 리터럴을 보존한다. `_x`는 공백 하나, `*x`는 빈 문자열이다. 소수 초는 `.0`부터 `.000`까지 지원한다. 전체 일련값의 총 초를 15유효자리로 정규화한 뒤 표시 정밀도에서 HALF_UP으로 한 번 반올림한다. 날짜도 같은 반올림 결과의 정수 일수를 사용하므로 자정 carry가 유지된다. 1904 체계의 음수 경과 시간은 부호를 붙이고, 1900 체계의 음수 경과 시간과 음수 날짜·시각은 원시값을 유지한다.
 
-`c:title` 자체가 없는 자동 제목 생성은 실물 근거가 없어 제거했다. `c:title`이 있고 `c:tx`가 없으며 autoTitleDeleted가 명시적 false인 단일 계열의 이름만 제목으로 사용한다. 차트 시각의 일련값이 하루 이상이면 일수를 잃지 않도록 날짜를 붙인다. `57181.xlsm`의 `2015-07-28 07:00`은 Excel의 `07:00`과 의도적으로 다른 표시다.
+`ss`와 `s` 단독 표시는 각각 두 자리와 한 자리 초이며, `h:m:s.00`은 각 단위의 폭을 따른다. 기존 일반 시각의 `HH:MM[:SS]`와 ISO 날짜 정규화는 유지한다. 차트의 하루 이상 시각에는 날짜를 붙여 일수를 보존한다. 이는 Excel의 시각 전용 표시와 의도적으로 다르므로 문자열 정확 일치로 세지 않는다. 일반 차트 숫자·백분율과 축 눈금 정책은 바꾸지 않았다.
 
-## 비교 범위와 결과
+`[<0]"";0%`의 음수는 빈 문자열이다. 기존 XLSX 출력기가 빈 셀을 생략하므로 실제 출력에서는 해당 좌표가 빠질 수 있다. 미지원 경과 조합인 `[h]:[m]`, `[h]:ss`와 네 자리 이상의 소수 초는 원시값으로 남긴다.
 
-검토군은 기존과 같은 854파일이다. 차트 포함 OOXML 93개, XLS 720개와 차트 포함 HWPX 41개로 구성한다. XLS 720개가 모두 차트 문서라는 뜻은 아니다. 시트 회귀군은 XLS 720개와 XLSX 계열 367개이며 두 검토군의 합집합은 1,193개다.
+## 전수 비교와 판정
 
-`poc-shared-strings.xlsx`는 전후 모두 직렬화 120초 한도를 넘었다. 이 1파일은 성공으로 세지 않는다. 따라서 완결된 출력 비교는 검토군 854개와 추가군 338개를 합한 1,192개다. 파서 경고가 있는 문서도 포함한 회귀 비교이며 모든 문서가 완전히 지원된다는 뜻은 아니다.
+검토군은 차트 포함 OOXML 93개, XLS 720개, 차트 포함 HWPX 41개로 총 854파일이다. XLS 720개가 모두 차트 문서라는 뜻은 아니다. 추가 시트군은 339개이며 합집합은 1,193개다. `poc-shared-strings.xlsx`는 전후 동일하게 직렬화 120초 제한을 넘었으므로 미검증이다. 완결된 출력 비교는 1,192개다.
 
-| 검토 집합 | 파일 수 | Markdown 변경 | JSON 변경 | 경고·예외 변화 | 판정 |
-|---|---:|---:|---:|---|---|
-| 차트 리뷰 검토군 | 854 | 3 | 3 | 0개이며 경고 문서 126개도 동일하다. | 854/854 출력을 비교했다. |
-| 추가 시트 검토군 | 339 | 11 | 11 | 0개이며 경고 문서 20개도 동일하다. | 338개를 비교했고 악성 표본 1개는 미검증이다. |
-| XLS 시트 | 720 | 0 | 0 | 기존 동작이 유지됐다. | 시트 서식기는 수정하지 않았다. |
-| XLSX 계열 시트 | 367 | 14파일, 2,015셀 | 같은 셀 변경을 확인했다. | 셀별 원시 XML 근거를 확보했다. | 아래 독립 대조와 제한을 따른다. |
+| 비교 | Markdown·JSON 변경 | 시트 변경 | 경고·예외 변화 |
+|---|---:|---:|---:|
+| 1.7.0 → 수정본, 차트 검토군 | 35파일이다. | 아래 23파일 집계에 포함했다. | 0개다. 경고 문서 126개가 동일하다. |
+| 1.7.0 → 수정본, 추가 시트군 | 19파일이다. | 아래 23파일 집계에 포함했다. | 0개다. 경고 문서 20개가 동일하다. |
+| 1.7.0 → 수정본, 전체 시트 | 전체 출력 변경은 54파일이다. | 23파일 5,515셀이다. | 좌표별 원시 근거를 모두 확보했다. |
+| 저장된 4차 출력 → 수정본 | 2파일이다. | `DateFormatTests.xlsx` 185셀, `57181.xlsm` 3셀이다. | 0개이며 실제 차트 표도 모두 동일하다. |
 
-변경된 2,015셀의 원시 값, 서식, 날짜 체계, XML 위치, 전후 표시, 기대와 판정은 [시트 변경 셀 CSV](2026-10-02-chart-details-fix-sheet-values.csv)에 기록했다. 날짜·시간 46셀은 원시 문자열 폴백을 확인했다. 회계·숫자 레이아웃 1,969셀은 원시 수치에 독립 Decimal 반올림을 적용하고 통화·부호·앞뒤 공백을 결합한 기대 문자열과 정확히 일치했다. 이 중 `48962.xlsx` B13은 기존 로캘 통화·부호 위치를 보존한 `$-123.00 `과 정확히 일치했다. 이를 원시 문자열 `-123`과 같다고 세거나 Excel의 음수 회계 표시와 동일하다고 주장하지 않는다.
+Opus의 `classify.py`와 같이 변경 표시를 원시 값·서식에 연결하되, 동일 표시가 여러 좌표에 반복되는 경우도 각각 대조했다. `scripts/probe_chart_review_classify.py`는 다음 관찰 서식군의 독립 계산·토큰 제거 결과를 확인하고 그 외에는 미확인으로 실패한다. 판정은 Excel 표시와의 방향 비교이며 전체가 Excel 문자열 정확 일치라는 뜻은 아니다.
 
-이번 수정에서 실제 차트 표·제목·캡션의 변경은 0개다. 모든 변경 JSON 요소가 시트 표임을 확인했으며 나머지 표와 문단은 전후 동일했다. [전체 출력 차이](2026-10-02-chart-details-fix-output-diffs.md)와 [출력 변경 셀 CSV](2026-10-02-chart-details-fix-output-values.csv)는 이를 기록한다. 이전 CSV는 변경 행 양쪽에 함께 나온 숫자 21,480개를 문서 내 수치 후보와 대조했지만, 이번 CSV는 실제 바뀐 2,015개 셀만 원본 좌표로 직접 연결한다. 따라서 현재 두 값 CSV는 동일한 2,015개 셀을 담으며 과거 행 수와 비교하지 않는다.
+| 서식군 | 변경 셀 | 가까워짐 | 중립 | 근거 |
+|---|---:|---:|---:|---|
+| 회계·공백 | 1,969 | 1,969 | 0 | 이전 수치는 유지하면서 원시 서식의 공백·채움 토큰 제거 결과와 새 표시가 일치한다. |
+| 날짜·시각 | 83 | 83 | 0 | 유리수 일련값의 날짜·시간 계산과 대조했다. 이 중 45셀은 소수 초 날짜·시각이다. 날짜 철자는 ISO로 정규화한다. |
+| 잘못된 접미·통화 제거 | 25 | 25 | 0 | 잘못 붙었던 M/K·달러를 제거한다. 원시값 폴백을 정확 표시로 세지 않는다. |
+| 경과 시간 | 128 | 128 | 0 | 독립 유리수 HALF_UP 계산과 표시가 128/128 일치한다. |
+| 빈 조건 구역 | 140 | 140 | 0 | 음수 구역의 빈 리터럴과 빈 출력이 일치한다. |
+| 영값 `[=0]?` 구역 | 3,148 | 2,497 | 651 | 2,497셀의 잘못된 날짜는 제거했다. 공백 대신 0을 표시하는 제한은 남아 있다. |
+| 백분율 | 20 | 20 | 0 | 15유효자리 HALF_UP 기대와 일치한다. |
+| 음수 날짜·쉼표 배율 원시값 | 2 | 0 | 2 | 기준본도 Excel 표시와 달랐으며 수정본도 표시 성공으로 세지 않는다. |
+| 합계 | **5,515** | **4,862** | **653** | **멀어짐 0개, 미확인 0개다.** |
 
-## 칸별 실물 근거
+## 칸별 실물 증거
 
 | 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
 |---|---|---|---|---|---|
-| XLSX 공백·채움 토큰 | `LIBRE_OFFICE-128382-0.xlsx`, `ConditionalFormattingSamples.xlsx`, `mv-calculator-final-2-20-2013.xlsm` 등 | 셀 XML의 원시 값·formatCode와 독립 자리수/통화/공백 계산이다. | `_x`는 공백 하나가 되고 `*x`는 사라져야 한다. | 회계 레이아웃 1,969셀의 기대 표시가 일치했다. | 해당 수정 범위만 통과했다. 전체 회계 서식 지원을 주장하지 않는다. |
-| 음수 날짜·시각 | `DateFormatTests.xlsx`, `bug60858.xlsx` | 원시 음수 일련값과 날짜 체계다. | 부호를 잃거나 이전 날짜로 변환하지 않고 원문을 남겨야 한다. | `bug60858.xlsx` N2의 `-1.0` 등 원시 값이 보존됐다. | 폴백을 검증했다. |
-| 소수 초·음수 날짜 | `DateFormatTests.xlsx` | 소수 초가 있는 원본 셀 서식과 원시 값이다. | 초 정밀도를 버린 문자열 대신 원시 값을 내야 한다. | 이 파일의 변경 45셀은 원시 값과 일치했다. 음수 날짜 사례도 포함한다. | 표시 구현이 아닌 원시 보존을 검증했다. |
-| 단순 경과 시간 | `57181.xlsm`의 128셀이다. | 원시 XML의 조건부 [hh]:mm:ss, 기준 커밋 표시와 독립 유리수 산술이다. | 단순 경과 표시가 복구돼야 한다. | 128/128이 기준 표시로 복구됐으며 독립 산술은 125/128 일치했다. 3개는 반초 경계로 아래에 구분했다. | 복구는 통과했다. 전체 서식 칸은 ⬜를 유지한다. |
-| 미지원 경과 조합·단일 s 시각 | `ElapsedFormatTests.xlsx`, `DateFormatTests.xlsx`의 TEXT 캐시다. | Excel이 저장한 TEXT 결과, 참조 원시 숫자와 서식이다. | Excel 표시 일치와 원시 폴백을 구분해야 한다. | 아래 138건 대조에서 소수 초·복합 경과 형식의 원시 보존을 확인했다. | 표시 구현 성공으로 세지 않는다. |
-| 백분율 15유효자리 HALF_UP | 공개 138건 TEXT 캐시와 합성 경계값이다. | 원시 double의 15유효자리 및 명시적 HALF_UP 정책이다. | `0.034999999999999996`의 `0%`는 `4%`여야 한다. | 합성 경계값이 통과했고 공개 정확 일치 항목의 회귀는 없다. | 해당 경계값의 Excel 실물 정답을 새로 확보한 것은 아니다. |
-| c:tx 없는 제목 요소 | `bar-chart.pptx`, `60509.xlsx`, 공개 HWPX 단일 계열 표본이다. | c:title, autoTitleDeleted=false 및 계열명 캐시다. | 검증된 제목 생성만 유지해야 한다. | 기존 공개 출력이 유지됐다. c:title 없는 생성의 실물은 0개다. | 자동 제목 전체 칸은 ⬜를 유지한다. |
-| 차트 시각 날짜 접두 | `57181.xlsm`이다. | `h:mm` 캐시와 정수 날짜 부분이다. | 날짜 부분을 보존해야 한다. | `2015-07-28 07:00` 등 기존 차트 출력이 유지됐다. | Excel 표시와의 의도적 차이를 기록했다. |
-| chartEx 군집 막대·파레토·txData 제목 | 새 해당 실물은 없다. | 이전 공개 코퍼스 조사와 이번 출력 회귀다. | 해당 종류의 실물 증거가 필요하다. | 합성 및 기존 종류의 회귀만 있다. | ⬜를 유지한다. |
+| OOXML 소수 초 날짜·시각 | `DateFormatTests.xlsx`의 45셀이다. | `xl/styles.xml`의 `dd\-mmm\-yyyy\ hh:mm:ss.000`과 1904 일련값을 독립 유리수 산술로 계산했다. | 예를 들어 `1952-10-11 14:35:27.000`이다. | 45/45가 날짜·시간·밀리초 의미와 일치한다. | 1.7.0의 날짜만 표시하거나 4차의 원시값을 표시하던 상태보다 개선됐다. ISO 날짜 철자는 Excel 원문과 다르다. |
+| OOXML 경과 시간 | `57181.xlsm`의 128셀이다. | 원시 수치와 조건부 `[hh]:mm:ss` 또는 `[hh]:mm` 구역, 독립 유리수 HALF_UP 산술이다. | 반초 경계 3셀은 `00:00:41`이다. | 전체 128/128이 일치한다. 4차와 같은 표시는 125개다. | 독립 산술 일치다. 이 3셀에는 Excel 표시 캐시가 없으므로 TEXT 캐시 검증과 구분한다. |
+| OOXML 조건부 빈 표시 | `DateFormatTests.xlsx`의 140셀이다. | 원시 `[<0]"";0%` 구역과 음수 값이다. | 빈 문자열이다. | 140/140이 빈 표시이며 출력 셀은 생략된다. | 일치한다. |
+| OOXML 서식의 Excel 직접 정답 | `NumberFormatTests.xlsx`, `DateFormatTests.xlsx`, `ElapsedFormatTests.xlsx`, `FormatChoiceTests.xlsx`, `FormatConditionTests.xlsx`, `GeneralFormatTests.xlsx`, `TextFormatTests.xlsx`, `NumberFormatApproxTests.xlsx`, `DateFormatNumberTests.xlsx`다. | 원본 XML에 저장된 `TEXT()` 결과 138건이다. | 저장된 Excel 문자열이다. | 1.7.0 48/138, 시작 HEAD 59/138, 수정본 63/138이 정확히 일치한다. | 두 기준 모두 기존 일치 손실 0개다. 나머지 15개는 원시값, 60개는 표시 미지원이다. |
+| 선택 구역, 색·지역·리터럴, 1904 음수 경과 | 해당 조합의 공개 실물 셀은 별도 확보하지 못했다. | 합성 XML 및 직접 서식 테스트다. | 선택 구역과 단위별 표시를 따른다. | 단위·네 차트 리더 통합 테스트를 통과했다. | 이 조합의 실물은 미검증이며 ✅로 확대하지 않는다. |
 
-## 경과 시간 복구와 반초 경계
+새로 정확 일치한 TEXT 캐시는 네 건이다. `DateFormatTests.xlsx` A40의 `h:m:s.00`은 `4:5:6.01`, `ElapsedFormatTests.xlsx` A2의 `[h]:m:s.000`은 `75:23:53.376`, 같은 파일 A7의 `[ss].000`은 `271433.376`, `DateFormatNumberTests.xlsx` A2의 날짜·시각은 `1904-01-02 00:00:00.000`이다.
 
-367개 XLSX 계열 후보를 원시 스타일에서 조사했다. ZIP으로 열리지 않는 16개는 제외 사유를 JSON에 기록했다. 경과 시간 토큰을 가진 실제 숫자 셀은 `57181.xlsm`의 2,625개였다. 그중 2,497개는 값이 0이고 조건부 서식의 `[=0]?` 분기를 선택하므로 단순 경과 시간 표시의 분모에서 제외했다.
+경과 시간 검색은 XLSX 계열 367개를 대상으로 했다. 비ZIP·암호화 등 읽을 수 없는 16개는 제외했고, 원시 경과 서식 후보 2,625셀 중 2,497개는 `[=0]?` 구역이므로 경과 표시 성공에 포함하지 않았다.
 
-나머지 128개는 조건부 서식 `[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm`에서 경과 시간 분기를 선택했다. 실제 시트 출력 128/128이 `62b8c3e`와 같으며 3차의 원시 폴백이 제거됐다. 예를 들어 CCSInfo!E1의 원시 `2.0833333333333332E-2`는 다시 `00:30:00`이다. 이 128셀은 변경 셀 CSV의 분모에서 빠졌으므로 3차의 2,143셀은 최종 2,015셀로 줄었다. `57181.xlsm` 전체 Markdown·JSON도 기준본과 같아 변경 파일 수는 15개에서 14개로 줄었다.
+## 재현과 산출물
 
-독립 유리수 산술의 기대 표시는 125/128(97.65625%)과 일치했다. Summary_report!K8·K35·K36의 원시 `4.6875000000000004E-4`는 정확한 십진 유리수로 계산하면 40.5초보다 조금 커서 41초다. 기존 코드와 수정본은 double로 초를 계산할 때 정확히 40.5가 되고 Python의 기존 동점 반올림으로 40초를 낸다. 세 셀의 `00:00:40`은 기준과 동일하지만 독립 기대 `00:00:41`과는 다르다. Excel의 해당 표시 캐시를 확보하지 못했으므로 정확 일치로 세지 않는다. 이 경계를 맞추기 위해 허용오차나 임의 조건을 추가하지 않았다.
-
-[경과 시간 CSV](2026-10-02-chart-details-fix-elapsed-values.csv)는 128개 전부의 원시 값·서식·좌표·전후 표시·독립 기대를 담는다. 이 실물은 반복 시 단위의 복구 근거이며, 모든 총 단위·리터럴·하루 초과 사례의 실물 검증을 뜻하지 않는다. 요청된 예시와 추가 조합은 합성 25사례를 시트의 두 날짜 체계 및 네 차트 리더 경로로 검증했다.
-
-## Excel TEXT 캐시 138건
-
-9개 공개 `*Format*Tests.xlsx`의 실제 `TEXT(값셀, 서식셀)` 수식 캐시 138개를 재계산 없이 정답으로 사용했다. 정확 일치는 `62b8c3e`와 수정본 모두 59/138이다. 정확 일치를 새로 얻거나 잃은 항목은 각각 0개다. 수정본의 나머지는 원시 폴백 19개와 표시 미지원 60개다. 원시 폴백을 Excel 표시 성공으로 세지 않는다.
-
-10건의 표시가 달라졌으며 기존에 정확히 일치하던 사례는 없다. 시간 관련 8건과 공백용 `_?`를 분수 자리로 잘못 읽던 2건이 원시 폴백으로 바뀌었다. `NumberFormatTests.xlsx` A188의 `-3.75`와 `|#_?=/=#|`는 기존 `-|3 3/4|`와 중간 수정의 `-|4|` 모두 Excel 캐시 `-|15 =/=4|`와 다르다. 지원하지 않는 분수를 정수로 반올림하지 않도록 원시 `-3.75`를 남겼다. `_?`가 없는 기존 서식은 이 조치에서 제외해 기존 일치를 유지했다.
-
-행별 전후 결과와 Excel 캐시는 [TEXT 캐시 CSV](2026-10-02-chart-details-fix-text-cache.csv)에 있다. 이 검증은 캐시가 저장된 138건에 한하며 Excel UI를 새로 실행한 결과는 아니다.
-
-## 테스트와 제한
-
-3차의 초기 재현에서는 36개 실패를 확인했고 수정 후 새 회귀 57개가 통과했다. 4차에서는 경과 시간 표시의 실패 77개를 먼저 확인한 뒤 구현했고 관련 테스트 184개가 통과했다. 기존 리뷰의 비유한 값 가드·255자 차트 서식 상한·차트 단계 조건 선택을 각각 제거한 뮤테이션 3개 모두 새 테스트에서 실패했다. 복사한 코드 트리가 아닌 원본을 잘못 읽지 않도록 별도 pytest 설정과 import 경로를 사용해 검증했다.
-
-최종 전체 테스트는 3,530개 통과, 24개 건너뜀, 기존 예상 실패 14개다. Ruff와 diff 공백 검사가 통과했고 커밋 대상 파일의 로컬 절대 경로 문자열 검사에서 위반은 0개였다.
-
-4차 지시에 따라 합성 벤치마크 생성기의 두 기대, 이를 확인하는 테스트의 두 단언과 XLSX 리더의 한 단언을 `36:00:00`으로 복구했다. `test_review_cell_number_formats`의 `[s]`도 총 초인 `1`로 고쳤다. 이는 3차의 잘못된 원시 폴백 정책을 고정하던 단언의 정정이다. 지원 사례는 `test_supported_elapsed_displays_total_units` 및 `test_elapsed_display_reaches_all_four_chart_readers`로 옮겼으며 미지원 폴백 단언은 유지했다. 제목 테스트 두 개는 c:title이 존재하는 픽스처로 범위를 좁혔고, c:title 부재는 별도의 새 무제목 테스트로 확인했다. 그 밖의 기존 단언은 변경하지 않았다.
-
-XLS 시트 서식기의 로캘 토큰 달러 오인, 부동소수점 백분율 표시와 날짜+시각 원시 출력은 범위 밖이므로 수정하지 않았다. `_NumericString`의 메모리 비용 개선도 이번 표시 수정과 분리한 후속 측정 과제다. README·CHANGELOG·공유 모델·출력 writer·런타임 의존성은 바꾸지 않았다.
-
-## 재현 명령
-
-`corpus`는 외부 읽기 전용 코퍼스 루트를 가리키는 경로 인자다. 다음 예시는 상대 경로로 적었다. 매 코드 상태마다 새로운 스냅샷 디렉터리를 사용한다.
+코퍼스 경로는 인자로 받는다. 다음에서 `corpus`는 공개 코퍼스 루트이며, 원본을 작업 트리에 복사할 필요가 없다.
 
 ```bash
-mkdir -p .codex-work/review-r4/head
-git archive 62b8c3e | tar -x -C .codex-work/review-r4/head
-/usr/bin/python3 -m scripts.probe_chart_review_outputs inventory --corpus corpus --manifest .codex-work/review-r4/manifest.json
-/usr/bin/python3 -m scripts.probe_chart_review_outputs snapshot --corpus corpus --manifest .codex-work/review-r4/manifest.json --tree .codex-work/review-r4/head --output .codex-work/review-r4/before
-/usr/bin/python3 -m scripts.probe_chart_review_outputs snapshot --corpus corpus --manifest .codex-work/review-r4/manifest.json --tree . --output .codex-work/review-r4/after
-/usr/bin/python3 -m scripts.probe_chart_review_outputs compare --corpus corpus --manifest .codex-work/review-r4/manifest.json --before .codex-work/review-r4/before --after .codex-work/review-r4/after --output .codex-work/review-r4/comparison
-/usr/bin/python3 -m scripts.probe_chart_review_evidence --corpus corpus --comparison .codex-work/review-r4/comparison/comparison.json --output .codex-work/review-r4/sheet-evidence.json
-/usr/bin/python3 -m scripts.probe_chart_review_sheet_values --evidence .codex-work/review-r4/sheet-evidence.json --output .codex-work/review-r4/sheet-verdicts.json --csv docs/benchmarks/2026-10-02-chart-details-fix-sheet-values.csv
-/usr/bin/python3 -m scripts.probe_chart_review_artifacts --comparison .codex-work/review-r4/comparison --verdicts .codex-work/review-r4/sheet-verdicts.json --before .codex-work/review-r4/before --after .codex-work/review-r4/after --output-prefix docs/benchmarks/2026-10-02-chart-details-fix
-/usr/bin/python3 -m scripts.probe_chart_review_elapsed --corpus corpus --manifest .codex-work/review-r4/manifest.json --before .codex-work/review-r4/before --after .codex-work/review-r4/after --output .codex-work/review-r4/elapsed-verdicts.json --csv docs/benchmarks/2026-10-02-chart-details-fix-elapsed-values.csv
-/usr/bin/python3 -m scripts.probe_chart_review_text_cache snapshot --corpus corpus/poi-src/test-data/spreadsheet --tree .codex-work/review-r4/head --output .codex-work/review-r4/text-before.json
-/usr/bin/python3 -m scripts.probe_chart_review_text_cache snapshot --corpus corpus/poi-src/test-data/spreadsheet --tree . --output .codex-work/review-r4/text-after.json
-/usr/bin/python3 -m scripts.probe_chart_review_text_cache compare --before .codex-work/review-r4/text-before.json --after .codex-work/review-r4/text-after.json --output .codex-work/review-r4/text-comparison.json --csv docs/benchmarks/2026-10-02-chart-details-fix-text-cache.csv
-/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
-ruff check dochan scripts tests
+mkdir -p .codex-work/review-r5/base .codex-work/review-r5/head
+git archive 107e18d dochan | tar -x -C .codex-work/review-r5/base
+git archive 8340045 dochan | tar -x -C .codex-work/review-r5/head
+/usr/bin/python3 scripts/probe_chart_review_outputs.py inventory --corpus corpus --manifest .codex-work/review-r5/manifest.json
+/usr/bin/python3 scripts/probe_chart_review_outputs.py snapshot --corpus corpus --manifest .codex-work/review-r5/manifest.json --tree .codex-work/review-r5/base --output .codex-work/review-r5/before
+/usr/bin/python3 scripts/probe_chart_review_outputs.py snapshot --corpus corpus --manifest .codex-work/review-r5/manifest.json --tree . --output .codex-work/review-r5/after
+/usr/bin/python3 scripts/probe_chart_review_outputs.py compare --corpus corpus --manifest .codex-work/review-r5/manifest.json --before .codex-work/review-r5/before --after .codex-work/review-r5/after --output .codex-work/review-r5/comparison
+/usr/bin/python3 -m scripts.probe_chart_review_evidence --corpus corpus --comparison .codex-work/review-r5/comparison/comparison.json --output .codex-work/review-r5/evidence.json
+/usr/bin/python3 -m scripts.probe_chart_review_classify --evidence .codex-work/review-r5/evidence.json --output .codex-work/review-r5/classified.json --csv docs/benchmarks/2026-10-02-chart-details-fix-sheet-values.csv
+/usr/bin/python3 scripts/probe_chart_review_text_cache.py snapshot --corpus corpus/poi-src/test-data/spreadsheet --tree .codex-work/review-r5/head --output .codex-work/review-r5/text-head.json
+/usr/bin/python3 scripts/probe_chart_review_text_cache.py snapshot --corpus corpus/poi-src/test-data/spreadsheet --tree . --output .codex-work/review-r5/text-after.json
+/usr/bin/python3 scripts/probe_chart_review_text_cache.py compare --before .codex-work/review-r5/text-head.json --after .codex-work/review-r5/text-after.json --output .codex-work/review-r5/text-comparison.json --csv docs/benchmarks/2026-10-02-chart-details-fix-text-cache.csv
 ```
+
+`sheet-values.csv`와 `output-values.csv`는 동일한 5,515셀의 원시 근거와 판정을 담는다. `output-diffs.md`는 1.7.0 대비 변경 문서의 실제 Markdown diff다. `text-cache.csv`는 138건 전부이며 HEAD 열은 `8340045`다. `elapsed-values.csv`는 경과 시간 128건이며 기준 열은 이전 경과 표시가 있던 `62b8c3e`다. 이 비교 기준들을 혼동하지 않는다.
+
+## 테스트와 남은 범위
+
+첫 재현에서 28개 실패를 확인했다. 새 회귀 테스트 38개와 기존 회귀를 포함한 전체 결과는 **3,568 passed, 24 skipped, 14 xfailed**다. Ruff와 diff 공백 검사를 통과했다. 날짜 has_time의 초 검사를 제거하는 변이와 차트의 날짜 접두를 제거하는 변이는 각각 새 직접 테스트에서 실패했다.
+
+4차의 원시값 폴백을 고정한 기존 테스트 23개 사례는 이번 명시적 지원 결정에 맞춰 정확한 표시 기대로 바꿨다. 소수 초·단일 s·경과 리터럴은 이번 실패 테스트와 네 Excel 캐시가 근거이고, 1904 음수 경과는 합성 기대다. 변경 전에는 새 28개 재현 테스트가 모두 실패했다. 기존 일반 숫자·백분율·축 서식·자동 제목 계약은 유지했다.
+
+전체 숫자 서식 칸의 ⬜ 판정은 유지한다. 영값 ?의 공백, 일반 Excel 사용자 서식 전체, chartEx 군집 막대·파레토·txData 제목, c:title 없는 자동 제목, XLS 시간·1904 실물 검증은 남아 있다. 독립 산술·합성 검증을 Excel UI 실물 검증으로 과장하지 않는다.

@@ -37,8 +37,18 @@ def test_spacing_fill_and_literals_are_not_time_tokens(fmt, expected):
 def test_unsupported_temporal_displays_preserve_raw(value, fmt, date_1904):
     reader = XLSXReader()
     reader._date_1904 = date_1904
-    assert reader._format_cell_value(value, fmt) == value
-    assert charts.format_chart_number(value, fmt, date_1904) == value
+    # Fifth review explicitly replaces these earlier raw fallbacks with display.
+    supported = {
+        "[ss].000": "271433.376", "ss.00": "00.00",
+        "[h]:mm:ss.000": "36:00:00.000", "[h] mm": "36 00",
+        '[h]":"mm': "36:00", "h:m:s.00": "4:5:6.01",
+        "hh:mm:ss.000": "04:05:06.010", "h:m:s": "4:5:6", "s": "0",
+    }
+    if date_1904:
+        supported.update({"[h]:mm:ss": "-36:00:00", "[mm]:ss": "-360:00"})
+    expected = supported.get(fmt, value)
+    assert reader._format_cell_value(value, fmt) == expected
+    assert charts.format_chart_number(value, fmt, date_1904) == expected
 
 
 @pytest.mark.parametrize("fmt", ["[h]", "[hh]", "[mm]", "[ss]", "[HHH]"])
@@ -116,13 +126,15 @@ def test_temporal_fallback_reaches_all_four_chart_readers(value, fmt):
     from test_xls_chart import cache, chart, rows, series as biff_series
     from test_xls_chart_details import formatted_brai
 
+    expected = {"[ss].000": "43200.000", "hh:mm:ss.000": "03:00:00.000",
+                "h:m:s": "12:0:0"}.get(fmt, value)
     xml = root('<c:scatterChart>' + series('S', [value], ['2'], True, fmt) + '</c:scatterChart>')
     for reader_type in (XLSXReader, PPTXReader):
-        assert table(reader_type, xml)[1] == [value, "2"]
+        assert table(reader_type, xml)[1] == [expected, "2"]
     elements, _ = parse_chart_xml(etree.tostring(xml), display_values=True)
-    assert next(element for element in elements if hasattr(element, "rows")).rows[1][0].text == value
+    assert next(element for element in elements if hasattr(element, "rows")).rows[1][0].text == expected
     data = chart(biff_series(formatted_brai(2, 164)), cache(2, [float(value)]), cache(1, [2]))
-    assert rows(parse_chart_substreams(data, number_formats={164: fmt})[0])[1] == [value, "2"]
+    assert rows(parse_chart_substreams(data, number_formats={164: fmt})[0])[1] == [expected, "2"]
 
 
 ELAPSED_CASES = [

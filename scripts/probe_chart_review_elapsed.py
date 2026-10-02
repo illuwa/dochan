@@ -53,7 +53,9 @@ def expected_elapsed(raw, fmt):
         valid = tail[:2] in allowed['h'][1:] and tail[2:] in ([':', 's'], [':', 'ss'])
     if not valid:
         return None
-    total = round(value * 86400)
+    seconds = value * 86400
+    # Positive rational HALF_UP, independently of the runtime Decimal path.
+    total = (2 * seconds.numerator + seconds.denominator) // (2 * seconds.denominator)
     first = total // {'h': 3600, 'm': 60, 's': 1}[unit[0]]
     pieces = [str(first).zfill(len(unit))]
     for token in tail[1::2]:

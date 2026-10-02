@@ -121,9 +121,9 @@ poi-src/test-data/spreadsheet/57181.xlsm,Detailed_report!AJ130,xl/worksheets/she
 poi-src/test-data/spreadsheet/57181.xlsm,Detailed_report!AK130,xl/worksheets/sheet3.xml:AK130,1.1574074074074075E-5,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:01,00:00:01,00:00:01,True,True
 poi-src/test-data/spreadsheet/57181.xlsm,Detailed_report!AL130,xl/worksheets/sheet3.xml:AL130,3.6265432098765439E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:31,00:00:31,00:00:31,True,True
 poi-src/test-data/spreadsheet/57181.xlsm,Detailed_report!AM130,xl/worksheets/sheet3.xml:AM130,1.3888888888888889E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:12,00:00:12,00:00:12,True,True
-poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!K8,xl/worksheets/sheet4.xml:K8,4.6875000000000004E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:40,00:00:40,00:00:41,True,False
+poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!K8,xl/worksheets/sheet4.xml:K8,4.6875000000000004E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:40,00:00:41,00:00:41,False,True
 poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!L8,xl/worksheets/sheet4.xml:L8,9.2592592592592588E-5,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:08,00:00:08,00:00:08,True,True
-poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!K35,xl/worksheets/sheet4.xml:K35,4.6875000000000004E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:40,00:00:40,00:00:41,True,False
+poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!K35,xl/worksheets/sheet4.xml:K35,4.6875000000000004E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:40,00:00:41,00:00:41,False,True
 poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!L35,xl/worksheets/sheet4.xml:L35,9.2592592592592588E-5,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:08,00:00:08,00:00:08,True,True
-poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!K36,xl/worksheets/sheet4.xml:K36,4.6875000000000004E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:40,00:00:40,00:00:41,True,False
+poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!K36,xl/worksheets/sheet4.xml:K36,4.6875000000000004E-4,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:40,00:00:41,00:00:41,False,True
 poi-src/test-data/spreadsheet/57181.xlsm,Summary_report!L36,xl/worksheets/sheet4.xml:L36,9.2592592592592588E-5,[=0]?;[<4.16666666666667][hh]:mm:ss;[hh]:mm,00:00:08,00:00:08,00:00:08,True,True

@@ -152,6 +152,15 @@ def mathml_to_latex(data: bytes) -> str:
         pending.extend((child, depth + 1) for child in node)
     if _tag(root) != "math":
         raise ValueError("MathML root must be math")
+    # MathML 3 section 2.2.1: math accepts the descendant defaults of mstyle.
+    # Only non-inherited metadata and the separately handled display mode are
+    # safe to ignore here; decline unknown styling rather than alter meaning.
+    metadata = {"display", "id", "class", "intent", "xref", "href", "alttext",
+                "altimg", "altimg-width", "altimg-height", "altimg-valign"}
+    if any(key not in metadata for key in root.attrib):
+        raise ValueError("MathML inherited style unsupported")
+    if root.get("display") not in (None, "block", "inline"):
+        raise ValueError("unsupported MathML display")
     return _render(root)
 
 

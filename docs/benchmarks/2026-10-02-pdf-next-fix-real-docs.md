@@ -1,6 +1,6 @@
 # PDF 리뷰 반영 실물 검증
 
-기준 커밋은 `107e18d7725af8cc6680d5ba0e1ca2b931ed8163`이다. 링크·미주(A)를 먼저 분리 검증했으며 수식(B)의 의미 정답과 최종 회귀를 함께 기록했다. 외부 코퍼스는 읽기 전용으로 사용했다. README는 수정하지 않는다.
+1차 검증의 기준 커밋은 `107e18d7725af8cc6680d5ba0e1ca2b931ed8163`이다. 아래의 원본 의미 정답과 1차 기록을 보존하며, 최신 결과는 마지막 **3차 리뷰 반영과 전수 회귀** 절에 기록했다. 3차 기준은 `028f807`이고 P2 5건을 수정했다. 외부 코퍼스는 읽기 전용으로 사용했으며 README는 수정하지 않았다.
 
 ## 링크·미주(A)
 
@@ -23,7 +23,7 @@ A만 적용한 독립 체크아웃에서 전체 테스트는 3,295 passed, 24 sk
 | 수식 | `bug2009627.pdf`다. | AF streams 26·28을 읽었다. | mod 관계와 행렬 2개를 출력하고 inline 변수는 보존한다. | display 2개가 일치하고 inline 1개가 보존됐다. | 확인한 범위는 통과했다. |
 | 수식 | `bug2025674.pdf`다. | AF stream 22를 읽었다. | `a^{2}+b^{2}=c^{2}`를 출력한다. | display 1개가 일치했다. | 확인한 범위는 통과했다. |
 
-6문서의 원시 Formula는 33개다. 의미 정답을 가진 display 8개, inline·코드·Alt 보존 항목 22개, 빈 구조 3개로 구분한다. display 소유 조각 90개만 치환했고 보존 Formula 소유 조각 39개와 전체 비소유 조각 640개가 원문과 같다. 비소유 Artifact 95개도 보존했다. 기존의 26/26 주장은 inline·코드·낭독문까지 수식 성공으로 세었으므로 철회한다. 태그 없는 수식과 일부 의미 표현은 미지원이며 PDF 수식 칸은 **⬜ 유지**를 제안한다. 합·적분 첨자는 실물 양성 표본이 없으므로 단위 테스트 검증으로만 보고한다.
+6문서의 원시 Formula는 33개다. 의미 정답을 가진 display 8개, inline·코드·Alt 보존 항목 22개, 빈 구조 3개로 구분한다. display 소유 조각 90개만 치환했고 전체 비치환 조각 640개가 원문과 같다. 이 640개에는 보존 Formula 소유 조각 39개가 포함된다. 비소유 Artifact 95개도 보존했다. 기존의 26/26 주장은 inline·코드·낭독문까지 수식 성공으로 세었으므로 철회한다. 태그 없는 수식과 일부 의미 표현은 미지원이며 PDF 수식 칸은 **⬜ 유지**를 제안한다. 합·적분 첨자는 실물 양성 표본이 없으므로 단위 테스트 검증으로만 보고한다.
 
 `FormulaExtractor`는 표와 각주 소유권이 결정된 뒤 실행한다. 해당 소유 글리프는 표 셀·각주 안에 남긴다. Code·Note·Table 구조 아래 수식도 보존한다. MathML의 `display="block"` 또는 PDF Layout의 `Placement=Block`이 있거나 같은 기준선에 다른 본문이 없는 경우에만 블록 Equation을 만든다. Alt/ActualText만으로 LaTeX를 만들지 않는다. TeX 연관 자료의 내부 달러 구분자와 빈 줄은 거부하며 글리프를 보존한다. Equation의 선택적 `script_format`은 MathML에 `mathml`, TeX에 `latex`를 기록한다. 다른 형식의 기존 JSON에는 필드를 추가하지 않는다.
 
@@ -345,9 +345,9 @@ AF stream 22
 ```
 
 
-## 최종 전수 회귀
+## 1차 전수 회귀
 
-2026년 10월 3일에 HEAD와 최종 작업본을 각각 기본·text_tables 모드에서 983개씩 다시 실행했다. 네 실행 모두 983/983개를 완료했고 예외·시간초과는 0개다. 각 모드에서 Markdown 변경 9문서, JSON 변경 10문서였다. 수식 5문서, 미주 1문서, 링크 4문서가 본문 변경에 해당하며 `bug1997343.pdf`는 수식과 링크에 중복된다. `bug2004951.pdf`는 Alt 치환을 철회하여 HEAD의 본문으로 돌아왔다.
+2026년 10월 3일의 1차 검증에서 `107e18d`와 당시 작업본을 각각 기본·text_tables 모드에서 983개씩 다시 실행했다. 네 실행 모두 983/983개를 완료했고 예외·시간초과는 0개다. 각 모드에서 Markdown 변경 9문서, JSON 변경 10문서였다. 수식 5문서, 미주 1문서, 링크 4문서가 본문 변경에 해당하며 `bug1997343.pdf`는 수식과 링크에 중복된다. `bug2004951.pdf`는 Alt 치환을 철회하여 기준 본문으로 돌아왔다.
 
 | 기본 모드 지표 | HEAD | 최종 |
 | --- | ---: | ---: |
@@ -373,7 +373,7 @@ JSON만 달라진 `issue20516.pdf`는 새 구조 접근으로 기존 xref 손상
 
 전체 테스트는 3,389 passed, 24 skipped, 14 xfailed다. Ruff와 `git diff --check`도 통과했다. skip·xfail을 지원 성공으로 세지 않았다.
 
-## 재현 명령
+## 1차 재현 명령
 
 `PDFJS_DIR`과 `PAIRS_DIR`은 읽기 전용 코퍼스 경로다. 아래 명령은 저장소 루트에서 Python 3.9로 실행한다. `BASELINE_REPO`는 원래 HEAD의 별도 체크아웃이다. 서로 다른 버전·모드의 출력 파일은 구분한다.
 
@@ -390,4 +390,50 @@ ruff check dochan scripts tests
 /usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/fix-links.json --baseline .codex-work/links-before-next.json --timeout 60
 /usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/fix-links-tables.json --baseline .codex-work/links-before-next.json --text-tables --timeout 60
 /usr/bin/python3 -m scripts.probe_pdf_link_deferrals PDFJS_DIR --baseline .codex-work/links-before-next.json --after .codex-work/fix-links.json --output .codex-work/fix-link-causes.json
+```
+
+## 3차 리뷰 반영과 전수 회귀
+
+기준 HEAD `028f807`의 별도 스냅샷과 P2 5건을 수정한 작업본을 새로 실행했다. 이전 프로브 JSON을 재사용하지 않았다. 전체 테스트는 **3,416 passed, 24 skipped, 14 xfailed**이며 Ruff와 `git diff --check`도 통과했다. 기존 HEAD 테스트의 단언은 변경하지 않았다. 새 테스트는 미주 3개와 수식 24개다. 지적별 실패를 먼저 확인한 뒤 수정했고, 상세 실패 로그와 테스트 이름은 `.codex-work/report.md`에 기록했다.
+
+| 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
+| --- | --- | --- | --- | --- | --- |
+| PDF 수식 | 위 의미 정답 표의 공개 6문서다. | 원시 AF MathML·namespace StructElem과 MCID를 다시 대조했다. | display 의미 정답 8개와 보존 항목 22개, 빈 구조 3개를 구분한다. | display 8/8개가 일치하고 비치환 조각 640개(보존 Formula 조각 39개 포함)와 Artifact 95개를 보존했다. | 기존 실물 검증은 통과했으나 이번 경계 사례 자체의 실물 양성은 미검증이므로 ⬜를 유지한다. |
+| PDF 미주 | `freeculture.pdf`다. | Poppler 원시 단어 위치와 장별 정의·참조를 대조했다. | 정의·참조 222개와 소제목 21개를 보존한다. | 정의 본문·페이지, 참조 장·번호·페이지·시작 x는 222/222개, 소제목은 21/21개다. 참조 양 끝 좌표는 216/222개다. | 기존 실물 검증은 통과했으나 상단 작은 인용문 경계 사례의 실물 양성은 미검증이므로 ⬜를 유지한다. |
+| PDF 본문 링크 | pdf.js 공개 983개다. | 원시 주석과 독립 PDFium 글리프 중심을 기본·text_tables에서 각각 대조했다. | 기존 연결 388개를 보존하고 경계 오류·URL 소실을 만들지 않는다. | 비교 가능 주석 678개 중 연결 388/388개 일치, 보류 290개다. 경계 오류·URL 소실·최종 런 불일치는 0개다. | 회귀 검증을 통과했으며 전체 지원은 ⬜를 유지한다. |
+
+명시적 `display="inline"`은 위첨자의 기준선과 Layout Block보다 우선한다. 선언이 없을 때만 기하 추정을 사용한다. 텍스트 표는 수식 제거 전에 기존 표 검출기로 소유권을 정하고, 셀 안 수식은 글리프로 남긴다. TeX는 일반 주석과 이스케이프를 처리한 뒤 정규화하며 제어어 경계를 유지한다. `^^`·catcode·verb 등 지원하지 않는 어휘 변경은 치환하지 않는다. MathML 루트는 display와 비상속 메타데이터 외의 속성이 있으면 변환을 거부한다. namespace 구조에서도 math·mstyle 속성을 누락하지 않는다.
+
+미주는 반복 머리말 검출 결과를 적용한 뒤, 상단 작은 글꼴 줄과 인접 줄의 문단 연속성을 확인한다. 불확실한 첫 줄을 건너뛰고 나머지만 이동하지 않고 구역 복원을 보류한다. 지적 5건은 합성 테스트에서 재현했으며, 기존 실물 문서의 무변화를 해당 결함의 실물 양성 검증으로 세지 않았다.
+
+| 전수 비교 항목 | `028f807` | 3차 수정본 | 변화 |
+| --- | ---: | ---: | --- |
+| 공개 기본 모드 완료 문서 | 983 | 983 | 예외·시간초과 0개다. |
+| 공개 text_tables 완료 문서 | 983 | 983 | 예외·시간초과 0개다. |
+| 기본 Markdown·JSON 변경 문서 | 기준이다. | 0·0 | 바뀐 문서가 없다. |
+| text_tables Markdown·JSON 변경 문서 | 기준이다. | 0·0 | 바뀐 문서가 없다. |
+| 기본 Markdown 문자 수 | 2,195,958 | 2,195,958 | 같다. |
+| text_tables Markdown 문자 수 | 2,212,216 | 2,212,216 | 같다. |
+| 기본·text_tables 표 수 | 250·427 | 250·427 | 같다. |
+| 각 모드의 ERR·WARN·U+FFFD | 13·324·348 | 13·324·348 | 같다. |
+| 각 모드의 미주 수 | 222 | 222 | 같다. |
+| 내부 쌍별 수치가 같은 문서 | 기준이다. | 79/79 | 변경 0쌍이다. |
+
+공개 문서별 Markdown·JSON 해시와 모든 측정값이 동일하므로, 이번 단계에서 변경된 실물 문서 목록과 변화 사유는 없다. 내부 79쌍도 모든 익명 쌍별 수치와 집계가 같으며 위 1차 기록의 집계값을 유지한다. 내부 파일명·본문은 저장하지 않았다. `.codex-work/r3-comparison.json`에 전후 대조 결과를 남겼다.
+
+재현 시 `BASELINE_REPO`는 `git archive 028f807`로 만든 스냅샷이고 `FINAL_REPO`는 이 작업본이다. `PDFJS_DIR`·`PAIRS_DIR`은 읽기 전용 코퍼스 경로다. 서로 다른 버전의 결과가 섞이지 않도록 아래 출력 파일이 없는 상태에서 시작한다. 모두 Python 3.9로 실행한다.
+
+```sh
+/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
+ruff check dochan scripts tests
+/usr/bin/python3 scripts/compare_pdf_fix2.py BASELINE_REPO PDFJS_DIR .codex-work/r3-head-default.json
+/usr/bin/python3 scripts/compare_pdf_fix2.py FINAL_REPO PDFJS_DIR .codex-work/r3-final-default.json
+/usr/bin/python3 scripts/compare_pdf_fix2.py BASELINE_REPO PDFJS_DIR .codex-work/r3-head-tables.json --text-tables
+/usr/bin/python3 scripts/compare_pdf_fix2.py FINAL_REPO PDFJS_DIR .codex-work/r3-final-tables.json --text-tables
+/usr/bin/python3 scripts/compare_pdf_fix2.py BASELINE_REPO PAIRS_DIR .codex-work/r3-head-pairs.json --mode pairs
+/usr/bin/python3 scripts/compare_pdf_fix2.py FINAL_REPO PAIRS_DIR .codex-work/r3-final-pairs.json --mode pairs
+/usr/bin/python3 -m scripts.probe_pdf_formulas PDFJS_DIR --output .codex-work/r3-formulas.json
+/usr/bin/python3 -m scripts.probe_pdf_endnotes PDFJS_DIR > .codex-work/r3-endnotes-probe.json
+/usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/r3-links.json --timeout 180
+/usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/r3-links-tables.json --text-tables --timeout 180
 ```

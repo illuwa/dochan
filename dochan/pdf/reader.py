@@ -220,6 +220,17 @@ class PDFReader:
                         pdf.warnings.append(f"WARN: {page_number}페이지 표 복원 실패: {e!r}")
                     protected_orders = set().union(*(t.fragment_orders for t in tables))
                     if formula_extractor is not None:
+                        if self.text_tables:
+                            try:
+                                # Decide ownership before Formula removal can
+                                # destroy the repeated rows needed for detection.
+                                for group in self._body_groups(extractor, page_content.fragments, tables):
+                                    for _table, indices in detect_text_tables(group, page_number):
+                                        protected_orders.update(order for index in indices
+                                                                for order in group[index].fragment_orders)
+                            except Exception as e:
+                                pdf.warnings.append(f"WARN: {page_number}페이지 텍스트 표 소유권 판정 실패: {e!r}")
+                                protected_orders.update(f.order for f in page_content.fragments)
                         try:
                             equations, consumed_formula = formula_extractor.apply(
                                 page, page_content, protected_orders)

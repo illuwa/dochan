@@ -6,6 +6,7 @@ formulae leave original text intact. No visual equation recognition is attempted
 from dataclasses import dataclass, field
 import math
 import re
+from typing import Optional
 from xml.sax.saxutils import escape, quoteattr  # nosemgrep: use-defused-xml (문자열 이스케이프만, XML 파싱은 lxml 안전 파서)
 
 from lxml import etree
@@ -28,8 +29,49 @@ class _Formula:
     page: object
     members: list = field(default_factory=list)
     unsupported: bool = False
-    display: bool = False
+    display: Optional[bool] = None
     preserve: bool = False
+
+
+def _tex_without_comments(source):
+    """Strip ordinary TeX comments without changing escaped percent tokens.
+
+    A comment suppresses its end-of-line (including next-line indentation),
+    but still terminates a control word. Decline altered lexical conventions.
+    """
+    if "^^" in source:
+        raise ValueError("TeX 문자 재해석은 지원하지 않음")
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
+    parts = []
+    index = 0
+    control_word = False
+    while index < len(source):
+        char = source[index]
+        if char == "%":
+            end = source.find("\n", index)
+            index = len(source) if end < 0 else end + 1
+            while index < len(source) and source[index] in " \t":
+                index += 1
+            if control_word:
+                parts.append(" ")
+            control_word = False
+        elif char == "\\":
+            end = index + 1
+            while end < len(source) and source[end].isascii() and source[end].isalpha():
+                end += 1
+            control_word = end > index + 1
+            if control_word:
+                if source[index + 1:end] in {"verb", "catcode", "endlinechar", "obeylines", "obeyspaces", "csname"}:
+                    raise ValueError("TeX 주석 어휘 변경은 지원하지 않음")
+            else:
+                end = min(len(source), end + 1)
+            parts.append(source[index:end])
+            index = end
+        else:
+            parts.append(char)
+            index += 1
+            control_word = False
+    return "".join(parts).strip()
 
 
 class FormulaExtractor:
@@ -262,9 +304,16 @@ class FormulaExtractor:
             for attr in attributes[:32]:
                 attr = self.pdf.resolve(attr)
                 if isinstance(attr, dict):
-                    for key in ("mathvariant", "display", "linethickness", "open", "close", "separators",
-                                "width", "rowspan", "columnspan", "bevelled"):
+                    keys = ("mathvariant", "display", "linethickness", "open", "close", "separators",
+                            "width", "rowspan", "columnspan", "bevelled")
+                    if tag in ("math", "mstyle"):
+                        # Preserve descendant defaults so the converter can
+                        # reject unsupported inheritance, including new names.
+                        keys = [key for key in attr if key not in ("O", "NS")]
+                    for key in keys:
                         if key in attr:
+                            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", key):
+                                raise ValueError("MathML 속성 이름 손상")
                             attr_value = self.pdf.resolve(attr[key])
                             text = (str(attr_value).lower() if isinstance(attr_value, (bool, int, float))
                                     else text_string(attr_value))
@@ -295,12 +344,12 @@ class FormulaExtractor:
                 latex = mathml_to_latex(data)
                 root = etree.fromstring(data, etree.XMLParser(
                     resolve_entities=False, load_dtd=False, no_network=True))
-                record.display = root.get("display") == "block"
+                record.display = {"block": True, "inline": False}.get(root.get("display"))
                 # Empty MathML is layout-only, not a visible equation.
                 return Equation(script=data.decode("utf-8-sig"), latex_override=latex,
                                 script_format="mathml") if latex else None
             source = data.decode("utf-8-sig").strip()
-            latex = source
+            latex = _tex_without_comments(source)
             for left, right in (("$$", "$$"), ("$", "$"), (r"\[", r"\]"), (r"\(", r"\)")):
                 if latex.startswith(left) and latex.endswith(right) and len(latex) >= len(left + right):
                     latex = latex[len(left):-len(right)].strip()
@@ -319,7 +368,7 @@ class FormulaExtractor:
             latex = mathml_to_latex(encoded)
             root = etree.fromstring(encoded, etree.XMLParser(
                 resolve_entities=False, load_dtd=False, no_network=True))
-            record.display = root.get("display") == "block"
+            record.display = {"block": True, "inline": False}.get(root.get("display"))
             if latex:
                 return Equation(script=tree, latex_override=latex, script_format="mathml")
         # Alt/ActualText is prose, not a declared mathematical source syntax.
@@ -367,6 +416,9 @@ class FormulaExtractor:
                 self._warn("의미 자료 해석 실패: " + str(exc))
                 continue
             if equation is None:
+                continue
+            # Explicit inline wins over both Layout and baseline geometry.
+            if record.display is False:
                 continue
             attributes = self.pdf.resolve(record.node.get("A"))
             for attr in attributes if isinstance(attributes, list) else [attributes]:

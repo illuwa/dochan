@@ -12,11 +12,12 @@ hwp/section.py — 섹션 파서 (트리 구축 + 컨트롤 식별)
 """
 
 import struct
+import zlib
 from bisect import bisect_right
 from dataclasses import dataclass, replace as _dc_replace
 from typing import List
 
-from ..utils.safe_decompress import safe_zlib_decompress
+from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
 
 from ..constants import (
     HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT, HWPTAG_PARA_CHAR_SHAPE,
@@ -67,7 +68,12 @@ def _apply_link_ranges(runs, ranges):
     return runs
 
 
-MAX_HWP_RECORDS = 200_000
+# Public corpus maximum: 638,984 records in one section. A byte-only
+# bound would admit 52,428,800 empty records in 200 MiB and amplify them
+# into Python tree nodes. Keep an independent object/work bound as well.
+MAX_HWP_RECORDS = 1_000_000
+MAX_HWP_DOCUMENT_RECORDS = 2_000_000
+MAX_HWP_DOCUMENT_BYTES = MAX_DECOMPRESSED_SIZE
 MAX_HWP_STRUCTURE_DEPTH = 64
 MAX_HWP_TABLE_DEPTH = 32
 MAX_HWP_TABLE_CELLS = 200_000
@@ -114,6 +120,8 @@ class SectionParser:
         self.errors = []
         self._section_cells = 0
         self._document_cells = 0
+        self._document_records = 0
+        self._document_bytes = 0
         self._structure_depth = 0
         self._table_depth = 0
         self._in_table_cell = False
@@ -123,8 +131,27 @@ class SectionParser:
     def parse_stream(self, stream_data: bytes, is_compressed: bool,
                      *, reject_record_limit: bool = False) -> Section:
         self._reset_section_limits()
+        byte_limit = min(MAX_DECOMPRESSED_SIZE,
+                         MAX_HWP_DOCUMENT_BYTES - self._document_bytes)
         if is_compressed:
-            stream_data = safe_zlib_decompress(stream_data)
+            try:
+                stream_data = safe_zlib_decompress(stream_data, max_size=byte_limit)
+            except (ValueError, zlib.error) as exc:
+                # Failed inflation may already have consumed the whole budget
+                # (truncation, bad checksum, invalid deflate). Never let the
+                # next section repeat that work for free.
+                self._document_bytes += byte_limit
+                if "Decompressed size exceeds limit" not in str(exc):
+                    raise
+                self.errors.append(f"ERR: HWP section/document size limit: {exc}")
+                return Section()
+        if len(stream_data) > byte_limit:
+            self.errors.append(
+                "ERR: HWP section/document size exceeds limit: "
+                f"{len(stream_data)} > {byte_limit} bytes"
+            )
+            return Section()
+        self._document_bytes += len(stream_data)
 
         records = self._read_all_records(stream_data, reject_record_limit=reject_record_limit)
         tree = self._build_tree(records)
@@ -134,8 +161,17 @@ class SectionParser:
 
     def _read_all_records(self, data: bytes, *, reject_record_limit: bool = False) -> List[RawRecord]:
         records = []
+        if len(data) > MAX_DECOMPRESSED_SIZE:
+            self.errors.append("ERR: HWP section size exceeds limit")
+            return records
         i = 0
         while i < len(data) - 3:
+            if self._document_records >= MAX_HWP_DOCUMENT_RECORDS:
+                self.errors.append(
+                    "ERR: HWP document record count exceeds limit: "
+                    f"more than {MAX_HWP_DOCUMENT_RECORDS}"
+                )
+                break
             if len(records) >= MAX_HWP_RECORDS:
                 message = (
                     "ERR: HWP section record count exceeds limit: "
@@ -149,6 +185,9 @@ class SectionParser:
                 rec, new_i = self._read_one_record(data, i)
                 if rec:
                     records.append(rec)
+                    # Includes a rejected ViewText attempt before a BodyText
+                    # fallback, so repeated attempts cannot evade this budget.
+                    self._document_records += 1
                 i = new_i
             except ValueError as e:
                 self.errors.append(f"ERR: 레코드 읽기 실패 offset={i}: {e}")
@@ -193,9 +232,7 @@ class SectionParser:
         # 1단계: LIST_HEADER 뒤의 동일 레벨 레코드를 자식으로 level+1 보정
         # ★ 반복 적용으로 중첩 LH까지 처리
         adjusted = list(records)
-        # NOTE: 5-pass fixpoint loop is O(5*n) where n=records.
-        # Acceptable for documents up to ~100K records.
-        # For larger documents, consider single-pass state machine.
+        # At most five linear passes; n is bounded before allocating the tree.
         for _pass in range(5):
             new_adjusted = []
             changed = False
@@ -252,6 +289,7 @@ class SectionParser:
                 f"{depth} > {self.MAX_STRUCTURE_DEPTH}",
             )
             return
+        retained = []
         i = 0
         while i < len(nodes):
             node = nodes[i]
@@ -267,18 +305,19 @@ class SectionParser:
                 i + 1 < len(nodes) and
                 nodes[i + 1]['record'].tag_id == HWPTAG_PARA_HEADER):
                 # PH (+ 그 이후 non-LH 형제들)를 LH 자식으로 이동
-                moved = 0
-                while (i + 1 < len(nodes) and
-                       nodes[i + 1]['record'].tag_id != HWPTAG_LIST_HEADER):
-                    sibling = nodes.pop(i + 1)
-                    node['children'].append(sibling)
-                    moved += 1
-                # 이동하지 않았으면 다음으로
-                if moved == 0:
-                    i += 1
-                # 이동했으면 같은 i에서 재확인 (LH가 연속일 수 있음)
+                end = i + 1
+                while (end < len(nodes) and
+                       nodes[end]['record'].tag_id != HWPTAG_LIST_HEADER):
+                    end += 1
+                node['children'].extend(nodes[i + 1:end])
+                self._fix_empty_list_headers(node['children'], depth=depth + 1)
+                i = end
             else:
                 i += 1
+            retained.append(node)
+        # Repeated pop(i + 1) shifts the remaining sibling list O(n²).
+        # Compact once, retaining the same node identities and visit order.
+        nodes[:] = retained
 
     def _append_fatal_once(self, key: str, message: str) -> None:
         if key in self._fatal_error_keys:

@@ -12,7 +12,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Dict, List
 
-from ..utils.safe_decompress import safe_zlib_decompress
+from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
 
 from ..constants import (
     HWPTAG_DOCUMENT_PROPERTIES, HWPTAG_BIN_DATA, HWPTAG_FACE_NAME, HWPTAG_CHAR_SHAPE,
@@ -24,7 +24,8 @@ from .records.style import parse_style_record
 from .revisions import parse_change, parse_author, HWPTAG_TRACK_CHANGE, HWPTAG_TRACK_CHANGE_AUTHOR
 
 
-MAX_HWP_RECORDS = 200_000
+# Match the section object ceiling, independently of the 200 MiB byte cap.
+MAX_HWP_RECORDS = 1_000_000
 
 
 @dataclass
@@ -64,7 +65,13 @@ class DocInfoParser:
 
     def parse_stream(self, stream_data: bytes, is_compressed: bool) -> DocInfo:
         if is_compressed:
-            stream_data = safe_zlib_decompress(stream_data)
+            try:
+                stream_data = safe_zlib_decompress(stream_data, max_size=MAX_DECOMPRESSED_SIZE)
+            except ValueError as exc:
+                if "Decompressed size exceeds limit" not in str(exc):
+                    raise
+                self.errors.append(f"ERR: HWP DocInfo size limit: {exc}")
+                return DocInfo(errors=list(self.errors))
 
         doc_info = DocInfo()
         records = self._read_all_records(stream_data)
@@ -107,6 +114,9 @@ class DocInfoParser:
     def _read_all_records(self, data: bytes):
         """레코드 순차 읽기 (트리 구축 불필요 — DocInfo는 flat)"""
         records = []
+        if len(data) > MAX_DECOMPRESSED_SIZE:
+            self.errors.append("ERR: HWP DocInfo size exceeds limit")
+            return records
         i = 0
         while i < len(data) - 3:
             if len(records) >= MAX_HWP_RECORDS:

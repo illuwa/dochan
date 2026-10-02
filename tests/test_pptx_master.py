@@ -719,3 +719,19 @@ def test_content_tree_released_on_parse_failure(tmp_path, monkeypatch):
     assert any('synthetic content failure' in e for e in doc.errors)
     assert reader._last_layout_content == ('', None)
     assert not any(root.tag == '{%s}sldLayout' % P_NS for root in reader._text_styles.root_paths)
+
+
+def test_node_keys_use_one_index_per_tree_not_getpath():
+    # 도형마다 getpath() 로 형제를 훑으면 도형 수의 제곱이 된다. 트리마다 순번 색인을 한 번만 만들어 재사용한다.
+    from lxml import etree
+    from dochan.ooxml import pptx_styles
+    root = etree.fromstring(b"<r>" + b"<s/>" * 50 + b"</r>")
+    resolver = pptx_styles.TextStyleResolver.__new__(pptx_styles.TextStyleResolver)
+    resolver.root_paths = {root: "ppt/slides/slide1.xml"}
+    resolver._indexes = {}
+    keys = [resolver._node_key(child) for child in root]
+    assert keys == [("ppt/slides/slide1.xml", position) for position in range(1, 51)]
+    assert list(resolver._indexes) == [root]
+    index = resolver._indexes[root]
+    resolver._node_key(root[0])
+    assert resolver._indexes[root] is index

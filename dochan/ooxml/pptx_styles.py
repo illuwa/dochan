@@ -74,6 +74,7 @@ class TextStyleResolver:
         self.bytes = 0
         self.nodes = {}
         self.root_paths = {presentation: "ppt/presentation.xml"}
+        self._indexes = {}
 
     def warn(self, message):
         warning = 'WARN: PPTX text style ' + message
@@ -146,13 +147,24 @@ class TextStyleResolver:
         path = self.root_paths.get(root)
         if self.parts.get(path) is not root:
             self.root_paths.pop(root, None)
+            self._indexes.pop(root, None)
 
     def _node_key(self, node):
         tree = node.getroottree()
-        path = self.root_paths.get(tree.getroot())
+        root = tree.getroot()
+        path = self.root_paths.get(root)
         # Standalone nodes have no package identity. Package nodes use their
         # structural position, since cNvPr IDs can be missing or duplicated.
-        return (path, tree.getpath(node)) if path is not None else node
+        # One document-order index per tree replaces per-node getpath(), which
+        # rescans siblings and made many-shape slides quadratic.
+        if path is None:
+            return node
+        index = self._indexes.get(root)
+        if index is None:
+            index = {element: position for position, element in enumerate(root.iter())}
+            self._indexes[root] = index
+        position = index.get(node)
+        return (path, position if position is not None else tree.getpath(node))
 
     def _take_node(self, node):
         # Cache traversals and charge their work to the owning XML part, so one

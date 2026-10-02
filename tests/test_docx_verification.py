@@ -109,10 +109,11 @@ def test_story_oracle_detects_header_after_body_and_missing_note(tmp_path):
 
 
 def test_probe_primary_result_does_not_pass_empty_unsupported_body(tmp_path):
-    path = tmp_path / 'strict.docx'
+    path = tmp_path / 'unsupported.docx'
     with zipfile.ZipFile(path, 'w') as package:
         package.writestr('[Content_Types].xml', '<Types/>')
-        package.writestr('word/document.xml', '<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main">'
+        # Strict is now supported; retain the empty/unsupported-body guard.
+        package.writestr('word/document.xml', '<w:document xmlns:w="urn:dochan:test:unsupported-wordprocessingml">'
                           '<w:body><w:p><w:r><w:t>missing</w:t><w:drawing><shape/></w:drawing></w:r></w:p></w:body></w:document>')
     result = verify.probe(tmp_path)['reading_order'][0]
     assert not result['exact']

@@ -189,6 +189,7 @@ class XLSXReader:
             sheet_states = {node.get("name"): {"hidden": 1, "veryHidden": 2}.get(node.get("state"), 0)
                             for node in workbook.findall("s:sheets/s:sheet", namespaces=_namespaces(workbook))}
             for index, (sheet_name, sheet_path) in enumerate(sheets, start=1):
+                self._strict_iso_dates = False
                 self._sheet_range_cells_used = 0
                 self._sheet_range_budget_exhausted = False
                 section = Section(
@@ -212,6 +213,7 @@ class XLSXReader:
                             section.elements.append(table)
                     else:
                         sheet_root = package.read_xml_part(sheet_path)
+                        self._strict_iso_dates = package.is_strict_part(sheet_path)
                         headers, footers = self._read_sheet_headers_footers(sheet_root)
                         section.elements.extend(headers)
                         table = self._read_sheet_table(package, sheet_root, sheet_path, sheet_name, shared_strings, styles)
@@ -1420,12 +1422,47 @@ class XLSXReader:
             return self._with_formula("TRUE" if value == "1" else "FALSE", cell_elem, shared_formulas, cell_children.get("f"))
         if cell_type == "str":
             return self._with_formula(self._value_text(cell_elem, cell_children), cell_elem, shared_formulas, cell_children.get("f"))
+        if cell_type == "d" and (getattr(self, "_strict_iso_dates", False)
+                                 or cell_elem.tag == f"{{{STRICT_S_NS}}}c"):
+            return self._with_formula(
+                self._format_iso_date(self._value_text(cell_elem, cell_children), self._cell_format(cell_elem, styles)),
+                cell_elem, shared_formulas, cell_children.get("f"),
+            )
         return self._with_formula(
             self._format_cell_value(self._value_text(cell_elem, cell_children), self._cell_format(cell_elem, styles)),
             cell_elem,
             shared_formulas,
             cell_children.get("f"),
         )
+
+    def _format_iso_date(self, value: str, fmt: str) -> str:
+        # SpreadsheetML t="d" stores an ISO 8601 date, not an Excel serial.
+        # Keep the lexical value for General and non-date formats. Date/time
+        # formats follow the same display contract as numeric date cells.
+        try:
+            if len(value) > 64 or not re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+                r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?)?", value
+            ):
+                raise ValueError("invalid ISO date")
+            # Python 3.9 only accepts 3 or 6 fractional digits. Parse whole
+            # seconds separately and keep the fraction for existing rounding.
+            fraction = re.search(r"\.([0-9]+)", value)
+            fraction_seconds = float("0." + fraction.group(1)) if fraction else 0.0
+            whole = value[:fraction.start()] + value[fraction.end():] if fraction else value
+            date = datetime.fromisoformat(whole[:-1] + "+00:00" if whole.endswith("Z") else whole)
+        except ValueError:
+            warning = "WARN: XLSX invalid ISO date: " + value[:80]
+            if warning not in self._errors:
+                self._errors.append(warning)
+            return value
+        kind = self._format_metadata(fmt).kind if fmt else ""
+        if kind == "date":
+            return date.strftime("%Y-%m-%d")
+        if kind == "time":
+            seconds = date.hour * 3600 + date.minute * 60 + date.second + fraction_seconds
+            return self._excel_time(seconds / 86400, include_seconds="ss" in fmt.lower())
+        return value
 
     def _text_runs(self, elem) -> str:
         if elem is None:

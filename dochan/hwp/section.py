@@ -520,9 +520,12 @@ class SectionParser:
             # 하이퍼링크 필드(%hlk) 범위에 링크 부여
             link_ranges = self._hyperlink_ranges(text_result, ctrl_nodes)
             if link_ranges:
-                if not remaining and any(url and start < len(text_result['text']) and end > 0
-                                         for start, end, url in link_ranges):
-                    self._text_run_limit()
+                if plain_tail:
+                    text_end = len(text_result['text'])
+                    tail_start = text_end - len(para.runs[-1].text)
+                    if any(url and max(start, tail_start) < min(end, text_end)
+                           for start, end, url in link_ranges):
+                        self._text_run_limit()
                 # Never apply links to the unformatted suffix. If links exhaust
                 # the budget earlier, join the two plain suffixes only once.
                 tail = para.runs.pop() if plain_tail else None

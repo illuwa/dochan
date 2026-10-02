@@ -1000,14 +1000,20 @@ class HWPXParser:
             underline = cs['underline']
             strikeout = cs['strikeout']
 
-        def flush():
+        def append_text(text):
+            # 비어 있는 조각은 예약 여부를 검사할 때 다시 순회하지 않는다.
+            if text:
+                text_parts.append(text)
+
+        def flush(reserved=False):
             """누적 텍스트를 TextRun 으로 확정한다. 링크 경계에서도 호출된다."""
             if not text_parts:
                 return
             text = ''.join(text_parts)
             del text_parts[:]
             if text:
-                results.append(self._budgeted_text(
+                make_run = TextRun if reserved else self._budgeted_text
+                results.append(make_run(
                     text=text,
                     bold=bold, italic=italic,
                     font_size_pt=font_size_pt,
@@ -1016,16 +1022,18 @@ class HWPXParser:
                 ))
 
         def parse_after_prefix(parse_nested):
-            # 빈/미지원 컨트롤은 기존 런 경계를 바꾸지 않는다.
-            pending = list(text_parts)
-            result_start = len(results)
+            # 앞 본문의 예산만 먼저 예약한다. 문자열 확정은 실제 개체가
+            # 생긴 경우에만 한다. 빈 개체 반복에서 누적 본문 복사/합침을
+            # 되풀이하면 런 예산 이내에서도 제곱 시간이 걸린다.
             remaining = self._text_runs_remaining
             warned = self._text_run_budget_warned
-            flush()
+            reserved = bool(text_parts) and remaining > 0
+            if reserved:
+                self._text_runs_remaining -= 1
             nested = parse_nested()
-            if not nested:
-                text_parts[:] = pending
-                del results[result_start:]
+            if nested:
+                flush(reserved=reserved)
+            else:
                 self._text_runs_remaining = remaining
                 if not warned and self._text_run_budget_warned:
                     self.errors[:] = [e for e in self.errors if 'HWPX text run budget' not in e]
@@ -1039,11 +1047,11 @@ class HWPXParser:
                 # charPr 속성은 별도 처리하지 않고 charPrIDRef 기반
                 pass
             elif tag == 't':
-                text_parts.append(_text_of_t(child))
+                append_text(_text_of_t(child))
             elif tag == 'tab':
-                text_parts.append('\t')
+                append_text('\t')
             elif tag == 'lineBreak':
-                text_parts.append('\n')
+                append_text('\n')
             elif tag == 'tbl':
                 flush()
                 results.append(self._parse_table_elem(child))
@@ -1058,7 +1066,7 @@ class HWPXParser:
                 results.extend(self._parse_chart_elem(child))
             elif tag == 'compose':
                 # 글자 겹치기 — 표시 문자는 composeText 속성에 있다
-                text_parts.append(child.get('composeText', '') or '')
+                append_text(child.get('composeText', '') or '')
             elif tag in FORM_TAGS:
                 flush()
                 form = self._parse_form_run(child, TextRun(

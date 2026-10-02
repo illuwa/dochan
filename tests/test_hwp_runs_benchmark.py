@@ -60,3 +60,20 @@ def test_review_benchmark_patterns_preserve_public_api_text(kind, pattern):
         assert measured['notes'] == 8
     elif pattern == 'paragraphs':
         assert measured['paragraphs'] == 8
+
+
+@pytest.mark.parametrize('pattern', ['empty-drawings', 'empty-controls'])
+def test_empty_control_benchmark_counts_full_public_api_text(pattern):
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+        [sys.executable, str(root / 'scripts/benchmark_hwp_runs.py'),
+         '--source-root', str(root), '--format', 'hwpx', '--count', '8', '--pattern', pattern],
+        check=True, capture_output=True, text=True,
+    )
+    measured = json.loads(result.stdout)
+    assert measured['text_preserved']
+    assert measured['model_text_chars'] == 8000
+    assert measured['markdown_text_chars'] == 8000
+    assert measured['json_text_chars'] == 16000
+    assert measured['runs'] == 1
+    assert measured['errors'] == []

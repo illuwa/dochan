@@ -101,6 +101,10 @@ def prepare(directory, kind, count, style, pattern='runs'):
                 body += '<hp:t>' + 'x' * length + '</hp:t></hp:run></hp:p>'
             elif pattern == 'bookmarks':
                 body = '<hp:p><hp:run>' + ('<hp:t>x</hp:t><hp:ctrl><hp:bookmark name="b"/></hp:ctrl>') * length + '</hp:run></hp:p>'
+            elif pattern in ('empty-drawings', 'empty-controls'):
+                control = ('<hp:rect/>' if pattern == 'empty-drawings'
+                           else '<hp:ctrl><hp:unknown/></hp:ctrl>')
+                body = '<hp:p><hp:run>' + ('<hp:t>' + 'x' * 1000 + '</hp:t>' + control) * length + '</hp:run></hp:p>'
             else:
                 body = ('<hp:p>' + (run0 + run1) * (length // 2)
                         + (run0 if length % 2 else '') + '</hp:p>')
@@ -188,7 +192,9 @@ def main():
     parser.add_argument('--format', choices=['hwp', 'hwpx'], required=True)
     parser.add_argument('--count', type=int, required=True)
     parser.add_argument('--style', choices=['alternating', 'same'], default='alternating')
-    parser.add_argument('--pattern', choices=['runs', 'paragraphs', 'notes', 'bookmarks'], default='runs')
+    parser.add_argument('--pattern', choices=[
+        'runs', 'paragraphs', 'notes', 'bookmarks', 'empty-drawings', 'empty-controls',
+    ], default='runs')
     parser.add_argument('--prepared-dir', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not 0 < args.count <= 10_000_000:
@@ -197,7 +203,8 @@ def main():
         parser.error('HWP supports runs and paragraphs patterns')
     root = args.source_root.resolve()
     if args.prepared_dir:
-        print(json.dumps(measure(root, args.prepared_dir, args.format, args.count)))
+        text_count = args.count * (1000 if args.pattern in ('empty-drawings', 'empty-controls') else 1)
+        print(json.dumps(measure(root, args.prepared_dir, args.format, text_count)))
         return
     with tempfile.TemporaryDirectory(prefix='dochan-runs-') as temporary:
         directory = Path(temporary)

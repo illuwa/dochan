@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 import json
 from pathlib import Path
 
-import olefile
+from dochan import cfb as olefile  # olefile 호환 API 의 자체 [MS-CFB] 리더
 
 from dochan import Dochan
 from dochan.office_binary.officeart import walk_records

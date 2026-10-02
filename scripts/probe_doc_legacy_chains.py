@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import struct
 
-import olefile
+from dochan import cfb as olefile  # olefile 호환 API 의 자체 [MS-CFB] 리더
 
 from dochan.office_binary.doc_binary import DocBinary
 from dochan.office_binary.doc_stories import _plc

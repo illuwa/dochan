@@ -142,7 +142,7 @@ def extract_main(source, path):
 
 def raw_records(path):
     """마스터/Environment 및 슬라이드 CF의 원시 바이트와 스트림 위치를 덤프한다."""
-    import olefile
+    from dochan import cfb as olefile
     from dochan.office_binary.officeart import parse_records, walk_records
     from dochan.office_binary.ppt_render import sheet_shapes
     from dochan.office_binary.ppt_structure import resolve_presentation

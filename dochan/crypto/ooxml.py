@@ -263,7 +263,7 @@ def decrypt_ooxml(ole, password: Optional[str] = None) -> bytes:
                 raise _error("복호화된 패키지가 ZIP 형식이 아닙니다.")
             return plain
         raise _error("암호가 필요하거나 암호가 올바르지 않습니다.")
-    except (KeyError, TypeError, struct.error, ET.XMLSyntaxError, binascii.Error, UnicodeError, OSError) as exc:
+    except (KeyError, TypeError, struct.error, ET.XMLSyntaxError, binascii.Error, UnicodeError, OSError):
         raise _error("암호 정보가 손상되었습니다.") from None
     except ValueError as exc:
         if str(exc).startswith("ERR: 암호화된 문서"):

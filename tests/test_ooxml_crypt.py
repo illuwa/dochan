@@ -74,7 +74,9 @@ def _agile(password="secret", bits=256, algorithm="sha512"):
     data_salt = bytes(range(16, 32))
     secret = bytes(range(bits // 8))
     size = hashlib.new(algorithm).digest_size
-    digest = lambda data: hashlib.new(algorithm, data).digest()
+    def digest(data):
+        return hashlib.new(algorithm, data).digest()
+
     h = digest(salt + password.encode("utf-16le"))
     for i in range(3):
         h = digest(struct.pack("<I", i) + h)
@@ -86,7 +88,9 @@ def _agile(password="secret", bits=256, algorithm="sha512"):
     ns = "http://schemas.microsoft.com/office/2006/encryption"
     pns = "http://schemas.microsoft.com/office/2006/keyEncryptor/password"
     attrs = dict(saltSize="16", blockSize="16", keyBits=str(bits), hashSize=str(size), cipherAlgorithm="AES", cipherChaining="ChainingModeCBC", hashAlgorithm=algorithm.upper())
-    b64 = lambda value: base64.b64encode(value).decode()
+    def b64(value):
+        return base64.b64encode(value).decode()
+
     root = ET.Element("{" + ns + "}encryption")
     ET.SubElement(root, "{" + ns + "}keyData", dict(attrs, saltValue=b64(data_salt)))
     package = bytearray(struct.pack("<Q", len(payload)))

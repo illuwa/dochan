@@ -11,6 +11,7 @@ KS X 6101:2011 / OWPML 표준 기반.
   BinData/ — 바이너리 데이터 (이미지 등)
 """
 import os
+from io import StringIO
 
 import posixpath
 import re
@@ -54,6 +55,9 @@ MAX_DOCUMENT_CELLS = 200_000
 # 공개 HWPX 실측 최대 33,617개의 4.46배이다.
 # 근거: docs/benchmarks/2026-10-03-hwp-runs-real-docs.md.
 MAX_DOCUMENT_TEXT_RUNS = 150_000
+# 공개 문서의 문단+각주 최대 31,301개에 여유를 둔 예약 상한이다.
+# 문단 분할 가능성이 있는 개체 경계도 미리 예약한다.
+MAX_DOCUMENT_BODY_NODES = 150_000
 MAX_DRAWING_DEPTH = 32
 MAX_FIELD_DEPTH = 64                 # 짝이 안 맞는 fieldBegin 이 무한히 쌓이는 것을 막는다
 MAX_FONT_SIZE_PT = 4096.0            # HWP 스펙상 글자 크기 상한
@@ -168,6 +172,10 @@ class HWPXParser:
         self._cell_budget = MAX_DOCUMENT_CELLS
         self._text_runs_remaining = MAX_DOCUMENT_TEXT_RUNS
         self._text_run_budget_warned = False
+        self._body_nodes_remaining = MAX_DOCUMENT_BODY_NODES
+        self._body_budget_exceeded = False
+        self._body_tail = StringIO()
+        self._body_tail_run = None
         self._part_name_map = {}  # normalized package path -> ZIP entry name
         self._bin_data_map = {}  # exact binary reference -> ZIP entry name
         self._ambiguous_bin_ids = set()
@@ -277,6 +285,9 @@ class HWPXParser:
         doc.para_shapes = self._para_shapes
         doc.styles = self._style_entries
         doc.face_names = self._face_names
+        if self._body_tail_run is not None:
+            self._body_tail_run.text = self._body_tail.getvalue()
+        self._body_tail.close()
         doc.errors = self.errors
         return doc
 
@@ -675,6 +686,8 @@ class HWPXParser:
                 node.tag = '{%s}chart' % NS['hp']
         self._chart_seen.clear()
 
+        self._limit_body_nodes(root)
+
         # ★ 최상위 <p>만 처리 (직접 자식)
         #   표 셀 안의 <p>는 _parse_table_cell에서 재귀 처리되므로
         #   root.iter()를 쓰면 중복됨
@@ -694,7 +707,73 @@ class HWPXParser:
             if _local_tag(child.tag) == 'chart' and child not in self._chart_seen:
                 self._chart_error("unsupported_placement", part_name + ": chart in an unsupported container")
         self._chart_seen.clear()
+        if self._body_budget_exceeded and self._body_tail_run is None:
+            self._body_tail_run = TextRun()
+            section.elements.append(Paragraph(runs=[self._body_tail_run]))
         return section
+
+    def _limit_body_nodes(self, root):
+        """모델 생성 전에 문서 순서대로 문단·각주와 분할 경계를 예약한다.
+
+        빈 문단도 예약한다. 각주는 정의와 참조 문단에 두 자리를 쓴다.
+        나머지 블록은 뒤쪽 문단이 분리될 수 있어 한 자리를 더 예약한다.
+        초과 이후에는 XML을 한 번만 훑어 표시 텍스트를 문서 꼬리에 모은다.
+        """
+        blocks = DRAWING_TAGS | {'tbl', 'pic', 'equation', 'chart', 'header', 'footer'}
+        stack = [iter(_selected_children(root))]
+        while stack:
+            node = next(stack[-1], None)
+            if node is None:
+                stack.pop()
+                continue
+            tag = _local_tag(node.tag)
+            cost = 0
+            if tag in ('p', 'memo') or tag in blocks:
+                cost = 1
+            elif tag in ('footNote', 'endNote', 'hiddenComment'):
+                cost = 2
+            if not self._body_budget_exceeded and cost > self._body_nodes_remaining:
+                self._body_budget_exceeded = True
+                self.errors.append(
+                    'WARN: HWPX paragraph/note budget exceeded; remaining text is '
+                    'preserved in one paragraph without formatting or hyperlinks'
+                )
+            if self._body_budget_exceeded:
+                self._append_plain_body(node)
+                # 큰 하위 트리를 분리하면 lxml의 네임스페이스 재조정이 증폭된다.
+                # 본문을 수집한 뒤 원래 문서 안에서 비우고 빈 노드만 분리한다.
+                node.clear()
+                node.getparent().remove(node)
+            else:
+                self._body_nodes_remaining -= cost
+                if len(node):
+                    stack.append(iter(_selected_children(node)))
+
+    def _append_plain_body(self, root):
+        """선택된 분기의 표시 텍스트만 보존한다. 양식 비밀번호 정책도 재사용한다."""
+        stack = [iter((root,))]
+        while stack:
+            node = next(stack[-1], None)
+            if node is None:
+                stack.pop()
+                continue
+            tag = _local_tag(node.tag)
+            if tag == 't':
+                self._body_tail.write(_text_of_t(node))
+            elif tag in FORM_TAGS:
+                run = self._parse_form_run(node)
+                if run is not None:
+                    self._body_tail.write(run.text)
+            elif tag == 'compose':
+                self._body_tail.write(node.get('composeText', '') or '')
+            elif tag in ('tab', 'lineBreak'):
+                self._body_tail.write('\t' if tag == 'tab' else '\n')
+            elif tag == 'equation':
+                self._body_tail.write(_parse_equation_elem(node).script)
+            elif tag == 'ctrl' and _bookmark_marker(node):
+                self._body_tail.write(_bookmark_marker(node))
+            elif len(node):
+                stack.append(iter(_selected_children(node)))
 
     def _parse_memogroup(self, memogroup_elem) -> list:
         """<hp:memogroup> → Footnote(type='comment') 목록"""
@@ -784,6 +863,8 @@ class HWPXParser:
 
             def flush_plain():
                 if plain_parts:
+                    if len(plain_parts) > 1:
+                        self._text_run_limit()
                     runs.append(TextRun(text=''.join(plain_parts)))
                     plain_parts.clear()
 
@@ -812,7 +893,7 @@ class HWPXParser:
                     ctrl_elem = self._parse_ctrl(child)
                     if ctrl_elem:
                         if isinstance(ctrl_elem, TextRun):
-                            if self._reserve_text_run():
+                            if self._reserve_text_run(self._run_has_formatting(ctrl_elem)):
                                 flush_plain()
                                 runs.append(ctrl_elem)
                             else:
@@ -843,27 +924,40 @@ class HWPXParser:
 
     # ── run ──
 
-    def _reserve_text_run(self) -> bool:
+    def _reserve_text_run(self, loses_formatting=True) -> bool:
         """모든 섹션과 중첩 본문이 같은 서식 런 예산을 소비한다."""
         if self._text_runs_remaining > 0:
             self._text_runs_remaining -= 1
             return True
+        if loses_formatting:
+            self._text_run_limit()
+        return False
+
+    def _text_run_limit(self):
         if not self._text_run_budget_warned:
             self.errors.append(
-                "WARN: HWPX text run budget exceeded; remaining text is unformatted"
+                "WARN: HWPX text run budget exceeded; remaining text is preserved "
+                "without formatting or hyperlinks"
             )
             self._text_run_budget_warned = True
-        return False
+
+    @staticmethod
+    def _run_has_formatting(run):
+        return (run.bold or run.italic or run.underline or run.strikeout
+                or run.superscript or run.subscript or run.link
+                or run.font_size_pt != 10.0)
 
     def _budgeted_text(self, text, **properties):
         # 문자열은 문단 수집기가 합친 뒤 한 번만 TextRun으로 만든다.
         # 초과 런마다 TextRun을 만들거나 문자열을 += 하면 메모리/시간이 증폭된다.
-        if self._reserve_text_run():
+        formatted = any(value != (10.0 if key == 'font_size_pt' else False)
+                        for key, value in properties.items() if key != 'link')
+        if self._reserve_text_run(formatted or bool(properties.get('link'))):
             return TextRun(text=text, **properties)
         return text
 
     def _budgeted_existing_run(self, run):
-        if self._reserve_text_run():
+        if self._reserve_text_run(self._run_has_formatting(run)):
             return run
         return run.text
 
@@ -921,6 +1015,23 @@ class HWPXParser:
                     link=self._current_link(),
                 ))
 
+        def parse_after_prefix(parse_nested):
+            # 빈/미지원 컨트롤은 기존 런 경계를 바꾸지 않는다.
+            pending = list(text_parts)
+            result_start = len(results)
+            remaining = self._text_runs_remaining
+            warned = self._text_run_budget_warned
+            flush()
+            nested = parse_nested()
+            if not nested:
+                text_parts[:] = pending
+                del results[result_start:]
+                self._text_runs_remaining = remaining
+                if not warned and self._text_run_budget_warned:
+                    self.errors[:] = [e for e in self.errors if 'HWPX text run budget' not in e]
+                    self._text_run_budget_warned = False
+            return nested
+
         for child in _selected_children(run_elem):
             tag = _local_tag(child.tag)
 
@@ -958,9 +1069,8 @@ class HWPXParser:
                     results.append(self._budgeted_existing_run(form))
             elif tag in DRAWING_TAGS:
                 # 도형(사각형/타원/그룹 등) 내부의 <drawText> 텍스트
-                drawn = self._parse_drawing_elem(child)
+                drawn = parse_after_prefix(lambda: self._parse_drawing_elem(child))
                 if drawn:
-                    flush()
                     results.extend(drawn)
             elif tag == 'ctrl':
                 bookmark = _bookmark_marker(child)
@@ -981,12 +1091,11 @@ class HWPXParser:
                         self._pop_field()
                     continue
 
-                ctrl_result = self._parse_ctrl(child, TextRun(
+                ctrl_result = parse_after_prefix(lambda: self._parse_ctrl(child, TextRun(
                     bold=bold, italic=italic, underline=underline,
                     strikeout=strikeout, font_size_pt=font_size_pt,
-                    link=self._current_link()))
+                    link=self._current_link())))
                 if ctrl_result is not None:
-                    flush()
                     if isinstance(ctrl_result, TextRun):
                         # Forms remain inline, just like DOCX content controls.
                         results.append(self._budgeted_existing_run(ctrl_result))

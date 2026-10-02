@@ -34,9 +34,25 @@ def _compress(data):
     return compressor.compress(data) + compressor.flush()
 
 
-def prepare(directory, kind, count, style):
+def prepare(directory, kind, count, style, pattern='runs'):
     """컨테이너 입력을 준비하고 원시/압축 크기를 돌려준다."""
     if kind == 'hwp':
+        if pattern == 'paragraphs':
+            # 문서 레코드 상한 안에서 두 섹션의 일반 문단 팬아웃을 측정한다.
+            sizes = prepare(directory, kind, 1, style)
+            (directory / 'body').unlink()
+            one = _record(66, 0, bytes(22)) + _record(67, 1, b'x\x00\r\x00')
+            raw_bytes = len((directory / 'header').read_bytes()) + len(
+                zlib.decompress((directory / 'docinfo').read_bytes(), -15))
+            compressed_bytes = sum((directory / name).stat().st_size for name in ('header', 'docinfo'))
+            for index, offset in enumerate(range(0, count, 320000)):
+                body = one * min(320000, count - offset)
+                compressed = _compress(body)
+                (directory / ('body%d' % index)).write_bytes(compressed)
+                raw_bytes += len(body)
+                compressed_bytes += len(compressed)
+            sizes.update(raw_bytes=raw_bytes, compressed_bytes=compressed_bytes)
+            return sizes
         text = b'x\x00' * count + b'\r\x00'
         pairs = bytearray(count * 8)
         for index in range(count):
@@ -78,8 +94,17 @@ def prepare(directory, kind, count, style):
         # 기존 섹션 XML 토큰 상한과 분리하여 문서 총 run 수를 측정한다.
         for index, offset in enumerate(range(0, count, 100000)):
             length = min(100000, count - offset)
-            section = ('<hs:sec %s><hp:p>' % namespaces + (run0 + run1) * (length // 2)
-                       + (run0 if length % 2 else '') + '</hp:p></hs:sec>')
+            if pattern == 'paragraphs':
+                body = '<hp:p><hp:run><hp:t>x</hp:t></hp:run></hp:p>' * length
+            elif pattern == 'notes':
+                body = '<hp:p><hp:run>' + '<hp:ctrl><hp:footNote/></hp:ctrl>' * length
+                body += '<hp:t>' + 'x' * length + '</hp:t></hp:run></hp:p>'
+            elif pattern == 'bookmarks':
+                body = '<hp:p><hp:run>' + ('<hp:t>x</hp:t><hp:ctrl><hp:bookmark name="b"/></hp:ctrl>') * length + '</hp:run></hp:p>'
+            else:
+                body = ('<hp:p>' + (run0 + run1) * (length // 2)
+                        + (run0 if length % 2 else '') + '</hp:p>')
+            section = '<hs:sec %s>%s</hs:sec>' % (namespaces, body)
             archive.writestr('Contents/section%d.xml' % index, section)
             raw_bytes += len(section.encode())
     return {'raw_bytes': raw_bytes,
@@ -122,8 +147,9 @@ def measure(source_root, directory, kind, count):
     streams = {}
     if kind == 'hwp':
         streams = {'FileHeader': (directory / 'header').read_bytes(),
-                   'DocInfo': (directory / 'docinfo').read_bytes(),
-                   'BodyText/Section0': (directory / 'body').read_bytes()}
+                   'DocInfo': (directory / 'docinfo').read_bytes()}
+        for index, path in enumerate(sorted(directory.glob('body*'))):
+            streams['BodyText/Section%d' % index] = path.read_bytes()
     with patch('dochan.reader.olefile.OleFileIO', lambda path: _StreamsOle(streams)):
         start = time.perf_counter()
         reader = Dochan(str(directory / ('input.' + kind)))
@@ -137,17 +163,17 @@ def measure(source_root, directory, kind, count):
 
     # JSON 복사 디코딩으로 최고 RSS를 부풀리지 않는다. 이 입력의 본문은
     # ASCII x뿐이고 JSON은 문단 text와 각 run text를 각각 한 번 기록한다.
-    elements = [element for section in reader.doc.sections for element in section.elements]
+    elements = reader.doc.find_all('paragraph')
     runs = [run for element in elements for run in getattr(element, 'runs', [])]
-    model_chars = sum(len(run.text) for run in runs)
+    model_chars = sum(run.text.count('x') for run in runs)
     md_chars = markdown.count('x')
-    json_chars = sum(len(match.group(1)) for match in re.finditer(r'"text": "(x*)"', json_output))
-    preserved = (model_chars == count and md_chars == count and json_chars == count * 2
-                 and all(not run.text.strip('x') for run in runs))
+    json_chars = sum(match.group(1).count('x') for match in re.finditer(r'"text": "([^"\n]*)"', json_output))
+    preserved = model_chars == count and md_chars == count and json_chars == count * 2
     result = {'parse_s': parsed - start, 'markdown_s': rendered - parsed,
               'json_s': finished - rendered, 'total_s': finished - start,
               'parse_peak_rss_mib': parse_rss, 'peak_rss_mib': peak_rss,
               'runs': len(runs), 'bold_runs': sum(run.bold for run in runs),
+              'paragraphs': len(elements), 'notes': len(reader.doc.find_all('note')),
               'model_text_chars': model_chars, 'markdown_text_chars': md_chars,
               'json_text_chars': json_chars, 'text_preserved': preserved,
               'errors': reader.errors}
@@ -162,10 +188,13 @@ def main():
     parser.add_argument('--format', choices=['hwp', 'hwpx'], required=True)
     parser.add_argument('--count', type=int, required=True)
     parser.add_argument('--style', choices=['alternating', 'same'], default='alternating')
+    parser.add_argument('--pattern', choices=['runs', 'paragraphs', 'notes', 'bookmarks'], default='runs')
     parser.add_argument('--prepared-dir', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not 0 < args.count <= 10_000_000:
         parser.error('--count must be in 1..10000000')
+    if args.format == 'hwp' and args.pattern not in ('runs', 'paragraphs'):
+        parser.error('HWP supports runs and paragraphs patterns')
     root = args.source_root.resolve()
     if args.prepared_dir:
         print(json.dumps(measure(root, args.prepared_dir, args.format, args.count)))
@@ -173,17 +202,18 @@ def main():
     with tempfile.TemporaryDirectory(prefix='dochan-runs-') as temporary:
         directory = Path(temporary)
         start = time.perf_counter()
-        sizes = prepare(directory, args.format, args.count, args.style)
+        sizes = prepare(directory, args.format, args.count, args.style, args.pattern)
         preparation_s = time.perf_counter() - start
         command = [sys.executable, str(Path(__file__).resolve()), '--source-root', str(root),
                    '--format', args.format, '--count', str(args.count), '--style', args.style,
+                   '--pattern', args.pattern,
                    '--prepared-dir', str(directory)]
         completed = subprocess.run(command, check=False, capture_output=True, text=True)  # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
         if completed.returncode:
             raise RuntimeError('measurement worker failed: ' + completed.stderr)
         result = json.loads(completed.stdout)
         result.update(sizes)
-        result.update(format=args.format, count=args.count, style=args.style,
+        result.update(format=args.format, count=args.count, style=args.style, pattern=args.pattern,
                       preparation_s=preparation_s)
         print(json.dumps(result, ensure_ascii=False))
 

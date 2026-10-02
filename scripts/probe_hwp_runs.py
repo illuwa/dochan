@@ -51,6 +51,15 @@ def _install_observers():
 
     SectionParser._parse_paragraph_group_impl = hwp
     HWPXParser._parse_paragraph_elem = hwpx
+    if hasattr(HWPXParser, '_limit_body_nodes'):
+        original_limit = HWPXParser._limit_body_nodes
+
+        def body_nodes(self, root):
+            before = self._body_nodes_remaining
+            original_limit(self, root)
+            _OBSERVATIONS['body_nodes_reserved'] += before - self._body_nodes_remaining
+
+        HWPXParser._limit_body_nodes = body_nodes
 
 
 def _model_runs(document):
@@ -84,18 +93,23 @@ def _digest(value):
 def _probe(path):
     from dochan import Dochan
     global _OBSERVATIONS
-    _OBSERVATIONS = {'pairs': [], 'characters': []}
+    _OBSERVATIONS = {'pairs': [], 'characters': [], 'body_nodes_reserved': 0}
     started = time.monotonic()
     result = {'file': path.parent.name + '/' + path.name,
               'format': path.suffix[1:].lower()}
     try:
         reader = Dochan(path)
         result.update(runs=_model_runs(reader.doc),
+                      paragraphs=len(reader.doc.find_all('paragraph')),
+                      notes=len(reader.doc.find_all('note')),
                       markdown_sha256=_digest(reader.to_markdown()),
                       json_sha256=_digest(reader.to_json()),
                       errors_sha256=_digest(json.dumps(reader.errors, ensure_ascii=False)),
                       error_count=len(reader.errors))
         for metric, values in _OBSERVATIONS.items():
+            if metric == 'body_nodes_reserved':
+                result[metric] = values
+                continue
             result[metric + '_histogram'] = dict(Counter(values))
             result[metric + '_top20'] = sorted(
                 enumerate(values), key=lambda item: (-item[1], item[0]))[:20]
@@ -139,6 +153,10 @@ def _summarize(rows):
             stats[metric] = _distribution(histogram, top)
         stats['runs'] = _distribution(Counter(row['runs'] for row in valid),
                                      [{'file': row['file'], 'value': row['runs']} for row in valid])
+        stats['paragraphs_and_notes'] = _distribution(
+            Counter(row['paragraphs'] + row['notes'] for row in valid),
+            [{'file': row['file'], 'value': row['paragraphs'] + row['notes']} for row in valid])
+        stats['body_nodes_reserved_max'] = max((row.get('body_nodes_reserved', 0) for row in valid), default=0)
         summary[kind] = stats
     return summary
 

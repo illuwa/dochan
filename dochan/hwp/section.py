@@ -520,6 +520,9 @@ class SectionParser:
             # 하이퍼링크 필드(%hlk) 범위에 링크 부여
             link_ranges = self._hyperlink_ranges(text_result, ctrl_nodes)
             if link_ranges:
+                if not remaining and any(url and start < len(text_result['text']) and end > 0
+                                         for start, end, url in link_ranges):
+                    self._text_run_limit()
                 # Never apply links to the unformatted suffix. If links exhaust
                 # the budget earlier, join the two plain suffixes only once.
                 tail = para.runs.pop() if plain_tail else None
@@ -553,6 +556,7 @@ class SectionParser:
             failure_serial = self._table_failure_serial
             starting_cells = self._section_cells
             starting_document_cells = self._document_cells
+            starting_text_runs = self._document_text_runs
             try:
                 ctrl_elem = self._parse_control(ctrl_node)
             except (_HWPStructureError, RecursionError) as exc:
@@ -560,6 +564,7 @@ class SectionParser:
                 # 이미 성공한 형제 컨트롤은 그 예약과 함께 보존한다.
                 self._section_cells = starting_cells
                 self._document_cells = starting_document_cells
+                self._document_text_runs = starting_text_runs
                 if isinstance(exc, _HWPStructureError):
                     self._append_fatal_once(exc.key, exc.message)
                 else:
@@ -569,6 +574,7 @@ class SectionParser:
                     )
                 continue
             if self._table_failure_serial != failure_serial:
+                self._document_text_runs = starting_text_runs
                 continue
             if isinstance(ctrl_elem, list):
                 elements.extend(ctrl_elem)
@@ -580,7 +586,8 @@ class SectionParser:
     def _text_run_limit(self):
         self._document_limit_once(
             "text-runs",
-            "WARN: HWP document text run budget exceeded; remaining text is unformatted",
+            "WARN: HWP document text run budget exceeded; remaining text is preserved "
+            "without formatting or hyperlinks",
         )
 
     def _text_runs(self, text_result, char_shape_data, remaining):
@@ -591,12 +598,9 @@ class SectionParser:
         styles match: merging those would change public serialized output.
         """
         text = text_result['text']
-        if remaining == 0:
-            self._text_run_limit()
-            return [TextRun(text=text)], True
         shapes = getattr(self.doc_info, 'char_shapes', None)
         if not char_shape_data or len(char_shape_data) < 8 or not shapes:
-            return [TextRun(text=text)], False
+            return [TextRun(text=text)], remaining == 0
         # A memoryview and iter_unpack avoid an input-sized list of tuples.
         pairs = struct.iter_unpack(
             '<II', memoryview(char_shape_data)[:len(char_shape_data) // 8 * 8])
@@ -606,11 +610,37 @@ class SectionParser:
         start = 0
         runs = []
 
-        def append_run(end):
+        def suffix_changes(end, next_id):
+            """무서식 단일 구간은 경고하지 않되, 뒤쪽 서식/분할 소실은 확인한다."""
+            cursor = start
+            shape_id = current_id
+            segments = 0
+            boundaries = chain(((end, next_id),),
+                               ((min(raw_to_text[min(pos, len(raw_to_text) - 1)], len(text)), sid)
+                                for pos, sid in pairs),
+                               ((len(text), None),))
+            for boundary, following_id in boundaries:
+                if boundary < cursor:
+                    continue
+                if boundary > cursor:
+                    segments += 1
+                    if segments > 1:
+                        return True
+                    if shape_id is not None and 0 <= shape_id < len(shapes):
+                        cs = shapes[shape_id]
+                        if (cs.bold or cs.italic or cs.size_pt != 10.0 or cs.underline_type > 0
+                                or cs.strikeout > 0 or cs.superscript or cs.subscript):
+                            return True
+                cursor = boundary
+                shape_id = following_id
+            return False
+
+        def append_run(end, next_id=None):
             if end == start:
                 return True
             if len(runs) >= remaining:
-                self._text_run_limit()
+                if suffix_changes(end, next_id):
+                    self._text_run_limit()
                 runs.append(TextRun(text=text[start:]))
                 return False
             run = TextRun(text=text[start:end])
@@ -630,7 +660,7 @@ class SectionParser:
             end = min(raw_to_text[min(pos, len(raw_to_text) - 1)], len(text))
             if end < start:
                 continue
-            if not append_run(end):
+            if not append_run(end, cs_id):
                 return runs, True
             start = end
             current_id = cs_id

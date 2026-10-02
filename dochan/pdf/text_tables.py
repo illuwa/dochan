@@ -21,6 +21,23 @@ def _space_width(line) -> float:
     return max(3.0, 0.5 * line.size)
 
 
+def _cell_segments(line):
+    """셀 텍스트와 서식 런이 공유하는 인접 조각 묶음."""
+    groups = []
+    end = 0.0
+    previous_space = _space_width(line)
+    for segment in line.segments:
+        space = max(segment.space_width, 0.0) or _space_width(line)
+        if groups and segment.x0 - end < 2 * max(previous_space, space):
+            groups[-1].append(segment)
+            end = max(end, segment.x1)
+        else:
+            groups.append([segment])
+            end = segment.x1
+        previous_space = space
+    return groups
+
+
 def _cells(line) -> List[Tuple[float, float, str]]:
     """인접 세그먼트를 칸으로 합친다.
 
@@ -29,19 +46,18 @@ def _cells(line) -> List[Tuple[float, float, str]]:
     """
     fallback = _space_width(line)
     cells: List[Tuple[float, float, str]] = []
-    previous_space = fallback
-    for segment in line.segments:
-        space = max(segment.space_width, 0.0) or fallback
-        threshold = max(previous_space, space)
-        if cells and segment.x0 - cells[-1][1] < 2 * threshold:
-            x0, x1, previous = cells[-1]
-            gap = segment.x0 - x1
-            sep = " " if (gap > 0.5 * threshold and previous and not previous.endswith(" ")
+    for group in _cell_segments(line):
+        x0, end, text = group[0].x0, group[0].x1, group[0].text
+        previous_space = max(group[0].space_width, 0.0) or fallback
+        for segment in group[1:]:
+            space = max(segment.space_width, 0.0) or fallback
+            sep = " " if (segment.x0 - end > 0.5 * max(previous_space, space)
+                          and text and not text.endswith(" ")
                           and not segment.text.startswith(" ")) else ""
-            cells[-1] = (x0, max(x1, segment.x1), previous + sep + segment.text)
-        else:
-            cells.append((segment.x0, segment.x1, segment.text))
-        previous_space = space
+            text += sep + segment.text
+            end = max(end, segment.x1)
+            previous_space = space
+        cells.append((x0, end, text))
     return [(x0, x1, " ".join(text.split())) for x0, x1, text in cells]
 
 
@@ -114,17 +130,19 @@ def _table(lines, rows, columns, tolerance, page_number):
         runs_by_column = [[] for _ in columns]
         ends = [None for _ in columns]
         spaces = [0.0 for _ in columns]
-        for segment in line.segments:
-            col = max(0, min(bisect_right(columns, segment.x0 + tolerance) - 1, len(columns) - 1))
-            runs = runs_by_column[col]
-            space = max(segment.space_width, 0.0) or _space_width(line)
-            if (runs and ends[col] is not None and segment.x0 - ends[col] > 0.5 * max(space, spaces[col])
-                    and not runs[-1][0].endswith(" ") and not segment.text.startswith(" ")):
-                previous_link = runs[-1][3] if len(runs[-1]) > 3 else ""
-                next_link = segment.runs[0][3] if segment.runs and len(segment.runs[0]) > 3 else ""
-                runs.append((" ", False, False, previous_link if previous_link == next_link else ""))
-            runs.extend(segment.runs or [(segment.text, False, False)])
-            ends[col], spaces[col] = segment.x1, space
+        for group in _cell_segments(line):
+            col = max(0, min(bisect_right(columns, group[0].x0 + tolerance) - 1, len(columns) - 1))
+            for segment in group:
+                runs = runs_by_column[col]
+                space = max(segment.space_width, 0.0) or _space_width(line)
+                if (runs and ends[col] is not None and segment.x0 - ends[col] > 0.5 * max(space, spaces[col])
+                        and not runs[-1][0].endswith(" ") and not segment.text.startswith(" ")):
+                    previous_link = runs[-1][3] if len(runs[-1]) > 3 else ""
+                    next_link = segment.runs[0][3] if segment.runs and len(segment.runs[0]) > 3 else ""
+                    runs.append((" ", False, False, previous_link if previous_link == next_link else ""))
+                runs.extend(segment.runs or [(segment.text, False, False)])
+                ends[col] = max(ends[col], segment.x1) if ends[col] is not None else segment.x1
+                spaces[col] = space
         for col, value in enumerate(_cell_texts(cells, columns, tolerance)):
             cell = Cell(row=row, col=col, provenance=provenance)
             if value:

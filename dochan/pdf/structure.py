@@ -7,13 +7,14 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .crypto import StandardSecurityHandler, UnsupportedEncryption
-from .filters import decode_stream
+from .filters import PredictorBudget, decode_stream
 from .objects import PDFLexer, PDFName, PDFRef, PDFStream, PDFSyntaxError, parse_indirect_object
 
 MAX_XREF_SECTIONS = 32
 MAX_OBJECTS = 500_000
 MAX_PAGES = 10_000
 MAX_RESOLVE_DEPTH = 32
+MAX_ENCRYPTION_NODES = 4096
 MAX_TREE_DEPTH = 64
 _SCAN_ROOT_LIMIT = 10_000
 # 문서 단위 누적 해제 예산 — 스트림 1개당 한도만으로는 같은 폭탄 스트림을
@@ -39,6 +40,7 @@ class PDFFile:
         self._rescanned = False
         self._decoded_cache: Dict[int, Tuple[PDFStream, bytes]] = {}
         self._decode_budget = MAX_TOTAL_DECODED
+        self._predictor_budget = PredictorBudget()
         # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
         self._compressed: Dict[int, Tuple[int, int]] = {}
         self._objstm_cache: Dict[int, Tuple[list, Optional[bytes], int]] = {}
@@ -160,6 +162,7 @@ class PDFFile:
         if isinstance(ids, list) and ids and isinstance(ids[0], bytes):
             doc_id = ids[0]
         try:
+            encrypt = self._resolve_encryption_dictionary(encrypt)
             self._decryptor = StandardSecurityHandler(encrypt, doc_id, password=self.password)
             self.decrypt_ok = True
             self._cache.clear()  # 핸들러 이전 캐시는 미복호화 상태 — 폐기
@@ -170,6 +173,36 @@ class PDFFile:
             )
         except Exception as e:
             self.warnings.append(f"WARN: 암호화 처리 실패: {e!r} — 텍스트 추출 불가")
+
+    def _resolve_encryption_dictionary(self, encrypt: dict) -> dict:
+        """보안 핸들러 시작 전에 CF와 필터 선택자를 포함한 간접 값을 푼다.
+
+        ISO 32000-1 §7.3.10의 간접 객체를 직접 객체와 동일하게 처리한다.
+        순환·깊이·확장 개수를 제한하고 원본 객체 캐시는 수정하지 않는다.
+        """
+        remaining = MAX_ENCRYPTION_NODES
+        active = set()
+
+        def visit(value, depth):
+            nonlocal remaining
+            remaining -= 1
+            if remaining < 0 or depth > MAX_RESOLVE_DEPTH:
+                raise UnsupportedEncryption("암호화 사전 참조 한도 초과")
+            value = self.resolve(value)
+            if not isinstance(value, (dict, list)):
+                return value
+            key = id(value)
+            if key in active:
+                raise UnsupportedEncryption("암호화 사전 순환 참조")
+            active.add(key)
+            try:
+                if isinstance(value, dict):
+                    return {name: visit(item, depth + 1) for name, item in value.items()}
+                return [visit(item, depth + 1) for item in value]
+            finally:
+                active.remove(key)
+
+        return visit(encrypt, 0)
 
     def _decrypt_object(self, num: int, gen: int, obj: Any) -> Any:
         """indirect 객체의 문자열·스트림 바이트를 제자리 복호화."""
@@ -412,7 +445,8 @@ class PDFFile:
             if msg not in self.warnings:
                 self.warnings.append(msg)
             return b""
-        out = decode_stream(stream.dictionary, stream.raw, self.warnings)
+        out = decode_stream(stream.dictionary, stream.raw, self.warnings,
+                            self._predictor_budget)
         if len(out) > self._decode_budget:
             out = out[:self._decode_budget]
             self.warnings.append("WARN: 스트림이 문서 해제 총량 한도에 걸려 잘림")

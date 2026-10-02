@@ -114,7 +114,7 @@ class StandardSecurityHandler:
             stmf = encrypt.get(field, "Identity")
             if str(stmf) == "Identity":
                 return "identity"
-            if isinstance(cf, dict) and str(stmf) in cf:
+            if isinstance(cf, dict) and isinstance(cf.get(str(stmf)), dict):
                 cfm = str(cf[str(stmf)].get("CFM", ""))
                 if cfm == "AESV3":
                     return "aesv3"

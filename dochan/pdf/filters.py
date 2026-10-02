@@ -2,7 +2,7 @@
 import base64
 import binascii
 import zlib
-from typing import List
+from typing import List, Optional
 
 MAX_DECODED_SIZE = 50 * 1024 * 1024
 # Packed samples take up to eight Python decode steps per byte. Bound work
@@ -15,7 +15,15 @@ _IMAGE_FILTERS = {"DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBI
 _WHITESPACE = b"\x00\t\n\x0c\r "
 
 
-def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str]) -> bytes:
+class PredictorBudget:
+    """문서의 모든 packed TIFF 스트림이 공유하는 샘플 연산 예산."""
+
+    def __init__(self):
+        self.remaining_samples = MAX_PACKED_PREDICTOR_SAMPLES
+
+
+def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str],
+                  predictor_budget: Optional[PredictorBudget] = None) -> bytes:
     """스트림 사전의 /Filter 체인을 적용해 원본 바이트를 해제한다."""
     filters = stream_dict.get("Filter")
     if filters is None:
@@ -25,6 +33,8 @@ def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str]) -> bytes:
 
     parms = stream_dict.get("DecodeParms", stream_dict.get("DP"))
     parameters = parms if isinstance(parms, list) else [parms]
+    if predictor_budget is None:
+        predictor_budget = PredictorBudget()
     data = raw
     for index, filt in enumerate(filters):
         name = str(filt)
@@ -51,7 +61,7 @@ def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str]) -> bytes:
             warnings.append("WARN: PDF 스트림이 해제 한도를 초과하여 잘림")
             return data[:MAX_DECODED_SIZE]
         if name in ("FlateDecode", "Fl", "LZWDecode", "LZW"):
-            data = _predictor(data, param, warnings)
+            data = _predictor(data, param, warnings, predictor_budget)
     return data
 
 
@@ -96,7 +106,8 @@ def _lzw(data: bytes, early: int, warnings: List[str]) -> bytes:
     return bytes(out)
 
 
-def _predictor(data: bytes, parms: dict, warnings: List[str]) -> bytes:
+def _predictor(data: bytes, parms: dict, warnings: List[str],
+               predictor_budget: PredictorBudget) -> bytes:
     predictor = parms.get("Predictor", 1)
     if predictor == 1:
         return data
@@ -110,27 +121,28 @@ def _predictor(data: bytes, parms: dict, warnings: List[str]) -> bytes:
         warnings.append("WARN: PDF Predictor 매개변수가 잘못되거나 한도를 초과함")
         return b""
     if predictor == 2:
-        return _apply_tiff_predictor(data, columns, colors, bits, warnings)
+        return _apply_tiff_predictor(data, columns, colors, bits, warnings, predictor_budget)
     return _apply_png_predictor(data, columns, colors, bits, warnings)
 
 
 def _apply_tiff_predictor(data: bytes, columns: int, colors: int, bits: int,
-                          warnings: List[str]) -> bytes:
+                          warnings: List[str], predictor_budget: PredictorBudget) -> bytes:
     """행별로 같은 색의 이전 픽셀을 더한다. 패딩은 샘플이 아니다."""
     samples = columns * colors
     row_width = (samples * bits + 7) // 8
     out = bytearray()
     mask = (1 << bits) - 1
-    remaining_samples = MAX_PACKED_PREDICTOR_SAMPLES
     for pos in range(0, len(data), row_width):
         if len(data) - pos < row_width:
             warnings.append("WARN: TIFF Predictor 행이 잘림 — 잔여 데이터 무시")
             break
         if bits < 8:
-            if samples > remaining_samples:
-                warnings.append("WARN: TIFF Predictor 연산 한도 초과 — 완성된 행만 반환")
+            if samples > predictor_budget.remaining_samples:
+                message = "WARN: TIFF Predictor 연산 한도 초과 — 완성된 행만 반환"
+                if message not in warnings:
+                    warnings.append(message)
                 break
-            remaining_samples -= samples
+            predictor_budget.remaining_samples -= samples
         row = bytearray(data[pos:pos + row_width])
         if bits == 8:
             for i in range(colors, row_width):

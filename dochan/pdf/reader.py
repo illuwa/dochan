@@ -653,7 +653,7 @@ class PDFReader:
             if not isinstance(xobj, PDFStream) \
                     or str(xobj.dictionary.get("Subtype", "")) != "Image":
                 continue
-            data, ext = extract_image_bytes(xobj, pdf.warnings)
+            data, ext = extract_image_bytes(xobj, pdf.warnings, pdf.decode_stream_bytes)
             if not data:
                 continue
             images.append(Image(

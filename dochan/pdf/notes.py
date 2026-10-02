@@ -181,8 +181,13 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
             left_margins.append(line.segments[1].x0)
         for continuation in lines[index + 1:following]:
             gap = previous_y - continuation.y
+            # 하단 영역은 독립 바닥글일 수 있으므로, 위에서 실제로 관찰한
+            # 줄간격이 있어야 진입한다. 이어지는 줄도 아래의 간격·내어쓰기
+            # 검사를 통과해야 한다. 위치만으로 긴 각주의 끝을 잘라내지 않는다.
             if (continuation.y > line.y or abs(continuation.size - line.size) > 0.1
-                    or continuation.y <= bottom + HEADER_FOOTER_ZONE
+                    or continuation.y < bottom
+                    or (continuation.y <= bottom + HEADER_FOOTER_ZONE
+                        and observed_gap is None)
                     or not any(abs(continuation.left - left) <= GEOMETRY_TOLERANCE
                                for left in left_margins)
                     or gap <= 0 or gap > line.size * 2

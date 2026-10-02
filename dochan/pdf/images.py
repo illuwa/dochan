@@ -5,7 +5,7 @@ DCTDecode/JPXDecode 스트림은 그 자체가 JPEG/JP2 파일이라 그대로 �
 Pillow(선택 의존성)가 없거나 지원 못 하는 컬러스페이스면 빈 값을 반환한다.
 """
 import io
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from .filters import decode_stream
 from .objects import PDFStream
@@ -13,7 +13,8 @@ from .objects import PDFStream
 MAX_IMAGE_PIXELS = 40_000_000  # 픽셀 폭탄 방어 (~40MP)
 
 
-def extract_image_bytes(stream: PDFStream, warnings: List[str]) -> Tuple[bytes, str]:
+def extract_image_bytes(stream: PDFStream, warnings: List[str],
+                        decode: Optional[Callable[[PDFStream], bytes]] = None) -> Tuple[bytes, str]:
     """이미지 스트림 → (바이트, 확장자). 실패 시 (b"", "")."""
     d = stream.dictionary
     filters = d.get("Filter")
@@ -47,7 +48,7 @@ def extract_image_bytes(stream: PDFStream, warnings: List[str]) -> Tuple[bytes, 
     if mode is None:
         return b"", ""
 
-    samples = decode_stream(d, stream.raw, warnings)
+    samples = decode(stream) if decode is not None else decode_stream(d, stream.raw, warnings)
     expected = width * height * channels
     if len(samples) < expected:
         return b"", ""

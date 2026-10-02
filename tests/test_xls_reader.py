@@ -283,7 +283,7 @@ def _ptg_str(text):
 
 
 def _ptg_attr(value=0x0000):
-    return bytes([0x19, value & 0xFF, (value >> 8) & 0xFF])
+    return bytes([0x19, value & 0xFF, (value >> 8) & 0xFF, 0])
 
 
 def _ptg_bool(value):
@@ -1024,7 +1024,8 @@ def test_parse_biff_workbook_preserves_unknown_fixed_formula_functions():
         + _label(0, 1, "B")
         + _label(1, 0, "Score")
         + _formula_with_tokens(1, 1, 0, _ptg_ref(1, 0) + _ptg_int(10) + _ptg_func(250))
-        + _formula_with_tokens(1, 2, 0, _ptg_ref(1, 0) + _ptg_ref(1, 1) + _ptg_str("note") + _ptg_func_var(3, 251))
+        # MS-XLS Ftab assigns 251 to RESUME; 249 is genuinely unassigned.
+        + _formula_with_tokens(1, 2, 0, _ptg_ref(1, 0) + _ptg_ref(1, 1) + _ptg_str("note") + _ptg_func_var(3, 249))
         + _eof()
     )
     offset = len(globals_part) + len(_boundsheet(0, "FormulaUnknown"))
@@ -1033,8 +1034,11 @@ def test_parse_biff_workbook_preserves_unknown_fixed_formula_functions():
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert table.rows[1][1].text == "0 (=F250(A2,10))"
-    assert table.rows[1][2].text == '0 (=F251(A2,B2,"note"))'
+    # Unknown PtgFunc has no argument count; consuming the whole RPN stack
+    # invents structure. Preserve the cache and make the loss explicit instead.
+    assert table.rows[1][1].text == "0"
+    assert any("unknown fixed function 250" in message for message in doc.errors)
+    assert table.rows[1][2].text == '0 (=F249(A2,B2,"note"))'
 
 
 def test_parse_biff_workbook_restores_cross_sheet_formula_references():
@@ -1553,7 +1557,7 @@ def test_parse_biff_workbook_restores_formula_blank_cached_result_without_leadin
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert table.rows[1][1].text == "(=A2)"
+    assert table.rows[1][1].text == "=A2"
 
 
 def test_parse_biff_workbook_restores_shared_formula_template_tokens():

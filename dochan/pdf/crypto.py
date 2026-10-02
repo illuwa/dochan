@@ -7,7 +7,9 @@ AES 블록 연산은 dochan/utils/aes.py 의 순정 구현을 CBC/256비트로 �
 """
 import hashlib
 import struct
-from typing import Optional
+import stringprep
+import unicodedata
+from typing import Optional, Union
 
 from ..utils import aes as _aes
 
@@ -44,10 +46,13 @@ class UnsupportedEncryption(Exception):
 class StandardSecurityHandler:
     """PDF 표준 보안 핸들러 — 파일 암호화 키 유도와 객체별 복호화."""
 
-    def __init__(self, encrypt: dict, doc_id: bytes, password: bytes = b""):
+    def __init__(self, encrypt: dict, doc_id: bytes, password: Union[str, bytes] = b""):
         self.v = encrypt.get("V", 0)
         self.r = encrypt.get("R", 0)
-        self.length_bits = encrypt.get("Length", 40)
+        # AESV3 always uses 256 bits; /Length is not required for V5.
+        self.length_bits = 256 if self.v == 5 else encrypt.get("Length", 40)
+        if self.v == 4 and "Length" not in encrypt:
+            self.length_bits = self._v4_filter_key_bits(encrypt)
         self.o = _as_bytes(encrypt.get("O", b""))
         self.u = _as_bytes(encrypt.get("U", b""))
         self.oe = _as_bytes(encrypt.get("OE", b""))
@@ -55,16 +60,60 @@ class StandardSecurityHandler:
         self.p = encrypt.get("P", 0) & 0xFFFFFFFF
         self.encrypt_metadata = encrypt.get("EncryptMetadata", True)
         self.doc_id = doc_id
+        self._validate_parameters()
         self._cipher = self._detect_cipher(encrypt)
-        self.key = self._compute_key(password)
+        self._string_cipher = self._detect_cipher(encrypt, "StrF")
+        self.key = self._compute_key(_password_bytes(password, self.r))
         if self.key is None:
             raise UnsupportedEncryption("암호 인증 실패 — 빈/제공 암호로 열 수 없음")
 
-    def _detect_cipher(self, encrypt: dict) -> str:
+    @staticmethod
+    def _v4_filter_key_bits(encrypt: dict) -> int:
+        """최상위 Length가 없는 V4에서 활성 필터의 바이트 키 길이를 읽는다."""
+        lengths = set()
+        filters = encrypt.get("CF", {})
+        for field in ("StmF", "StrF"):
+            name = str(encrypt.get(field, "Identity"))
+            if name == "Identity":
+                continue
+            entry = filters.get(name) if isinstance(filters, dict) else None
+            if not isinstance(entry, dict):
+                raise UnsupportedEncryption("지원하지 않는 암호 필터")
+            cipher = str(entry.get("CFM", "None"))
+            if cipher in ("None", "Identity"):
+                continue
+            if cipher not in ("V2", "AESV2"):
+                raise UnsupportedEncryption("지원하지 않는 V4 암호 필터")
+            # ISO 32000-1 §7.6.5: AESV2 uses a 128-bit key. CF Length
+            # is in bytes; absent RC4 length retains the 40-bit default.
+            length = entry.get("Length", 16 if cipher == "AESV2" else 5)
+            if (type(length) is not int or not 5 <= length <= 16 or
+                    cipher == "AESV2" and length != 16):
+                raise UnsupportedEncryption("잘못된 암호 필터 키 길이")
+            lengths.add(length * 8)
+        if len(lengths) > 1:
+            raise UnsupportedEncryption("서로 다른 암호 필터 키 길이는 지원하지 않음")
+        return next(iter(lengths)) if lengths else 40
+
+    def _validate_parameters(self) -> None:
+        if self.r not in (2, 3, 4, 5, 6) or self.v not in (1, 2, 4, 5):
+            raise UnsupportedEncryption("지원하지 않는 표준 보안 핸들러 버전")
+        if self.r >= 5:
+            if (self.v != 5 or self.length_bits != 256 or len(self.o) < 48 or
+                    len(self.u) < 48 or len(self.oe) != 32 or len(self.ue) != 32):
+                raise UnsupportedEncryption("손상된 AES-256 암호화 사전")
+        elif (not isinstance(self.length_bits, int) or self.length_bits < 40 or
+              self.length_bits > 128 or self.length_bits % 8 or
+              len(self.o) < 32 or len(self.u) < 32):
+            raise UnsupportedEncryption("손상된 RC4/AES-128 암호화 사전")
+
+    def _detect_cipher(self, encrypt: dict, field: str = "StmF") -> str:
         """RC4 / AESV2 / AESV3 중 무엇인지 판정."""
         if self.v >= 4:
             cf = encrypt.get("CF")
-            stmf = encrypt.get("StmF", "Identity")
+            stmf = encrypt.get(field, "Identity")
+            if str(stmf) == "Identity":
+                return "identity"
             if isinstance(cf, dict) and str(stmf) in cf:
                 cfm = str(cf[str(stmf)].get("CFM", ""))
                 if cfm == "AESV3":
@@ -73,11 +122,9 @@ class StandardSecurityHandler:
                     return "aesv2"
                 if cfm == "V2":
                     return "rc4"
-                if cfm == "Identity":
+                if cfm in ("None", "Identity"):
                     return "identity"
-            if self.v == 5 or self.r >= 5:
-                return "aesv3"
-            return "rc4"
+            raise UnsupportedEncryption("지원하지 않는 암호 필터")
         return "rc4"
 
     def _compute_key(self, password: bytes) -> Optional[bytes]:
@@ -85,7 +132,7 @@ class StandardSecurityHandler:
             return self._compute_key_r5(password)
         return self._compute_key_rc4(password)
 
-    def _compute_key_rc4(self, password: bytes) -> Optional[bytes]:
+    def _compute_key_rc4(self, password: bytes, owner_retry: bool = True) -> Optional[bytes]:
         """Algorithm 2 (R2-R4) — 파일 키 유도 후 /U 로 인증."""
         n = self.length_bits // 8 if self.v >= 2 else 5
         padded = (password + _PAD)[:32]
@@ -104,9 +151,10 @@ class StandardSecurityHandler:
         if self._authenticate_rc4(key):
             return key
         # 사용자 암호가 소유자 암호로 주어졌을 수 있음 → 소유자 경로 시도
-        owner_key = self._owner_user_password(password)
-        if owner_key is not None:
-            return self._compute_key_rc4(owner_key)
+        if owner_retry:
+            owner_key = self._owner_user_password(password)
+            if owner_key is not None:
+                return self._compute_key_rc4(owner_key, owner_retry=False)
         return None
 
     def _authenticate_rc4(self, key: bytes) -> bool:
@@ -183,15 +231,16 @@ class StandardSecurityHandler:
                 break
         return k[:32]
 
-    def decrypt(self, num: int, gen: int, data: bytes) -> bytes:
+    def decrypt(self, num: int, gen: int, data: bytes, is_stream: bool = True) -> bytes:
         """객체 (num, gen) 의 문자열/스트림 바이트를 복호화."""
-        if self._cipher == "identity" or not data:
+        cipher = self._cipher if is_stream else self._string_cipher
+        if cipher == "identity" or not data:
             return data
-        if self._cipher == "aesv3":
+        if cipher == "aesv3":
             return _aes_cbc_decrypt(self.key, data)
         # RC4/AESV2 는 객체별 키 유도 (Algorithm 1)
-        obj_key = self._object_key(num, gen, self._cipher == "aesv2")
-        if self._cipher == "aesv2":
+        obj_key = self._object_key(num, gen, cipher == "aesv2")
+        if cipher == "aesv2":
             return _aes_cbc_decrypt(obj_key, data)
         return rc4(obj_key, data)
 
@@ -229,3 +278,54 @@ def _as_bytes(value) -> bytes:
     if isinstance(value, str):
         return value.encode("latin-1", errors="replace")
     return b""
+
+
+def _password_bytes(password: Union[str, bytes], revision: int) -> bytes:
+    """R2–R4는 PDFDocEncoding, R5는 UTF-8, R6는 SASLprep 후 UTF-8."""
+    if isinstance(password, bytes):
+        # 바이트 API는 이미 인코딩/정규화한 암호를 전달하는 경로다.
+        return password[:127] if revision >= 5 else password[:32]
+    if not isinstance(password, str) or len(password) > 4096:
+        raise UnsupportedEncryption("암호 형식 또는 길이 한도 오류")
+    try:
+        if revision <= 4:
+            return _encode_pdfdoc_password(password[:32])
+        if revision == 6:
+            password = _saslprep(password)
+        return password.encode("utf-8")[:127]
+    except (UnicodeError, ValueError) as exc:
+        raise UnsupportedEncryption("암호 문자 인코딩 또는 정규화 실패") from exc
+
+
+def _encode_pdfdoc_password(value: str) -> bytes:
+    """ISO 32000-1 Annex D의 단일 바이트 PDFDocEncoding 역매핑."""
+    encoding = {chr(i): i for i in range(256)
+                if not 0x18 <= i <= 0x1f and not 0x7f <= i <= 0xa0 and i != 0xad}
+    encoding.update({char: 0x18 + i for i, char in enumerate("˘ˇˆ˙˝˛˚˜")})
+    encoding.update({char: 0x80 + i for i, char in enumerate(
+        "•†‡…—–ƒ⁄‹›−‰„“”‘’‚™ﬁﬂŁŒŠŸŽıłœšž")})
+    encoding["€"] = 0xa0
+    try:
+        return bytes(encoding[char] for char in value)
+    except KeyError as exc:
+        raise ValueError("PDFDocEncoding에 없는 암호 문자") from exc
+
+
+def _saslprep(value: str) -> str:
+    """RFC 4013의 Unicode 3.2 매핑·NFKC·금지 문자·양방향 검사를 적용한다."""
+    mapped = "".join(" " if stringprep.in_table_c12(c) else c for c in value
+                     if not stringprep.in_table_b1(c))
+    normalized = unicodedata.ucd_3_2_0.normalize("NFKC", mapped)
+    prohibited = (stringprep.in_table_a1, stringprep.in_table_c12,
+                  stringprep.in_table_c21_c22, stringprep.in_table_c3,
+                  stringprep.in_table_c4, stringprep.in_table_c5,
+                  stringprep.in_table_c6, stringprep.in_table_c7,
+                  stringprep.in_table_c8, stringprep.in_table_c9)
+    if any(check(c) for c in normalized for check in prohibited):
+        raise ValueError("SASLprep 금지 문자")
+    if any(stringprep.in_table_d1(c) for c in normalized):
+        if (any(stringprep.in_table_d2(c) for c in normalized) or
+                not stringprep.in_table_d1(normalized[0]) or
+                not stringprep.in_table_d1(normalized[-1])):
+            raise ValueError("SASLprep 양방향 문자 순서 오류")
+    return normalized

@@ -5,6 +5,9 @@ import zlib
 from typing import List
 
 MAX_DECODED_SIZE = 50 * 1024 * 1024
+# Packed samples take up to eight Python decode steps per byte. Bound work
+# separately from byte size; return only completed rows on exhaustion.
+MAX_PACKED_PREDICTOR_SAMPLES = 1024 * 1024
 
 # 이미지 압축 계열 — 텍스트 추출 대상이 아니므로 조용히 빈 값 처리
 _IMAGE_FILTERS = {"DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode"}
@@ -20,26 +23,21 @@ def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str]) -> bytes:
     if not isinstance(filters, list):
         filters = [filters]
 
-    parms = stream_dict.get("DecodeParms") or stream_dict.get("DP")
-    predictor = 1
-    columns = 1
-    colors = 1
-    bits = 8
-    if isinstance(parms, dict):
-        if isinstance(parms.get("Predictor"), int):
-            predictor = parms["Predictor"]
-        if isinstance(parms.get("Columns"), int) and parms["Columns"] > 0:
-            columns = parms["Columns"]
-        if isinstance(parms.get("Colors"), int) and parms["Colors"] > 0:
-            colors = parms["Colors"]
-        if isinstance(parms.get("BitsPerComponent"), int) and parms["BitsPerComponent"] > 0:
-            bits = parms["BitsPerComponent"]
-
+    parms = stream_dict.get("DecodeParms", stream_dict.get("DP"))
+    parameters = parms if isinstance(parms, list) else [parms]
     data = raw
-    for filt in filters:
+    for index, filt in enumerate(filters):
         name = str(filt)
+        param = parameters[index] if index < len(parameters) else None
+        param = param if isinstance(param, dict) else {}
         if name in ("FlateDecode", "Fl"):
             data = _flate(data, warnings)
+        elif name in ("LZWDecode", "LZW"):
+            early = param.get("EarlyChange", 1)
+            if early not in (0, 1):
+                warnings.append("WARN: LZWDecode EarlyChange 값이 잘못됨")
+                return b""
+            data = _lzw(data, early, warnings)
         elif name in ("ASCIIHexDecode", "AHx"):
             data = _ascii_hex(data, warnings)
         elif name in ("ASCII85Decode", "A85"):
@@ -49,19 +47,116 @@ def decode_stream(stream_dict: dict, raw: bytes, warnings: List[str]) -> bytes:
         else:
             warnings.append(f"WARN: 지원하지 않는 PDF 필터: {name}")
             return b""
-
-    if predictor >= 10:  # PNG predictor 계열 — xref 스트림의 사실상 표준
-        return _apply_png_predictor(data, columns, colors, bits, warnings)
-    if predictor > 1:  # TIFF predictor 2 — 드물고 미지원
-        warnings.append("WARN: TIFF Predictor 인코딩은 지원하지 않음 — 해당 스트림 건너뜀")
-        return b""
+        if len(data) > MAX_DECODED_SIZE:
+            warnings.append("WARN: PDF 스트림이 해제 한도를 초과하여 잘림")
+            return data[:MAX_DECODED_SIZE]
+        if name in ("FlateDecode", "Fl", "LZWDecode", "LZW"):
+            data = _predictor(data, param, warnings)
     return data
+
+
+def _lzw(data: bytes, early: int, warnings: List[str]) -> bytes:
+    """ISO 32000-1 §7.4.4: MSB 코드, 9–12비트, Clear/EOD."""
+    table = [bytes([i]) for i in range(256)] + [b"", b""]
+    width, bitpos, previous = 9, 0, b""
+    out = bytearray()
+    while bitpos + width <= len(data) * 8:
+        bytepos, shift = divmod(bitpos, 8)
+        count = (shift + width + 7) // 8
+        word = int.from_bytes(data[bytepos:bytepos + count], "big")
+        code = (word >> (count * 8 - shift - width)) & ((1 << width) - 1)
+        if bitpos == 0 and code != 256:
+            warnings.append("WARN: LZWDecode 시작 Clear 코드가 없음")
+            return b""
+        bitpos += width
+        if code == 256:
+            table = table[:258]
+            width, previous = 9, b""
+            continue
+        if code == 257:
+            return bytes(out)
+        if code < len(table):
+            entry = table[code]
+        elif code == len(table) and previous:
+            entry = previous + previous[:1]
+        else:
+            warnings.append("WARN: LZWDecode 사전 코드가 잘못됨")
+            return bytes(out)
+        if len(out) + len(entry) > MAX_DECODED_SIZE:
+            warnings.append("WARN: LZWDecode 해제 한도를 초과하여 잘림")
+            out.extend(entry[:MAX_DECODED_SIZE - len(out)])
+            return bytes(out)
+        out.extend(entry)
+        if previous and len(table) < 4096:
+            table.append(previous + entry[:1])
+            if width < 12 and len(table) + early == 1 << width:
+                width += 1
+        previous = entry
+    warnings.append("WARN: LZWDecode 코드열이 잘림 (EOD 없음)")
+    return bytes(out)
+
+
+def _predictor(data: bytes, parms: dict, warnings: List[str]) -> bytes:
+    predictor = parms.get("Predictor", 1)
+    if predictor == 1:
+        return data
+    columns, colors, bits = (parms.get("Columns", 1), parms.get("Colors", 1),
+                              parms.get("BitsPerComponent", 8))
+    if (not isinstance(predictor, int) or predictor not in (2, 10, 11, 12, 13, 14, 15)
+            or not isinstance(columns, int) or not isinstance(colors, int)
+            or columns <= 0 or colors <= 0 or not isinstance(bits, int)
+            or bits not in (1, 2, 4, 8, 16)
+            or columns * colors * bits > MAX_DECODED_SIZE * 8):
+        warnings.append("WARN: PDF Predictor 매개변수가 잘못되거나 한도를 초과함")
+        return b""
+    if predictor == 2:
+        return _apply_tiff_predictor(data, columns, colors, bits, warnings)
+    return _apply_png_predictor(data, columns, colors, bits, warnings)
+
+
+def _apply_tiff_predictor(data: bytes, columns: int, colors: int, bits: int,
+                          warnings: List[str]) -> bytes:
+    """행별로 같은 색의 이전 픽셀을 더한다. 패딩은 샘플이 아니다."""
+    samples = columns * colors
+    row_width = (samples * bits + 7) // 8
+    out = bytearray()
+    mask = (1 << bits) - 1
+    remaining_samples = MAX_PACKED_PREDICTOR_SAMPLES
+    for pos in range(0, len(data), row_width):
+        if len(data) - pos < row_width:
+            warnings.append("WARN: TIFF Predictor 행이 잘림 — 잔여 데이터 무시")
+            break
+        if bits < 8:
+            if samples > remaining_samples:
+                warnings.append("WARN: TIFF Predictor 연산 한도 초과 — 완성된 행만 반환")
+                break
+            remaining_samples -= samples
+        row = bytearray(data[pos:pos + row_width])
+        if bits == 8:
+            for i in range(colors, row_width):
+                row[i] = (row[i] + row[i - colors]) & 255
+        else:
+            # 최대 한 행만 보관한다. 큰 Python 정수로 행 전체를 펼치지 않는다.
+            for i in range(colors, samples):
+                offset, left_offset = i * bits, (i - colors) * bits
+                if bits == 16:
+                    at, left = offset // 8, left_offset // 8
+                    value = (int.from_bytes(row[at:at + 2], "big") +
+                             int.from_bytes(row[left:left + 2], "big")) & mask
+                    row[at:at + 2] = value.to_bytes(2, "big")
+                else:
+                    at, left = offset // 8, left_offset // 8
+                    shift, left_shift = 8 - bits - offset % 8, 8 - bits - left_offset % 8
+                    value = ((row[at] >> shift) + (row[left] >> left_shift)) & mask
+                    row[at] = (row[at] & ~(mask << shift)) | (value << shift)
+        out.extend(row)
+    return bytes(out)
 
 
 def _apply_png_predictor(data: bytes, columns: int, colors: int, bits: int,
                          warnings: List[str]) -> bytes:
     bpp = max(1, (colors * bits + 7) // 8)
-    row_width = bpp * columns
+    row_width = (columns * colors * bits + 7) // 8
     stride = row_width + 1  # 행마다 필터 타입 1바이트 선행
     out = bytearray()
     prev = bytearray(row_width)

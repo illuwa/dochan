@@ -27,7 +27,8 @@ _ENCRYPT_RE = re.compile(rb"/Encrypt\s+\d+\s+\d+\s+R")
 class PDFFile:
     """파싱된 PDF 파일 — 객체 접근과 페이지 트리 순회."""
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, password=""):
+        self.password = password
         self.data = data
         self.warnings: List[str] = []
         self.trailer: Dict[str, Any] = {}
@@ -36,7 +37,7 @@ class PDFFile:
         self.decrypt_ok = False
         self._cache: Dict[int, Any] = {}
         self._rescanned = False
-        self._decoded_cache: Dict[int, bytes] = {}
+        self._decoded_cache: Dict[int, Tuple[PDFStream, bytes]] = {}
         self._decode_budget = MAX_TOTAL_DECODED
         # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
         self._compressed: Dict[int, Tuple[int, int]] = {}
@@ -139,7 +140,7 @@ class PDFFile:
                     self.xref[obj_num] = int(off_tok) if kind == b"n" else None
 
     def _setup_encryption(self) -> None:
-        """Encrypt 사전이 있으면 표준 보안 핸들러를 빈 암호로 초기화."""
+        """Encrypt 사전이 있으면 표준 보안 핸들러를 주어진 암호로 초기화."""
         if not self.encrypted:
             return
         encrypt_ref = self.trailer.get("Encrypt")
@@ -159,12 +160,13 @@ class PDFFile:
         if isinstance(ids, list) and ids and isinstance(ids[0], bytes):
             doc_id = ids[0]
         try:
-            self._decryptor = StandardSecurityHandler(encrypt, doc_id, password=b"")
+            self._decryptor = StandardSecurityHandler(encrypt, doc_id, password=self.password)
             self.decrypt_ok = True
             self._cache.clear()  # 핸들러 이전 캐시는 미복호화 상태 — 폐기
         except UnsupportedEncryption:
+            password_kind = "제공 암호" if self.password else "빈 암호"
             self.warnings.append(
-                "WARN: 암호화된 PDF — 빈 암호로 열 수 없음(사용자 암호 필요) 또는 미지원 방식"
+                f"WARN: 암호화된 PDF — {password_kind}로 열 수 없음 또는 미지원 방식"
             )
         except Exception as e:
             self.warnings.append(f"WARN: 암호화 처리 실패: {e!r} — 텍스트 추출 불가")
@@ -176,7 +178,8 @@ class PDFFile:
         if isinstance(obj, PDFStream):
             obj.dictionary = self._decrypt_object(num, gen, obj.dictionary)
             try:
-                obj.raw = self._decryptor.decrypt(num, gen, obj.raw)
+                if str(obj.dictionary.get("Type")) != "Metadata" or self._decryptor.encrypt_metadata:
+                    obj.raw = self._decryptor.decrypt(num, gen, obj.raw)
             except Exception:
                 pass
             return obj
@@ -188,7 +191,7 @@ class PDFFile:
             return [self._decrypt_object(num, gen, v) for v in obj]
         if isinstance(obj, bytes) and not isinstance(obj, PDFName):
             try:
-                return self._decryptor.decrypt(num, gen, obj)
+                return self._decryptor.decrypt(num, gen, obj, is_stream=False)
             except Exception:
                 return obj
         return obj
@@ -401,8 +404,9 @@ class PDFFile:
         문서 전체 해제 총량이 MAX_TOTAL_DECODED 를 넘으면 중단한다.
         """
         key = id(stream)
-        if key in self._decoded_cache:
-            return self._decoded_cache[key]
+        cached = self._decoded_cache.get(key)
+        if cached is not None and cached[0] is stream:
+            return cached[1]
         if self._decode_budget <= 0:
             msg = "WARN: 문서 스트림 해제 총량 한도 초과 — 이후 스트림은 건너뜀"
             if msg not in self.warnings:
@@ -413,7 +417,9 @@ class PDFFile:
             out = out[:self._decode_budget]
             self.warnings.append("WARN: 스트림이 문서 해제 총량 한도에 걸려 잘림")
         self._decode_budget -= len(out)
-        self._decoded_cache[key] = out
+        # xref parsing creates temporary streams outside _cache. Retain the
+        # object alongside its bytes so a later stream cannot reuse its id.
+        self._decoded_cache[key] = (stream, out)
         return out
 
     # ── 페이지 트리 ──

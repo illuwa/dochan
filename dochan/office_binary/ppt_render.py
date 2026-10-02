@@ -64,6 +64,12 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
             seen.add(key)
             if key not in style_cache:
                 style_cache[key] = read_master_styles(current_record.children, errors)
+                if current_record.header.rec_type == 1016:
+                    # Other text defaults belong to Document.Environment, not
+                    # MainMaster (PowerPoint binary specification, TextMasterStyleAtom).
+                    # Some files serialize a redundant master Other; applying it
+                    # masks the document default before the local CF mask is used.
+                    style_cache[key] = {k: v for k, v in style_cache[key].items() if k[0] != 4}
             chain.append(style_cache[key])
             current = presentation.masters.get(current.master_id)
         return merge_styles(environment_styles, *reversed(chain))

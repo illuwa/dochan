@@ -2,7 +2,7 @@
 
 2026년 10월 3일 `legacy-docppt-fix`의 결과이다. 파일명 날짜는 배정된 기록 경로를 따른다. 리뷰 직전 기준은 `253d3c6`이고, 최초 상속 구현 전 기준은 `f7ceaa1`이다. 두 기준을 구별한다. README·CHANGELOG는 수정하지 않았다. 공개 코퍼스는 읽기 전용으로 사용했으며 다른 프로젝트의 구현 코드는 사용하지 않았다.
 
-## 칸별 판정
+## 1~4차 칸별 판정 (5차 정정은 아래에 기록한다)
 
 | 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
 |---|---|---|---|---|---|
@@ -271,3 +271,98 @@ ruff check dochan scripts tests
 ```
 
 `BASE_SOURCE`는 `1bc7aae`의 dochan 소스를 풀어 둔 경로이고 `CORPUS`는 읽기 전용 공개 코퍼스 루트 인자이다. 선택 경로·입력 해시·리비전별 출력 해시와 오류 계수는 `.codex-work/r4-samples.json`, `r4-before/records.json`, `r4-after-final/records.json`에 있다. 최종 판정은 `r4-final-comparison.json`, PPT 재검증은 `r4-ppt-pairs.json`, DOC 그림 재검증은 `r4-doc-images.json`, 실패 증거는 `r4-red.txt`와 `r4-corpus-red.txt`에 있다.
+
+
+## 5차: PowerPoint 실측 회귀 재분류와 Other 상속 수정
+
+2026년 10월 3일 `4fadf4c`를 수정 전 기준으로 삼았다. 제공된 15건을 다시 조사하니 실제 회귀는 2건이고, 13건은 기존 불일치 목록의 절단 때문에 생긴 회귀 오탐이었다. 실제 회귀 2건을 수정했다. 원래 지목된 15개 문단 모두가 PowerPoint와 일치한다고 주장하지 않는다. 기존 불일치 13건은 수정 전후 모두 남아 있으며 아래에서 별도로 반박한다.
+
+### 비교 목록 절단의 재현과 판정 정정
+
+제공된 `seq_oracle.py`의 `compare()`는 불일치를 최대 400건 모으지만, `main()`은 버전별 결과에 `mismatches[:40]`만 저장한다. 이 저장 목록끼리 차집합을 구하면 base의 41번째 이후 불일치가 없던 것으로 취급된다. 실제 base `11058e3`와 수정 전 `4fadf4c`를 같은 PowerPoint 저장값에 다시 대조했다. 아래 첫 세 파일의 전체 base 불일치는 각각 97·183·75건이었다. 각 파일의 굵게·기울임 전체 목록을 보존하면 해당 13건은 양쪽 모두 불일치한다.
+
+| 표본 파일 | 최초 회귀 주장 | 전체 목록에서 확인한 실제 회귀 | 조치와 판정 |
+|---|---:|---:|---|
+| `23884_defense_FINAL_OOimport_edit.ppt` | 기울임 6건이었다. | 0건이다. | base와 수정 전 모두 첫 런 기울임이 False이다. 기존 불일치를 회귀로 분류한 지적을 반박한다. |
+| `41246-1.ppt` | 굵게 5건이었다. | 0건이다. | base와 수정 전 모두 첫 런 굵게가 False이다. 기존 불일치를 회귀로 분류한 지적을 반박한다. |
+| `42474-2.ppt` | 굵게 2건이었다. | 0건이다. | 63·64번 슬라이드 모두 양쪽 첫 런 굵게가 False이다. 기존 불일치를 회귀로 분류한 지적을 반박한다. |
+| `45776.ppt` | 굵게 1건이었다. | 1건이다. | Other의 Environment 기본값을 복구하여 해결했다. 별도의 기존 크기 2건·굵게 1건도 같은 수정으로 해결됐다. |
+| `bug45124.ppt` | 굵게 1건이었다. | 1건이다. | Other의 Environment 기본값을 복구하여 해결했다. |
+
+제공된 AppleScript는 `font of pg`로 문단 범위의 속성을 읽고, 비교기는 첫 비공백 런을 사용한다. 중간 단어만 강조된 문단도 있으므로 이 13건은 문자별 PowerPoint 측정으로 다시 확인해야 한다. 이 측정 범위 차이가 모든 잔여 불일치의 확정 원인이라고 단정하지 않는다. 첫 런을 문단 전체의 강조 여부로 바꾸거나 문서별 예외를 넣어 숫자만 맞추지 않았다.
+
+### 원시 CF와 상속 계층
+
+[MS-PPT의 문자 서식 예제](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/d88c020e-6702-4be6-9f54-220106a971d6)는 fontStyle 필드의 존재와 속성 비트의 유효성을 구분한다. 현재 `_character_properties`, `read_master_styles`, `render_text`는 이미 속성별 마스크를 적용하고 있었다. 슬라이드·마스터·Environment 각각에서 한 속성만 덮고 다른 두 속성을 상속하는 합성 18건이 수정 전부터 통과했다. 따라서 이 조건을 다시 바꾸지 않았다.
+
+실제 결함은 마스터 Other(type 4)를 문서 Environment Other 위에 덮는 계층 선택이었다. [StyleTextPropAtom](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/a9a5fa71-238d-491e-acc7-fa1fffd5f100)은 placeholder의 마스터 상속을 명시하고, [TextMasterStyleAtom](https://learn.microsoft.com/en-au/openspecs/office_file_formats/ms-ppt/5febad27-0c48-4f98-b655-562b986f5874)은 텍스트 유형별 기본값을 구분한다. Microsoft의 구형 바이너리 명세 78쪽 검색 색인에도 Other의 저장 위치를 Environment로 구분한 설명이 있다. 이 위치 규칙과 두 파일의 PowerPoint 실측을 근거로 MainMaster(type 1016)의 Other만 기본값 병합에서 제외했다. Environment와 로컬 CF는 기존 속성별 마스크 규칙을 그대로 따른다.
+
+`bug45124.ppt`의 Environment Other 레코드는 스트림 452, CF 마스크는 500 위치에 있으며 `mask=0xEFFFFF`, `fontStyle=0x0003`, 크기 20pt이다. 마스터 Other 레코드는 7183, CF는 7231 위치이고 같은 마스크에 `fontStyle=0`, 크기 18pt이다. 슬라이드 CFRun은 49714 위치에서 `mask=0x430006`, `fontStyle=0x0005`, 크기 36pt이다. bold 마스크가 없으므로 Environment의 True를 상속하며, italic 마스크는 켜져 있고 값은 0이므로 False가 된다. underline은 True이다. 최종 `(bold, italic, underline, size)=(True, False, True, 36)`이 PowerPoint와 일치한다.
+
+`45776.ppt`의 Environment Other 레코드는 690, CF는 738 위치에 있으며 `mask=0xEFFFFF`, `fontStyle=0x0001`, 크기 11pt이다. 마스터 Other 레코드 6889·42573에는 `fontStyle=0`, 크기 18pt가 있다. `$$PICTURE$$`의 CFRun은 109709 위치에서 `mask=0x00000C00`, `fontStyle=0x0C01`이다. bold 비트의 유효성은 없으므로 원시 fontStyle의 bit 0을 직접 켜는 대신 Environment의 굵게를 상속한다. 최종 굵게 True·11pt가 PowerPoint와 일치한다.
+
+아래는 원래 15건의 첫 비공백 문자에 대응하는 CFRun이다. 위치는 `PowerPoint Document` 스트림에서 CFRun 시작 바이트를 센 값이다. 동일 payload가 여러 번 저장된 경우 가능한 위치를 함께 적으며 한 위치라고 단정하지 않는다. fontStyle 없음은 마스크 하위 16비트가 0이라 필드가 없다는 뜻이다.
+
+| 표본 파일 | 슬라이드·문단 앞부분 | CFRun 위치 | mask | fontStyle | 판정 |
+|---|---|---|---|---|---|
+| `23884_defense_FINAL_OOimport_edit.ppt` | 22번, Extensively analyzed by Phel | 290352 | `0x800` | `0x800` | 기존 불일치이며 회귀 오탐이다. |
+| `23884_defense_FINAL_OOimport_edit.ppt` | 24번, This is almost periodic in T | 29810 | `0x20000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `23884_defense_FINAL_OOimport_edit.ppt` | 27번, What happens when we reduce  | 31395·32407 | `0x20000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `23884_defense_FINAL_OOimport_edit.ppt` | 28번, What happens when we reduce  | 31395·32407 | `0x20000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `23884_defense_FINAL_OOimport_edit.ppt` | 28번, We can increase the effectiv | 346232 | `0x20000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `23884_defense_FINAL_OOimport_edit.ppt` | 30번, Original Source: GPS Risk As | 360070 | `0x20005` | `0x5` | 기존 불일치이며 회귀 오탐이다. |
+| `41246-1.ppt` | 16번, SUN's JVM has a default impl | 11101 | `0x0` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `41246-1.ppt` | 18번, JVM_OnLoad(JavaVM *jvm, char | 40421 | `0x60000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `41246-1.ppt` | 18번, // get jvmpi interface point | 40451 | `0x60000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `41246-1.ppt` | 18번, if ((jvm->GetEnv((void **)&j | 40481 | `0x60000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `41246-1.ppt` | 20번, You can setup triggers for s | 12006 | `0x0` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `42474-2.ppt` | 63번, .01 .02 .03 .04 .05 .06 p | 198324·199573 | `0x10000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `42474-2.ppt` | 64번, .01 .02 .03 .04 .05 .06 p | 198324·199573 | `0x10000` | 없다. | 기존 불일치이며 회귀 오탐이다. |
+| `45776.ppt` | 1번, $$PICTURE$$ | 109709 | `0xc00` | `0xc01` | 실제 회귀를 수정했다. |
+| `bug45124.ppt` | 1번, THIS TEXT WILL BECOME NOT BO | 49714 | `0x430006` | `0x5` | 실제 회귀를 수정했다. |
+
+### 실물 판정과 전체 지표
+
+| 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
+|---|---|---|---|---|---|
+| PPT Other 굵게 상속 | `45776.ppt`, `bug45124.ppt`이다. | 저장된 PowerPoint 실측 3문단과 Environment·슬라이드 CF 원시 바이트이다. | 굵게 True가 상속되어야 한다. | 실제 회귀 2건과 기존 불일치 1건, 합계 3/3문단이 일치한다. | 합성·실물 통과이며 확인한 Other 굵게 범위는 ✅ 근거로 제안한다. |
+| PPT Other 크기 상속 | `45776.ppt`, `bug52297.ppt`이다. | 앞 파일의 저장된 실측 2문단과 뒤 파일의 요약에 남은 명시 정답 2문단이다. | 각각 11pt·14pt여야 한다. | 4/4문단이 일치한다. | 확인한 Other 크기 범위는 ✅ 근거로 제안한다. |
+| PPT 기울임·밑줄 신규 상속 | 38개 요약 및 5개 원문 실측을 사용했다. | 수정 전후 첫 런 속성과 기존 합성 테스트이다. | 기존 일치 수가 줄지 않아야 한다. | 기울임 1,525/1,537, 밑줄 1,537/1,537을 유지한다. | 회귀 없음이다. 새로 바뀐 기울임·밑줄 실물은 0개이므로 신규 상속 전체의 검증을 주장하지 않는다. |
+| 공개 PPT 본문 | 기존 선정 목록의 공개 PPT 221개이다. | 수정 전후 문단 순서·본문 및 문자별 서식 스냅숏이다. | 본문 변화와 호출 예외 증가가 0개여야 한다. | 본문 불일치 0개, 호출 예외 0개, 문서 오류 목록 변화 0개이다. | 221/221 통과이다. |
+
+38개 전체는 5개·677문단의 원문 실측을 직접 재대조하고, 나머지 33개는 수정 전후 첫 런 속성을 비교했다. 그중 32개는 동일하며 `bug52297.ppt`의 변경 2문단은 요약에 남아 있는 PowerPoint 크기 14pt와 유일하게 대응한다. 따라서 아래 최종 수치는 38개를 PowerPoint로 다시 열어 측정한 값이 아니라, 저장 실측의 오프라인 재대조와 변경분 검증으로 갱신한 값이다. 정답을 복원할 수 없는 변경은 0건이었다.
+
+| 속성 | base `11058e3` | 수정 전 `4fadf4c` | 5차 최종 |
+|---|---:|---:|---:|
+| 크기 | 1,123/1,537 | 1,527/1,537 | 1,531/1,537 |
+| 굵게 | 1,486/1,537 | 1,521/1,537 | 1,524/1,537 |
+| 기울임 | 1,522/1,537 | 1,525/1,537 | 1,525/1,537 |
+| 밑줄 | 1,535/1,537 | 1,537/1,537 | 1,537/1,537 |
+| 첨자 | 1,537/1,537 | 1,537/1,537 | 1,537/1,537 |
+
+모든 속성이 두 기준 이상이다. 새 검사기는 불일치 전체와 정규화된 전체 문구를 저장하며, 표시용 40자 접두사 충돌은 정답으로 채택하지 않는다. 55개 불일치 중 앞 40개만 개선한 합성 사례에서 가짜 회귀가 0개임을 확인했다.
+
+공개 221개에서는 크기 324자·4파일, 굵게 115자·3파일이 바뀌었고 기울임·밑줄·첨자는 0자이다. 본문은 전부 동일하며 Markdown은 3파일만 바뀌었다. 같은 이름 PPT/PPTX 9쌍 중 비공백 정답을 대응시킨 5쌍의 크기 10,982/12,207자와 나머지 다섯 속성 12,479/12,479자는 유지한다.
+
+| 변경 표본 파일 | 문자별 변화 | 사유와 실측 범위 |
+|---|---|---|
+| `45543.ppt` | 크기 172자가 바뀌었다. | 마스터 Other의 18pt 대신 Environment의 24pt를 적용한다. 이 파일은 PowerPoint 38개 목록 밖이므로 원시 바이트 근거만 있다. |
+| `45776.ppt` | 굵게 44자·크기 38자가 바뀌었다. | Environment의 굵게·11pt를 복구한다. 슬라이드 2문단은 PowerPoint 실측과 일치한다. |
+| `52244.ppt` | 굵게 28자·크기 45자가 바뀌었다. | Environment의 굵게·12pt를 적용한다. 이 파일은 PowerPoint 38개 목록 밖이므로 원시 바이트 근거만 있다. |
+| `bug45124.ppt` | 굵게 43자가 바뀌었다. | Environment의 굵게를 상속한다. 슬라이드 1문단은 PowerPoint 실측과 일치한다. |
+| `bug52297.ppt` | 크기 69자가 바뀌었다. | Environment의 14pt를 적용한다. 슬라이드 2문단이 요약의 명시 정답과 일치한다. |
+
+### 검증 재실행
+
+```bash
+/usr/bin/python3 -m scripts.probe_ppt_r5_oracle --corpus-root CORPUS --oracle .codex-work/powerpoint/ppt-regress-powerpoint.json --summary .codex-work/powerpoint/ppt38-summary.json --base BASE_SOURCE --before BEFORE_SOURCE --after . --output .codex-work/r5-oracle-final.json
+/usr/bin/python3 -m scripts.probe_ppt_review_evidence snapshot --source BEFORE_SOURCE --list PUBLIC_LIST --corpus-root CORPUS --output .codex-work/r5-corpus-before.json
+/usr/bin/python3 -m scripts.probe_ppt_review_evidence snapshot --source . --list PUBLIC_LIST --corpus-root CORPUS --output .codex-work/r5-corpus-after.json
+/usr/bin/python3 -m scripts.probe_ppt_review_evidence compare --before .codex-work/r5-corpus-before.json --after .codex-work/r5-corpus-after.json --corpus-root CORPUS --output .codex-work/r5-corpus-comparison.json
+/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
+ruff check dochan scripts tests
+```
+
+`BASE_SOURCE`는 `11058e3`, `BEFORE_SOURCE`는 `4fadf4c`의 dochan 패키지 스냅숏이다. `CORPUS`와 `PUBLIC_LIST`는 각각 읽기 전용 코퍼스 루트와 기존 공개 표본 목록 인자이다. 최초 실패는 `r5-red.txt`의 3 failed·18 passed이고, 검증기 최초 실패는 `r5-oracle-red.txt`에 있다. 전체 테스트·Ruff·공백 검사의 최종 결과는 작업 보고서와 `r5-full-tests.txt`에 남긴다. 기존 HEAD 단언, README, CHANGELOG, 공유 모델·출력 파일은 변경하지 않았다.
+
+5차 최종 전체 테스트는 **3,442 passed, 24 skipped, 14 xfailed**이다. 신규 테스트 24개가 모두 실행됐고, Ruff와 diff 공백 검사도 통과했다.

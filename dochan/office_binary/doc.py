@@ -336,6 +336,19 @@ class DOCReader:
                 return doc
             best_document = None
             best_score = None
+            def load_data_stream():
+                if ole.exists("Data"):
+                    try:
+                        return read_ole_stream(
+                            ole, "Data", max_bytes=MAX_OLE_STREAM_SIZE,
+                            budget=stream_budget,
+                        )
+                    except Exception as exc:
+                        doc.errors.append(f"WARN: DOC Data stream unavailable: {exc}")
+                return b""
+
+            preferred_table = ("1Table" if len(word_data) > 11 and
+                               struct.unpack_from('<H', word_data, 10)[0] & 0x0200 else "0Table")
 
             def _score_document(document: Document, piece_lines: List[str]):
                 element_count = sum(len(section.elements) for section in document.sections)
@@ -366,6 +379,19 @@ class DOCReader:
                     continue
                 # 후보 하나의 파싱이 실패해도 다른 후보와 폴백을 시도할 수 있어야 한다.
                 # 보호 없이 두면 테이블 스트림 하나가 문서 전체를 잃게 만든다.
+                # A valid native structure wins over text heuristics. In particular,
+                # subdocument text must not be mistaken for additional body rows.
+                if (table_name == preferred_table and len(word_data) >= 34
+                        and word_data[:2] == b"\xec\xa5"):
+                    try:
+                        from .doc_structure import parse_structured_doc
+                        structured = parse_structured_doc(word_data, candidate, load_data_stream)
+                        if structured is not None:
+                            structured.errors.extend(doc.errors)
+                            return structured
+                        doc.errors.append("WARN: DOC structure unavailable; text fallback")
+                    except Exception as exc:
+                        doc.errors.append(f"WARN: DOC structure parsing failed; text fallback: {exc}")
                 try:
                     piece_lines = _extract_piece_table_lines(word_data, candidate)
                     document = parse_doc_word_stream(word_data, candidate)

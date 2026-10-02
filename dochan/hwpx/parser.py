@@ -725,9 +725,9 @@ class HWPXParser:
         direct_id = _int_attr(p_elem, 'paraPrIDRef', -1)
         direct = self._para_prs.get(direct_id)
         if direct and direct['heading_type'] == 'OUTLINE':
-            # 직접 지정은 스타일보다 우선한다. 제목 상한 밖의 개요도
-            # 스타일 개요로 되돌아가지 않고 글꼴 크기 폴백을 적용한다.
-            return self._outline_level(direct_id) or self._detect_heading_level_by_font(runs)
+            # 직접 지정은 스타일보다 우선한다. 깊은 개요는 글꼴 크기와
+            # 관계없이 본문 열거 항목으로 유지한다(HWP와 같은 규칙).
+            return self._outline_level(direct_id)
 
         style_id = _int_attr(p_elem, 'styleIDRef', -1)
         style = self._styles.get(style_id)
@@ -736,15 +736,17 @@ class HWPXParser:
             # (a) 스타일 이름이 "개요 N" / "Outline N" / "Heading N"
             level = _heading_level_from_style_name(style['name']) or \
                 _heading_level_from_style_name(style['eng_name'])
-            if level and level <= MAX_OUTLINE_HEADING_LEVEL:
-                return level
+            if level:
+                return level if level <= MAX_OUTLINE_HEADING_LEVEL else 0
 
             # (b) 유효한 직접 문단 모양이 없을 때만 스타일의 기본 개요를 쓴다.
-            level = self._outline_level(style['para_pr_id']) if not direct else 0
-            if level:
-                return level
+            inherited = self._para_prs.get(style['para_pr_id']) if not direct else None
+            if inherited and inherited['heading_type'] == 'OUTLINE':
+                return self._outline_level(style['para_pr_id'])
 
-        # (c) 폰트 크기 휴리스틱
+        # (c) 셀 안의 문단/중첩 개체는 글꼴 크기만으로 제목이 되지 않는다.
+        if any(parent.tag == '{%s}tc' % NS['hp'] for parent in p_elem.iterancestors()):
+            return 0
         return self._detect_heading_level_by_font(runs)
 
     def _outline_level(self, para_pr_id: int) -> int:

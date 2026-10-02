@@ -62,9 +62,9 @@ def test_hwpx_direct_nonoutline_keeps_named_heading_style(tmp_path):
 
 
 @pytest.mark.parametrize("direct_level", [3, 4, 5])
-@pytest.mark.parametrize("font_size, expected", [(1000, 0), (1600, 2)])
-def test_hwpx_deep_direct_outline_uses_font_fallback(
-        tmp_path, direct_level, font_size, expected):
+@pytest.mark.parametrize("font_size", [1000, 1600])
+def test_hwpx_deep_direct_outline_stays_body(
+        tmp_path, direct_level, font_size):
     para = _heading_document(tmp_path, "OUTLINE", direct_level, "개요 1", 0,
                              font_size=font_size)
-    assert para.heading_level == expected
+    assert para.heading_level == 0

@@ -30,12 +30,12 @@ def test_clickhere_only_emits_stored_body_in_both_formats(tmp_path, value):
 
 
 @pytest.mark.parametrize('level', [3, 4, 5])
-@pytest.mark.parametrize('size,expected', [(10, 0), (13, 3), (16, 2), (20, 1)])
-def test_deep_direct_outline_falls_back_to_font(level, size, expected):
+@pytest.mark.parametrize('size', [10, 13, 16, 20])
+def test_deep_direct_outline_stays_body(level, size):
     info = DocInfo(styles=[StyleEntry(name='Heading 1', para_shape_id=0)])
     DocInfoParser()._parse_para_shape(struct.pack('<I', (1 << 23) | (level << 25)), info)
     para = Paragraph(runs=[TextRun('text', font_size_pt=size)], para_shape_id=0, style_id=0)
-    assert SectionParser(info)._detect_heading_level(para) == expected
+    assert SectionParser(info)._detect_heading_level(para) == 0
 
 
 def _tracked_reader(monkeypatch, tmp_path, mode='preserve', missing_body=False):

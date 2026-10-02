@@ -116,6 +116,7 @@ class SectionParser:
         self._document_cells = 0
         self._structure_depth = 0
         self._table_depth = 0
+        self._in_table_cell = False
         self._fatal_error_keys = set()
         self._table_failure_serial = 0
 
@@ -646,7 +647,8 @@ class SectionParser:
         shapes = getattr(self.doc_info, 'para_shapes', [])
         direct = 0 <= para.para_shape_id < len(shapes)
         if direct and shapes[para.para_shape_id].heading_type == 1:
-            return self._outline_level(para.para_shape_id) or self._heading_level_by_font(para)
+            # 깊은 개요는 본문 열거 항목이다. 글꼴 크기로 다시 승격하지 않는다.
+            return self._outline_level(para.para_shape_id)
         # 1. Style 이름 기반
         if self.doc_info and hasattr(self.doc_info, 'styles') and 0 <= para.style_id < len(self.doc_info.styles):
             style = self.doc_info.styles[para.style_id]
@@ -655,25 +657,25 @@ class SectionParser:
             if '개요' in name or 'outline' in name or 'heading' in name:
                 for i in range(1, 7):
                     if str(i) in name:
-                        return i if i <= MAX_OUTLINE_HEADING_LEVEL else self._heading_level_by_font(para)
+                        return i if i <= MAX_OUTLINE_HEADING_LEVEL else 0
                 return 1  # default heading level
             if name.startswith(('부제목', 'subtitle')):
                 return 2
             if '제목' in name or 'title' in name:
                 return 1
-            level = self._outline_level(style.para_shape_id) if not direct else 0
-            if level:
-                return level
+            if (not direct and 0 <= style.para_shape_id < len(shapes)
+                    and shapes[style.para_shape_id].heading_type == 1):
+                return self._outline_level(style.para_shape_id)
 
         level = self._outline_level(para.para_shape_id)
         if level:
             return level
 
-        return self._heading_level_by_font(para)
+        return 0 if self._in_table_cell else self._heading_level_by_font(para)
 
     @staticmethod
     def _heading_level_by_font(para) -> int:
-        # HWPX와 동일하게 지원 개요 범위 밖에서는 글꼴 크기로 판단한다.
+        # 개요 정보가 없는 셀 밖 문단만 글꼴 크기로 판단한다.
         if para.runs:
             size = para.runs[0].font_size_pt
             if size >= 20:
@@ -939,6 +941,14 @@ class SectionParser:
 
     def _parse_cell_info(self, lh_node) -> dict:
         """LIST_HEADER 노드에서 셀 위치/병합/내용 파싱"""
+        saved_cell = self._in_table_cell
+        self._in_table_cell = True
+        try:
+            return self._parse_cell_info_impl(lh_node)
+        finally:
+            self._in_table_cell = saved_cell
+
+    def _parse_cell_info_impl(self, lh_node) -> dict:
         info = self._parse_cell_geometry(lh_node)
         info['paragraphs'] = []
 

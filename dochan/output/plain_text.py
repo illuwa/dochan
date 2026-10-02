@@ -32,6 +32,9 @@ def _element_to_text(elem) -> str:
     elif isinstance(elem, Image):
         if elem.ocr_text:
             return _with_caption(elem.ocr_text, elem)
+        if getattr(elem, 'inline_reference', False):
+            # 문단 런에 이미 그림 참조가 있다 — Markdown 출력과 같이 다시 내지 않고 캡션만 남긴다
+            return _with_caption("", elem).strip()
         body = f"[이미지: {elem.filename}]" if elem.filename else "[이미지]"
         return _with_caption(body, elem)
     elif isinstance(elem, (HeaderFooter, Footnote)):

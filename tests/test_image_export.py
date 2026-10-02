@@ -89,3 +89,14 @@ def test_reader_save_images_api(tmp_path):
     _docx_with_png(source)
     written = Dochan(str(source)).save_images(str(tmp_path / "imgs"))
     assert [p.rsplit("/", 1)[-1] for p in written] == ["sample-image-001.png"]
+
+
+def test_plain_text_does_not_repeat_inline_image_reference(tmp_path):
+    # 문단 런에 이미 그림 참조가 있으면 평문에서 [이미지: …] 를 다시 내지 않는다(Markdown 과 같은 규칙)
+    from dochan import Dochan
+
+    source = tmp_path / "sample.docx"
+    _docx_with_png(source)
+    text = Dochan(str(source)).to_plain_text()
+    assert text.count("image1.png") == 1
+    assert "[이미지:" not in text

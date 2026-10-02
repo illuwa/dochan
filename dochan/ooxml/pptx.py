@@ -9,7 +9,7 @@ from lxml import etree
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
-from .charts import chart_elements, text_table, xy_series_rows
+from .charts import chart_elements, chart_series, text_table, xy_series_rows
 from .core import core_property_elements, read_core_properties
 from .package import OOXMLPackage
 
@@ -871,8 +871,9 @@ class PPTXReader:
         if getattr(self, "_chart_budget_exhausted", False):
             return Table()
         series_items = []
+        implicit_x = []
         xy = False
-        for series in chart_root.iterfind(".//c:ser", namespaces=NS):
+        for series in chart_series(chart_root):
             if not self._reserve_chart_resource(
                 "_chart_series_remaining",
                 1,
@@ -882,7 +883,9 @@ class PPTXReader:
                 return Table()
             series_name = self._chart_series_name(series)
             # 분산형·거품형은 c:cat/c:val 대신 c:xVal/c:yVal 에 값을 둔다.
-            xy = xy or series.find("c:xVal", namespaces=NS) is not None
+            has_x_values = series.find("c:xVal", namespaces=NS) is not None
+            xy = xy or has_x_values
+            implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
             if getattr(self, "_chart_budget_exhausted", False):
@@ -891,7 +894,7 @@ class PPTXReader:
         if not series_items:
             return Table()
 
-        long_rows = xy_series_rows(series_items, xy)
+        long_rows = xy_series_rows(series_items, xy, implicit_x)
         if long_rows is not None:
             if not self._reserve_chart_resource(
                 "_chart_output_cells_remaining",

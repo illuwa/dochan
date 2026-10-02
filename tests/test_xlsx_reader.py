@@ -2912,3 +2912,26 @@ def test_xlsx_long_scatter_table_counts_against_output_cell_budget(tmp_path, mon
         for section in doc.sections
         for element in section.elements
     )
+
+
+def test_xlsx_chart_series_in_both_alternate_content_branches_are_read_once(tmp_path, monkeypatch):
+    path = tmp_path / "alternate-series.xlsx"
+    # 점 예산도 고른 갈래만 센다: 두 갈래를 다 세면 4점이 되어 한도 2를 넘는다.
+    monkeypatch.setattr(xlsx_module, "MAX_CHART_POINTS", 4)
+    _write_chart_part_xlsx(
+        path,
+        '<c:plotArea><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        f'<mc:Choice Requires="c14"><c:lineChart>{_XLSX_CHART_SERIES_XML}</c:lineChart></mc:Choice>'
+        f"<mc:Fallback><c:lineChart>{_XLSX_CHART_SERIES_XML}</c:lineChart></mc:Fallback>"
+        "</mc:AlternateContent></c:plotArea>",
+    )
+
+    document = XLSXReader().read(str(path))
+    (table,) = _xlsx_chart_tables(document)
+
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["Category", "ARR"],
+        ["Q1", "10"],
+        ["Q2", "20"],
+    ]
+    assert document.errors == []

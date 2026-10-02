@@ -2031,3 +2031,23 @@ def test_rejects_pptx_long_scatter_table_above_document_cell_budget(tmp_path, mo
 
     assert any("PPTX chart output cell limit exceeded" in error for error in doc.errors)
     assert doc.find_all("table") == []
+
+
+def test_pptx_chart_series_in_both_alternate_content_branches_are_read_once(tmp_path):
+    path = tmp_path / "alternate-series.pptx"
+    _write_chart_part_pptx(
+        path,
+        '<c:plotArea><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        f'<mc:Choice Requires="c14"><c:barChart><c:barDir val="bar"/>{_CHART_SERIES_XML}</c:barChart></mc:Choice>'
+        f"<mc:Fallback><c:barChart>{_CHART_SERIES_XML}</c:barChart></mc:Fallback>"
+        "</mc:AlternateContent></c:plotArea>",
+    )
+
+    table = PPTXReader().read(str(path)).sections[0].elements[0]
+
+    assert table.caption_text == "Chart type: bar"
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["Category", "Sales"],
+        ["Q1", "10"],
+        ["Q2", "20"],
+    ]

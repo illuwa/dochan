@@ -3,7 +3,7 @@ import pytest
 from lxml import etree
 
 import dochan.ooxml.charts as charts_module
-from dochan.ooxml.charts import chart_caption, chart_title
+from dochan.ooxml.charts import chart_caption, chart_series, chart_title, xy_series_rows
 
 _NS = (
     'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" '
@@ -265,3 +265,102 @@ def test_title_and_caption_are_empty_without_chart_element():
 
     assert chart_title(root) == ""
     assert chart_caption(root) == ""
+
+
+def test_caption_skips_a_choice_branch_that_resolves_to_nothing():
+    root = etree.fromstring(
+        f"<c:chartSpace {_NS} {_MC}><c:chart><c:plotArea><mc:AlternateContent>"
+        "<mc:Choice Requires=\"c14\"><mc:AlternateContent/></mc:Choice>"
+        "<mc:Fallback><c:barChart/></mc:Fallback>"
+        "</mc:AlternateContent></c:plotArea></c:chart></c:chartSpace>".encode("utf-8")
+    )
+
+    assert chart_caption(root) == "Chart type: column"
+
+
+def test_caption_reads_axis_title_wrapped_in_alternate_content():
+    root = etree.fromstring(
+        f"<c:chartSpace {_NS} {_MC}><c:chart><c:plotArea><c:barChart/><c:catAx>"
+        "<mc:AlternateContent><mc:Choice Requires=\"c14\">"
+        f"{_rich_title(_run('Quarter'))}</mc:Choice></mc:AlternateContent>"
+        "</c:catAx></c:plotArea></c:chart></c:chartSpace>".encode("utf-8")
+    )
+
+    assert chart_caption(root) == "Chart type: column; Category axis: Quarter"
+
+
+def test_title_reads_nested_alternate_content_text_once():
+    nested = (
+        '<mc:AlternateContent><mc:Choice Requires="a14">' + _run("B") + "</mc:Choice>"
+        "<mc:Fallback>" + _run("B") + "</mc:Fallback></mc:AlternateContent>"
+    )
+    title = _rich_title(
+        '<mc:AlternateContent><mc:Choice Requires="a14">' + _run("A") + nested + "</mc:Choice>"
+        "<mc:Fallback>" + _run("A") + _run("B") + "</mc:Fallback></mc:AlternateContent>"
+    )
+    root = etree.fromstring(
+        f"<c:chartSpace {_NS} {_MC}><c:chart>{title}</c:chart></c:chartSpace>".encode("utf-8")
+    )
+
+    assert chart_title(root) == "AB"
+
+
+def test_title_does_not_double_space_after_a_trailing_line_break():
+    root = _chart_space(_rich_title(_run("Sales") + "<a:br/>", _run("2024")))
+
+    assert chart_title(root) == "Sales 2024"
+
+
+def test_chart_series_reads_one_alternate_content_branch_in_plot_area():
+    series = "<c:ser><c:tx><c:v>{}</c:v></c:tx></c:ser>"
+    root = etree.fromstring(
+        f"<c:chartSpace {_NS} {_MC}><c:chart><c:plotArea><mc:AlternateContent>"
+        f'<mc:Choice Requires="c14"><c:barChart>{series.format("Choice")}</c:barChart></mc:Choice>'
+        f"<mc:Fallback><c:barChart>{series.format('Fallback')}</c:barChart></mc:Fallback>"
+        f"</mc:AlternateContent><c:lineChart>{series.format('Line')}</c:lineChart>"
+        "</c:plotArea></c:chart></c:chartSpace>".encode("utf-8")
+    )
+
+    names = [ser.find(f"{{{charts_module.C_NS}}}tx/{{{charts_module.C_NS}}}v").text for ser in chart_series(root)]
+
+    assert names == ["Choice", "Line"]
+
+
+def test_long_xy_rows_number_points_of_a_series_without_x_source():
+    rows = xy_series_rows(
+        [("A", {0: "1.5", 1: "2.5"}, {0: "5", 1: "6"}), ("B", {}, {0: "7", 1: "8"})],
+        True,
+        implicit_x=[False, True],
+    )
+
+    assert rows == [
+        ["Series", "X", "Y"],
+        ["A", "1.5", "5"],
+        ["A", "2.5", "6"],
+        ["B", "1", "7"],
+        ["B", "2", "8"],
+    ]
+
+
+def test_long_xy_rows_leave_x_blank_when_the_x_cache_is_missing():
+    rows = xy_series_rows(
+        [("A", {0: "1.5"}, {0: "5"}), ("B", {}, {0: "7"})],
+        True,
+        implicit_x=[False, False],
+    )
+
+    assert rows == [["Series", "X", "Y"], ["A", "1.5", "5"], ["B", "", "7"]]
+
+
+@pytest.mark.parametrize(
+    "runs, expected",
+    [
+        (_run("Sales ") + "<a:br/>" + _run("2024"), "Sales 2024"),
+        (_run("Sales") + "<a:br/>" + _run(" 2024"), "Sales 2024"),
+        (_run("Sales") + "<a:br/><a:br/>" + _run("2024"), "Sales 2024"),
+        ("<a:br/>" + _run("Sales"), "Sales"),
+        (_run("A") + _run(" ") + _run(" B"), "A  B"),
+    ],
+)
+def test_title_line_breaks_add_at_most_one_space(runs, expected):
+    assert chart_title(_chart_space(_rich_title(runs))) == expected

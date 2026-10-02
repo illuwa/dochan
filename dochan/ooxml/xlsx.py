@@ -13,7 +13,7 @@ from ..conversion import AssetRef, Provenance
 from ..model.header_footer import HeaderFooter
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
-from .charts import chart_elements, text_table, xy_series_rows
+from .charts import chart_elements, chart_series, text_table, xy_series_rows
 from .core import core_property_elements, read_core_properties
 from .package import MAX_XML_PART_SIZE, OOXMLPackage
 
@@ -940,7 +940,7 @@ class XLSXReader:
             self._record_chart_limit_error("output cell", 1, 0)
             return Table()
 
-        series_elements = chart_root.findall(".//c:ser", namespaces=NS)
+        series_elements = chart_series(chart_root)
         series_count = len(series_elements)
         if series_count > self._chart_series_remaining:
             self._record_chart_limit_error(
@@ -969,9 +969,12 @@ class XLSXReader:
         self._chart_points_remaining -= point_count
 
         series_items = []
+        implicit_x = []
         xy = False
         for series in series_elements:
-            xy = xy or series.find("c:xVal", namespaces=NS) is not None
+            has_x_values = series.find("c:xVal", namespaces=NS) is not None
+            xy = xy or has_x_values
+            implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
             series_name = self._chart_series_name(series)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
@@ -979,7 +982,7 @@ class XLSXReader:
         if not series_items:
             return Table()
 
-        long_rows = xy_series_rows(series_items, xy)
+        long_rows = xy_series_rows(series_items, xy, implicit_x)
         if long_rows is not None:
             if not self._reserve_chart_output_cells(3 * len(long_rows)):
                 return Table()

@@ -78,24 +78,43 @@ def chart_elements(chart_root, table, paragraph: Callable[[str], object]) -> Lis
     return elements
 
 
-def xy_series_rows(series_items, xy: bool) -> Optional[List[List[str]]]:
+def xy_series_rows(series_items, xy: bool, implicit_x=None) -> Optional[List[List[str]]]:
     """분산형·거품형 계열의 X 값이 계열마다 다르면 (계열, X, Y) 긴 표의 행들. 아니면 None.
 
     series_items 는 리더가 모은 (계열 이름, {idx: X 또는 범주}, {idx: Y 또는 값}) 목록이다.
     X 를 공유하는 계열은 X 한 열과 계열별 Y 열로 묶는 편이 읽기 쉬우니 리더의 기존 표를 쓴다.
     X 가 다른데 idx 로 묶으면 첫 계열의 X 가 다른 계열의 Y 에 붙어 좌표가 틀어진다.
+
+    implicit_x[i] 가 참이면 그 계열은 X 원천(c:xVal·c:cat)이 아예 없다. Office 는 이런 계열을
+    1, 2, … 위치에 그리므로 X 를 그 번호로 채운다. 원천은 있는데 캐시가 없으면 X 를 비운다.
     """
     if not xy or len(series_items) < 2:
         return None
     first_xs = series_items[0][1]
     if all(xs == first_xs for _, xs, _ in series_items[1:]):
         return None
+    implicit_x = implicit_x or [False] * len(series_items)
     rows = [["Series", "X", "Y"]]
-    for position, (name, xs, ys) in enumerate(series_items):
+    for position, ((name, xs, ys), implicit) in enumerate(zip(series_items, implicit_x)):
         label = name or f"Series {position + 1}"
         for index in sorted(set(xs) | set(ys)):
-            rows.append([label, xs.get(index, ""), ys.get(index, "")])
+            x = xs.get(index, str(index + 1) if implicit and not xs else "")
+            rows.append([label, x, ys.get(index, "")])
     return rows
+
+
+def chart_series(chart_root) -> list:
+    """c:chart/c:plotArea/<차트 그룹>/c:ser — 확장 래퍼는 캡션과 같은 한 갈래만 읽는다."""
+    chart = _chart(chart_root)
+    plot_area = _child(chart, "plotArea") if chart is not None else None
+    if plot_area is None:
+        return []
+    return [
+        series
+        for _, group in _chart_children(plot_area)
+        for name, series in _chart_children(group)
+        if name == "ser"
+    ]
 
 
 def text_table(rows: List[List[str]]) -> Table:
@@ -166,7 +185,11 @@ def _chart_children(parent, depth: int = 0):
         if tag.startswith(_C):
             yield tag[len(_C):], child
         elif tag == _MC + "AlternateContent" and depth < _MAX_ALTERNATE_DEPTH:
-            branch = _alternate_branch(child, _has_chart_child)
+            # 펼쳤을 때 실제로 차트 요소가 나오는 갈래만 고른다(빈 래퍼·깊이 상한에 걸리는 갈래 제외).
+            branch = _alternate_branch(
+                child,
+                lambda candidate: next(_chart_children(candidate, depth + 1), None) is not None,
+            )
             if branch is not None:
                 yield from _chart_children(branch, depth + 1)
 
@@ -180,14 +203,6 @@ def _alternate_branch(alternate, wanted):
         if branch.tag == _MC + "Fallback" and wanted(branch):
             return branch
     return None
-
-
-def _has_chart_child(branch) -> bool:
-    return any(
-        isinstance(child.tag, str)
-        and (child.tag.startswith(_C) or child.tag == _MC + "AlternateContent")
-        for child in branch
-    )
 
 
 def _has_text(branch) -> bool:
@@ -205,10 +220,10 @@ def _type_labels(plot_area) -> List[str]:
 
 def _type_label(name: str, elem) -> str:
     if name in ("barChart", "bar3DChart"):
-        direction = "bar" if _val(elem, "c:barDir") == "bar" else "column"
+        direction = "bar" if _val(elem, "barDir") == "bar" else "column"
         return f"3-D {direction}" if name == "bar3DChart" else direction
     if name == "ofPieChart":
-        return "bar of pie" if _val(elem, "c:ofPieType") == "bar" else "pie of pie"
+        return "bar of pie" if _val(elem, "ofPieType") == "bar" else "pie of pie"
     return _TYPE_LABELS.get(name, "")
 
 
@@ -216,9 +231,9 @@ def _axis_titles(plot_area) -> List[str]:
     titles = []
     for name, child in _chart_children(plot_area):
         label = _AXIS_LABELS.get(name)
-        if not label or _flag(child, "c:delete"):
+        if not label or _flag(child, "delete"):
             continue
-        text = _title_text(child.find("c:title", namespaces=_NS))
+        text = _title_text(_child(child, "title"))
         if text:
             titles.append(f"{label}: {text}")
             if len(titles) >= MAX_CAPTION_AXES:
@@ -226,14 +241,14 @@ def _axis_titles(plot_area) -> List[str]:
     return titles
 
 
-def _val(elem, path: str) -> str:
-    child = elem.find(path, namespaces=_NS)
+def _val(elem, name: str) -> str:
+    child = _child(elem, name)
     return (child.get("val") or "").strip() if child is not None else ""
 
 
-def _flag(elem, path: str) -> bool:
+def _flag(elem, name: str) -> bool:
     """CT_Boolean: 요소가 없으면 거짓, val 이 없으면 스키마 기본값인 참."""
-    child = elem.find(path, namespaces=_NS)
+    child = _child(elem, name)
     if child is None:
         return False
     value = child.get("val")
@@ -269,20 +284,39 @@ def _title_text(title) -> str:
 
 def _paragraph_text(paragraph) -> str:
     parts = []
-    for child in paragraph:
+    _collect_text(paragraph, parts, 0)
+    text = []
+    pending_break = False
+    for part in parts:
+        if part is _BREAK:
+            pending_break = True
+            continue
+        if not part:
+            continue
+        # 줄바꿈은 앞뒤 글자가 모두 공백이 아닐 때만 공백 하나가 된다. 문단 끝의 줄바꿈은 버린다.
+        if pending_break and text and not text[-1][-1].isspace() and not part[0].isspace():
+            text.append(" ")
+        pending_break = False
+        text.append(part)
+    return "".join(text)
+
+
+_BREAK = object()
+
+
+def _collect_text(container, parts: list, depth: int) -> None:
+    for child in container:
         tag = child.tag
         if not isinstance(tag, str):
             continue
         if tag == _A + "br":
-            if parts and parts[-1] and not parts[-1][-1].isspace():
-                parts.append(" ")
-            continue
-        if tag == _MC + "AlternateContent":
-            child = _alternate_branch(child, _has_text)
-            if child is None:
+            parts.append(_BREAK)
+        elif tag == _MC + "AlternateContent":
+            if depth >= _MAX_ALTERNATE_DEPTH:
                 continue
-        # a:r·a:fld 의 글자 (pPr·endParaRPr 에는 a:t 가 없다).
-        text = "".join(node.text or "" for node in child.iterfind(".//a:t", namespaces=_NS))
-        if text:
-            parts.append(text)
-    return "".join(parts)
+            branch = _alternate_branch(child, _has_text)
+            if branch is not None:
+                _collect_text(branch, parts, depth + 1)
+        else:
+            # a:r·a:fld 의 글자 (pPr·endParaRPr 에는 a:t 가 없다).
+            parts.append("".join(node.text or "" for node in child.iterfind(".//a:t", namespaces=_NS)))

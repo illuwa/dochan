@@ -531,10 +531,7 @@ def _read_name_record(record_data: bytes) -> _DefinedName:
     scope = struct.unpack_from("<H", record_data, 8)[0]
     name_length = record_data[3]
     formula_length = struct.unpack_from("<H", record_data, 4)[0]
-    menu_length = record_data[10]
-    description_length = record_data[11]
-    help_length = record_data[12]
-    status_length = record_data[13]
+    # 바이트 10–13 은 메뉴·설명·도움말·상태 문자열 길이다 — 이름과 수식 뒤에 오므로 읽지 않는다
     offset = 14
     if offset >= len(record_data):
         return _DefinedName("")

@@ -51,7 +51,8 @@ def test_docx_textbox_image_is_emitted_once(tmp_path):
 
 def test_docx_inline_image_heading_is_not_repeated(tmp_path):
     doc = read(tmp_path, '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>before</w:t>' + IMAGE + '<w:t>after</w:t></w:r></w:p>')
-    assert [e.heading_level for e in doc.find_all('paragraph')] == [1, 0]
+    assert [e.heading_level for e in doc.find_all('paragraph')] == [1]
+    assert doc.find_all('paragraph')[0].text == 'before![image](word/media/a.png)after'
 
 def test_docx_completed_model_does_not_retain_xml_elements(tmp_path):
     doc = read(tmp_path, CAPTION % 'caption' + table())
@@ -101,8 +102,9 @@ def test_docx_inline_image_does_not_repeat_numbering(tmp_path):
     write_docx(path, body, parts, RELS)
     paragraphs = DOCXReader().read(str(path)).find_all('paragraph')
     assert paragraphs[0].text.startswith('1. before')
-    assert paragraphs[1].text == 'after'
-    assert paragraphs[2].text == '2. next'
+    assert paragraphs[0].text.endswith('![image](word/media/a.png)after')
+    assert paragraphs[1].text == '2. next'
+    assert len(paragraphs) == 2
 
 
 @pytest.mark.parametrize('one_run', [True, False])

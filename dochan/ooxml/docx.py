@@ -1,6 +1,5 @@
 """Native DOCX reader."""
 from dataclasses import dataclass, replace
-from copy import deepcopy
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
@@ -237,6 +236,7 @@ class DOCXReader:
         self._image_occurrences = 0
         self._caption_styles = set()
         self._chart_parts = {}
+        self._chart_cell_counts = {}
         self._chart_occurrences = 0
         from .xlsx import MAX_CHART_OUTPUT_CELLS
         self._chart_output_remaining = MAX_CHART_OUTPUT_CELLS
@@ -380,32 +380,39 @@ class DOCXReader:
         return self._attach_captions(elements)
 
     def _paragraph_flow(self, para):
-        """문단 안 차트/이미지를 앵커에서 펼치고 원래 런 순서를 보존한다."""
+        """이미지 참조는 문단에 남기고 블록 차트만 앵커에서 펼친다."""
         elements = []
         runs = []
+        images = []
+
+        def flush():
+            if any(r.text.strip() for r in runs):
+                block = replace(para, runs=list(runs),
+                                heading_level=para.heading_level if not elements else 0)
+                block._source_element = getattr(para, "_source_element", None)
+                if len(images) == 1:
+                    block._image_target = images[0]
+                elements.append(block)
+            elements.extend(images)
+            runs.clear()
+            images.clear()
+
         for run in para.runs:
             flow = getattr(run, "_flow_elements", None)
             if flow is None:
                 runs.append(run)
                 continue
-            if any(r.text.strip() for r in runs):
-                preceding = replace(para, runs=runs, heading_level=para.heading_level if not elements else 0)
-                preceding._source_element = getattr(para, "_source_element", None)
-                if len(flow) == 1 and isinstance(flow[0], Image):
-                    preceding._image_target = flow[0]
-                elements.append(preceding)
-            runs = []
             for item in flow:
                 if isinstance(item, Image):
                     item._source_element = getattr(para, "_source_element", None)
                     item._anchored = True
-            elements.extend(flow)
+                    images.append(item)
+                else:
+                    flush()
+                    elements.append(item)
             if run.text:
                 runs.append(replace(run))
-        if any(r.text.strip() for r in runs):
-            trailing = replace(para, runs=runs, heading_level=para.heading_level if not elements else 0)
-            trailing._source_element = getattr(para, "_source_element", None)
-            elements.append(trailing)
+        flush()
         kind = getattr(para, "_caption_kind", "")
         if kind and len(elements) == 1 and isinstance(elements[0], Paragraph):
             elements[0]._caption_kind = kind
@@ -985,17 +992,37 @@ class DOCXReader:
                 if self._chart_occurrences >= MAX_DOCUMENT_CHARTS:
                     self._chart_warning("WARN: DOCX chart count limit exceeded")
                     continue
-                cells = sum(len(row) for block in template if isinstance(block, Table)
-                            for row in block.rows)
+                if target not in self._chart_cell_counts:
+                    self._chart_cell_counts[target] = sum(
+                        len(row) for block in template if isinstance(block, Table)
+                        for row in block.rows)
+                cells = self._chart_cell_counts[target]
                 if cells > self._chart_output_remaining:
                     self._chart_warning("WARN: DOCX chart output cell budget exceeded")
                     continue
                 self._chart_occurrences += 1
                 self._chart_output_remaining -= cells
-                blocks.extend(deepcopy(template))
+                blocks.extend(self._clone_chart_block(block) for block in template)
             else:
                 stack.extend(reversed(list(node)))
         return blocks
+
+    def _clone_chart_block(self, block):
+        """정규화된 차트 모델만 경량 복제한다. 문자열은 불변 값으로 공유한다.
+
+        deepcopy의 범용 객체 그래프·memo 비용을 피하면서도 셀/런/캡션을
+        개별 수정하거나 find_all로 순회하는 기존 모델 계약을 유지한다.
+        """
+        if isinstance(block, Table):
+            return replace(block, rows=[[
+                replace(cell, paragraphs=[self._clone_chart_block(p) for p in cell.paragraphs],
+                        provenance=replace(cell.provenance) if cell.provenance else None)
+                for cell in row] for row in block.rows],
+                caption=[self._clone_chart_block(p) for p in block.caption])
+        return replace(block, runs=[
+            replace(run, provenance=replace(run.provenance) if run.provenance else None)
+            for run in block.runs],
+            provenance=replace(block.provenance) if block.provenance else None)
 
     def _read_part_relationships(self, package: OOXMLPackage, part_path: str) -> Dict[str, str]:
         rels_path = self._relationships_path(part_path)
@@ -1549,6 +1576,14 @@ class DOCXReader:
                     yield run
                 continue
             if node.tag == f"{{{WP_NS}}}docPr":
+                # 이미지 설명은 _image_reference가 참조의 대체 텍스트로 낸다.
+                # 이미지 없는 도형의 설명은 종전처럼 본문에 남긴다.
+                parent = node.getparent()
+                blip = parent.find(".//a:blip", namespaces=NS) if parent is not None else None
+                rel_id = _r_attr(blip, "embed")
+                if rel_id and (getattr(self, "_active_relationships", {}).get(rel_id) or
+                               getattr(self, "_document_relationships", {}).get(rel_id)):
+                    continue
                 alt = " ".join(part for part in (node.get("title", ""), node.get("descr", "")) if part)
                 if alt:
                     yield TextRun(text=alt)
@@ -1787,6 +1822,7 @@ class DOCXReader:
                 alt_text=label,
                 image_format=ext,
                 provenance=Provenance(source_format="docx", path=target),
+                inline_reference=True,
             )
         )
 

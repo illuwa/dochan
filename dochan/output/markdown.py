@@ -410,7 +410,8 @@ def _image_to_md(img: Image, ctx=None) -> str:
     # 공백이나 괄호가 든 파일명은 꺾쇠로 감싸야 이미지 문법이 깨지지 않는다
     if any(ch in target for ch in ' ()<>'):
         target = '<' + target.replace('<', '%3C').replace('>', '%3E') + '>'
-    parts.append(f"![{alt}]({target})")
+    if not img.inline_reference:
+        parts.append(f"![{alt}]({target})")
 
     # OCR 텍스트가 있으면 이미지 아래에 추가
     if img.ocr_text:

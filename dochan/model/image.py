@@ -17,6 +17,7 @@ class Image:
     # 신규 필드는 반드시 뒤에 붙일 것 — 위치 인자 호환성
     image_format: str = ""                        # png | jpg | jp2 등
     provenance: object = None
+    inline_reference: bool = False               # 문단 런에 이미지 참조가 이미 있다
 
     @property
     def has_data(self) -> bool:

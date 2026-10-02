@@ -1,9 +1,10 @@
-"""내부 PDF/HWPX 쌍의 각주를 읽기 전용으로 비교하고 익명 집계만 출력한다."""
+"""내부 PDF/HWPX 주석을 익명 집계하거나 공개 PDF 미주 양성을 독립 탐색한다."""
 import argparse
 from collections import Counter
 import json
 from pathlib import Path
 import re
+import subprocess
 import unicodedata
 import zipfile
 
@@ -43,14 +44,15 @@ def probe(corpus):
             raw = _raw_counts(answer_path)
             answer = Dochan(str(answer_path)).doc
             candidate = PDFReader().read(str(path))
-            actual = [_normalize(note.text) for note in candidate.find_all("footnote")]
+            actual = {kind: [_normalize(note.text) for note in candidate.find_all(kind)]
+                      for kind in ("footnote", "endnote")}
             expected = {kind: [_normalize(note.text) for note in answer.find_all(kind)]
                         for kind in ("footnote", "endnote")}
             if any(raw[kind] != len(expected[kind]) for kind in expected):
                 result["raw_model_count_mismatches"] += 1
             if not any(raw.values()) and not any(expected.values()):
                 result["negative_documents"] += 1
-                result["negative_false_positives"] += len(actual)
+                result["negative_false_positives"] += sum(map(len, actual.values()))
                 continue
             for kind, texts in expected.items():
                 if not texts:
@@ -59,27 +61,53 @@ def probe(corpus):
                 stats["documents"] += 1
                 stats["expected"] += len(texts)
                 stats["expected_characters"] += sum(map(len, texts))
-                # PDF 휴리스틱은 미주도 footnote로 정규화한다. 두 종류가 함께
-                # 있는 문서는 종류별 후보 수를 정할 수 없으므로 일치 수만 센다.
-                pool = Counter(actual)
+                # 정의 내용뿐 아니라 공통 모델의 각주/미주 유형도 일치해야 한다.
+                pool = Counter(actual[kind])
                 for text in texts:
                     if pool[text]:
                         stats["exact"] += 1
                         pool[text] -= 1
-                if sum(bool(items) for items in expected.values()) == 1:
-                    stats["actual"] += len(actual)
-                    stats["actual_characters"] += sum(map(len, actual))
+                stats["actual"] += len(actual[kind])
+                stats["actual_characters"] += sum(map(len, actual[kind]))
         except Exception:
             # 경로/내용이 들어 있는 예외 문자열도 외부로 출력하지 않는다.
             result["errors"] += 1
     return result
 
 
+def probe_public(corpus):
+    """Poppler는 검증에만 쓰며 파서 런타임에는 필요하지 않다."""
+    result = {"documents": 0, "conversion_errors": 0, "candidates": []}
+    heading = re.compile(r"^\s*(?:end\s*notes|notes|미\s*주)\s*$", re.I)
+    for path in sorted(Path(corpus).glob("*.pdf")):
+        result["documents"] += 1
+        try:
+            converted = subprocess.run(["pdftotext", "-layout", str(path), "-"],
+                                       capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            result["conversion_errors"] += 1
+            continue
+        if converted.returncode:
+            result["conversion_errors"] += 1
+        pages = converted.stdout.decode("utf-8", "replace").split("\f")
+        matches = [index for index, page in enumerate(pages, 1)
+                   if any(heading.fullmatch(line) for line in page.splitlines())]
+        if matches:
+            doc = PDFReader().read(str(path))
+            result["candidates"].append({"file": path.name, "heading_pages": matches,
+                                         "actual_endnotes": len(doc.find_all("endnote")),
+                                         "actual_footnotes": len(doc.find_all("footnote"))})
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("corpus", type=Path)
+    parser.add_argument("--public", action="store_true",
+                        help="공개 코퍼스에서 pdftotext로 미주 제목을 독립 검색한다")
     args = parser.parse_args()
-    print(json.dumps(probe(args.corpus), ensure_ascii=False, indent=2))
+    result = probe_public(args.corpus) if args.public else probe(args.corpus)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

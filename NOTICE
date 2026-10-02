@@ -7,6 +7,12 @@ This software was developed with reference to the publicly available HWP documen
 file format specification published by Hancom Inc.
 Reference: HWP Document File Format 5.0 revision 1.3 (2018.11.08)
 
+This software was developed with reference to the publicly available Microsoft Open
+Specifications ([MS-DOC], [MS-PPT], [MS-XLS], [MS-ODRAW], [MS-OFFCRYPTO], [MS-OSHARED]) and
+ISO/IEC 29500 (ECMA-376) and ISO 32000. Tables such as the Excel function table (Ftab) are
+reproduced from [MS-XLS] for implementation purposes under Microsoft's Open Specifications
+notice.
+
 Adobe Core 14 AFM metrics and Adobe Glyph List
 
 Copyright (c) 1985, 1987, 1988, 1989, 1997 Adobe Systems Incorporated. All Rights Reserved.
@@ -21,7 +27,8 @@ Copyright (c) 1989, 1990, 1991, 1993, 1997 Adobe Systems Incorporated.  All Righ
 
 This file and the 14 PostScript(R) AFM files it accompanies may be used, copied, and distributed for any purpose and without charge, with or without modification, provided that all copyright notices are retained; that the AFM files are not distributed without this file; that all modifications to this file or any of the AFM files are prominently noted in the modified file(s); and that this paragraph is not modified. Adobe Systems has no responsibility or obligation to support the use of the AFM files.
 
-AFM 에서 폭만 추출한 수정본입니다. 내장 인코딩 코드도 추출하고, Adobe Glyph List를 이용해 유니코드 대응표를 추가했습니다. 원본 AFM은 배포하지 않습니다.
+Modified: dochan extracts only glyph names, advance widths (WX) and built-in encoding codes from the AFM files, adds a Unicode mapping using the Adobe Glyph List, and rebuilds the WinAnsi and MacRoman tables from Python codecs. The original AFM files are not distributed with dochan.
+(AFM 에서 글리프 이름·폭·내장 인코딩 코드만 추출하고 Adobe Glyph List 로 유니코드 대응표를 더한 수정본이며, 원본 AFM 은 배포하지 않습니다.)
 
 Copyright 2002-2019 Adobe (http://www.adobe.com/).
 
@@ -56,7 +63,7 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-FontTools ZapfDingbats Unicode mapping:
+FontTools ZapfDingbats Unicode mapping (Adobe ITC Zapf Dingbats Glyph List, BSD-3, via fontTools):
 
 MIT License
 

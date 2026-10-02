@@ -1,7 +1,8 @@
 """Shared native Office symbol-font glyph mappings."""
 
 # Symbol's legacy byte encoding and Unicode cmap share these glyphs.
-# Font cmap observations are data, not a dependency on a font or font library.
+# 대응값은 Microsoft Symbol·Wingdings 글꼴 cmap 을 관찰한 사실 데이터다(글꼴·라이브러리 의존 아님).
+# Adobe symbol.txt 의 사설 영역(F8xx) 대신 현대 유니코드(괄호 조각 U+239B 계열, 〈〉 등)를 쓰는 점이 의도적으로 다르다.
 _SYMBOL_UNICODE = {
     0x22: 0x2200, 0x24: 0x2203, 0x27: 0x220D, 0x2A: 0x2217, 0x2D: 0x2212, 0x40: 0x2245,
     0x41: 0x0391, 0x42: 0x0392, 0x43: 0x03A7, 0x44: 0x0394, 0x45: 0x0395, 0x46: 0x03A6,

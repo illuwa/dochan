@@ -12,7 +12,8 @@
 #
 # This file and the 14 PostScript(R) AFM files it accompanies may be used, copied, and distributed for any purpose and without charge, with or without modification, provided that all copyright notices are retained; that the AFM files are not distributed without this file; that all modifications to this file or any of the AFM files are prominently noted in the modified file(s); and that this paragraph is not modified. Adobe Systems has no responsibility or obligation to support the use of the AFM files.
 #
-# AFM 에서 폭만 추출한 수정본입니다. 내장 인코딩 코드도 추출하고, Adobe Glyph List를 이용해 유니코드 대응표를 추가했습니다. 원본 AFM은 배포하지 않습니다.
+# Modified: dochan extracts only glyph names, advance widths (WX) and built-in encoding codes from the AFM files, adds a Unicode mapping using the Adobe Glyph List, and rebuilds the WinAnsi and MacRoman tables from Python codecs. The original AFM files are not distributed with dochan.
+# (AFM 에서 글리프 이름·폭·내장 인코딩 코드만 추출하고 Adobe Glyph List 로 유니코드 대응표를 더한 수정본이며, 원본 AFM 은 배포하지 않습니다.)
 #
 # Copyright 2002-2019 Adobe (http://www.adobe.com/).
 #
@@ -47,7 +48,7 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# FontTools ZapfDingbats Unicode mapping:
+# FontTools ZapfDingbats Unicode mapping (Adobe ITC Zapf Dingbats Glyph List, BSD-3, via fontTools):
 #
 # MIT License
 #

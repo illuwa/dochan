@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import struct
 
-import olefile
+from dochan import cfb
 
 from dochan.office_binary.doc import DOCReader
 from dochan.office_binary.mtef import parse_equation_native
@@ -35,7 +35,7 @@ def records(data):
 
 
 def ppt_storages(path):
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         errors = []
         result = resolve_presentation(ole.openstream('PowerPoint Document').read(),
                                       ole.openstream('Current User').read(), errors)
@@ -46,7 +46,7 @@ def ppt_storages(path):
 
 def embedded_stream(storage, name):
     raw = decompress_ppt_storage(storage.data, storage.header.rec_instance)
-    with olefile.OleFileIO(io.BytesIO(raw)) as ole:
+    with cfb.OleFileIO(io.BytesIO(raw)) as ole:
         return ole.openstream(name).read()
 
 
@@ -78,7 +78,7 @@ def inventory(root):
         for path in sorted(base.rglob('*.doc')):
             counts['doc_files'] += 1
             try:
-                with olefile.OleFileIO(str(path)) as ole:
+                with cfb.OleFileIO(str(path)) as ole:
                     entries = ole.listdir()
                     roots = sorted({tuple(e[:-1]) for e in entries
                                     if len(e) == 3 and e[0] == 'ObjectPool'})
@@ -148,7 +148,7 @@ def equation_inventory(root):
                 native = []
                 try:
                     if fmt == 'DOC':
-                        with olefile.OleFileIO(str(path)) as ole:
+                        with cfb.OleFileIO(str(path)) as ole:
                             for entry in ole.listdir():
                                 if len(entry) == 3 and entry[0] == 'ObjectPool' and entry[-1] == 'Equation Native':
                                     native.append(('/'.join(entry[:-1]), ole.openstream(entry).read()))
@@ -156,7 +156,7 @@ def equation_inventory(root):
                         for object_id, storage in ppt_storages(path).items():
                             try:
                                 raw = decompress_ppt_storage(storage.data, storage.header.rec_instance)
-                                with olefile.OleFileIO(io.BytesIO(raw)) as ole:
+                                with cfb.OleFileIO(io.BytesIO(raw)) as ole:
                                     if ole.exists('Equation Native'):
                                         native.append(('#ole%d' % object_id, ole.openstream('Equation Native').read()))
                             except Exception as exc:
@@ -229,7 +229,7 @@ def probe(root):
         failures = Counter()
         converted_values = {}
         total = converted = 0
-        with olefile.OleFileIO(str(path)) as ole:
+        with cfb.OleFileIO(str(path)) as ole:
             for entry in ole.listdir():
                 if entry[-1] != 'Equation Native':
                     continue

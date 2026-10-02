@@ -24,7 +24,6 @@ classifiers = [
     "Topic :: Text Processing :: Markup",
 ]
 dependencies = [
-    "olefile>=0.47",
     "lxml>=4.9",
 ]
 

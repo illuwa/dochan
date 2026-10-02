@@ -3,7 +3,7 @@ import re
 import struct
 from typing import List, Optional
 
-import olefile
+from dochan import cfb
 
 from ..model.document import Document
 from ..utils.bounded_io import (
@@ -307,7 +307,7 @@ class DOCReader:
             return doc
 
         try:
-            ole = olefile.OleFileIO(file_path)
+            ole = cfb.OleFileIO(file_path)
         except Exception as exc:
             doc.errors.append(f"ERR: DOC OLE 파일 열기 실패: {exc}")
             return doc

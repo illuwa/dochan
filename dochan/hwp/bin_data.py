@@ -6,7 +6,7 @@ OLE 스토리지의 BinData/ 하위에 저장된 바이너리 데이터를 추�
 import logging
 import struct
 import zlib
-import olefile
+from dochan import cfb
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -39,7 +39,7 @@ class BinDataItem:
 
 
 def extract_bin_data(
-    ole: olefile.OleFileIO,
+    ole: cfb.OleFileIO,
     is_compressed: bool,
     *,
     stream_budget: Optional[ByteBudget] = None,

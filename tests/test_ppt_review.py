@@ -106,7 +106,7 @@ def test_review_reader_connects_current_user_and_delayed_pictures(monkeypatch, t
         def close(self):
             pass
 
-    monkeypatch.setattr('dochan.office_binary.ppt.olefile.OleFileIO', FakeOle)
+    monkeypatch.setattr('dochan.office_binary.ppt.cfb.OleFileIO', FakeOle)
     path = tmp_path / 'synthetic.ppt'
     path.write_bytes(b'fake')
     doc = PPTReader().read(str(path))

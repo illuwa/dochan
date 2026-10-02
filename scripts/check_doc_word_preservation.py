@@ -13,7 +13,7 @@ import re
 import subprocess
 import types
 
-import olefile
+from dochan import cfb
 
 from dochan.model.document import Document
 from dochan.office_binary.doc import DOCReader
@@ -63,7 +63,7 @@ def load_baseline(ref):
 def read_binary(path):
     validate_file_size(str(path), MAX_OLE_DOCUMENT_SIZE)
     budget = ByteBudget(MAX_OLE_DOCUMENT_SIZE)
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         def read(name):
             return read_ole_stream(ole, name, max_bytes=MAX_OLE_STREAM_SIZE, budget=budget)
         word = read('WordDocument')

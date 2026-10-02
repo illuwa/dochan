@@ -74,7 +74,7 @@ def test_dochan_falls_back_to_hwpx_when_hwp_extension_holds_zip_content(tmp_path
 
 def test_dochan_falls_back_to_hwp_when_hwpx_extension_holds_ole_content(monkeypatch, tmp_path):
     """파일명은 .hwpx 인데 실제 바이트는 OLE2(HWP) — 흔한 출처 표기 실수."""
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", FakeHwpOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", FakeHwpOle)
     path = tmp_path / "mislabeled.hwpx"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake-ole-body")
 

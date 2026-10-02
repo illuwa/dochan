@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from unittest.mock import patch
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.cli import main as cli_main
@@ -35,7 +35,7 @@ def probe(poi, lo):
             cli_status = cli_main(['info', str(path)])
     xlsb = Dochan(str(poi / 'spreadsheet/protected_passtika.xlsb'), password='tika')
     source = lo / 'sw/qa/extras/ooxmlexport/data/Encrypted_MSO2013_abc.docx'
-    with olefile.OleFileIO(str(source)) as ole:
+    with cfb.OleFileIO(str(source)) as ole:
         streams = {}
         for name in ('EncryptionInfo', 'EncryptedPackage'):
             with ole.openstream(name) as stream:

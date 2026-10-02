@@ -6,7 +6,7 @@ Dochan(path) 이 배포용(distribution) HWP 파일을 만났을 때 ViewText �
 빈 결과만 냈다 — docs/benchmarks/2026-07-27-hwp-corpus-collection-and-quality-scan.md
 finding #1).
 
-FakeOle 로 olefile.OleFileIO 를 대체하는 패턴은 tests/test_doc_reader.py 와 동일.
+FakeOle 로 cfb.OleFileIO 를 대체하는 패턴은 tests/test_doc_reader.py 와 동일.
 """
 import struct
 import zlib
@@ -79,7 +79,7 @@ class FakeDistributionOle:
 
 
 def test_dochan_extracts_text_from_distribution_document(monkeypatch, tmp_path):
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", FakeDistributionOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", FakeDistributionOle)
     path = tmp_path / "distributed.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 

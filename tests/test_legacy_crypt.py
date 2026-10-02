@@ -150,7 +150,7 @@ def test_legacy_reader_preserves_safe_crypto_failure_detail(monkeypatch, tmp_pat
             return len(streams[name])
         def close(self):
             pass
-    monkeypatch.setattr("dochan.office_binary.%s.olefile.OleFileIO" % kind, Ole)
+    monkeypatch.setattr("dochan.office_binary.%s.cfb.OleFileIO" % kind, Ole)
     path = tmp_path / ("encrypted." + kind)
     path.write_bytes(b"\xd0\xcf\x11\xe0" + bytes(508))
     reader = DOCReader if kind == "doc" else XLSReader
@@ -258,7 +258,7 @@ def test_doc_xor_reader_and_public_api_preserve_native_model(monkeypatch, tmp_pa
             return len(streams[name])
         def close(self):
             pass
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", Ole)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", Ole)
     path = tmp_path / "xor-native.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + bytes(504))
     document = DOCReader(password="abc").read(str(path))

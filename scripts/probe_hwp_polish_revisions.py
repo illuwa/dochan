@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.hwp.doc_info import DocInfoParser
@@ -86,10 +86,10 @@ def probe(corpus):
         header = None
         try:
             validate_file_size(str(path), MAX_OLE_DOCUMENT_SIZE)
-            if not olefile.isOleFile(str(path)):
+            if not cfb.isOleFile(str(path)):
                 counts['not_ole'] += 1
                 continue
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 if not ole.exists('FileHeader'):
                     counts['no_file_header'] += 1
                     continue

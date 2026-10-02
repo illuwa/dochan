@@ -50,7 +50,7 @@ class ByteBudget:
 
 
 def validate_file_size(file_path: str, max_bytes: int = MAX_OLE_DOCUMENT_SIZE) -> None:
-    """Reject an oversized OLE file before ``olefile`` parses its allocation tables."""
+    """Reject an oversized OLE file before ``cfb`` parses its allocation tables."""
 
     _validate_limit(max_bytes, "max_bytes")
     try:
@@ -75,7 +75,7 @@ def read_ole_stream(
 ) -> bytes:
     """Read one OLE stream with a ``limit + 1`` overrun probe.
 
-    Real ``olefile`` objects expose ``get_size``.  That metadata is checked before
+    Real ``cfb`` objects expose ``get_size``.  That metadata is checked before
     ``openstream`` so an oversized stream is rejected without allocating its
     payload.  Small test doubles that omit ``get_size`` remain supported and are
     bounded by the actual read.

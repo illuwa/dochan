@@ -91,7 +91,7 @@ def _read_encrypted(monkeypatch, streams, password='secret'):
             return streams
         def __exit__(self, *args):
             pass
-    monkeypatch.setattr('dochan.reader.olefile.OleFileIO', Container)
+    monkeypatch.setattr('dochan.reader.cfb.OleFileIO', Container)
     reader = object.__new__(Dochan)
     reader.file_path = 'synthetic.docx'
     reader._password = password

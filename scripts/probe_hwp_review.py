@@ -10,7 +10,7 @@ from pathlib import Path
 import struct
 import zipfile
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.hwp.forms import clickhere_prompt
@@ -35,9 +35,9 @@ def probe(corpus):
         pair = root / 'hwpx' / (path.stem + '.hwpx')
         try:
             validate_file_size(str(path), MAX_OLE_DOCUMENT_SIZE)
-            if not olefile.isOleFile(str(path)):
+            if not cfb.isOleFile(str(path)):
                 continue
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 if not ole.exists('FileHeader'):
                     continue
                 header = FileHeader.parse(read_ole_stream(ole, 'FileHeader', max_bytes=256))

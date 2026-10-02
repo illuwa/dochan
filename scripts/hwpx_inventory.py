@@ -11,14 +11,19 @@ import os
 import re
 import stat
 import struct
+import sys
 import zlib
 import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Optional
 
-import olefile
-from lxml import etree
+# Preserve direct-script execution without importing an unrelated installed copy.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from dochan import cfb  # noqa: E402
+from lxml import etree  # noqa: E402
 
 
 HASH_CHUNK_BYTES = 1024 * 1024
@@ -151,7 +156,7 @@ def inspect_file(path: Path, relative_path: str) -> dict:
                 record["container"] = "ole"
                 try:
                     # Directory/FAT validation only: do not open any OLE stream.
-                    with olefile.OleFileIO(stream, raise_defects=olefile.DEFECT_INCORRECT):
+                    with cfb.OleFileIO(stream, raise_defects=cfb.DEFECT_INCORRECT):
                         pass
                 except (OSError, ValueError, EOFError, struct.error):
                     record["errors"] = ["invalid_ole"]

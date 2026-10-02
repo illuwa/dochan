@@ -24,8 +24,8 @@ def _records(data, start=0):
 
 def _string_formula_cells(path, sheet_names):
     """FORMULA의 문자열 캐시 표시와 좌표만 독립적으로 읽는다."""
-    import olefile
-    with olefile.OleFileIO(str(path)) as ole:
+    from dochan import cfb
+    with cfb.OleFileIO(str(path)) as ole:
         name = 'Workbook' if ole.exists('Workbook') else 'Book'
         data = ole.openstream(name).read()
     offsets = []

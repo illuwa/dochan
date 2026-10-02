@@ -12,7 +12,7 @@ import struct
 import zlib
 from dataclasses import replace
 
-import olefile
+from dochan import cfb
 
 from ..model.equation import Equation
 from ..utils.bounded_io import ByteBudget, read_ole_stream
@@ -98,7 +98,7 @@ def decompress_ppt_storage(data, instance, errors=None):
         # Some producers omit the zlib checksum or append a padding byte.
         # Accept only an exactly sized compound file that its reader can open.
         try:
-            with olefile.OleFileIO(io.BytesIO(result), raise_defects=olefile.DEFECT_INCORRECT):
+            with cfb.OleFileIO(io.BytesIO(result), raise_defects=cfb.DEFECT_INCORRECT):
                 pass
         except Exception as exc:
             raise ValueError('incomplete compression without valid compound storage') from exc
@@ -465,7 +465,7 @@ class PptObjects:
             storage_errors = []
             raw = decompress_ppt_storage(record.data, record.header.rec_instance, storage_errors)
             self.storage_bytes.consume(len(raw), 'PPT embedded storage')
-            with olefile.OleFileIO(io.BytesIO(raw)) as ole:
+            with cfb.OleFileIO(io.BytesIO(raw)) as ole:
                 if not any(ole.exists(name) for name in ('Equation Native', 'Workbook', 'Book')):
                     # Excel.Sheet.12 stores OOXML in Package. It is not a native
                     # chart/equation input: keep its preview and do not report

@@ -5,7 +5,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-import olefile
+from dochan import cfb
 
 from .structure import is_encrypted_container
 from .xls_hyperlink import parse_hlink
@@ -2043,7 +2043,7 @@ class XLSReader:
             return doc
 
         try:
-            ole = olefile.OleFileIO(file_path)
+            ole = cfb.OleFileIO(file_path)
         except Exception as exc:
             doc.errors.append(f"ERR: XLS OLE 파일 열기 실패: {exc}")
             return doc

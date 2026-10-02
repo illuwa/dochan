@@ -62,7 +62,7 @@ class TrackedOle:
 
 @pytest.mark.parametrize("mode,expected", [("preserve", "aNEWoldz"), ("final", "aNEWz"), ("original", "aoldz")])
 def test_reader_projects_tracked_view_without_distribution_decryption(monkeypatch, tmp_path, mode, expected):
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", TrackedOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", TrackedOle)
     def forbidden(*args, **kwargs):
         pytest.fail("tracked ViewText must not use distribution AES")
     monkeypatch.setattr("dochan.reader.decode_distribution_section", forbidden)
@@ -76,7 +76,7 @@ def test_reader_projects_tracked_view_without_distribution_decryption(monkeypatc
 def test_missing_tracked_view_keeps_body_and_reports_original_failure(monkeypatch, tmp_path):
     class MissingView(TrackedOle):
         no_view = True
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", MissingView)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", MissingView)
     path = tmp_path / "missing-view.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0")
     reader = Dochan(path, revision_mode="original")
@@ -97,7 +97,7 @@ def test_unresolved_nondefault_revision_is_an_error():
 def test_password_protected_document_still_has_clear_error(monkeypatch, tmp_path):
     class PasswordOle(TrackedOle):
         encrypted = True
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", PasswordOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", PasswordOle)
     path = tmp_path / "password.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0")
     reader = Dochan(path)
@@ -117,7 +117,7 @@ def test_final_reads_body_without_opening_tracked_view(monkeypatch, tmp_path):
             assert not name.startswith("ViewText/"), "final must not load marked ViewText"
             return super().openstream(name)
 
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", FinalBodyOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", FinalBodyOle)
     path = tmp_path / "final-body.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0")
     reader = Dochan(path, revision_mode="final")

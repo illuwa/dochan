@@ -48,7 +48,7 @@ def _tracked_reader(monkeypatch, tmp_path, mode='preserve', missing_body=False):
             self.streams['BodyText/Section1'] = _section('NEXT BODY')
             if missing_body:
                 del self.streams['BodyText/Section0']
-    monkeypatch.setattr('dochan.reader.olefile.OleFileIO', OversizedView)
+    monkeypatch.setattr('dochan.reader.cfb.OleFileIO', OversizedView)
     monkeypatch.setattr('dochan.hwp.section.MAX_HWP_RECORDS', 3)
     path = tmp_path / 'tracked-limit.hwp'
     path.write_bytes(b'\xd0\xcf\x11\xe0')
@@ -80,7 +80,7 @@ def test_preserve_body_fallback_still_enforces_record_limit(monkeypatch, tmp_pat
             super().__init__(path)
             self.streams['ViewText/Section0'] = _section('VIEW') * 3
             self.streams['BodyText/Section0'] = _section('BODY') * 3
-    monkeypatch.setattr('dochan.reader.olefile.OleFileIO', BothOversized)
+    monkeypatch.setattr('dochan.reader.cfb.OleFileIO', BothOversized)
     monkeypatch.setattr('dochan.hwp.section.MAX_HWP_RECORDS', 3)
     path = tmp_path / 'both-limit.hwp'
     path.write_bytes(b'\xd0\xcf\x11\xe0')

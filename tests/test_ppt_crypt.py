@@ -152,7 +152,7 @@ def test_ppt_reader_uses_password_and_keeps_it_out_of_errors(monkeypatch, tmp_pa
         def close(self):
             pass
 
-    monkeypatch.setattr('dochan.office_binary.ppt.olefile.OleFileIO', FakeOle)
+    monkeypatch.setattr('dochan.office_binary.ppt.cfb.OleFileIO', FakeOle)
     path = tmp_path / 'encrypted.ppt'
     path.write_bytes(b'synthetic')
     assert 'Encrypted slide' in to_markdown(PPTReader(password='open').read(str(path)))

@@ -1746,7 +1746,7 @@ def test_xls_reader_reads_workbook_stream(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", FakeOle)
 
     path = tmp_path / "book.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -1774,7 +1774,7 @@ def test_xls_reader_returns_error_when_workbook_stream_unreadable(monkeypatch, t
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", BadWorkbookOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", BadWorkbookOle)
 
     path = tmp_path / "broken.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -1808,7 +1808,7 @@ def test_xls_reader_falls_back_to_book_when_workbook_stream_unreadable(monkeypat
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", FallbackOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", FallbackOle)
 
     path = tmp_path / "fallback.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -1850,7 +1850,7 @@ def test_xls_reader_prefers_best_workbook_stream(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", BestStreamOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", BestStreamOle)
 
     path = tmp_path / "best-stream.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -1879,7 +1879,7 @@ def test_xls_reader_reads_legacy_book_stream(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", BookOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", BookOle)
 
     path = tmp_path / "legacy.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -1936,7 +1936,7 @@ def test_dochan_routes_xls_to_native_reader(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", FakeOle)
 
     path = tmp_path / "book.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -1965,7 +1965,7 @@ def test_batch_convert_includes_xls_by_default(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", FakeOle)
 
     input_dir = tmp_path / "in"
     output_dir = tmp_path / "out"
@@ -2001,7 +2001,7 @@ def test_cli_info_reports_xls_format(monkeypatch, tmp_path, capsys):
     class Args:
         pass
 
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", FakeOle)
     path = tmp_path / "info.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
     args = Args()

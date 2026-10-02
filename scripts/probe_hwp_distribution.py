@@ -13,7 +13,7 @@ import zlib
 from collections import Counter
 from pathlib import Path
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.constants import HWPTAG_DISTRIBUTE_DOC_DATA, HWPTAG_PARA_TEXT
@@ -86,7 +86,7 @@ def _probe_file(path, header):
     row = {"file": path.name, "compressed": header.is_compressed,
            "encrypted": header.is_encrypted, "sections": []}
     expected_texts = []
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         streams = [name for name in ole.listdir()
                    if len(name) == 2 and name[0] == "ViewText"
                    and re.fullmatch(r"Section\d+", name[1])]
@@ -170,7 +170,7 @@ def probe(corpus):
         try:
             if path.stat().st_size > MAX_OLE_DOCUMENT_SIZE:
                 raise ValueError("OLE document size exceeds limit")
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 if not ole.exists("FileHeader"):
                     continue
                 header = FileHeader.parse(_read_stream(ole, "FileHeader"))

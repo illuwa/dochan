@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.office_binary.officeart import parse_properties, parse_records, walk_records
@@ -23,7 +23,7 @@ def verify(poi, lo):
         path = root / name
         if path not in cache:
             parsed = Dochan(str(path))
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 raw = ole.openstream("PowerPoint Document").read()
             cache[path] = (parsed, parsed.doc.find_all("paragraph"), raw)
         return cache[path]

@@ -25,7 +25,7 @@ class FakeOle:
 
 
 def test_doc_reader_extracts_utf16_text(monkeypatch, tmp_path):
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", FakeOle)
     path = tmp_path / "legacy.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -53,7 +53,7 @@ def test_doc_reader_uses_fib_text_range_when_available(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FibOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", FibOle)
     path = tmp_path / "fib.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -67,7 +67,7 @@ def test_doc_reader_returns_error_when_word_document_stream_unreadable(monkeypat
         def openstream(self, name):
             raise IOError("stream is unreadable")
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", BadWordOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", BadWordOle)
     path = tmp_path / "unreadable-word.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -117,7 +117,7 @@ def test_doc_reader_uses_clx_piece_table_from_table_stream(monkeypatch, tmp_path
                 return Stream(bytes(word_data))
             return Stream(clx)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", PieceTableOle)
     path = tmp_path / "piece-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -154,7 +154,7 @@ def test_doc_reader_ignores_unknown_clx_markers_when_extracting_piece_table(monk
                 return Stream(bytes(word_data))
             return Stream(clx)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", PieceTableOle)
     path = tmp_path / "piece-table-unknown-marker.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -190,7 +190,7 @@ def test_doc_reader_recovers_from_truncated_piece_table_segments(monkeypatch, tm
                 return Stream(bytes(word_data))
             return Stream(clx)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", PieceTableOle)
     path = tmp_path / "piece-table-truncated.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -223,7 +223,7 @@ def test_doc_reader_recovers_from_truncated_clx_piece_marker(monkeypatch, tmp_pa
                 return Stream(bytes(word_data))
             return Stream(clx)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PieceTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", PieceTableOle)
     path = tmp_path / "piece-table-resync.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -260,7 +260,7 @@ def test_doc_reader_skips_unreadable_table_streams(monkeypatch, tmp_path):
                 return Stream(clx)
             raise KeyError(name)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FailingTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", FailingTableOle)
     path = tmp_path / "doc-with-failing-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -310,7 +310,7 @@ def test_doc_reader_falls_back_to_secondary_table_stream(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", TwoTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", TwoTableOle)
     path = tmp_path / "fallback-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -349,7 +349,7 @@ def test_doc_reader_joins_multiple_clx_piece_segments(monkeypatch, tmp_path):
                 return Stream(bytes(word_data))
             return Stream(clx)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", MultiSegmentClxOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", MultiSegmentClxOle)
     path = tmp_path / "multi-clx.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -381,7 +381,7 @@ def test_doc_reader_decodes_clx_compressed_piece_flag(monkeypatch, tmp_path):
                 return Stream(bytes(word_data))
             return Stream(clx)
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", CompressedPieceOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", CompressedPieceOle)
     path = tmp_path / "compressed-piece.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -405,7 +405,7 @@ def test_doc_reader_prefers_latin_text_when_fib_range_is_compressed(monkeypatch,
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", LatinFibOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", LatinFibOle)
     path = tmp_path / "latin-fib.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -429,7 +429,7 @@ def test_doc_reader_preserves_cp1252_punctuation_in_compressed_text(monkeypatch,
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", Cp1252FibOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", Cp1252FibOle)
     path = tmp_path / "cp1252.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -447,7 +447,7 @@ def test_doc_reader_normalizes_legacy_layout_characters(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", LayoutCharOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", LayoutCharOle)
     path = tmp_path / "layout-chars.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -465,7 +465,7 @@ def test_doc_reader_preserves_legacy_soft_line_breaks(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", SoftBreakOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", SoftBreakOle)
     path = tmp_path / "soft-break.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -483,7 +483,7 @@ def test_doc_reader_restores_hyperlink_field_result(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", HyperlinkOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", HyperlinkOle)
     path = tmp_path / "hyperlink-field.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -507,7 +507,7 @@ def test_doc_reader_restores_unquoted_hyperlink_field_result(monkeypatch, tmp_pa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", UnquotedHyperlinkOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", UnquotedHyperlinkOle)
     path = tmp_path / "unquoted-hyperlink-field.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -528,7 +528,7 @@ def test_doc_reader_restores_internal_hyperlink_field_result(monkeypatch, tmp_pa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", InternalHyperlinkOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", InternalHyperlinkOle)
     path = tmp_path / "internal-hyperlink-field.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -549,7 +549,7 @@ def test_doc_reader_restores_generic_field_display_result(monkeypatch, tmp_path)
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", GenericFieldOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", GenericFieldOle)
     path = tmp_path / "generic-field.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -578,7 +578,7 @@ def test_doc_reader_restores_headings_lists_and_tables(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", StructuredOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", StructuredOle)
     path = tmp_path / "structured.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -614,7 +614,7 @@ def test_doc_reader_restores_pipe_delimited_tables(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", PipeTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", PipeTableOle)
     path = tmp_path / "pipe-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -640,7 +640,7 @@ def test_doc_reader_restores_fixed_width_space_aligned_tables(monkeypatch, tmp_p
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", SpaceAlignedTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", SpaceAlignedTableOle)
     path = tmp_path / "space-aligned-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -666,7 +666,7 @@ def test_doc_reader_restores_ideographic_space_aligned_tables(monkeypatch, tmp_p
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", IdeographicSpaceTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", IdeographicSpaceTableOle)
     path = tmp_path / "ideographic-space-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -692,7 +692,7 @@ def test_doc_reader_restores_markdown_pipe_tables_with_separator(monkeypatch, tm
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", MarkdownPipeTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", MarkdownPipeTableOle)
     path = tmp_path / "markdown-pipe-table.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -717,7 +717,7 @@ def test_doc_reader_restores_key_value_form_lines_as_table(monkeypatch, tmp_path
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", KeyValueOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", KeyValueOle)
     path = tmp_path / "key-value-form.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -743,7 +743,7 @@ def test_doc_reader_restores_fullwidth_colon_key_value_lines_as_table(monkeypatc
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", KoreanKeyValueOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", KoreanKeyValueOle)
     path = tmp_path / "korean-key-value-form.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -769,7 +769,7 @@ def test_doc_reader_restores_equal_sign_key_value_lines_as_table(monkeypatch, tm
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", KeyValueOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", KeyValueOle)
     path = tmp_path / "equal-key-value-form.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -795,7 +795,7 @@ def test_doc_reader_normalizes_legacy_bullet_markers(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", BulletOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", BulletOle)
     path = tmp_path / "bullets.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -813,7 +813,7 @@ def test_doc_reader_normalizes_legacy_mid_dot_bullet_markers(monkeypatch, tmp_pa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", BulletOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", BulletOle)
     path = tmp_path / "mid-dot-bullets.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -831,7 +831,7 @@ def test_doc_reader_normalizes_legacy_numbered_list_markers(monkeypatch, tmp_pat
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "numbered-list.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -849,7 +849,7 @@ def test_doc_reader_normalizes_legacy_dotted_numbered_list_markers(monkeypatch, 
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "dotted-numbered-list.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -867,7 +867,7 @@ def test_doc_reader_normalizes_parenthesized_numbered_list_markers(monkeypatch, 
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "parenthesized-numbered-list.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -885,7 +885,7 @@ def test_doc_reader_normalizes_spaced_and_circled_numbered_list_markers(monkeypa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "numbered-list.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -903,7 +903,7 @@ def test_doc_reader_normalizes_legacy_alpha_and_roman_outline_markers(monkeypatc
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", OutlineOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", OutlineOle)
     path = tmp_path / "outline-list.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -921,7 +921,7 @@ def test_doc_reader_restores_legacy_checklist_markers(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", ChecklistOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", ChecklistOle)
     path = tmp_path / "checklist.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -939,7 +939,7 @@ def test_doc_reader_restores_underline_style_headings(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", UnderlineHeadingOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", UnderlineHeadingOle)
     path = tmp_path / "underline-headings.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -957,7 +957,7 @@ def test_doc_reader_restores_explicit_legacy_heading_labels(monkeypatch, tmp_pat
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", HeadingOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", HeadingOle)
     path = tmp_path / "headings.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -975,7 +975,7 @@ def test_doc_reader_restores_korean_legacy_heading_labels(monkeypatch, tmp_path)
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", KoreanHeadingOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", KoreanHeadingOle)
     path = tmp_path / "korean-headings.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -993,7 +993,7 @@ def test_doc_reader_restores_word_table_cell_markers(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", TableMarkerOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", TableMarkerOle)
     path = tmp_path / "cell-markers.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -1028,7 +1028,7 @@ def test_doc_reader_restores_section_breaks(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", SectionBreakOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", SectionBreakOle)
     path = tmp_path / "section-break.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -1043,7 +1043,7 @@ def test_doc_reader_restores_section_breaks(monkeypatch, tmp_path):
 
 
 def test_dochan_routes_doc_to_native_reader(monkeypatch, tmp_path):
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", FakeOle)
     path = tmp_path / "legacy.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -1057,7 +1057,7 @@ def test_cli_info_reports_doc_format(monkeypatch, tmp_path, capsys):
     class Args:
         pass
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", FakeOle)
     path = tmp_path / "info.doc"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
     args = Args()

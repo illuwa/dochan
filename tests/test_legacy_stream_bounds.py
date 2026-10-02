@@ -114,21 +114,21 @@ def test_ole_stream_budget_rejects_aggregate_before_second_open():
     ("ole_target", "limit_target", "reader_type", "stream_name", "format_name"),
     [
         (
-            "dochan.office_binary.doc.olefile.OleFileIO",
+            "dochan.office_binary.doc.cfb.OleFileIO",
             "dochan.office_binary.doc.MAX_OLE_STREAM_SIZE",
             DOCReader,
             "WordDocument",
             "DOC",
         ),
         (
-            "dochan.office_binary.ppt.olefile.OleFileIO",
+            "dochan.office_binary.ppt.cfb.OleFileIO",
             "dochan.office_binary.ppt.MAX_OLE_STREAM_SIZE",
             PPTReader,
             "PowerPoint Document",
             "PPT",
         ),
         (
-            "dochan.office_binary.xls.olefile.OleFileIO",
+            "dochan.office_binary.xls.cfb.OleFileIO",
             "dochan.office_binary.xls.MAX_OLE_STREAM_SIZE",
             XLSReader,
             "Workbook",
@@ -233,7 +233,7 @@ def test_hwp_accepts_exact_256_byte_header_with_no_argument_fake(monkeypatch, tm
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", HwpOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", HwpOle)
     path = tmp_path / "exact-header.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -264,7 +264,7 @@ def test_hwp_rejects_non_exact_file_header_before_opening(monkeypatch, tmp_path)
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", OversizedHeaderOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", OversizedHeaderOle)
     path = tmp_path / "oversized-header.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -312,7 +312,7 @@ def test_hwp_section_over_limit_discards_previously_parsed_state(
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", OversizedSectionOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", OversizedSectionOle)
     monkeypatch.setattr("dochan.reader.MAX_OLE_STREAM_SIZE", 8)
     path = tmp_path / "oversized-section.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
@@ -483,8 +483,8 @@ def test_extensionless_ole_routes_from_workbook_stream(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", WorkbookOle)
-    monkeypatch.setattr("dochan.office_binary.xls.olefile.OleFileIO", WorkbookOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", WorkbookOle)
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", WorkbookOle)
     path = tmp_path / "extensionless"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -505,7 +505,7 @@ def test_extensionless_ambiguous_ole_fails_closed(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", AmbiguousOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", AmbiguousOle)
     path = tmp_path / "ambiguous"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 

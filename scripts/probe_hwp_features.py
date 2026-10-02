@@ -11,7 +11,7 @@ from pathlib import Path
 import zipfile
 
 from lxml import etree
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.hwp.forms import form_text, clickhere_prompt
@@ -178,10 +178,10 @@ def probe(corpus):
         counts['files'] += 1
         try:
             validate_file_size(str(path), MAX_OLE_DOCUMENT_SIZE)
-            if not olefile.isOleFile(str(path)):
+            if not cfb.isOleFile(str(path)):
                 counts['not_ole'] += 1
                 continue
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 if not ole.exists('FileHeader'):
                     counts['no_file_header'] += 1
                     continue

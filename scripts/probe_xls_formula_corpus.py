@@ -13,7 +13,7 @@ from pathlib import Path
 import struct
 import sys
 
-import olefile
+from dochan import cfb
 
 from dochan.utils.bounded_io import MAX_OLE_STREAM_SIZE, read_ole_stream
 
@@ -73,7 +73,7 @@ def named_formula_count(data):
 def inventory(path):
     coordinates, streams, failures = set(), [], []
     named_count = 0
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         for stream in ('Workbook', 'Book'):
             if not ole.exists(stream):
                 continue

@@ -6,7 +6,7 @@ import json
 import struct
 from pathlib import Path
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.crypto.ppt import decrypt_presentation
@@ -33,7 +33,7 @@ PICTURE_HASHES = [
 
 
 def decrypted_pictures(path, password):
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         _, pictures = decrypt_presentation(
             ole.openstream('PowerPoint Document').read(),
             ole.openstream('Current User').read(),
@@ -73,7 +73,7 @@ def probe(base):
         if name == 'ppt_with_png_encrypted.ppt':
             pictures = decrypted_pictures(path, password)
             plain_path = base / 'slideshow' / 'ppt_with_png.ppt'
-            with olefile.OleFileIO(str(plain_path)) as ole:
+            with cfb.OleFileIO(str(plain_path)) as ole:
                 reference = ole.openstream('Pictures').read()
             result['png_pixels_match_plain_pair'] = pictures[15203 + 25:] == reference[25:]
             plain = PPTReader().read(str(plain_path))

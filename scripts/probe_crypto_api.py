@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import struct
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.pdf.reader import PDFReader
@@ -42,7 +42,7 @@ def probe_hwp(corpus):
         result['files'] += 1
         try:
             validate_file_size(str(path))
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 if not ole.exists('FileHeader'):
                     continue
                 header = read_ole_stream(ole, 'FileHeader', max_bytes=256, expected_size=256)

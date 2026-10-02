@@ -11,7 +11,7 @@ import struct
 from collections import Counter
 from pathlib import Path
 
-import olefile
+from dochan import cfb
 
 from dochan.office_binary.officeart import (
     Limits, Record, RecordHeader, decode_blip, parse_header, parse_records,
@@ -29,7 +29,7 @@ LIMITS = Limits()
 def _read(ole, name):
     if not ole.exists(name):
         return b""
-    if ole.get_type(name) != olefile.STGTY_STREAM:
+    if ole.get_type(name) != cfb.STGTY_STREAM:
         return b""
     if ole.get_size(name) > LIMITS.max_stream_bytes:
         raise ValueError("probe stream byte limit exceeded")
@@ -113,7 +113,7 @@ def probe_file(path):
     pictures = []
     stores = []
     shapes = []
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         if path.suffix == ".ppt":
             raw = _read(ole, "Pictures")
             roots = parse_records(raw, errors=errors)

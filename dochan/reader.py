@@ -9,7 +9,7 @@ reader.py — 통합 진입점 (HWP/HWPX 자동 판별)
 import os
 import re
 
-import olefile
+from dochan import cfb
 
 from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
 from .hwp.distdoc import decode_distribution_section
@@ -231,7 +231,7 @@ class Dochan:
         try:
             if self._detect_ole_formats() != ["hwp"]:
                 return False
-            with olefile.OleFileIO(self.file_path) as ole:
+            with cfb.OleFileIO(self.file_path) as ole:
                 data = read_ole_stream(ole, 'FileHeader', max_bytes=HWP_FILE_HEADER_SIZE,
                                        expected_size=HWP_FILE_HEADER_SIZE)
             header = FileHeader.parse(data)
@@ -283,7 +283,7 @@ class Dochan:
     def _detect_ole_formats(self):
         """확장자 없는 OLE 문서를 표준 스트림 구성으로 식별한다."""
         validate_file_size(self.file_path, MAX_OLE_DOCUMENT_SIZE)
-        ole = olefile.OleFileIO(self.file_path)
+        ole = cfb.OleFileIO(self.file_path)
         try:
             # 암호 패키지에는 구버전 Office용 WordDocument 안내 스트림도
             # 함께 들어간다. 복호화한 패키지의 내용으로 실제 형식을 판별한다.
@@ -312,7 +312,7 @@ class Dochan:
             return
 
         try:
-            ole = olefile.OleFileIO(self.file_path)
+            ole = cfb.OleFileIO(self.file_path)
         except Exception as e:
             self.doc.errors.append(f"ERR: OLE 파일 열기 실패: {e}")
             return
@@ -526,7 +526,7 @@ class Dochan:
         from .crypto.ooxml import decrypt_ooxml
 
         try:
-            with olefile.OleFileIO(self.file_path) as ole:
+            with cfb.OleFileIO(self.file_path) as ole:
                 package_data = decrypt_ooxml(ole, self._password)
             with BytesIO(package_data) as package:
                 kind = detect_ooxml_format(package)

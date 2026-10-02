@@ -5,7 +5,7 @@ import struct
 from pathlib import Path
 from zipfile import ZipFile
 
-import olefile
+from dochan import cfb
 from lxml import etree
 
 from dochan.model.table import flatten_block_texts
@@ -24,7 +24,7 @@ def check(poi_document, lo_ww8):
     results = []
     path = lo_ww8 / 'tdf90408.doc'
     doc = DOCReader().read(str(path))
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         word = ole.openstream('WordDocument').read()
         table_name = '1Table' if struct.unpack_from('<H', word, 10)[0] & 512 else '0Table'
         binary = DocBinary(word, ole.openstream(table_name).read())

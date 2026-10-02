@@ -16,7 +16,7 @@ from lxml import etree as ET
 from pathlib import Path
 from zipfile import ZipFile
 
-import olefile
+from dochan import cfb
 
 from dochan.office_binary.xls import (
     XLSReader, _cell_ref, _decode_formula_token_stream, _iter_records, _read_boundsheet_name,
@@ -220,7 +220,7 @@ def workbook_formula_evidence(data, coordinates):
 
 
 def raw_formula_evidence(path, coordinates):
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         stream = 'Workbook' if ole.exists('Workbook') else 'Book'
         data = read_ole_stream(ole, stream, max_bytes=MAX_OLE_STREAM_SIZE)
     return workbook_formula_evidence(data, coordinates)

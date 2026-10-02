@@ -4,8 +4,8 @@ import json
 import struct
 from pathlib import Path
 
-import olefile
-from olefile.olefile import OleFileError
+from dochan import cfb
+from dochan.cfb import OleFileError
 
 
 def inventory(root):
@@ -19,7 +19,7 @@ def inventory(root):
                 if handle.read(8) != b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
                     continue
             result["cfb_files"] += 1
-            with olefile.OleFileIO(str(path)) as ole:
+            with cfb.OleFileIO(str(path)) as ole:
                 if not ole.exists("WordDocument"):
                     continue
                 result["word_streams"] += 1

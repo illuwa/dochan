@@ -120,7 +120,7 @@ def test_hwp_password_is_explicitly_unsupported(tmp_path, monkeypatch, password)
 
     path = tmp_path / 'protected.hwp'
     path.write_bytes(b'\xd0\xcf\x11\xe0synthetic')
-    monkeypatch.setattr('dochan.reader.olefile.OleFileIO', EncryptedHwp)
+    monkeypatch.setattr('dochan.reader.cfb.OleFileIO', EncryptedHwp)
     reader = Dochan(str(path), password=password)
     assert any(e.startswith('ERR: 암호화/DRM') for e in reader.errors)
     assert reader.to_plain_text() == ''
@@ -191,7 +191,7 @@ def test_encrypted_ooxml_dispatch_is_in_memory(tmp_path, monkeypatch, kind, mode
     plain = tmp_path / ('plain.' + kind)
     plain.write_bytes(payload)
     expected = Dochan(str(plain))
-    monkeypatch.setattr('dochan.reader.olefile.OleFileIO', Container)
+    monkeypatch.setattr('dochan.reader.cfb.OleFileIO', Container)
     actual = Dochan(str(encrypted), password='secret')
     assert actual.doc.source_format == kind
     assert 'Protected Office text' in actual.to_plain_text()

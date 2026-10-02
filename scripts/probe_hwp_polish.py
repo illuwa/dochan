@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.hwp.forms import clickhere_prompt
@@ -17,7 +17,7 @@ from scripts.probe_hwp_features import _records
 
 
 def _fields(path):
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         header = FileHeader.parse(read_ole_stream(ole, 'FileHeader', max_bytes=256))
         records = [record for entry in ole.listdir()
                    if len(entry) == 2 and entry[0] == 'BodyText'

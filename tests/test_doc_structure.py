@@ -125,7 +125,7 @@ def _fake_reader(monkeypatch, tmp_path, streams):
 
         def close(self):
             pass
-    monkeypatch.setattr('dochan.office_binary.doc.olefile.OleFileIO', Ole)
+    monkeypatch.setattr('dochan.office_binary.doc.cfb.OleFileIO', Ole)
     path = tmp_path / 'native.doc'
     path.write_bytes(b'fake')
     return DOCReader().read(str(path))

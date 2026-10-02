@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import zipfile
 
-import olefile
+from dochan import cfb
 
 from dochan import Dochan
 from dochan.crypto.ooxml import decrypt_ooxml
@@ -41,7 +41,7 @@ def probe(root, cases=CASES):
     rows = []
     for name, password, expected, expected_digest in cases:
         path = root / name
-        with olefile.OleFileIO(str(path)) as ole:
+        with cfb.OleFileIO(str(path)) as ole:
             payload = decrypt_ooxml(ole, password)
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                 crc_ok = archive.testzip() is None

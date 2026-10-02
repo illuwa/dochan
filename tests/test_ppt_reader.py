@@ -44,7 +44,7 @@ class FakeOle:
 
 
 def test_ppt_reader_extracts_text_records(monkeypatch, tmp_path):
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", FakeOle)
     path = tmp_path / "legacy.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -62,7 +62,7 @@ def test_ppt_reader_returns_error_when_powerpoint_stream_unreadable(monkeypatch,
                 raise KeyError(name)
             raise IOError("stream is unreadable")
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", CorruptPptOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", CorruptPptOle)
     path = tmp_path / "corrupt.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -98,7 +98,7 @@ def test_ppt_reader_falls_back_to_contents_when_powerpoint_stream_unreadable(mon
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", ContentsFallbackOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", ContentsFallbackOle)
     path = tmp_path / "contents-fallback.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -141,7 +141,7 @@ def test_ppt_reader_prefers_best_stream_structure(monkeypatch, tmp_path):
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", MultiStreamOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", MultiStreamOle)
     path = tmp_path / "best-stream.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -164,7 +164,7 @@ def test_ppt_reader_preserves_cp1252_punctuation_in_byte_text_records(monkeypatc
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", Cp1252Ole)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", Cp1252Ole)
     path = tmp_path / "cp1252.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -187,7 +187,7 @@ def test_ppt_reader_restores_slide_sections_and_tables(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", StructuredOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", StructuredOle)
     path = tmp_path / "structured.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -235,7 +235,7 @@ def test_ppt_reader_restores_pipe_delimited_tables(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", PipeTableOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", PipeTableOle)
     path = tmp_path / "pipe-table.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -262,7 +262,7 @@ def test_ppt_reader_restores_fixed_width_space_aligned_tables(monkeypatch, tmp_p
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", SpaceAlignedTableOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", SpaceAlignedTableOle)
     path = tmp_path / "space-aligned-table.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -289,7 +289,7 @@ def test_ppt_reader_restores_ideographic_space_aligned_tables(monkeypatch, tmp_p
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", IdeographicSpaceTableOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", IdeographicSpaceTableOle)
     path = tmp_path / "ideographic-space-table.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -316,7 +316,7 @@ def test_ppt_reader_restores_markdown_pipe_tables_with_separator(monkeypatch, tm
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", MarkdownPipeTableOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", MarkdownPipeTableOle)
     path = tmp_path / "markdown-pipe-table.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -342,7 +342,7 @@ def test_ppt_reader_restores_key_value_form_lines_as_table(monkeypatch, tmp_path
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", KeyValueOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", KeyValueOle)
     path = tmp_path / "key-value-form.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -369,7 +369,7 @@ def test_ppt_reader_restores_fullwidth_colon_key_value_lines_as_table(monkeypatc
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", KoreanKeyValueOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", KoreanKeyValueOle)
     path = tmp_path / "korean-key-value-form.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -396,7 +396,7 @@ def test_ppt_reader_restores_equal_sign_key_value_lines_as_table(monkeypatch, tm
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", KeyValueOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", KeyValueOle)
     path = tmp_path / "equal-key-value-form.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -422,7 +422,7 @@ def test_ppt_reader_normalizes_legacy_bullet_markers(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", BulletOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", BulletOle)
     path = tmp_path / "bullets.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -440,7 +440,7 @@ def test_ppt_reader_normalizes_legacy_numbered_list_markers(monkeypatch, tmp_pat
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "numbered-list.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -458,7 +458,7 @@ def test_ppt_reader_normalizes_legacy_dotted_numbered_list_markers(monkeypatch, 
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "dotted-numbered-list.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -476,7 +476,7 @@ def test_ppt_reader_normalizes_parenthesized_numbered_list_markers(monkeypatch, 
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "parenthesized-numbered-list.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -495,7 +495,7 @@ def test_ppt_reader_normalizes_spaced_and_circled_numbered_list_markers(monkeypa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NumberedOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", NumberedOle)
     path = tmp_path / "numbered-list.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -513,7 +513,7 @@ def test_ppt_reader_normalizes_legacy_alpha_and_roman_outline_markers(monkeypatc
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", OutlineOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", OutlineOle)
     path = tmp_path / "outline-list.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -532,7 +532,7 @@ def test_ppt_reader_restores_legacy_checklist_markers(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", ChecklistOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", ChecklistOle)
     path = tmp_path / "checklist.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -551,7 +551,7 @@ def test_ppt_reader_restores_underline_style_headings(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", UnderlineHeadingOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", UnderlineHeadingOle)
     path = tmp_path / "underline-headings.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -569,7 +569,7 @@ def test_ppt_reader_restores_explicit_legacy_heading_labels(monkeypatch, tmp_pat
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", HeadingOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", HeadingOle)
     path = tmp_path / "headings.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -587,7 +587,7 @@ def test_ppt_reader_restores_korean_legacy_heading_labels(monkeypatch, tmp_path)
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", KoreanHeadingOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", KoreanHeadingOle)
     path = tmp_path / "korean-headings.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -610,7 +610,7 @@ def test_ppt_reader_promotes_text_header_title_records(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", TextHeaderOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", TextHeaderOle)
     path = tmp_path / "text-header.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -631,7 +631,7 @@ def test_ppt_reader_promotes_center_title_text_header(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", CenterTitleOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", CenterTitleOle)
     path = tmp_path / "center-title.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -649,7 +649,7 @@ def test_ppt_reader_preserves_repeated_text_lines(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", RepeatedOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", RepeatedOle)
     path = tmp_path / "repeated.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -668,7 +668,7 @@ def test_ppt_reader_normalizes_legacy_layout_characters(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", LayoutCharOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", LayoutCharOle)
     path = tmp_path / "layout-chars.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -687,7 +687,7 @@ def test_ppt_reader_preserves_legacy_soft_line_breaks(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", SoftBreakOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", SoftBreakOle)
     path = tmp_path / "soft-breaks.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -705,7 +705,7 @@ def test_ppt_reader_normalizes_legacy_mid_dot_bullet_markers(monkeypatch, tmp_pa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", BulletOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", BulletOle)
     path = tmp_path / "mid-dot-bullets.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -724,7 +724,7 @@ def test_ppt_reader_restores_hyperlink_field_result(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", HyperlinkOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", HyperlinkOle)
     path = tmp_path / "hyperlink-field.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -749,7 +749,7 @@ def test_ppt_reader_restores_unquoted_hyperlink_field_result(monkeypatch, tmp_pa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", UnquotedHyperlinkOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", UnquotedHyperlinkOle)
     path = tmp_path / "unquoted-hyperlink-field.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -771,7 +771,7 @@ def test_ppt_reader_restores_internal_hyperlink_field_result(monkeypatch, tmp_pa
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", InternalHyperlinkOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", InternalHyperlinkOle)
     path = tmp_path / "internal-hyperlink-field.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -793,7 +793,7 @@ def test_ppt_reader_restores_generic_field_display_result(monkeypatch, tmp_path)
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", GenericFieldOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", GenericFieldOle)
     path = tmp_path / "generic-field.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -816,7 +816,7 @@ def test_ppt_reader_restores_notes_container_text(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NotesOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", NotesOle)
     path = tmp_path / "notes.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -849,7 +849,7 @@ def test_ppt_reader_recovers_from_truncated_text_record_in_slide_container(monke
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", TruncatedTextOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", TruncatedTextOle)
     path = tmp_path / "truncated-ppt-text.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -870,7 +870,7 @@ def test_ppt_reader_recovers_truncated_notes_container_text(monkeypatch, tmp_pat
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", TruncatedNotesOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", TruncatedNotesOle)
     path = tmp_path / "truncated-ppt-notes.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -891,7 +891,7 @@ def test_ppt_reader_recovers_notes_after_truncated_payload_record(monkeypatch, t
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", MixedOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", MixedOle)
     path = tmp_path / "mixed-corrupt.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -915,7 +915,7 @@ def test_ppt_reader_attaches_nested_notes_to_previous_slide(monkeypatch, tmp_pat
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", NestedNotesOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", NestedNotesOle)
     path = tmp_path / "nested-notes.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -942,7 +942,7 @@ def test_ppt_reader_restores_comments_container_text(monkeypatch, tmp_path):
 
             return Stream()
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", CommentsOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", CommentsOle)
     path = tmp_path / "comments.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -961,7 +961,7 @@ def test_ppt_reader_restores_comments_container_text(monkeypatch, tmp_path):
 
 
 def test_dochan_routes_ppt_to_native_reader(monkeypatch, tmp_path):
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", FakeOle)
     path = tmp_path / "legacy.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
 
@@ -975,7 +975,7 @@ def test_cli_info_reports_ppt_format(monkeypatch, tmp_path, capsys):
     class Args:
         pass
 
-    monkeypatch.setattr("dochan.office_binary.ppt.olefile.OleFileIO", FakeOle)
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", FakeOle)
     path = tmp_path / "info.ppt"
     path.write_bytes(b"\xd0\xcf\x11\xe0fake")
     args = Args()

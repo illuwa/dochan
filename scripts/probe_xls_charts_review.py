@@ -14,7 +14,7 @@ import struct
 import subprocess
 from types import SimpleNamespace
 
-import olefile
+from dochan import cfb
 
 from dochan.model.table import Table
 from dochan.office_binary import xls, xls_chart
@@ -170,7 +170,7 @@ def compare(actual, expected):
 
 
 def inspect(path, oracle_python):
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         stream = 'Workbook' if ole.exists('Workbook') else 'Book'
         data = ole.openstream(stream).read()
     all_records = list(records(data))

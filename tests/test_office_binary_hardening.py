@@ -200,7 +200,7 @@ def test_xls_reader_keeps_document_when_sheet_has_only_row_indices(monkeypatch, 
     """리더 경로에서도 같은 시트가 문서를 통째로 잃게 만들지 않아야 한다."""
     workbook = _workbook("RowsOnly", _row_record(3))
     monkeypatch.setattr(
-        "dochan.office_binary.xls.olefile.OleFileIO",
+        "dochan.office_binary.xls.cfb.OleFileIO",
         _stream_ole_factory({"Workbook": workbook}),
     )
 
@@ -399,7 +399,7 @@ def test_xls_reader_reports_filepass_protected_workbook(monkeypatch, tmp_path):
     """
     workbook = _workbook("Protected", _label(0, 0, "A"), globals_body=_filepass())
     monkeypatch.setattr(
-        "dochan.office_binary.xls.olefile.OleFileIO",
+        "dochan.office_binary.xls.cfb.OleFileIO",
         _stream_ole_factory({"Workbook": workbook}),
     )
 
@@ -453,7 +453,7 @@ def test_doc_reader_survives_table_stream_parse_failure(monkeypatch, tmp_path):
     """
     word_data = "Legacy Word\n본문 텍스트".encode("utf-16-le")
     monkeypatch.setattr(
-        "dochan.office_binary.doc.olefile.OleFileIO",
+        "dochan.office_binary.doc.cfb.OleFileIO",
         _doc_ole_factory(word_data),
     )
     real_parse = doc_module.parse_doc_word_stream
@@ -493,7 +493,7 @@ def test_doc_reader_keeps_stream_read_failure_message_distinct(monkeypatch, tmp_
         def close(self):
             pass
 
-    monkeypatch.setattr("dochan.office_binary.doc.olefile.OleFileIO", FailingTableOle)
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", FailingTableOle)
 
     doc = DOCReader().read(_write_fake_ole(tmp_path, "unreadable-table.doc"))
 
@@ -504,7 +504,7 @@ def test_doc_reader_keeps_stream_read_failure_message_distinct(monkeypatch, tmp_
 def test_doc_reader_warns_when_no_body_text_extracted(monkeypatch, tmp_path):
     """본문을 한 줄도 못 뽑았으면 조용히 빈 문서를 돌려주지 않고 경고를 남긴다."""
     monkeypatch.setattr(
-        "dochan.office_binary.doc.olefile.OleFileIO",
+        "dochan.office_binary.doc.cfb.OleFileIO",
         _doc_ole_factory(b"\x00" * 512),
     )
 
@@ -519,7 +519,7 @@ def test_doc_reader_warns_when_no_body_text_extracted(monkeypatch, tmp_path):
 def test_doc_reader_does_not_warn_when_body_text_exists(monkeypatch, tmp_path):
     """정상 문서에는 경고를 붙이지 않는다."""
     monkeypatch.setattr(
-        "dochan.office_binary.doc.olefile.OleFileIO",
+        "dochan.office_binary.doc.cfb.OleFileIO",
         _doc_ole_factory("Legacy Word".encode("utf-16-le")),
     )
 
@@ -535,7 +535,7 @@ def test_doc_reader_does_not_warn_when_body_text_exists(monkeypatch, tmp_path):
 def test_doc_reader_reports_encrypted_container(monkeypatch, tmp_path):
     """EncryptedPackage 가 있으면 '스트림 없음' 이 아니라 암호 보호로 보고한다."""
     monkeypatch.setattr(
-        "dochan.office_binary.doc.olefile.OleFileIO",
+        "dochan.office_binary.doc.cfb.OleFileIO",
         _stream_ole_factory({"EncryptedPackage": b"\x00" * 16, "EncryptionInfo": b"\x00" * 8}),
     )
 
@@ -547,7 +547,7 @@ def test_doc_reader_reports_encrypted_container(monkeypatch, tmp_path):
 
 def test_xls_reader_reports_encrypted_container(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "dochan.office_binary.xls.olefile.OleFileIO",
+        "dochan.office_binary.xls.cfb.OleFileIO",
         _stream_ole_factory({"EncryptionInfo": b"\x00" * 8}),
     )
 
@@ -559,7 +559,7 @@ def test_xls_reader_reports_encrypted_container(monkeypatch, tmp_path):
 
 def test_ppt_reader_reports_encrypted_container(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "dochan.office_binary.ppt.olefile.OleFileIO",
+        "dochan.office_binary.ppt.cfb.OleFileIO",
         _stream_ole_factory({"EncryptedPackage": b"\x00" * 16}),
     )
 
@@ -572,7 +572,7 @@ def test_ppt_reader_reports_encrypted_container(monkeypatch, tmp_path):
 def test_readers_do_not_flag_plain_documents_as_encrypted(monkeypatch, tmp_path):
     """평범한 문서를 암호 보호로 오인하지 않아야 한다."""
     monkeypatch.setattr(
-        "dochan.office_binary.ppt.olefile.OleFileIO",
+        "dochan.office_binary.ppt.cfb.OleFileIO",
         _stream_ole_factory({"PowerPoint Document": _ppt_text_stream("Title Slide")}),
     )
 

@@ -314,3 +314,30 @@ def test_chapter_endnotes_respect_detected_running_header_before_top_paragraph()
     assert drafts[3].notes[-1].text == (
         "Second chapter definition\nQuoted first line\nQuoted second line")
     assert drops[5] == {id(line) for line in continuation.groups[0]}
+
+
+def test_chapter_endnotes_include_small_paragraph_crossing_bottom_zone():
+    for top in (82, 58):
+        drafts = chapter_pages()
+        drafts[-1].page_number = 6
+        continuation = draft(5, [fragment("Quoted first line", 50, top, 9, 0),
+                                 fragment("Quoted second line", 50, top - 12, 9, 1),
+                                 fragment("Quoted last line", 50, top - 24, 9, 2)])
+        drafts.insert(-1, continuation)
+        drops = {}
+        assert detect_endnotes(drafts, drops, 1) == 3
+        assert drafts[3].notes[-1].text == (
+            "Second chapter definition\nQuoted first line\nQuoted second line\nQuoted last line")
+        assert drops[5] == {id(line) for line in continuation.groups[0]}
+
+
+def test_chapter_endnotes_defer_ambiguous_small_bottom_line_atomically():
+    drafts = chapter_pages()
+    drafts[-1].page_number = 6
+    drafts.insert(-1, draft(5, [fragment("Possible continuation", 50, 58, 9, 0)]))
+    original_runs = [list(line.runs) for d in drafts for group in d.groups for line in group]
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 1
+    assert not any(d.notes for d in drafts)
+    assert drops == {}
+    assert [line.runs for d in drafts for group in d.groups for line in group] == original_runs

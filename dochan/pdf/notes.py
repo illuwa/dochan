@@ -497,14 +497,14 @@ def _detect_chapter_endnotes(drafts, entries, begin, dropped, first_number, warn
                     and (line.right < chapter.left
                          or line.left < chapter.left - GEOMETRY_TOLERANCE
                          or line.left > body_right + GEOMETRY_TOLERANCE
-                         or line.y <= d.bounds[0] + HEADER_FOOTER_ZONE
                          or (_heading_key(re.sub(r"\d+", "", line.text)) in ("", notes_key)
                              and line.y < body_bottoms.get(d.page_number, d.bounds[0])))):
                 continue
+            at_bottom = line.y <= d.bounds[0] + HEADER_FOOTER_ZONE
             if (abs(line.size - chapter.size) > .1
-                    and line.y >= d.bounds[1] - HEADER_FOOTER_ZONE):
-                # 반복 머리말은 detect_running이 만든 dropped로 이미 제외됐다.
-                # 남은 상단 줄은 같은 페이지의 인접 줄과 문단이 이어져야 한다.
+                    and (at_bottom or line.y >= d.bounds[1] - HEADER_FOOTER_ZONE)):
+                # 반복 머리말·꼬리말은 detect_running의 dropped로 이미 제외됐다.
+                # 남은 여백 줄도 같은 페이지의 인접 줄과 문단이 이어지면 포함한다.
                 # 불확실한 줄만 건너뛰면 미주가 잘리므로 구역 전체를 보류한다.
                 neighbors = section[max(start + 1, index - 1):index]
                 neighbors += section[index + 1:min(stop, index + 2)]
@@ -513,6 +513,12 @@ def _detect_chapter_endnotes(drafts, entries, begin, dropped, first_number, warn
                            and abs(other.left - line.left) <= GEOMETRY_TOLERANCE
                            and 0 < abs(other.y - line.y) <= line.size * 2
                            for other_draft, other in neighbors):
+                    if at_bottom and definitions:
+                        previous_draft, previous = definitions[-1][1][-1]
+                        # 같은 쪽에서 미주 문단과 분리된 바닥글은 본문에 남긴다.
+                        # 앞선 미주가 다른 쪽에 있으면 분리 여부를 확인할 수 없다.
+                        if previous_draft is d and previous.y - line.y > line.size * 2:
+                            continue
                     return first_number
             match = _ENDNOTE_DEFINITION.match(line.text)
             if match:

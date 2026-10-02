@@ -73,10 +73,10 @@
 
 ```sh
 /usr/bin/python3 -m scripts.probe_ppt_corpus \
-  --corpus /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow \
+  --corpus corpus/poi-src/test-data/slideshow \
   --output .codex-work/ppt-corpus-final.json --verify-features
 /usr/bin/python3 -m scripts.compare_office_pairs \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow \
+  corpus/poi-src/test-data/slideshow \
   --output .codex-work/ppt-pairs-final.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ```

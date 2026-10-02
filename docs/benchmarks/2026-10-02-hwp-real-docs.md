@@ -72,11 +72,11 @@ HWP 구현을 바꾼 각 단계에서 지정한 `scripts.compare_hwp_pairs`를 �
 다음 명령은 코퍼스 경로를 인자로 받고 표본을 복사하지 않는다.
 
 ```bash
-/usr/bin/python3 -m scripts.probe_hwp_features /Users/illuwa/dev/personal/dochan/corpus/hwp-public
-/usr/bin/python3 -m scripts.probe_hwp_distribution /Users/illuwa/dev/personal/dochan/corpus/hwp-public/hwp
-/usr/bin/python3 -m scripts.probe_hwp_styles /Users/illuwa/dev/personal/dochan/corpus/hwp-public
-/usr/bin/python3 -m scripts.probe_hwpx_features /Users/illuwa/dev/personal/dochan/corpus/hwp-public/hwpx
-/usr/bin/python3 -m scripts.compare_hwp_pairs /Users/illuwa/dev/personal/dochan/test_pairs/
+/usr/bin/python3 -m scripts.probe_hwp_features corpus/hwp-public
+/usr/bin/python3 -m scripts.probe_hwp_distribution corpus/hwp-public/hwp
+/usr/bin/python3 -m scripts.probe_hwp_styles corpus/hwp-public
+/usr/bin/python3 -m scripts.probe_hwpx_features corpus/hwp-public/hwpx
+/usr/bin/python3 -m scripts.compare_hwp_pairs test_pairs/
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ```
 

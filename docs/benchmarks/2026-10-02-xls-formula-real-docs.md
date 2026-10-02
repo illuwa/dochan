@@ -100,7 +100,7 @@ PtgArray의 7바이트 예약 영역 뒤에서 RPN을 계속 읽고, 값은 rgce
 저장소 루트에서 다음 명령을 실행한다. 코퍼스는 읽기 전용이며 원본 문서를 저장소에 복사하지 않는다.
 
 ```bash
-/usr/bin/python3 -m scripts.probe_xls_formula_pairs /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet --oracle-python /Users/illuwa/dev/personal/dochan/corpus/.venv-oracle/bin/python --output .codex-work/formula-final.json
+/usr/bin/python3 -m scripts.probe_xls_formula_pairs corpus/poi-src/test-data/spreadsheet --oracle-python corpus/.venv-oracle/bin/python --output .codex-work/formula-final.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 git diff --check
 ```

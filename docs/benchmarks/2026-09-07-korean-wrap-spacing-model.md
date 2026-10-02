@@ -29,7 +29,7 @@ PDF 에서 줄바꿈으로 갈라진 한글 두 글자를 이을 때 공백을 �
 ## 최종 모델 (표본 외)
 
 학습 데이터는 저장소 밖 공개 HWP/HWPX 코퍼스(`scripts/download_public_hwp_corpus.py`,
-법제처·국세청·정책브리핑·법원 등)이며, 평가용 79쌍(무역안보관리원 규정)은 학습에 쓰지 않았다.
+법제처·국세청·정책브리핑·법원 등)이며, 평가용 79쌍(내부 규정 문서)은 학습에 쓰지 않았다.
 
 ```bash
 python -m scripts.build_korean_spacing_model corpus/hwp-public --output dochan/pdf/korean_spacing.json --workers 6

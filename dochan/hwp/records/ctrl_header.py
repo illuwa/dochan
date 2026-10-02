@@ -64,7 +64,7 @@ def is_field_ctrl_id(ctrl_id: bytes) -> bool:
 def parse_field_command_url(data: bytes) -> str:
     """필드 CTRL_HEADER 에서 하이퍼링크 URL 을 추출한다.
 
-    레이아웃 (실측 — 수당 및 제수수료 지급규칙(2024년도 8월 개정).hwp hexdump,
+    레이아웃 (실측 — 내부 실물 문서 A 의 hexdump,
     HWPX 동일 문서의 fieldBegin id/Command 와 대조 확인):
       ctrlId(4) + 속성(DWORD 4) + 기타 속성(BYTE 1)
       + Command 길이(UINT16) + Command(UTF-16LE) + 인스턴스 ID(DWORD 4)

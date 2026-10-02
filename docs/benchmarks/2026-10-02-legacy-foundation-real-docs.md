@@ -32,7 +32,7 @@ POI 테스트 경로는 코퍼스 루트 아래의 상대 경로이다. `scratch
 
 ```sh
 /usr/bin/python3 -m scripts.probe_officeart \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data \
+  corpus/poi-src/test-data \
   --output .codex-work/officeart-probe.json
 /usr/bin/python3 -m pytest tests/test_officeart.py -q \
   -p no:cacheprovider --basetemp=.codex-work/pytest-tmp

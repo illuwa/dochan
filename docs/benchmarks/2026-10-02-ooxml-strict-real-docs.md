@@ -92,8 +92,8 @@ POI 후보 577개와 LO 후보 1,807개, 합계 2,384개를 읽기 전용으로 
 
 ```bash
 /usr/bin/python3 -m scripts.probe_ooxml_strict \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data \
-  /Users/illuwa/dev/personal/dochan/corpus/lo-src \
+  corpus/poi-src/test-data \
+  corpus/lo-src \
   --output .codex-work/after.json --baseline .codex-work/before.json
 ```
 

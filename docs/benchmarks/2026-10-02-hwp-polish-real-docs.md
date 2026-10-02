@@ -47,7 +47,7 @@
 
 ```bash
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
-/usr/bin/python3 -m scripts.compare_hwp_pairs /Users/illuwa/dev/personal/dochan/test_pairs/
+/usr/bin/python3 -m scripts.compare_hwp_pairs test_pairs/
 /usr/bin/python3 -m scripts.probe_hwp_polish /path/to/hwp-public
 /usr/bin/python3 -m scripts.probe_hwp_polish_headings /path/to/hwp-public --output .codex-work/headings-evidence.json
 /usr/bin/python3 -m scripts.probe_hwp_polish_revisions /path/to/hwp-public

@@ -35,12 +35,12 @@ preserve는 HWPX처럼 삽입·삭제 텍스트를 모두 보존하는 ViewText 
 ## 재현 명령
 
 ```bash
-/usr/bin/python3 -m scripts.probe_hwp_features /Users/illuwa/dev/personal/dochan/corpus/hwp-public
-/usr/bin/python3 -m scripts.probe_hwp_review /Users/illuwa/dev/personal/dochan/corpus/hwp-public
-/usr/bin/python3 -m scripts.probe_hwpx_features /Users/illuwa/dev/personal/dochan/corpus/hwp-public/hwpx
-/usr/bin/python3 -m scripts.probe_hwp_styles /Users/illuwa/dev/personal/dochan/corpus/hwp-public
-/usr/bin/python3 -m scripts.probe_hwp_distribution /Users/illuwa/dev/personal/dochan/corpus/hwp-public/hwp
-/usr/bin/python3 -m scripts.compare_hwp_pairs /Users/illuwa/dev/personal/dochan/test_pairs/
+/usr/bin/python3 -m scripts.probe_hwp_features corpus/hwp-public
+/usr/bin/python3 -m scripts.probe_hwp_review corpus/hwp-public
+/usr/bin/python3 -m scripts.probe_hwpx_features corpus/hwp-public/hwpx
+/usr/bin/python3 -m scripts.probe_hwp_styles corpus/hwp-public
+/usr/bin/python3 -m scripts.probe_hwp_distribution corpus/hwp-public/hwp
+/usr/bin/python3 -m scripts.compare_hwp_pairs test_pairs/
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ```
 

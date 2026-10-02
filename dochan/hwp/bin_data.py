@@ -124,7 +124,7 @@ def link_images_to_bin_data(doc, bin_data_items: Dict[int, BinDataItem],
     # GSO 이미지가 표 셀 안에 있는 실문서(회계규칙 등)에서 최상위 순회만으로는 놓친다.
     for elem in doc.find_all('image'):
         if elem.bin_id >= 1:
-            # ★ SC_PICTURE 의 binItem 은 1-based ID (실측: 정보보안 세부지침 —
+            # ★ SC_PICTURE 의 binItem 은 1-based ID (실측: 내부 실물 문서 B —
             #   BinDataEntry 12개에 bin_id 1..12. 0-based 로 읽으면 한 칸씩 밀린
             #   엉뚱한 이미지가 연결되고 마지막 이미지는 연결되지 않는다)
             index = elem.bin_id - 1

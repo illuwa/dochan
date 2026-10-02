@@ -372,7 +372,7 @@ def test_hwpx_hyperlink_command_only_internal_bookmark_and_script(tmp_path):
 def test_hwpx_field_result_text_is_captured(tmp_path):
     """필드(누름틀 CLICK_HERE / 계산식 FORMULA)의 결과 텍스트가 본문에 그대로
     남고 하이퍼링크는 걸리지 않는다.
-    (필드 결과 텍스트 + 컨트롤/스마트 태그 텍스트) — 실측 문서관리규칙 '공개',
+    (필드 결과 텍스트 + 컨트롤/스마트 태그 텍스트) — 내부 실물 문서의 '공개' 양식,
     사내벤처 창업 및 운영지침 '100'."""
     def field(ftype, result):
         return (

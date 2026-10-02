@@ -135,9 +135,9 @@ XLS 오류 짝은 `54206`, `ConditionalFormattingSamples`, `FormatChoiceTests`, 
 
 ```sh
 /usr/bin/python3 -m scripts.compare_office_pairs \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/document \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet \
+  corpus/poi-src/test-data/document \
+  corpus/poi-src/test-data/slideshow \
+  corpus/poi-src/test-data/spreadsheet \
   --output .codex-work/legacy-office-baseline.json
 ```
 

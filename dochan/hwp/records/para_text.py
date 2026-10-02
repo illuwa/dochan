@@ -20,7 +20,7 @@ def parse_para_text(data: bytes) -> dict:
     field_marks 의 text_offset 은 반환 text 문자열 안의 오프셋이다 (char_index 와
     달리 컨트롤 문자를 세지 않는다). 필드 시작(3)은 확장 컨트롤 블록 안에
     ctrlId 4바이트(LE, 예: b'klh%')가 내장되어 있어 그대로 기록한다 — 실측:
-    수당 및 제수수료 지급규칙(2024년도 8월 개정).hwp hexdump.
+    내부 실물 문서 A 의 hexdump.
     """
     text_parts = []
     ctrl_positions = []

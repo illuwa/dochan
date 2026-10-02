@@ -110,8 +110,8 @@ AVERAGE를 고정 토큰의 단일 범위로 읽던 기존 WARN 호환 경로는
 저장소 루트에서 다음 명령을 실행한다. 코퍼스와 명세 원본은 읽기 전용이며 저장소로 복사하지 않는다.
 
 ```bash
-/usr/bin/python3 -m scripts.generate_xls_ftab /Users/illuwa/dev/personal/dochan/corpus/specs/ftab-table.json dochan/office_binary/xls_ftab.py --check
-/usr/bin/python3 -m scripts.probe_xls_formula_pairs /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet --output .codex-work/ftab-final.json
+/usr/bin/python3 -m scripts.generate_xls_ftab corpus/specs/ftab-table.json dochan/office_binary/xls_ftab.py --check
+/usr/bin/python3 -m scripts.probe_xls_formula_pairs corpus/poi-src/test-data/spreadsheet --output .codex-work/ftab-final.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 git diff --check
 ```

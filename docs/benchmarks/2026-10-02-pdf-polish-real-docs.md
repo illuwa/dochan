@@ -82,8 +82,8 @@ BitsPerComponent 1을 지정한다. 전후 한 번씩 측정한 제한 동작이
 실물 PDF를 그 사본에 복사하지 않는다. 표 목록은 아래 표본 열의 66개 공개 파일명으로 만든다.
 
 ```text
-/usr/bin/python3 -m scripts.probe_pdf_polish /Users/illuwa/dev/personal/dochan/corpus/pdfjs-src/test/pdfs --baseline-repo .codex-work/baseline-785c0e0 --table-manifest .codex-work/table-manifest.txt --timeout 180 --workers 4 --output .codex-work/pdf-polish-probe.json
-/usr/bin/python3 -m scripts.probe_pdf_features /Users/illuwa/dev/personal/dochan/corpus/pdfjs-src/test/pdfs --output .codex-work/pdf-polish-filters.json
+/usr/bin/python3 -m scripts.probe_pdf_polish corpus/pdfjs-src/test/pdfs --baseline-repo .codex-work/baseline-785c0e0 --table-manifest .codex-work/table-manifest.txt --timeout 180 --workers 4 --output .codex-work/pdf-polish-probe.json
+/usr/bin/python3 -m scripts.probe_pdf_features corpus/pdfjs-src/test/pdfs --output .codex-work/pdf-polish-filters.json
 ```
 
 원시 집계는 `.codex-work/pdf-polish-probe.json`, 음성 대조는

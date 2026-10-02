@@ -770,7 +770,7 @@ class SectionParser:
         """표 파싱 (셀 병합 대응, LIST_HEADER(72)+TABLE(77) 수집)
 
         ★ 캡션 처리: 표 캡션은 TABLE 레코드보다 먼저 오는 LIST_HEADER 다
-          (실측: Trade and Security / 정보보안 hexdump). _build_tree 의 LIST_HEADER
+          (실측: 내부 실물 문서 2건의 hexdump). _build_tree 의 LIST_HEADER
           자식 흡수 규칙 때문에 이 캡션 LH 가 뒤따르는 TABLE 레코드를 자식으로
           삼킨다. 그래서 TABLE 을 못 찾으면 표 차원이 0이 되고 캡션 LH 가 셀로
           오인돼 표가 통째로 무너진다. TABLE 을 만나기 전의 LIST_HEADER(및 그 안에

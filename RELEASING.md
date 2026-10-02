@@ -20,6 +20,10 @@
    # Maintainer-only: requires the local secaudit installation.
    uv run --isolated --locked --extra dev python \
      scripts/run_tracked_security_audit.py
+   # Maintainer-only: no internal document names/body text or local paths in tracked files and commit messages
+   python -m scripts.check_internal_leaks --internal-dir test_pairs --internal-dir corpus/local-samples \
+     --public-dir corpus/hwp-public --public-text docs/benchmarks/hwp-corpus-fixtures.json \
+     --messages-since "$(git describe --tags --abbrev=0)"
    uv run --isolated --with build==1.5.0 python -m build \
      --outdir "${DOCHAN_DIST_DIR}"
    uv run --isolated --with twine==7.0.0 python -m twine check \

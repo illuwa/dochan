@@ -10,7 +10,7 @@
 
 **핵심 검증 자원 (모두 로컬):**
 - 공개 HWP 코퍼스 7,188개: `corpus/hwp-public/` (스펙 추정이 어긋나면 실물 바이트로 확인)
-- 동일 문서 HWP/HWPX 쌍: `/Users/illuwa/dev/personal/dochan/test_pairs/` — **HWPX 추출 결과가 정답지** (같은 문서에서 HWPX 가 뽑는 하이퍼링크/도형 텍스트를 HWP 도 뽑아야 함)
+- 동일 문서 HWP/HWPX 쌍: `test_pairs/` — **HWPX 추출 결과가 정답지** (같은 문서에서 HWPX 가 뽑는 하이퍼링크/도형 텍스트를 HWP 도 뽑아야 함)
 - 검증 명령: `PYTHONPATH=. pytest tests/ -q` (시작 시점 552개 통과), 회귀: `PYTHONPATH=. python3 scripts/scan_corpus_quality.py corpus/hwp-public --workers 8` (기준: crashed 2, internal 7 — docs/benchmarks/2026-08-09-hwp-corpus-rescan-after-pdf-phase1.md)
 
 ## Task 1: HWP GSO 텍스트박스/도형 텍스트

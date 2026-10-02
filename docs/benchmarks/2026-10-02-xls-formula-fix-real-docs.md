@@ -79,9 +79,9 @@ HEAD 테스트 단언은 바꾸지 않았다. 이전 작업의 미커밋 `test_f
 코퍼스 경로는 인자로 전달한다. 시작 시점 파서의 복사본과 JSON은 git에 포함하지 않는다.
 
 ```bash
-/usr/bin/python3 -m scripts.probe_xls_formula_pairs /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet --oracle-python /Users/illuwa/dev/personal/dochan/corpus/.venv-oracle/bin/python --output .codex-work/formula-pairs-after-review-strict.json
-/usr/bin/python3 -m scripts.probe_xls_formula_corpus /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet --parser-snapshot .codex-work/before-review/dochan/office_binary --output .codex-work/formula-corpus-before-review.json
-/usr/bin/python3 -m scripts.probe_xls_formula_corpus /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet --output .codex-work/formula-corpus-after-review.json
+/usr/bin/python3 -m scripts.probe_xls_formula_pairs corpus/poi-src/test-data/spreadsheet --oracle-python corpus/.venv-oracle/bin/python --output .codex-work/formula-pairs-after-review-strict.json
+/usr/bin/python3 -m scripts.probe_xls_formula_corpus corpus/poi-src/test-data/spreadsheet --parser-snapshot .codex-work/before-review/dochan/office_binary --output .codex-work/formula-corpus-before-review.json
+/usr/bin/python3 -m scripts.probe_xls_formula_corpus corpus/poi-src/test-data/spreadsheet --output .codex-work/formula-corpus-after-review.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 git diff --check
 ```

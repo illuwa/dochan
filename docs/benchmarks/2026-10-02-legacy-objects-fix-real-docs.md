@@ -54,8 +54,8 @@ DOC의 EB04 개체 두 개 가운데 하나는 공백을 해석한 뒤 종료 �
 코퍼스는 인자로 받은 경로에서 읽기만 한다. 소스 코드·테스트에 실물 표본을 복사하지 않았다. 기대값 근거는 원시 레코드와 기존 OOXML 비교이며, POI·LibreOffice 구현 코드를 번역하지 않았다. 공유 모델·출력 파일, README, CHANGELOG, 의존성은 변경하지 않았다.
 
 ```bash
-/usr/bin/python3 -m scripts.probe_legacy_objects /Users/illuwa/dev/personal/dochan/corpus --output .codex-work/legacy-objects-fix-real.json
-/usr/bin/python3 -m scripts.probe_xls_formula_pairs /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet --output .codex-work/xls-formula-pairs-review.json
+/usr/bin/python3 -m scripts.probe_legacy_objects corpus --output .codex-work/legacy-objects-fix-real.json
+/usr/bin/python3 -m scripts.probe_xls_formula_pairs corpus/poi-src/test-data/spreadsheet --output .codex-work/xls-formula-pairs-review.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ```
 

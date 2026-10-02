@@ -6,12 +6,12 @@ tests/test_hwp_section_controls.py — HWP 섹션 컨트롤 파싱 (GSO 도형 �
 구조 근거 (실측 — test_pairs / corpus 실파일 덤프):
   - GSO 텍스트박스: CTRL_HEADER('gso ') → SHAPE_COMPONENT → LIST_HEADER
     → PARA_HEADER(동일 레벨; 트리 보정으로 LH 자식이 됨) → PARA_TEXT
-    (정보보안 세부지침(2024년도 8월 개정).hwp 실측 구조와 동일)
+    (내부 실물 문서 B 의 실측 구조와 동일)
   - 하이퍼링크: PARA_TEXT 안 확장 컨트롤 3(필드 시작, ctrlId 'klh%' 내장)
     + 인라인 컨트롤 4(필드 끝), CTRL_HEADER('%hlk')의 Command 에 URL
-    (수당 및 제수수료 지급규칙(2024년도 8월 개정).hwp 실측 hexdump 근거)
+    (내부 실물 문서 A 의 실측 hexdump 근거)
   - 개체 설명문: GSO CTRL_HEADER 개체 공통 속성(표 70) offset 44 에
-    UINT16 길이 + UTF-16LE 문자열 (회계규칙(2024년도 8월 개정).hwp 실측)
+    UINT16 길이 + UTF-16LE 문자열 (내부 실물 문서 C 실측)
   - 메모: CTRL_HEADER('tcmt') → LIST_HEADER → PARA_HEADER
     (han_grammar.hwp / 숨은설명.hwp 실측)
 """
@@ -66,7 +66,7 @@ def field_end_block() -> bytes:
 
 
 def hlk_ctrl_payload(command: str) -> bytes:
-    """%hlk CTRL_HEADER — 실측(수당 및 제수수료 지급규칙 hexdump):
+    """%hlk CTRL_HEADER — 실측(내부 실물 문서 A hexdump):
     ctrlId(4) + 속성(4) + 기타속성(1) + len(UINT16) + Command(UTF-16LE) + 인스턴스ID(4)"""
     cmd = command.encode("utf-16-le")
     return (b"klh%" + struct.pack("<I", 0x800) + b"\x00" +
@@ -229,7 +229,7 @@ def test_header_keeps_table_and_nested_image_blocks():
 
 
 def test_link_images_uses_one_based_bin_item():
-    """SC_PICTURE binItem 은 1-based (실측: 정보보안 세부지침 bin_id 1..12
+    """SC_PICTURE binItem 은 1-based (실측: 내부 실물 문서 B 의 bin_id 1..12
     ↔ BinDataEntry 12개). 0-based 로 읽으면 한 칸 밀리거나 연결이 빠진다."""
     from dochan.hwp.bin_data import BinDataItem, link_images_to_bin_data
     from dochan.hwp.doc_info import BinDataEntry
@@ -408,7 +408,7 @@ def field_ctrl_payload(ctrl_id_le: bytes, command: str) -> bytes:
 def test_click_here_field_result_text_is_captured():
     """누름틀(%clk, CLICK_HERE) — HWP 의 콘텐츠 컨트롤 — 의 결과(표시) 텍스트가
     본문에 그대로 남고 하이퍼링크는 걸리지 않는다.
-    (컨트롤/스마트 태그 텍스트 + 필드 결과 텍스트) — 실측 문서관리규칙 '공개'."""
+    (컨트롤/스마트 태그 텍스트 + 필드 결과 텍스트) — 내부 실물 문서의 '공개' 양식."""
     text_payload = (
         "구분: ".encode("utf-16-le") +
         field_start_block(b"klc%") +          # %clk (LE)
@@ -598,7 +598,7 @@ def test_memo_renders_as_comment_definition_in_markdown():
 # ── 표 캡션 (실측: 캡션 LIST_HEADER 가 TABLE 레코드 앞에 온다) ──
 
 def table_caption_lh(direction: int = 2) -> bytes:
-    """표 캡션 LIST_HEADER — 실측(Trade and Security / 정보보안 hexdump):
+    """표 캡션 LIST_HEADER — 실측(내부 실물 문서 2건의 hexdump):
     paraCount(UINT32)=1 + attr(UINT32)=0 + 위치(UINT32; 0=L,1=R,2=T,3=B) + 나머지.
     셀 LIST_HEADER(47바이트)와 달리 TABLE 레코드보다 먼저 등장한다."""
     return struct.pack("<I", 1) + struct.pack("<I", 0) + struct.pack("<I", direction) + bytes(18)
@@ -608,7 +608,7 @@ def test_table_caption_is_attached_and_dimensions_survive():
     """캡션이 있는 표에서 (1) 캡션이 Table.caption 으로 분리되고
     (2) 캡션 LIST_HEADER 가 셀로 오염되지 않아 표 차원이 보존돼야 한다.
 
-    실측 레코드 순서 (Trade and Security 학술지 운영지침.hwp):
+    실측 레코드 순서 (내부 실물 문서):
       CTRL_HEADER('tbl ') → LIST_HEADER(캡션) → PARA_HEADER(캡션문단)
       → TABLE → LIST_HEADER(셀) → PARA_HEADER(셀문단)
     캡션 LH 는 TABLE 레코드를 트리 보정으로 자식으로 흡수한다."""

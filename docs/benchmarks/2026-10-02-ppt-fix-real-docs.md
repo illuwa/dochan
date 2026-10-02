@@ -64,10 +64,10 @@ PPT↔PPTX 8쌍을 재실행했고 예외 0개, 평균 토큰 유사도 0.640631
 ## 재현 명령
 
 ```sh
-/usr/bin/python3 -m scripts.probe_ppt_corpus --corpus /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow --output .codex-work/ppt-fix-poi-final.json --verify-features
-/usr/bin/python3 -m scripts.probe_ppt_corpus --corpus /Users/illuwa/dev/personal/dochan/corpus/lo-src/sd/qa/unit/data/ppt --recursive --output .codex-work/ppt-fix-lo-final.json
-/usr/bin/python3 -m scripts.probe_ppt_review --poi /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow --lo /Users/illuwa/dev/personal/dochan/corpus/lo-src/sd/qa/unit/data/ppt --output .codex-work/ppt-fix-review-final.json
-/usr/bin/python3 -m scripts.compare_office_pairs /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow --output .codex-work/ppt-fix-pairs-final.json
+/usr/bin/python3 -m scripts.probe_ppt_corpus --corpus corpus/poi-src/test-data/slideshow --output .codex-work/ppt-fix-poi-final.json --verify-features
+/usr/bin/python3 -m scripts.probe_ppt_corpus --corpus corpus/lo-src/sd/qa/unit/data/ppt --recursive --output .codex-work/ppt-fix-lo-final.json
+/usr/bin/python3 -m scripts.probe_ppt_review --poi corpus/poi-src/test-data/slideshow --lo corpus/lo-src/sd/qa/unit/data/ppt --output .codex-work/ppt-fix-review-final.json
+/usr/bin/python3 -m scripts.compare_office_pairs corpus/poi-src/test-data/slideshow --output .codex-work/ppt-fix-pairs-final.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ```
 

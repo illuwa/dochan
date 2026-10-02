@@ -102,12 +102,12 @@ LO 1,366개 중 18개에는 기존 오류 또는 경고가 남아 있고, 그중
 저장소 루트에서 Python 3.9로 실행한다. 모든 코퍼스 경로는 인자로 전달한다.
 
 ```bash
-/usr/bin/python3 -m scripts.probe_docx_polish /Users/illuwa/dev/personal/dochan/corpus/lo-src/sw/qa/extras/ooxmlexport/data .codex-work/lo-base.json --revision 785c0e0
-/usr/bin/python3 -m scripts.probe_docx_polish /Users/illuwa/dev/personal/dochan/corpus/lo-src/sw/qa/extras/ooxmlexport/data .codex-work/lo-before.json --revision 23624d4
-/usr/bin/python3 -m scripts.probe_docx_polish /Users/illuwa/dev/personal/dochan/corpus/lo-src/sw/qa/extras/ooxmlexport/data .codex-work/lo-fixed.json
-/usr/bin/python3 -m scripts.probe_docx_polish /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/document .codex-work/poi-fixed.json
-/usr/bin/python3 -m scripts.probe_docx_polish /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/document .codex-work/chart-before.json --chart-benchmark --revision 23624d4
-/usr/bin/python3 -m scripts.probe_docx_polish /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/document .codex-work/chart-fixed.json --chart-benchmark
+/usr/bin/python3 -m scripts.probe_docx_polish corpus/lo-src/sw/qa/extras/ooxmlexport/data .codex-work/lo-base.json --revision 785c0e0
+/usr/bin/python3 -m scripts.probe_docx_polish corpus/lo-src/sw/qa/extras/ooxmlexport/data .codex-work/lo-before.json --revision 23624d4
+/usr/bin/python3 -m scripts.probe_docx_polish corpus/lo-src/sw/qa/extras/ooxmlexport/data .codex-work/lo-fixed.json
+/usr/bin/python3 -m scripts.probe_docx_polish corpus/poi-src/test-data/document .codex-work/poi-fixed.json
+/usr/bin/python3 -m scripts.probe_docx_polish corpus/poi-src/test-data/document .codex-work/chart-before.json --chart-benchmark --revision 23624d4
+/usr/bin/python3 -m scripts.probe_docx_polish corpus/poi-src/test-data/document .codex-work/chart-fixed.json --chart-benchmark
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ```
 

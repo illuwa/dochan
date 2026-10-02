@@ -212,7 +212,7 @@ class _Reader:
         if self.version == 2:
             # Before MTCode, CHAR stores a byte in the selected typeface.
             if face in (0x84, 0x85, 0x86, 0x96):
-                from .ppt_text import _SYMBOL_UNICODE
+                from .symbol_fonts import _SYMBOL_UNICODE
                 # Identity glyphs verified against Symbol's cmap. In particular
                 # byte 0x60 is a radical extender, not an ASCII backtick.
                 identity = ' !#%&()+,./0123456789:;<=>?[]_{}|'

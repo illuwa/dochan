@@ -42,6 +42,13 @@ _TYPE_LABELS = {
     "bubbleChart": "bubble",
     "radarChart": "radar",
     "stockChart": "stock",
+    "sunburstChart": "sunburst",
+    "boxWhiskerChart": "box and whisker",
+    "treemapChart": "treemap",
+    "waterfallChart": "waterfall",
+    "histogramChart": "histogram",
+    "paretoChart": "Pareto",
+    "funnelChart": "funnel",
     "surfaceChart": "surface",
     "surface3DChart": "3-D surface",
 }
@@ -320,3 +327,341 @@ def _collect_text(container, parts: list, depth: int) -> None:
         else:
             # a:r·a:fld 의 글자 (pPr·endParaRPr 에는 a:t 가 없다).
             parts.append("".join(node.text or "" for node in child.iterfind(".//a:t", namespaces=_NS)))
+
+
+CX_NS = "http://schemas.microsoft.com/office/drawing/2014/chartex"
+_CX = "{%s}" % CX_NS
+MAX_REFERENCE_CELLS = 200000
+MAX_REFERENCE_SERIES = 1000
+MAX_REFERENCE_BYTES_TOTAL = 64 * 1024 * 1024
+
+
+def _reference_state(package):
+    state = getattr(package, "_chart_reference_state", None)
+    if state is None:
+        state = {"remaining": MAX_REFERENCE_CELLS, "loaded": 0, "bytes": 0,
+                 "resolvers": {}}
+        package._chart_reference_state = state
+    return state
+
+
+def workbook_chart_resolver(package, errors, budget=None):
+    """같은 통합문서의 유한 A1 범위를 캐시 값으로 읽는 지연 resolver.
+
+    수식은 계산하지 않고 저장된 v를 쓴다. 외부 통합문서·이름·수식은 실행하지 않는다.
+    XLSX 리더의 시트/공유문자열 코드를 재사용하며 조회한 시트만 희소 맵으로 보관한다.
+    """
+    import re
+    from .xlsx import XLSXReader, _namespaces, _column_index
+
+    reader = XLSXReader()
+    # 선택적인 차트 참조의 잘못된 좌표가 본문 전체를 ERR로 만들지 않는다.
+    reader._errors = []
+    budget = _reference_state(package) if budget is None else budget
+    initialized = False
+    sheets = {}
+    shared = []
+    cells_by_sheet = {}
+    exhausted = False
+
+    def resolve(formula):
+        nonlocal initialized, shared, sheets, exhausted
+        if exhausted:
+            return {}
+        match = re.fullmatch(
+            r"(?:'((?:[^']|'')+)'|([^'!\[\]]+))!\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})(?::\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6}))?",
+            (formula or "").strip(),
+        )
+        if match is None:
+            return {}
+        name = (match.group(1) or match.group(2)).replace("''", "'")
+        col1 = _column_index(match.group(3))
+        row1 = int(match.group(4)) - 1
+        col2 = _column_index(match.group(5) or match.group(3))
+        row2 = int(match.group(6) or match.group(4)) - 1
+        count = (col2 - col1 + 1) * (row2 - row1 + 1)
+        if col2 < col1 or row2 < row1 or col2 >= 16384 or row2 >= 1048576:
+            _chart_warning(errors, "invalid chart formula range")
+            return {}
+        if count > budget["remaining"]:
+            _chart_warning(errors, "chart reference cell limit exceeded")
+            return {}
+        if not initialized:
+            workbook = package.read_xml_part("xl/workbook.xml")
+            sheets = dict(reader._read_sheets(workbook, reader._read_workbook_relationships(package)))
+            shared = reader._read_shared_strings(package)
+            initialized = True
+        path = sheets.get(name)
+        if not path or not package.exists(path):
+            return {}
+        if name not in cells_by_sheet:
+            if budget["loaded"] >= MAX_REFERENCE_CELLS:
+                _chart_warning(errors, "chart source cell limit exceeded")
+                exhausted = True
+                return {}
+            root = package.read_xml_part(path)
+            cells = {}
+            for fallback_row, row in enumerate(root.iterfind("s:sheetData/s:row", namespaces=_namespaces(root))):
+                row_index = reader._sheet_row_index(row, fallback_row)
+                if row_index is None:
+                    continue
+                next_column = 0
+                for cell in row.iterfind("s:c", namespaces=_namespaces(row)):
+                    budget["loaded"] += 1
+                    if budget["loaded"] > MAX_REFERENCE_CELLS:
+                        _chart_warning(errors, "chart source cell limit exceeded")
+                        exhausted = True
+                        return {}
+                    reference = cell.get("r", "")
+                    coordinate = reader._validated_cell_coordinates(reference) if reference else (row_index, next_column)
+                    if coordinate is None or coordinate[0] != row_index or coordinate[1] >= 16384:
+                        _chart_warning(errors, "invalid chart source cell coordinate")
+                        continue
+                    next_column = coordinate[1] + 1
+                    kind = cell.get("t", "")
+                    value = cell.find("s:v", namespaces=_namespaces(cell))
+                    text = value.text or "" if value is not None else ""
+                    if kind == "s":
+                        try:
+                            text = shared[int(text)] if int(text) >= 0 else ""
+                        except (ValueError, IndexError):
+                            text = ""
+                    elif kind == "inlineStr":
+                        text = reader._text_runs(cell.find("s:is", namespaces=_namespaces(cell)))
+                    cells[coordinate] = text
+            if reader._errors:
+                _chart_warning(errors, "invalid chart source cell coordinate")
+                reader._errors.clear()
+            cells_by_sheet[name] = cells
+        budget["remaining"] -= count
+        cells = cells_by_sheet[name]
+        width = col2 - col1 + 1
+        return {
+            (row - row1) * width + col - col1: cells[(row, col)]
+            for row in range(row1, row2 + 1)
+            for col in range(col1, col2 + 1)
+            if cells.get((row, col), "") != ""
+        }
+
+    return resolve
+
+
+def _chart_warning(errors, message):
+    warning = "WARN: OOXML " + message
+    if warning not in errors:
+        errors.append(warning)
+
+
+def hydrate_chart_references(chart_root, package, chart_path, errors, resolver=None):
+    """캐시 없는 c:strRef/c:numRef를 c:f가 참조한 셀의 저장값으로 보강한다.
+
+    기존 캐시는 그대로 두고 외부 TargetMode는 참조하지 않는다.
+    DOCX/PPTX의 내장 통합문서는 안전한 OOXMLPackage로 열어 같은 resolver를 쓴다.
+    """
+    import io
+    import posixpath
+    import zipfile
+    from lxml import etree
+    from .package import OOXMLPackage
+
+    references = []
+    for ref in chart_root.iter():
+        if ref.tag not in (_C + "strRef", _C + "numRef"):
+            continue
+        cache_name = "strCache" if ref.tag == _C + "strRef" else "numCache"
+        if ref.find(_C + cache_name) is not None:
+            continue
+        formula = ref.find(_C + "f")
+        if formula is not None and formula.text:
+            references.append((ref, cache_name, formula.text))
+    if not references:
+        return
+    if len(references) > MAX_REFERENCE_SERIES * 4:
+        _chart_warning(errors, "chart reference count limit exceeded")
+        return
+
+    def fill(resolve):
+        for ref, cache_name, formula in references:
+            values = resolve(formula)
+            if not values:
+                continue
+            if len(values) > MAX_REFERENCE_CELLS:
+                _chart_warning(errors, "chart reference cell limit exceeded")
+                continue
+            cache = etree.SubElement(ref, _C + cache_name)
+            etree.SubElement(cache, _C + "ptCount", val=str(max(values) + 1))
+            for index, value in sorted(values.items()):
+                point = etree.SubElement(cache, _C + "pt", idx=str(index))
+                etree.SubElement(point, _C + "v").text = str(value)
+
+    try:
+        if resolver is not None:
+            fill(resolver)
+            return
+        if package is None:
+            return
+        external = chart_root.find(_C + "externalData")
+        if external is None:
+            return
+        rel_id = external.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+        directory = posixpath.dirname(chart_path)
+        rels_path = posixpath.join(directory, "_rels", posixpath.basename(chart_path) + ".rels")
+        if not package.exists(rels_path):
+            return
+        rels = package.read_xml_part(rels_path)
+        for rel in rels:
+            if rel.get("Id") != rel_id or rel.get("TargetMode", "").lower() == "external":
+                continue
+            target = rel.get("Target", "")
+            target = posixpath.normpath(target.lstrip("/") if target.startswith("/") else posixpath.join(directory, target))
+            if not target.endswith(".xlsx") or not package.exists(target):
+                return
+            state = _reference_state(package)
+            if target not in state["resolvers"]:
+                # 실패한 대상도 기억해 반복된 손상 파트 해제를 막는다.
+                state["resolvers"][target] = None
+                size = package.part_size(target)
+                if state["bytes"] + size > MAX_REFERENCE_BYTES_TOTAL:
+                    _chart_warning(errors, "chart workbook byte limit exceeded")
+                    return
+                state["bytes"] += size
+                embedded = OOXMLPackage(io.BytesIO(package.read_part(target)))
+                resolve = workbook_chart_resolver(embedded, errors, state)
+                with embedded:
+                    fill(resolve)
+                state["resolvers"][target] = (embedded, resolve)
+            elif state["resolvers"][target] is not None:
+                embedded, resolve = state["resolvers"][target]
+                with embedded:
+                    fill(resolve)
+            return
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+        _chart_warning(errors, "chart workbook reference could not be read: " + str(exc)[:256])
+
+
+def bubble_series_rows(series_items, sizes, implicit_x=None):
+    """거품 계열을 값이 빠지지 않는 Series/X/Y/Bubble size 긴 표로 낸다."""
+    if not any(sizes):
+        return None
+    rows = [["Series", "X", "Y", "Bubble size"]]
+    implicit_x = implicit_x or [False] * len(series_items)
+    for position, ((name, xs, ys), size, implicit) in enumerate(zip(series_items, sizes, implicit_x)):
+        for index in sorted(set(xs) | set(ys) | set(size)):
+            rows.append([
+                name or "Series %s" % (position + 1),
+                xs.get(index, str(index + 1) if implicit and not xs else ""),
+                ys.get(index, ""), size.get(index, ""),
+            ])
+    return rows
+
+
+def normalize_chart(chart_root, errors):
+    """chartEx의 명시적 차원 캐시를 기존 c:chart 출력 계약으로 변환한다.
+
+    상자 수염의 통계값이나 sunburst 배치를 계산하지 않고 원본 데이터를 낸다.
+    계층 범주는 바깥쪽부터 안쪽까지 /로 이어 정보를 보존한다.
+    """
+    from copy import deepcopy
+    from lxml import etree
+
+    if chart_root.tag != _CX + "chartSpace":
+        return chart_root
+    root = etree.Element(_C + "chartSpace")
+    chart = etree.SubElement(root, _C + "chart")
+    source = chart_root.find(_CX + "chart")
+    if source is None:
+        return root
+    title = source.find(_CX + "title")
+    if title is not None:
+        title = deepcopy(title)
+        for node in title.iter():
+            if isinstance(node.tag, str) and node.tag.startswith(_CX):
+                node.tag = _C + node.tag[len(_CX):]
+        tx_data = title.find(_C + "tx/" + _C + "txData")
+        if tx_data is not None:
+            # chartEx 셀 연결 제목의 저장된 v와 f를 classic strRef로 옮긴다.
+            tx_data.tag = _C + "strRef"
+            value = tx_data.find(_C + "v")
+            if value is not None:
+                tx_data.remove(value)
+                cache = etree.SubElement(tx_data, _C + "strCache")
+                point = etree.SubElement(cache, _C + "pt", idx="0")
+                point.append(value)
+        chart.append(title)
+    plot = etree.SubElement(chart, _C + "plotArea")
+    data = {node.get("id"): node for node in chart_root.findall(_CX + "chartData/" + _CX + "data")}
+    series = source.findall(".//" + _CX + "plotAreaRegion/" + _CX + "series")
+    if len(series) > MAX_REFERENCE_SERIES:
+        _chart_warning(errors, "chartEx series limit exceeded")
+        return root
+    used = 0
+    for source_series in series:
+        layout = source_series.get("layoutId", "")
+        known_layouts = {"sunburst", "boxWhisker", "treemap", "waterfall", "clusteredColumn", "paretoLine", "funnel", "regionMap"}
+        if layout not in known_layouts:
+            _chart_warning(errors, "unknown chartEx layout")
+            layout = "unknown"
+        layout = {"clusteredColumn": "histogram", "paretoLine": "pareto"}.get(layout, layout)
+        group = etree.SubElement(plot, _C + layout + "Chart")
+        ser = etree.SubElement(group, _C + "ser")
+        name = source_series.find(_CX + "tx/" + _CX + "txData/" + _CX + "v")
+        if name is not None:
+            etree.SubElement(etree.SubElement(ser, _C + "tx"), _C + "v").text = name.text
+        data_id = source_series.find(_CX + "dataId")
+        dimension_data = data.get(data_id.get("val")) if data_id is not None else None
+        if dimension_data is None:
+            continue
+        for dim in dimension_data:
+            kind = dim.get("type", "")
+            destination = "cat" if kind == "cat" else "val" if kind in ("val", "size", "y") else "xVal" if kind == "x" else ""
+            if not destination:
+                continue
+            levels = []
+            for level in dim.findall(_CX + "lvl"):
+                points = {}
+                for point in level.findall(_CX + "pt"):
+                    used += 1
+                    if used > MAX_REFERENCE_CELLS:
+                        _chart_warning(errors, "chartEx point limit exceeded")
+                        return etree.Element(_C + "chartSpace")
+                    raw = point.get("idx", "")
+                    if not raw.isascii() or not raw.isdigit() or len(raw) > 10 or int(raw) > 4294967295:
+                        _chart_warning(errors, "invalid chartEx point index")
+                        continue
+                    points[int(raw)] = point.text or ""
+                levels.append(points)
+            parent = etree.SubElement(ser, _C + destination)
+            numeric = dim.tag == _CX + "numDim"
+            ref = etree.SubElement(parent, _C + ("numRef" if numeric else "strRef"))
+            formula = dim.find(_CX + "f")
+            if formula is not None:
+                etree.SubElement(ref, _C + "f").text = formula.text
+            if levels:
+                cache = etree.SubElement(ref, _C + ("numCache" if numeric else "strCache"))
+                indexes = set(index for level in levels for index in level)
+                for index in sorted(indexes):
+                    values = [level.get(index, "") for level in reversed(levels)]
+                    value = " / ".join(value for value in values if value) if not numeric else values[-1]
+                    point = etree.SubElement(cache, _C + "pt", idx=str(index))
+                    etree.SubElement(point, _C + "v").text = value
+    external = chart_root.find(_CX + "chartData/" + _CX + "externalData")
+    if external is not None:
+        external = deepcopy(external)
+        external.tag = _C + "externalData"
+        root.append(external)
+    return root
+
+
+def chart_drawing_references(container, depth=0):
+    """그리기 앵커의 classic/chartEx 참조를 찾고 AlternateContent는 한 갈래만 고른다."""
+    if depth > 64:
+        return
+    for child in container:
+        if child.tag in (_C + "chart", _CX + "chart"):
+            yield child
+        elif child.tag == _MC + "AlternateContent":
+            branch = _alternate_branch(child, lambda candidate: next(chart_drawing_references(candidate, depth + 1), None) is not None)
+            if branch is not None:
+                yield from chart_drawing_references(branch, depth + 1)
+        else:
+            yield from chart_drawing_references(child, depth + 1)

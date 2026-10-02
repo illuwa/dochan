@@ -1,5 +1,6 @@
 """Native PPTX reader."""
 import posixpath
+from copy import deepcopy
 import zipfile
 from fractions import Fraction
 from typing import Dict, List
@@ -9,7 +10,10 @@ from lxml import etree
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
-from .charts import chart_elements, chart_series, text_table, xy_series_rows
+from ..model.equation import Equation
+from .math import omml_to_latex
+from .charts import (chart_elements, chart_series, text_table, xy_series_rows,
+                     bubble_series_rows, hydrate_chart_references, normalize_chart)
 from .core import core_property_elements, read_core_properties
 from .package import OOXMLPackage
 
@@ -17,15 +21,23 @@ P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 C_NS = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 DGM_NS = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
+CX_NS = "http://schemas.microsoft.com/office/drawing/2014/chartex"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS = {"p": P_NS, "a": A_NS, "c": C_NS, "dgm": DGM_NS, "r": R_NS, "rel": REL_NS}
+MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+A14_NS = "http://schemas.microsoft.com/office/drawing/2010/main"
+P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+MAX_MEDIA_ASSET_REFS = 10000
 MAX_GROUP_DEPTH = 64
 MAX_SHAPE_NODES = 100000
 MAX_NUMBERING_VALUE = 100000
 MAX_CHART_SERIES = 1000
 MAX_CHART_POINTS = 200000
 MAX_CHART_OUTPUT_CELLS = 200000
+MAX_CHART_REFERENCES = 1000
+MAX_CHART_BYTES_TOTAL = 64 * 1024 * 1024
 MAX_IMAGE_ASSET_REFS = 10000
 MAX_DIAGNOSTIC_PATH_CHARS = 256
 
@@ -84,10 +96,15 @@ class PPTXReader:
         self._chart_points_remaining = MAX_CHART_POINTS
         self._chart_output_cells_remaining = MAX_CHART_OUTPUT_CELLS
         self._chart_budget_exhausted = False
+        self._chart_roots = {}
+        self._chart_references_remaining = MAX_CHART_REFERENCES
+        self._chart_bytes_total = 0
         self._image_asset_ids = set()
         self._image_asset_count = 0
         self._image_asset_limit_reported = False
         self._assets = []
+        self._media_asset_ids = set()
+        self._media_content_types = None
         self._slide_images = {}
         self._image_bytes_total = 0
         with OOXMLPackage(file_path) as package:
@@ -312,8 +329,8 @@ class PPTXReader:
                 heading_level = self._shape_heading_level(child)
                 added_text = False
                 bullet_counts = {}
-                for p_elem in child.findall(".//a:p", namespaces=NS):
-                    para = self._parse_paragraph(
+                for p_elem in child.findall("p:txBody/a:p", namespaces=NS):
+                    blocks = self._paragraph_blocks(
                         p_elem,
                         slide_number,
                         slide_path,
@@ -322,9 +339,13 @@ class PPTXReader:
                         heading_level=heading_level,
                         bullet_counts=bullet_counts,
                     )
-                    if para.text.strip():
-                        positioned.append((absolute_y, absolute_x, ordinal, para))
+                    for block in blocks:
+                        positioned.append((absolute_y, absolute_x, ordinal, block))
                         added_text = True
+                for reference in self._media_references(child, relationships, slide_number):
+                    positioned.append((absolute_y, absolute_x, ordinal,
+                                       self._text_paragraph(reference, slide_number, slide_path)))
+                    added_text = True
                 if not added_text:
                     alt_text = self._shape_alt_text(child)
                     if alt_text:
@@ -342,6 +363,10 @@ class PPTXReader:
                 absolute_x = base_x + x * scale_x
                 absolute_y = base_y + y * scale_y
                 ordinal = ordinal_ref[0]
+                media_references = self._media_references(child, relationships, slide_number)
+                for reference in media_references:
+                    positioned.append((absolute_y, absolute_x, ordinal,
+                                       self._text_paragraph(reference, slide_number, slide_path)))
                 image_reference = self._picture_reference(child, relationships, slide_number)
                 if image_reference:
                     positioned.append(
@@ -352,7 +377,7 @@ class PPTXReader:
                             self._text_paragraph(image_reference, slide_number, slide_path),
                         )
                     )
-                else:
+                elif not media_references:
                     alt_text = self._shape_alt_text(child)
                     if alt_text:
                         positioned.append(
@@ -373,7 +398,7 @@ class PPTXReader:
                     table = self._parse_table(table_elem, slide_number, slide_path, relationships)
                     if table.rows:
                         positioned.append((absolute_y, absolute_x, ordinal, table))
-                for chart_elem in child.findall(".//c:chart", namespaces=NS):
+                for chart_elem in self._graphic_chart_references(child):
                     for offset, element in enumerate(
                         self._parse_chart(chart_elem, package, slide_number, slide_path, relationships)
                     ):
@@ -383,6 +408,14 @@ class PPTXReader:
                 ):
                     positioned.append((absolute_y, absolute_x, ordinal + offset / 1000, element))
                 ordinal_ref[0] += 1
+            elif child.tag == f"{{{MC_NS}}}AlternateContent":
+                branch = self._alternate_branch(child)
+                if branch is not None:
+                    self._collect_positioned_elements(
+                        package, branch, slide_number, slide_path, relationships,
+                        positioned, ordinal_ref, base_x, base_y, scale_x, scale_y,
+                        skip_placeholder_shapes, depth + 1,
+                    )
             elif child.tag == f"{{{P_NS}}}grpSp":
                 transform = self._group_transform(child)
                 self._collect_positioned_elements(
@@ -400,6 +433,158 @@ class PPTXReader:
                     skip_placeholder_shapes=skip_placeholder_shapes,
                     depth=depth + 1,
                 )
+
+    def _alternate_branch(self, elem):
+        supported = {P_NS, A_NS, C_NS, CX_NS, DGM_NS, M_NS, A14_NS, P14_NS,
+                     "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex"}
+        for choice in elem.findall("{%s}Choice" % MC_NS):
+            prefixes = choice.get("Requires", "").split()
+            if prefixes and all(choice.nsmap.get(prefix) in supported for prefix in prefixes):
+                return choice
+        return elem.find("{%s}Fallback" % MC_NS)
+
+    def _graphic_chart_references(self, container, depth=0):
+        if depth > MAX_GROUP_DEPTH:
+            warning = "WARN: PPTX graphic wrapper depth limit exceeded"
+            if warning not in self._errors:
+                self._errors.append(warning)
+            return
+        for child in container:
+            if child.tag in {"{%s}chart" % C_NS, "{%s}chart" % CX_NS}:
+                yield child
+            elif child.tag == "{%s}AlternateContent" % MC_NS:
+                branch = self._alternate_branch(child)
+                if branch is not None:
+                    yield from self._graphic_chart_references(branch, depth + 1)
+            else:
+                yield from self._graphic_chart_references(child, depth + 1)
+
+    def _paragraph_blocks(self, p_elem, slide_number, slide_path, relationships, **kwargs):
+        """OMML 을 문단의 앞뒤 텍스트 사이에 기존 Equation 모델로 보존한다."""
+        blocks = []
+        chunk = etree.Element(p_elem.tag)
+
+        def flush():
+            if not any(child.tag != "{%s}pPr" % A_NS for child in chunk):
+                return
+            para = self._parse_paragraph(chunk, slide_number, slide_path, relationships, **kwargs)
+            if para.text.strip():
+                blocks.append(para)
+            chunk.clear()
+
+        def visit(container, depth=0):
+            if depth > MAX_GROUP_DEPTH:
+                warning = "WARN: PPTX paragraph wrapper depth limit exceeded"
+                if warning not in self._errors:
+                    self._errors.append(warning)
+                return
+            for child in container:
+                if child.tag == "{%s}pPr" % A_NS:
+                    continue
+                if child.tag == "{%s}AlternateContent" % MC_NS:
+                    branch = self._alternate_branch(child)
+                    if branch is not None:
+                        visit(branch, depth + 1)
+                elif child.tag in {"{%s}m" % A14_NS, "{%s}oMath" % M_NS,
+                                   "{%s}oMathPara" % M_NS}:
+                    flush()
+                    latex = omml_to_latex(child)
+                    if latex.strip():
+                        blocks.append(Equation(script="".join(child.itertext()), latex_override=latex))
+                else:
+                    chunk.append(deepcopy(child))
+
+        visit(p_elem)
+        flush()
+        # 번호는 텍스트 조각이 아니라 원본 문단당 한 번만 소비한다.
+        prefix = self._bullet_prefix(p_elem, kwargs.get("bullet_counts"))
+        if prefix and blocks:
+            if isinstance(blocks[0], Paragraph):
+                blocks[0].runs.insert(0, TextRun(text=prefix + " ",
+                                               provenance=blocks[0].provenance))
+            else:
+                blocks.insert(0, self._text_paragraph(prefix, slide_number, slide_path))
+        return blocks
+
+    def _media_references(self, shape, relationships, slide_number):
+        """미디어의 호환용 이중 관계는 대상 경로 기준으로 한 번만 낸다."""
+        tags = {"{%s}videoFile" % A_NS: "video", "{%s}videoFile" % P_NS: "video",
+                "{%s}audioFile" % A_NS: "audio", "{%s}audioFile" % P_NS: "audio",
+                "{%s}media" % P14_NS: "media"}
+        nodes = []
+        for node in shape.iter():
+            if node.tag in tags:
+                if len(nodes) >= MAX_MEDIA_ASSET_REFS:
+                    warning = "WARN: PPTX media reference limit exceeded"
+                    if warning not in self._errors:
+                        self._errors.append(warning)
+                    break
+                nodes.append(node)
+        kinds = {relationships.get(_r_attr(n, "link") or _r_attr(n, "embed"), ""): tags[n.tag]
+                 for n in nodes if tags[n.tag] != "media"}
+        seen = set()
+        references = []
+        for node in nodes:
+            rel_id = _r_attr(node, "embed") or _r_attr(node, "link")
+            target = relationships.get(rel_id, "")
+            if not target or target in seen:
+                continue
+            seen.add(target)
+            source_path = target.lstrip("#")
+            kind = kinds.get(target, tags[node.tag])
+            label = self._shape_label(shape) or kind
+            references.append("[%s](%s)" % (label, source_path))
+            if not target.startswith("#") or source_path in self._media_asset_ids:
+                continue
+            if len(self._media_asset_ids) >= MAX_MEDIA_ASSET_REFS:
+                warning = "WARN: PPTX media asset reference limit exceeded"
+                if warning not in self._errors:
+                    self._errors.append(warning)
+                continue
+            try:
+                missing = not self._package.exists(source_path)
+            except ValueError:
+                self._errors.append("WARN: PPTX unsafe media target: " + _bounded_diagnostic_path(source_path))
+                continue
+            self._media_asset_ids.add(source_path)
+            content_type = self._media_content_type(source_path)
+            if kind == "media":
+                kind = content_type.split("/", 1)[0] if content_type.startswith(("audio/", "video/")) else "media"
+            self._assets.append(AssetRef(
+                id=rel_id, source_path=source_path, filename=posixpath.basename(source_path),
+                content_type=content_type,
+                metadata={"kind": kind, "label": label, "missing": missing,
+                          "source_format": "pptx", "slide": slide_number},
+            ))
+            if missing:
+                self._errors.append("WARN: PPTX media part not found: " + _bounded_diagnostic_path(source_path))
+        return references
+
+    def _media_content_type(self, source_path):
+        package = self._package
+        extension = posixpath.splitext(source_path)[1].lstrip(".").lower()
+        if self._media_content_types is None:
+            defaults, overrides = {}, {}
+            self._media_content_types = (defaults, overrides)
+            if package.exists("[Content_Types].xml"):
+                try:
+                    root = package.read_xml_part("[Content_Types].xml")
+                    for node in root:
+                        content_type = node.get("ContentType", "application/octet-stream")
+                        if node.get("PartName"):
+                            overrides[node.get("PartName").lstrip("/")] = content_type
+                        elif node.get("Extension"):
+                            defaults[node.get("Extension").lower()] = content_type
+                except (ValueError, etree.XMLSyntaxError):
+                    self._errors.append("WARN: PPTX media content types could not be read")
+        defaults, overrides = self._media_content_types
+        if source_path in overrides:
+            return overrides[source_path]
+        if extension in defaults:
+            return defaults[extension]
+        return {"mp4": "video/mp4", "mp3": "audio/mpeg", "wav": "audio/wav",
+                "m4a": "audio/mp4", "wmv": "video/x-ms-wmv", "avi": "video/x-msvideo"}.get(
+                    extension, "application/octet-stream")
 
     def _picture_reference(self, pic_elem, relationships: Dict[str, str], slide_number: int) -> str:
         blip = pic_elem.find(".//a:blip", namespaces=NS)
@@ -792,10 +977,12 @@ class PPTXReader:
             row = []
             for col_idx, tc_elem in enumerate(tr_elem.findall("a:tc", namespaces=NS)):
                 paragraphs = []
-                for p_elem in tc_elem.findall(".//a:p", namespaces=NS):
-                    para = self._parse_paragraph(p_elem, slide_number, slide_path, relationships)
-                    if para.text.strip():
-                        paragraphs.append(para)
+                bullet_counts = {}
+                for p_elem in tc_elem.findall("a:txBody/a:p", namespaces=NS):
+                    paragraphs.extend(self._paragraph_blocks(
+                        p_elem, slide_number, slide_path, relationships,
+                        bullet_counts=bullet_counts,
+                    ))
                 row.append(
                     Cell(
                         paragraphs=paragraphs,
@@ -827,14 +1014,44 @@ class PPTXReader:
         relationships: Dict[str, str],
     ) -> List[object]:
         chart_path = relationships.get(_r_attr(chart_elem, "id"), "").lstrip("#")
-        if not chart_path or not package.exists(chart_path):
+        if not chart_path:
             return []
-        chart_root = package.read_xml_part(chart_path)
-        return chart_elements(
-            chart_root,
-            self._chart_series_table(chart_root),
-            lambda text: self._text_paragraph(text, slide_number, chart_path),
-        )
+        if self._chart_references_remaining <= 0:
+            warning = "WARN: PPTX chart reference limit exceeded"
+            if warning not in self._errors:
+                self._errors.append(warning)
+            return []
+        self._chart_references_remaining -= 1
+        try:
+            if not package.exists(chart_path):
+                self._errors.append("WARN: PPTX chart part not found: " + _bounded_diagnostic_path(chart_path))
+                return []
+            roots = self._chart_roots
+            if chart_path not in roots:
+                # 실패한 파트도 캐시하여 반복 참조가 같은 압축/파싱을 반복하지 않는다.
+                roots[chart_path] = None
+                size = package.part_size(chart_path)
+                if self._chart_bytes_total + size > MAX_CHART_BYTES_TOTAL:
+                    self._errors.append("WARN: PPTX chart byte limit exceeded")
+                    return []
+                self._chart_bytes_total += size
+                chart_root = normalize_chart(package.read_xml_part(chart_path), self._errors)
+                hydrate_chart_references(chart_root, package, chart_path, self._errors)
+                roots[chart_path] = chart_root
+            chart_root = roots[chart_path]
+            if chart_root is None:
+                return []
+            return chart_elements(
+                chart_root,
+                self._chart_series_table(chart_root),
+                lambda text: self._text_paragraph(text, slide_number, chart_path),
+            )
+        except (KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+            self._errors.append(
+                "WARN: PPTX chart could not be read: %s (%s)" %
+                (_bounded_diagnostic_path(chart_path), type(exc).__name__)
+            )
+            return []
 
     def _parse_smartart(
         self,
@@ -872,6 +1089,7 @@ class PPTXReader:
             return Table()
         series_items = []
         implicit_x = []
+        sizes = []
         xy = False
         for series in chart_series(chart_root):
             if not self._reserve_chart_resource(
@@ -888,17 +1106,22 @@ class PPTXReader:
             implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
+            sizes.append(self._chart_points(series, "c:bubbleSize"))
             if getattr(self, "_chart_budget_exhausted", False):
                 return Table()
             series_items.append((series_name, categories, values))
         if not series_items:
             return Table()
 
-        long_rows = xy_series_rows(series_items, xy, implicit_x)
+        if not any(values for _, _, values in series_items) and not any(sizes):
+            return Table()
+        long_rows = bubble_series_rows(series_items, sizes, implicit_x)
+        if long_rows is None:
+            long_rows = xy_series_rows(series_items, xy, implicit_x)
         if long_rows is not None:
             if not self._reserve_chart_resource(
                 "_chart_output_cells_remaining",
-                3 * len(long_rows),
+                len(long_rows[0]) * len(long_rows),
                 MAX_CHART_OUTPUT_CELLS,
                 "output cell",
             ):
@@ -913,6 +1136,8 @@ class PPTXReader:
             for index, category in categories.items():
                 category_labels.setdefault(index, category)
 
+        if not indexes:
+            return Table()
         output_cells = (len(indexes) + 1) * (len(series_items) + 1)
         if not self._reserve_chart_resource(
             "_chart_output_cells_remaining",

@@ -2,6 +2,7 @@
 import posixpath
 import re
 import zipfile
+import zlib
 from typing import List
 
 from lxml import etree
@@ -95,6 +96,8 @@ class OOXMLPackage:
         if self._zip:
             self._zip.close()
         self._zip = None
+        # 차트 resolver가 보관한 내장 ZIP 바이트와 희소 셀 캐시도 문서와 함께 해제한다.
+        self._chart_reference_state = None
 
     def namelist(self) -> List[str]:
         return self._zip.namelist()
@@ -125,7 +128,10 @@ class OOXMLPackage:
             raise ValueError(f"package part too large: {safe_name}")
         if info.compress_size > 0 and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO:
             raise ValueError(f"package part compression ratio too high: {safe_name}")
-        return self._zip.read(stored_name)
+        try:
+            return self._zip.read(stored_name)
+        except (zlib.error, RuntimeError, NotImplementedError, EOFError) as exc:
+            raise ValueError(f"package part could not be decoded: {safe_name}: {exc}") from exc
 
     def read_xml_part(self, name: str, recover: bool = False):
         if self.part_size(name) > MAX_XML_PART_SIZE:

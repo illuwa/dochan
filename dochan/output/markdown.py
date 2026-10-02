@@ -60,6 +60,10 @@ def to_markdown(doc: Document) -> str:
     parts = []
     ctx = _MdContext()
     include_sheet_headings = _should_include_sheet_headings(doc)
+    force_sheet_headings = include_sheet_headings and any(
+        getattr(getattr(section, 'provenance', None), 'hidden', False)
+        for section in doc.sections
+    )
     include_slide_headings = _should_include_slide_headings(doc)
 
     for section in doc.sections:
@@ -69,7 +73,7 @@ def to_markdown(doc: Document) -> str:
                 md = _element_to_md(elements.pop(0), ctx)
                 if md:
                     parts.append(md)
-            sheet_heading = _sheet_heading(section)
+            sheet_heading = _sheet_heading(section, force=force_sheet_headings)
             if sheet_heading:
                 parts.append(sheet_heading)
         elif include_slide_headings:
@@ -90,12 +94,19 @@ def to_markdown(doc: Document) -> str:
 def _should_include_sheet_headings(doc: Document) -> bool:
     if doc.source_format not in {"xlsx", "xls"}:
         return False
-    return any(_is_meaningful_sheet_name(_sheet_name(section)) for section in doc.sections)
+    return any(_is_meaningful_sheet_name(_sheet_name(section)) or
+               getattr(getattr(section, "provenance", None), "hidden", False)
+               for section in doc.sections)
 
 
-def _sheet_heading(section) -> str:
+def _sheet_heading(section, force=False) -> str:
     name = _sheet_name(section)
-    return f"## {name}" if _is_meaningful_sheet_name(name) else ""
+    provenance = getattr(section, "provenance", None)
+    if name and getattr(provenance, "hidden", False):
+        state = "veryHidden" if getattr(provenance, "visibility", 0) == 2 else "hidden"
+        # 이름에 들어 있는 괄호/대괄호와 구별되는 별도 메타데이터 줄이다.
+        return f"## {name}\n\n*Sheet visibility: {state}*"
+    return f"## {name}" if name and (force or _is_meaningful_sheet_name(name)) else ""
 
 
 def _sheet_name(section) -> str:
@@ -280,6 +291,8 @@ def _with_caption(rendered: str, elem) -> str:
     if not caption or not caption.strip():
         return rendered
     text = ' '.join(caption.split())
+    # 캡션은 모델의 평문이다. 강조 안에서 원문 기호가 새 서식이 되지 않게 한다.
+    text = ''.join('\\' + char if char in '\\`*_~' else char for char in text)
     line = f"*{text}*"
     # LEFT 는 TOP 과, RIGHT 는 BOTTOM 과 같이 취급한다 (Markdown 에 좌우 개념이 없다).
     side = (getattr(elem, 'caption_side', '') or 'BOTTOM').upper()

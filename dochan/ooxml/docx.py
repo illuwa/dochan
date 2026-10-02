@@ -1,5 +1,6 @@
 """Native DOCX reader."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from copy import deepcopy
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
@@ -18,6 +19,7 @@ from ..model.header_footer import Comment, Footnote, HeaderFooter
 from ..model.image import Image
 from ..model.table import Cell, Table
 from .package import OOXMLPackage
+from .math import _omml_to_latex
 
 # 문서당 이미지 바이너리 추출 총량 상한 (메모리 방어)
 _MAX_IMAGE_BYTES_TOTAL = 100 * 1024 * 1024
@@ -52,6 +54,8 @@ MAX_NUMBERING_LEVEL = 8
 MAX_NUMBERING_TEMPLATE_CHARS = 256
 MAX_IMAGE_ASSET_REFS = 10000
 MAX_DIAGNOSTIC_PATH_CHARS = 256
+MAX_DOCUMENT_CHARTS = 128
+MAX_CHART_BYTES_TOTAL = 64 * 1024 * 1024
 _STRUCTURE_DEPTH_ERROR = (
     f"ERR: DOCX structure depth limit exceeded ({MAX_STRUCTURE_DEPTH})"
 )
@@ -230,6 +234,12 @@ class DOCXReader:
         self._image_asset_limit_reported = False
         self._assets = []
         self._image_elements = []
+        self._image_occurrences = 0
+        self._caption_styles = set()
+        self._chart_parts = {}
+        self._chart_occurrences = 0
+        from .xlsx import MAX_CHART_OUTPUT_CELLS
+        self._chart_output_remaining = MAX_CHART_OUTPUT_CELLS
         self._image_bytes_total = 0
         self._table_cell_budget = MAX_TABLE_CELLS
         self._active_document_errors = doc.errors
@@ -243,6 +253,7 @@ class DOCXReader:
                 self._image_data_cache = self._preload_image_bytes(package)
                 self._record_embedded_relationship_assets(package)
                 self._paragraph_styles = self._read_paragraph_styles(package)
+                self._chart_parts = self._read_chart_parts(package)
                 self._run_styles = self._read_run_styles(package)
                 numbering = self._read_numbering(package)
                 self._notes = {
@@ -287,13 +298,31 @@ class DOCXReader:
             if comment and comment.text.strip():
                 section.elements.append(comment)
 
-        section.elements.extend(getattr(self, "_image_elements", []))
+        section.elements.extend(image for image in getattr(self, "_image_elements", [])
+                                if not getattr(image, "_anchored", False))
         doc.assets = getattr(self, "_assets", [])
         doc.sections.append(section)
+        self._release_source_elements(doc)
         self._package = None
         self._active_relationships = {}
         self._alt_chunk_data = {}
         return doc
+
+    def _release_source_elements(self, doc):
+        """캡션 결합이 끝나면 모델에 임시로 붙인 XML 참조를 제거한다."""
+        stack = [doc]
+        seen = set()
+        while stack:
+            value = stack.pop()
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            if isinstance(value, (list, tuple)):
+                stack.extend(value)
+            elif hasattr(value, "__dict__"):
+                value.__dict__.pop("_source_element", None)
+                value.__dict__.pop("_image_target", None)
+                stack.extend(value.__dict__.values())
 
     def _parse_block_elements(
         self,
@@ -314,8 +343,7 @@ class DOCXReader:
                 )
                 self._apply_numbering(para, child, numbering)
                 paragraph_index_ref[0] += 1
-                if para.text.strip():
-                    elements.append(para)
+                elements.extend(self._paragraph_flow(para))
                 elements.extend(self._equations_in(child))
             elif child.tag in (f"{{{M_NS}}}oMathPara", f"{{{M_NS}}}oMath"):
                 elements.extend(self._equations_in(child, include_self=True))
@@ -324,13 +352,10 @@ class DOCXReader:
                 paragraph_index_ref[0] += len(alt_chunk_elements)
                 elements.extend(alt_chunk_elements)
             elif child.tag == f"{{{W_NS}}}tbl":
-                elements.append(
-                    self._parse_table(
-                        child,
-                        paragraph_index_ref[0],
-                        structure_depth=depth,
-                    )
-                )
+                table = self._parse_table(
+                    child, paragraph_index_ref[0], structure_depth=depth)
+                table._source_element = child
+                elements.append(table)
             elif child.tag in (
                 f"{{{W_NS}}}sdt",
                 f"{{{W_NS}}}sdtContent",
@@ -352,7 +377,123 @@ class DOCXReader:
                         preferred, paragraph_index_ref, numbering, depth + 1,
                     )
                 )
+        return self._attach_captions(elements)
+
+    def _paragraph_flow(self, para):
+        """문단 안 차트/이미지를 앵커에서 펼치고 원래 런 순서를 보존한다."""
+        elements = []
+        runs = []
+        for run in para.runs:
+            flow = getattr(run, "_flow_elements", None)
+            if flow is None:
+                runs.append(run)
+                continue
+            if any(r.text.strip() for r in runs):
+                preceding = replace(para, runs=runs, heading_level=para.heading_level if not elements else 0)
+                preceding._source_element = getattr(para, "_source_element", None)
+                if len(flow) == 1 and isinstance(flow[0], Image):
+                    preceding._image_target = flow[0]
+                elements.append(preceding)
+            runs = []
+            for item in flow:
+                if isinstance(item, Image):
+                    item._source_element = getattr(para, "_source_element", None)
+                    item._anchored = True
+            elements.extend(flow)
+            if run.text:
+                runs.append(replace(run))
+        if any(r.text.strip() for r in runs):
+            trailing = replace(para, runs=runs, heading_level=para.heading_level if not elements else 0)
+            trailing._source_element = getattr(para, "_source_element", None)
+            elements.append(trailing)
+        kind = getattr(para, "_caption_kind", "")
+        if kind and len(elements) == 1 and isinstance(elements[0], Paragraph):
+            elements[0]._caption_kind = kind
         return elements
+
+    def _caption_kind(self, elem):
+        instructions = ["".join(n.text or "" for n in elem.findall(".//w:instrText", namespaces=NS))]
+        instructions.extend(_w_attr(n, "instr") for n in elem.findall(".//w:fldSimple", namespaces=NS))
+        for instruction in instructions:
+            match = re.search(r"\bSEQ\s+(?:\"([^\"]+)\"|([^\s\\]+))", instruction, re.I)
+            if match:
+                name = (match.group(1) or match.group(2)).casefold()
+                if name in {"table", "표"}:
+                    return "table"
+                if name in {"figure", "그림"}:
+                    return "image"
+                return "" if name in {"equation", "수식"} else "any"
+        style = _w_attr(elem.find("w:pPr/w:pStyle", namespaces=NS), "val")
+        visited = set()
+        while style and style not in visited and len(visited) < MAX_STRUCTURE_DEPTH:
+            visited.add(style)
+            if style.casefold() == "caption" or style in getattr(self, "_caption_styles", set()):
+                return "any"
+            style = getattr(self, "_paragraph_styles", {}).get(style, "")
+        return ""
+
+    def _attach_captions(self, elements):
+        remove = set()
+        for index, elem in enumerate(elements):
+            kind = getattr(elem, "_caption_kind", "")
+            if not kind:
+                continue
+            candidates = []
+            for offset, side in ((-1, "BOTTOM"), (1, "TOP")):
+                position = index + offset
+                if 0 <= position < len(elements):
+                    target = elements[position]
+                    target = getattr(target, "_image_target", target)
+                    if isinstance(target, (Table, Image)) and not target.caption and (kind == "any" or
+                            kind == "table" and isinstance(target, Table) or
+                            kind == "image" and isinstance(target, Image)):
+                        source = getattr(elem, "_source_element", None)
+                        target_source = getattr(target, "_source_element", None)
+                        if source is not None and target_source is not None:
+                            if self._caption_neighbor(source, offset) is not target_source:
+                                continue
+                        candidates.append((target, side))
+            # 두 대상 사이의 모호한 캡션은 추측해 옮기지 않는다.
+            if len(candidates) == 1 and not candidates[0][0].caption:
+                target, side = candidates[0]
+                target.caption = [elem]
+                target.caption_side = side
+                remove.add(index)
+        return [elem for index, elem in enumerate(elements) if index not in remove]
+
+    def _caption_neighbor(self, source, direction):
+        """투명 래퍼만 건너뛰고 빈 문단을 포함한 실제 다음 블록을 찾는다."""
+        wrappers = {f"{{{W_NS}}}{name}" for name in
+                    ("sdt", "sdtContent", "smartTag", "ins", "moveTo")}
+        wrappers.update({f"{{{MC_NS}}}Choice", f"{{{MC_NS}}}Fallback"})
+
+        def edge(node):
+            if node.tag == f"{{{MC_NS}}}AlternateContent":
+                return edge(self._alternate_content_preferred_child(node))
+            if node.tag in wrappers:
+                children = list(node)
+                for child in children if direction > 0 else reversed(children):
+                    candidate = edge(child)
+                    if candidate is not None:
+                        return candidate
+                return None
+            if node.tag in {f"{{{W_NS}}}sdtPr", f"{{{W_NS}}}sdtEndPr",
+                            f"{{{W_NS}}}del", f"{{{W_NS}}}moveFrom"}:
+                return None
+            return node
+
+        current = source
+        while current is not None:
+            sibling = current.getnext() if direction > 0 else current.getprevious()
+            while sibling is not None:
+                candidate = edge(sibling)
+                if candidate is not None:
+                    return candidate
+                sibling = sibling.getnext() if direction > 0 else sibling.getprevious()
+            current = current.getparent()
+            if current is None or current.tag not in wrappers | {f"{{{MC_NS}}}AlternateContent"}:
+                return None
+        return None
 
     def _structure_depth_allowed(self, depth: int) -> bool:
         if depth <= MAX_STRUCTURE_DEPTH:
@@ -411,7 +552,9 @@ class DOCXReader:
                 path=path,
             )
         )
+        para._source_element = p_elem
         para.heading_level = self._heading_level(p_elem)
+        para._caption_kind = self._caption_kind(p_elem)
         para.runs = self._parse_runs(p_elem, structure_depth)
         for run in para.runs:
             if run.provenance is None:
@@ -697,12 +840,16 @@ class DOCXReader:
             return {}
         root = package.read_xml_part("word/styles.xml")
         styles = {}
+        self._caption_styles = set()
         for style in root.findall("w:style", namespaces=NS):
             if _w_attr(style, "type") != "paragraph":
                 continue
             style_id = _w_attr(style, "styleId")
             if not style_id:
                 continue
+            name = _w_attr(style.find("w:name", namespaces=NS), "val")
+            if name.casefold() == "caption":
+                self._caption_styles.add(style_id)
             based_on = _w_attr(style.find("w:basedOn", namespaces=NS), "val")
             styles[style_id] = based_on
         return styles
@@ -760,7 +907,7 @@ class DOCXReader:
                 )
                 if resolved:
                     relationships[rel_id] = resolved
-            elif rel_type.endswith("/image"):
+            elif rel_type.endswith("/image") or rel_type.endswith("/chart") or rel_type.endswith("/chartEx"):
                 resolved = self._validated_internal_relationship_target(
                     "word", target, rels_path, rel_id,
                 )
@@ -779,6 +926,76 @@ class DOCXReader:
                 if resolved:
                     relationships[rel_id] = resolved
         return relationships
+
+    def _read_chart_parts(self, package):
+        targets = [target for target in dict.fromkeys(self._document_relationships.values())
+                   if target.startswith("word/charts/") and target.endswith(".xml")]
+        if not targets:
+            return {}
+        from .charts import chart_elements, hydrate_chart_references, normalize_chart
+        from .xlsx import XLSXReader
+        result = {}
+        total = 0
+        reader = XLSXReader()
+        reader._errors = self._active_document_errors
+        for target in targets:
+            if len(result) >= MAX_DOCUMENT_CHARTS:
+                self._active_document_errors.append("WARN: DOCX chart count limit exceeded")
+                break
+            try:
+                size = package.part_size(target)
+                if total + size > MAX_CHART_BYTES_TOTAL:
+                    self._active_document_errors.append("WARN: DOCX chart byte limit exceeded")
+                    break
+                total += size
+                root = normalize_chart(package.read_xml_part(target), self._active_document_errors)
+                hydrate_chart_references(root, package, target, self._active_document_errors)
+                table = reader._chart_series_table(root)
+                def paragraph(text):
+                    return Paragraph(runs=[TextRun(text=text)], provenance=Provenance(
+                        source_format="docx", section=0, path=target))
+                result[target] = chart_elements(root, table, paragraph)
+            except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+                self._active_document_errors.append("WARN: DOCX chart skipped: %s: %s" % (target, exc))
+                result[target] = []
+        return result
+
+    def _chart_warning(self, warning):
+        if warning not in self._active_document_errors:
+            self._active_document_errors.append(warning)
+
+    def _chart_blocks_in(self, elem):
+        blocks = []
+        stack = [elem]
+        while stack:
+            node = stack.pop()
+            if node.tag == "{%s}AlternateContent" % MC_NS:
+                preferred = self._alternate_content_preferred_child(node)
+                if preferred is not node:
+                    stack.append(preferred)
+                    continue
+            if (isinstance(node.tag, str) and etree.QName(node).localname == "chart" and
+                    etree.QName(node).namespace in {
+                        "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                        "http://schemas.microsoft.com/office/drawing/2014/chartex"}):
+                target = getattr(self, "_active_relationships", {}).get(_r_attr(node, "id"), "")
+                template = getattr(self, "_chart_parts", {}).get(target, [])
+                if not template:
+                    continue
+                if self._chart_occurrences >= MAX_DOCUMENT_CHARTS:
+                    self._chart_warning("WARN: DOCX chart count limit exceeded")
+                    continue
+                cells = sum(len(row) for block in template if isinstance(block, Table)
+                            for row in block.rows)
+                if cells > self._chart_output_remaining:
+                    self._chart_warning("WARN: DOCX chart output cell budget exceeded")
+                    continue
+                self._chart_occurrences += 1
+                self._chart_output_remaining -= cells
+                blocks.extend(deepcopy(template))
+            else:
+                stack.extend(reversed(list(node)))
+        return blocks
 
     def _read_part_relationships(self, package: OOXMLPackage, part_path: str) -> Dict[str, str]:
         rels_path = self._relationships_path(part_path)
@@ -1141,6 +1358,12 @@ class DOCXReader:
                 f"{{{W_NS}}}fldSimple",
             ):
                 runs.extend(self._parse_runs(child, depth + 1))
+        for previous, current in zip(runs, runs[1:]):
+            if (previous.text and current.text and
+                    (getattr(previous, "_textbox_end", False) or
+                     getattr(current, "_textbox_start", False)) and
+                    not previous.text[-1].isspace() and not current.text[0].isspace()):
+                current.text = " " + current.text
         return runs
 
     def _run_comment_reference_ids(self, r_elem) -> set:
@@ -1171,9 +1394,20 @@ class DOCXReader:
         text_parts = []
 
         def flush_text():
-            text = "".join(text_parts)
+            text = ""
+            boundary = False
+            for piece in text_parts:
+                if piece is None:
+                    boundary = True
+                    continue
+                if boundary and text and piece and not text[-1].isspace() and not piece[0].isspace():
+                    text += " "
+                text += piece
+                if piece:
+                    boundary = False
             if text:
-                segments.append((text, "", None))
+                edges = (text_parts[0] is None, text_parts[-1] is None)
+                segments.append((text, "textbox_text", edges))
             text_parts.clear()
 
         for child in r_elem:
@@ -1207,15 +1441,15 @@ class DOCXReader:
                     flush_text()
                     segments.append((f"[comment {number}]", "comment", number))
             else:
-                text_parts.extend(self._textbox_texts(child, depth + 1))
-                image_reference = self._image_reference(child)
-                if image_reference:
-                    text_parts.append(image_reference)
-                for doc_pr in child.findall(".//wp:docPr", namespaces=NS):
-                    alt_parts = [doc_pr.get("title", ""), doc_pr.get("descr", "")]
-                    alt_text = " ".join(part for part in alt_parts if part)
-                    if alt_text:
-                        text_parts.append(alt_text)
+                for drawing_run in self._drawing_runs(child, depth + 1):
+                    flow = getattr(drawing_run, "_flow_elements", None)
+                    if getattr(drawing_run, "_text_boundary", False):
+                        text_parts.append(None)
+                    elif flow is not None:
+                        flush_text()
+                        segments.append(("", "flow", flow))
+                    elif drawing_run.text:
+                        text_parts.append(drawing_run.text)
 
         flush_text()
         if not segments:
@@ -1224,11 +1458,20 @@ class DOCXReader:
         r_pr = r_elem.find("w:rPr", namespaces=NS)
         runs = []
         for text, note_type, note_number in segments:
+            if note_type == "flow":
+                run = TextRun(text="")
+                run._flow_elements = note_number
+                runs.append(run)
+                continue
+            textbox_edges = note_number if note_type == "textbox_text" else (False, False)
+            if note_type == "textbox_text":
+                note_type, note_number = "", None
             run = TextRun(
                 text=text,
                 note_reference_type=note_type,
                 note_reference_number=note_number,
             )
+            run._textbox_start, run._textbox_end = textbox_edges
             # Markdown 렌더러는 note_ref 로 각주 참조를 그린다. 두 표현을 함께 채워
             # 의미 필드(note_reference_*)와 렌더 필드가 어긋나지 않게 한다.
             if note_number is not None and note_type in ('footnote', 'endnote'):
@@ -1257,6 +1500,61 @@ class DOCXReader:
             runs.append(run)
         return runs
 
+    def _drawing_runs(self, elem, depth):
+        """그룹 도형의 텍스트·차트·이미지를 선택된 XML 갈래에서 한 번 읽는다."""
+        stack = [elem]
+        anchored = elem.find(".//wp:anchor", namespaces=NS) is not None
+        while stack:
+            node = stack.pop()
+            if node.tag == f"{{{MC_NS}}}AlternateContent":
+                preferred = self._alternate_content_preferred_child(node)
+                if preferred is not node:
+                    stack.append(preferred)
+                    continue
+            if node.tag == f"{{{W_NS}}}txbxContent":
+                paragraphs = []
+                for p_elem, paragraph_depth in self._textbox_paragraphs(node, depth):
+                    runs = self._parse_runs(p_elem, paragraph_depth)
+                    if runs:
+                        paragraphs.append(runs)
+                if paragraphs:
+                    boundary = TextRun()
+                    boundary._text_boundary = True
+                    yield boundary
+                for index, runs in enumerate(paragraphs):
+                    # 기존 텍스트박스의 문단 줄바꿈 및 호스트 런 서식을 유지한다.
+                    for run in runs:
+                        yield run
+                    if index < len(paragraphs) - 1 or anchored:
+                        yield TextRun(text="\n")
+                if paragraphs:
+                    yield boundary
+                continue
+            if isinstance(node.tag, str) and etree.QName(node).localname == "chart":
+                blocks = self._chart_blocks_in(node)
+                if blocks:
+                    run = TextRun()
+                    run._flow_elements = blocks
+                    yield run
+                continue
+            if node.tag in {f"{{{A_NS}}}blip", f"{{{V_NS}}}imagedata"}:
+                image_start = len(getattr(self, "_image_elements", []))
+                reference = self._image_reference(node)
+                if reference:
+                    yield TextRun(text=reference)
+                images = getattr(self, "_image_elements", [])[image_start:]
+                if images:
+                    run = TextRun()
+                    run._flow_elements = images
+                    yield run
+                continue
+            if node.tag == f"{{{WP_NS}}}docPr":
+                alt = " ".join(part for part in (node.get("title", ""), node.get("descr", "")) if part)
+                if alt:
+                    yield TextRun(text=alt)
+                continue
+            stack.extend(reversed(list(node)))
+
     def _textbox_texts(self, elem, depth: int = 0) -> List[str]:
         search_root = self._alternate_content_preferred_child(elem)
         textboxes = self._outermost_textbox_contents(search_root)
@@ -1266,9 +1564,9 @@ class DOCXReader:
         anchored = search_root.find(".//wp:anchor", namespaces=NS) is not None
         for textbox in textboxes:
             paragraph_texts = []
-            for p_elem in textbox.findall("w:p", namespaces=NS):
+            for p_elem, paragraph_depth in self._textbox_paragraphs(textbox, depth):
                 text = "".join(
-                    run.text for run in self._parse_runs(p_elem, depth)
+                    run.text for run in self._parse_runs(p_elem, paragraph_depth)
                 ).strip()
                 if text:
                     paragraph_texts.append(text)
@@ -1276,6 +1574,20 @@ class DOCXReader:
                 text = "\n".join(paragraph_texts)
                 texts.append(f"{text}\n" if anchored else text)
         return texts
+
+    def _textbox_paragraphs(self, container, depth):
+        if not self._structure_depth_allowed(depth):
+            return
+        wrappers = {f"{{{W_NS}}}{name}" for name in
+                    ("sdt", "sdtContent", "smartTag", "ins", "moveTo", "tbl", "tr", "tc")}
+        for child in container:
+            if child.tag == f"{{{W_NS}}}p":
+                yield child, depth
+            elif child.tag in wrappers:
+                yield from self._textbox_paragraphs(child, depth + 1)
+            elif child.tag == f"{{{MC_NS}}}AlternateContent":
+                yield from self._textbox_paragraphs(
+                    self._alternate_content_preferred_child(child), depth + 1)
 
     def _outermost_textbox_contents(self, elem) -> List[object]:
         textboxes = []
@@ -1339,7 +1651,7 @@ class DOCXReader:
         run.subscript = run.subscript or style.subscript
 
     def _image_reference(self, elem) -> str:
-        image_elem = elem.find(".//a:blip", namespaces=NS)
+        image_elem = elem if elem.tag in {f"{{{A_NS}}}blip", f"{{{V_NS}}}imagedata"} else elem.find(".//a:blip", namespaces=NS)
         if image_elem is None:
             image_elem = elem.find(".//v:imagedata", namespaces=NS)
         if image_elem is None:
@@ -1350,9 +1662,18 @@ class DOCXReader:
             target = getattr(self, "_document_relationships", {}).get(rel_id, "")
         if not target:
             return ""
-        doc_pr = elem.find(".//wp:docPr", namespaces=NS)
+        context = elem
+        doc_pr = context.find(".//wp:docPr", namespaces=NS)
+        while doc_pr is None and context.getparent() is not None:
+            context = context.getparent()
+            doc_pr = context.find("wp:docPr", namespaces=NS)
+            if context.tag in {f"{{{W_NS}}}drawing", f"{{{W_NS}}}pict", f"{{{W_NS}}}txbxContent"}:
+                break
         label = self._doc_pr_label(doc_pr)
+        image_start = len(getattr(self, "_image_elements", []))
         self._record_image_asset(rel_id, target, label)
+        if len(getattr(self, "_image_elements", [])) == image_start:
+            self._extract_image_element(getattr(self, "_package", None), target, label)
         return f"![{label or 'image'}]({target})"
 
     def _doc_pr_label(self, doc_pr) -> str:
@@ -1452,6 +1773,12 @@ class DOCXReader:
         data = getattr(self, "_image_data_cache", {}).get(target)
         if not data:
             return
+        if getattr(self, "_image_occurrences", 0) >= MAX_IMAGE_ASSET_REFS:
+            warning = "WARN: DOCX image occurrence limit exceeded (%s)" % MAX_IMAGE_ASSET_REFS
+            if warning not in self._active_document_errors:
+                self._active_document_errors.append(warning)
+            return
+        self._image_occurrences = getattr(self, "_image_occurrences", 0) + 1
         ext = posixpath.splitext(target)[1].lstrip(".").lower()
         self._image_elements.append(
             Image(
@@ -1726,8 +2053,7 @@ class DOCXReader:
                     structure_depth=structure_depth,
                 )
                 paragraph_index += 1
-                if para.text.strip():
-                    paragraphs.append(para)
+                paragraphs.extend(self._paragraph_flow(para))
             elif child.tag == f"{{{W_NS}}}tbl":
                 if table_depth >= MAX_NESTED_TABLE_DEPTH:
                     paragraphs.append(Paragraph(runs=[TextRun(text="[nested table omitted: depth limit exceeded]")]))
@@ -1738,10 +2064,8 @@ class DOCXReader:
                     table_depth + 1,
                     structure_depth,
                 )
-                for row in table.rows:
-                    for cell in row:
-                        if cell.text.strip():
-                            paragraphs.append(Paragraph(runs=[TextRun(text=cell.text)]))
+                table._source_element = child
+                paragraphs.append(table)
             elif child.tag in (
                 f"{{{W_NS}}}sdt",
                 f"{{{W_NS}}}sdtContent",
@@ -1785,133 +2109,3 @@ class DOCXReader:
             return ""
         value = _w_attr(vmerge, "val")
         return "restart" if value == "restart" else "continue"
-
-
-# ── OMML(Office Math Markup Language) → LaTeX ──
-
-def _m_tag(name: str) -> str:
-    return f"{{{M_NS}}}{name}"
-
-
-_OMML_CONTAINER_TAGS = frozenset(
-    _m_tag(name)
-    for name in ("oMath", "oMathPara", "e", "num", "den", "sub", "sup", "deg", "fName", "lim")
-)
-
-_NARY_OPERATORS = {
-    "∑": r"\sum", "∏": r"\prod", "∫": r"\int", "∬": r"\iint", "∭": r"\iiint",
-    "∮": r"\oint", "⋃": r"\bigcup", "⋂": r"\bigcap", "⋁": r"\bigvee", "⋀": r"\bigwedge",
-}
-
-_OMML_MAX_DEPTH = 32
-
-
-def _omml_child(elem, name: str):
-    return elem.find(f"m:{name}", namespaces=NS)
-
-
-def _omml_join(elem, depth: int) -> str:
-    return "".join(_omml_to_latex(child, depth + 1) for child in elem)
-
-
-def _omml_to_latex(elem, depth: int = 0) -> str:
-    """OMML 트리를 LaTeX 문자열로 재귀 변환. 미지원 요소는 자식 텍스트를 보존."""
-    if depth > _OMML_MAX_DEPTH:
-        return ""
-    tag = elem.tag
-    if tag == _m_tag("t"):
-        return elem.text or ""
-    if tag == _m_tag("r"):
-        return "".join(t.text or "" for t in elem.findall("m:t", namespaces=NS))
-    if tag in _OMML_CONTAINER_TAGS:
-        return _omml_join(elem, depth)
-    if tag == _m_tag("f"):
-        num = _omml_child(elem, "num")
-        den = _omml_child(elem, "den")
-        return "\\frac{%s}{%s}" % (
-            _omml_to_latex(num, depth + 1) if num is not None else "",
-            _omml_to_latex(den, depth + 1) if den is not None else "",
-        )
-    if tag == _m_tag("sSup"):
-        base = _omml_child(elem, "e")
-        sup = _omml_child(elem, "sup")
-        return "{%s}^{%s}" % (
-            _omml_to_latex(base, depth + 1) if base is not None else "",
-            _omml_to_latex(sup, depth + 1) if sup is not None else "",
-        )
-    if tag == _m_tag("sSub"):
-        base = _omml_child(elem, "e")
-        sub = _omml_child(elem, "sub")
-        return "{%s}_{%s}" % (
-            _omml_to_latex(base, depth + 1) if base is not None else "",
-            _omml_to_latex(sub, depth + 1) if sub is not None else "",
-        )
-    if tag == _m_tag("sSubSup"):
-        base = _omml_child(elem, "e")
-        sub = _omml_child(elem, "sub")
-        sup = _omml_child(elem, "sup")
-        return "{%s}_{%s}^{%s}" % (
-            _omml_to_latex(base, depth + 1) if base is not None else "",
-            _omml_to_latex(sub, depth + 1) if sub is not None else "",
-            _omml_to_latex(sup, depth + 1) if sup is not None else "",
-        )
-    if tag == _m_tag("rad"):
-        deg = _omml_child(elem, "deg")
-        base = _omml_child(elem, "e")
-        deg_tex = _omml_to_latex(deg, depth + 1) if deg is not None else ""
-        base_tex = _omml_to_latex(base, depth + 1) if base is not None else ""
-        if deg_tex:
-            return "\\sqrt[%s]{%s}" % (deg_tex, base_tex)
-        return "\\sqrt{%s}" % base_tex
-    if tag == _m_tag("nary"):
-        nary_pr = _omml_child(elem, "naryPr")
-        chr_elem = nary_pr.find("m:chr", namespaces=NS) if nary_pr is not None else None
-        chr_val = chr_elem.get(f"{{{M_NS}}}val", "") if chr_elem is not None else ""
-        operator = _NARY_OPERATORS.get(chr_val, r"\int")
-        sub = _omml_child(elem, "sub")
-        sup = _omml_child(elem, "sup")
-        base = _omml_child(elem, "e")
-        parts = operator
-        sub_tex = _omml_to_latex(sub, depth + 1) if sub is not None else ""
-        sup_tex = _omml_to_latex(sup, depth + 1) if sup is not None else ""
-        if sub_tex:
-            parts += "_{%s}" % sub_tex
-        if sup_tex:
-            parts += "^{%s}" % sup_tex
-        base_tex = _omml_to_latex(base, depth + 1) if base is not None else ""
-        return f"{parts} {base_tex}".rstrip()
-    if tag == _m_tag("d"):  # 구분자 (기본 괄호)
-        inner = ",".join(
-            _omml_to_latex(e, depth + 1) for e in elem.findall("m:e", namespaces=NS)
-        )
-        d_pr = _omml_child(elem, "dPr")
-        beg = end = None
-        if d_pr is not None:
-            beg_elem = d_pr.find("m:begChr", namespaces=NS)
-            end_elem = d_pr.find("m:endChr", namespaces=NS)
-            beg = beg_elem.get(f"{{{M_NS}}}val") if beg_elem is not None else None
-            end = end_elem.get(f"{{{M_NS}}}val") if end_elem is not None else None
-        return f"{beg if beg is not None else '('}{inner}{end if end is not None else ')'}"
-    if tag == _m_tag("func"):
-        fname = _omml_child(elem, "fName")
-        base = _omml_child(elem, "e")
-        return "%s(%s)" % (
-            _omml_to_latex(fname, depth + 1) if fname is not None else "",
-            _omml_to_latex(base, depth + 1) if base is not None else "",
-        )
-    if tag == _m_tag("limLow"):
-        base = _omml_child(elem, "e")
-        lim = _omml_child(elem, "lim")
-        return "{%s}_{%s}" % (
-            _omml_to_latex(base, depth + 1) if base is not None else "",
-            _omml_to_latex(lim, depth + 1) if lim is not None else "",
-        )
-    if tag == _m_tag("limUpp"):
-        base = _omml_child(elem, "e")
-        lim = _omml_child(elem, "lim")
-        return "{%s}^{%s}" % (
-            _omml_to_latex(base, depth + 1) if base is not None else "",
-            _omml_to_latex(lim, depth + 1) if lim is not None else "",
-        )
-    # 미지원 구조 — 자식을 이어붙여 텍스트 보존
-    return _omml_join(elem, depth)

@@ -13,7 +13,9 @@ from ..conversion import AssetRef, Provenance
 from ..model.header_footer import HeaderFooter
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
-from .charts import chart_elements, chart_series, text_table, xy_series_rows
+from .charts import (chart_elements, chart_series, text_table, xy_series_rows,
+                     bubble_series_rows, hydrate_chart_references,
+                     normalize_chart, workbook_chart_resolver, chart_drawing_references)
 from .core import core_property_elements, read_core_properties
 from .package import MAX_XML_PART_SIZE, OOXMLPackage
 
@@ -183,6 +185,9 @@ class XLSXReader:
             )
             defined_name_elements = self._defined_name_elements(workbook)
             sheets = self._read_sheets(workbook, relationships)
+            self._chart_resolver = workbook_chart_resolver(package, doc.errors)
+            sheet_states = {node.get("name"): {"hidden": 1, "veryHidden": 2}.get(node.get("state"), 0)
+                            for node in workbook.findall("s:sheets/s:sheet", namespaces=_namespaces(workbook))}
             for index, (sheet_name, sheet_path) in enumerate(sheets, start=1):
                 self._sheet_range_cells_used = 0
                 self._sheet_range_budget_exhausted = False
@@ -191,6 +196,8 @@ class XLSXReader:
                         source_format="xlsx",
                         sheet=sheet_name,
                         path=sheet_path,
+                        visibility=sheet_states.get(sheet_name, 0),
+                        hidden=sheet_states.get(sheet_name, 0) != 0,
                     )
                 )
                 if package.exists(sheet_path):
@@ -698,7 +705,9 @@ class XLSXReader:
         relationships = self._read_part_relationships(package, drawing_path)
         positioned = []
         ordinal = 0
-        for anchor in root.findall("xdr:twoCellAnchor", namespaces=NS) + root.findall("xdr:oneCellAnchor", namespaces=NS):
+        for anchor in root:
+            if anchor.tag not in {"{%s}%s" % (XDR_NS, kind) for kind in ("twoCellAnchor", "oneCellAnchor", "absoluteAnchor")}:
+                continue
             row, col = self._anchor_position(anchor)
             for text in self._drawing_texts(anchor):
                 positioned.append((row, col, ordinal, self._drawing_paragraph(text, sheet_name, drawing_path)))
@@ -707,7 +716,7 @@ class XLSXReader:
             if image_reference:
                 positioned.append((row, col, ordinal, self._drawing_paragraph(image_reference, sheet_name, drawing_path)))
                 ordinal += 1
-            for chart_elem in anchor.findall(".//c:chart", namespaces=NS):
+            for chart_elem in chart_drawing_references(anchor):
                 for element in self._parse_chart(chart_elem, package, relationships, sheet_name):
                     positioned.append((row, col, ordinal, element))
                     ordinal += 1
@@ -750,6 +759,8 @@ class XLSXReader:
     def _drawing_texts(self, anchor) -> List[str]:
         texts = []
         for tx_body in anchor.findall(".//xdr:txBody", namespaces=NS):
+            if not self._selected_chart_branch(tx_body):
+                continue
             paragraph_texts = []
             for p_elem in tx_body.findall("a:p", namespaces=NS):
                 text = "".join(node.text or "" for node in p_elem.findall(".//a:t", namespaces=NS)).strip()
@@ -759,8 +770,25 @@ class XLSXReader:
                 texts.append("\n".join(paragraph_texts))
         return texts
 
+    @staticmethod
+    def _selected_chart_branch(node) -> bool:
+        """차트를 지원하는 AlternateContent의 비선택 갈래는 설명에도 넣지 않는다."""
+        from .charts import MC_NS, _alternate_branch
+        branch = node
+        while branch.getparent() is not None:
+            parent = branch.getparent()
+            if parent.tag == "{%s}AlternateContent" % MC_NS:
+                selected = _alternate_branch(
+                    parent, lambda item: next(chart_drawing_references(item), None) is not None,
+                )
+                if selected is not None and selected is not branch:
+                    return False
+            branch = parent
+        return True
+
     def _drawing_image_reference(self, anchor, relationships: Dict[str, str], sheet_name: str) -> str:
-        blip = anchor.find(".//a:blip", namespaces=NS)
+        blip = next((item for item in anchor.iterfind(".//a:blip", namespaces=NS)
+                     if self._selected_chart_branch(item)), None)
         if blip is None:
             return ""
         rel_id = _rel_attr(blip, "embed")
@@ -923,12 +951,19 @@ class XLSXReader:
         chart_path = relationships.get(_rel_attr(chart_elem, "id"), "")
         if not chart_path or not package.exists(chart_path):
             return []
-        chart_root = package.read_xml_part(chart_path)
-        return chart_elements(
-            chart_root,
-            self._chart_series_table(chart_root),
-            lambda text: self._drawing_paragraph(text, sheet_name, chart_path),
-        )
+        try:
+            chart_root = normalize_chart(package.read_xml_part(chart_path), self._errors)
+            hydrate_chart_references(chart_root, package, chart_path, self._errors, self._chart_resolver)
+            table = self._chart_series_table(chart_root)
+            table.provenance = Provenance(source_format="xlsx", sheet=sheet_name, path=chart_path)
+            return chart_elements(
+                chart_root,
+                table,
+                lambda text: self._drawing_paragraph(text, sheet_name, chart_path),
+            )
+        except (OSError, ValueError, KeyError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+            self._errors.append("WARN: XLSX chart could not be read: " + str(exc)[:256])
+            return []
 
     def _chart_series_table(self, chart_root) -> Table:
         if not hasattr(self, "_chart_series_remaining"):
@@ -970,6 +1005,7 @@ class XLSXReader:
 
         series_items = []
         implicit_x = []
+        sizes = []
         xy = False
         for series in series_elements:
             has_x_values = series.find("c:xVal", namespaces=NS) is not None
@@ -979,12 +1015,15 @@ class XLSXReader:
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
             series_items.append((series_name, categories, values))
-        if not series_items:
+            sizes.append(self._chart_points(series, "c:bubbleSize"))
+        if not series_items or not any(values for _, _, values in series_items):
             return Table()
 
-        long_rows = xy_series_rows(series_items, xy, implicit_x)
+        long_rows = bubble_series_rows(series_items, sizes, implicit_x)
+        if long_rows is None:
+            long_rows = xy_series_rows(series_items, xy, implicit_x)
         if long_rows is not None:
-            if not self._reserve_chart_output_cells(3 * len(long_rows)):
+            if not self._reserve_chart_output_cells(len(long_rows[0]) * len(long_rows)):
                 return Table()
             return text_table(long_rows)
 
@@ -995,6 +1034,9 @@ class XLSXReader:
             indexes.update(values)
             for index, category in categories.items():
                 category_labels.setdefault(index, category)
+
+        if not indexes or not any(values for _, _, values in series_items):
+            return Table()
 
         if not self._reserve_chart_output_cells((len(series_items) + 1) * (len(indexes) + 1)):
             return Table()
@@ -1062,6 +1104,12 @@ class XLSXReader:
         points = {}
         parent = series.find(parent_path, namespaces=NS)
         if parent is None:
+            return points
+        levels = parent.findall(".//c:multiLvlStrCache/c:lvl", namespaces=NS)
+        if levels:
+            level_points = [self._chart_points(level, ".") for level in levels]
+            for index in sorted(set(index for mapping in level_points for index in mapping)):
+                points[index] = " / ".join(mapping[index] for mapping in reversed(level_points) if mapping.get(index))
             return points
         for point in parent.findall(".//c:pt", namespaces=NS):
             raw_index = point.get("idx")

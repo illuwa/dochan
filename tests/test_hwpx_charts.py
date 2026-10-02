@@ -93,9 +93,9 @@ def test_cached_series_order_points_zero_and_lexical_values():
     elements, warnings = _parse(_chart(later + earlier))
     assert warnings == []
     tables = _tables(elements)
-    assert [table.caption_text for table in tables] == ["먼저", "나중"]
-    assert _rows(tables[0]) == [["범주", "값"], ["첫째", "2.00"], ["둘째", "1e3"]]
-    assert _rows(tables[1]) == [["범주", "값"], ["A", "0"], ["B", "-0.00"]]
+    assert [table.rows[0][1].text for table in tables] == ["먼저", "나중"]
+    assert _rows(tables[0]) == [["범주", "먼저"], ["첫째", "2.00"], ["둘째", "1e3"]]
+    assert _rows(tables[1]) == [["범주", "나중"], ["A", "0"], ["B", "-0.00"]]
     for table in tables:
         assert table.caption_side == "TOP"
         for row_index, row in enumerate(table.rows):
@@ -106,7 +106,7 @@ def test_cached_series_order_points_zero_and_lexical_values():
                 assert isinstance(cell.paragraphs[0].runs[0], TextRun)
 
 
-def test_rich_title_preserves_text_order_breaks_and_ignores_style_text():
+def test_rich_title_joins_breaks_with_spaces_and_ignores_style_text():
     title = (
         '<c:title><c:tx><c:rich><a:p><a:r><a:t>매출</a:t></a:r>'
         '<a:r><a:t> 2026</a:t></a:r><a:br/><a:fld><a:t>상반기</a:t>'
@@ -117,7 +117,7 @@ def test_rich_title_preserves_text_order_breaks_and_ignores_style_text():
     elements, warnings = _parse(_chart(_series(), title=title))
     assert warnings == []
     assert isinstance(elements[0], Paragraph)
-    assert elements[0].text == "매출 2026\n상반기\n합계"
+    assert elements[0].text == "매출 2026 상반기 합계"
     assert len(elements) == 2
 
 
@@ -127,7 +127,7 @@ def test_cached_title_and_series_name_and_absent_explicit_title():
     elements, warnings = _parse(_chart(series, title=title))
     assert warnings == []
     assert elements[0].text == "제목"
-    assert elements[1].caption_text == "이름"
+    assert elements[1].rows[0][1].text == "이름"
     no_title = '<c:title><c:txPr><a:p><a:r><a:t>서식</a:t></a:r></a:p></c:txPr></c:title>'
     elements, warnings = _parse(_chart(series, title=no_title))
     assert len(elements) == 1 and isinstance(elements[0], Table)
@@ -140,7 +140,7 @@ def test_sparse_empty_and_unequal_lengths_do_not_shift_or_fill_zero():
         _cache([(2, "0"), (0, "")], numeric=True, count=3),
     )
     elements, warnings = _parse(_chart(_series(sources=sources)))
-    assert _rows(elements[0]) == [["범주", "값"], ["A", ""], ["B", ""], ["C", "0"], ["D", ""]]
+    assert _rows(elements[0]) == [["범주", "판매"], ["A", ""], ["B", ""], ["C", "0"], ["D", ""]]
     assert _warned(warnings, "sparse_cache")
     assert _warned(warnings, "length_mismatch")
 
@@ -152,7 +152,7 @@ def test_duplicate_invalid_indices_and_invalid_numbers_are_diagnosed():
                numeric=True, count=2),
     )
     elements, warnings = _parse(_chart(_series(sources=sources)))
-    assert _rows(elements[0]) == [["범주", "값"], ["A", "0"], ["B", ""]]
+    assert _rows(elements[0]) == [["범주", "판매"], ["A", "0"], ["B", ""]]
     for code in ("duplicate_index", "invalid_index", "invalid_number", "count_mismatch"):
         assert _warned(warnings, code)
 
@@ -171,9 +171,9 @@ def test_scatter_pairs_each_series_by_idx_without_sorting_x_or_joining_series():
                      values=[(0, "1e-2")], scatter=True)
     elements, warnings = _parse(_chart(first + second, kind="scatterChart"))
     assert warnings == []
-    assert _rows(elements[0]) == [["X", "Y"], ["10.00", "-2"], ["0", "0"]]
-    assert _rows(elements[1]) == [["X", "Y"], ["100", "1e-2"]]
-    assert [table.caption_text for table in elements] == ["궤적 A", "궤적 B"]
+    assert _rows(elements[0]) == [["X", "궤적 A"], ["10.00", "-2"], ["0", "0"]]
+    assert _rows(elements[1]) == [["X", "궤적 B"], ["100", "1e-2"]]
+    assert [table.rows[0][1].text for table in elements] == ["궤적 A", "궤적 B"]
 
 
 def test_literal_and_numeric_category_caches_keep_date_serials_unformatted():
@@ -201,7 +201,7 @@ def test_literal_and_numeric_category_caches_keep_date_serials_unformatted():
 def test_category_value_families_extract_only_their_data(kind):
     elements, warnings = _parse(_chart(_series(), kind=kind))
     assert warnings == []
-    assert _rows(elements[0]) == [["범주", "값"], ["첫째", "0"], ["둘째", "2.00"]]
+    assert _rows(elements[0]) == [["범주", "판매"], ["첫째", "0"], ["둘째", "2.00"]]
 
 
 def test_scatter_sparse_indices_and_unequal_lengths_remain_paired():
@@ -210,7 +210,7 @@ def test_scatter_sparse_indices_and_unequal_lengths_remain_paired():
         _cache([(0, "0")], numeric=True),
     )
     elements, warnings = _parse(_chart(_series(sources=sources), kind="scatterChart"))
-    assert _rows(elements[0]) == [["X", "Y"], ["5", "0"], ["", ""], ["0", ""]]
+    assert _rows(elements[0]) == [["X", "판매"], ["5", "0"], ["", ""], ["0", ""]]
     assert _warned(warnings, "sparse_cache") and _warned(warnings, "length_mismatch")
 
 
@@ -246,14 +246,14 @@ def test_missing_cache_does_not_drop_other_valid_series_or_title():
     title = '<c:title><c:tx><c:rich><a:p><a:r><a:t>남김</a:t></a:r></a:p></c:rich></c:tx></c:title>'
     elements, warnings = _parse(_chart(_series(sources="") + _series("정상", 1), title=title))
     assert elements[0].text == "남김"
-    assert len(elements) == 2 and elements[1].caption_text == "정상"
+    assert len(elements) == 2 and elements[1].rows[0][1].text == "정상"
     assert _warned(warnings, "missing_cache")
 
 
 def test_fallback_series_name_and_tied_or_missing_order_are_explicit():
     series = _series("", None).replace('<c:tx><c:v></c:v></c:tx>', '')
     elements, warnings = _parse(_chart(series + _series("B", 0) + _series("C", 0)))
-    assert [table.caption_text for table in elements] == ["계열 1", "B", "C"]
+    assert [table.rows[0][1].text for table in elements] == ["계열 1", "B", "C"]
     assert _warned(warnings, "missing_name")
     assert _warned(warnings, "invalid_order")
     assert _warned(warnings, "duplicate_order")
@@ -416,7 +416,7 @@ def test_existing_outputters_keep_series_names_values_and_empty_cells():
     assert warnings == []
     document = Document(sections=[Section(elements=elements)])
     table = to_dict(document)['sections'][0]['elements'][0]
-    assert table['caption']['text'] == "판매"
+    assert table['caption']['text'] == "Chart type: line"
     assert table['rows'][1][1]['text'] == ""
     assert table['rows'][2][1]['text'] == "0"
     markdown = to_markdown(document)
@@ -476,6 +476,36 @@ def test_public_corpus_matches_independent_xml_gold(filename, digest, part_diges
     assert warnings == []
     assert all(isinstance(element, Table) for element in elements)
     assert len(elements) == len(gold)
-    for table, (name, rows) in zip(elements, gold):
-        assert table.caption_text == name
-        assert _rows(table) == [["범주", "값"]] + rows
+    for position, (table, (name, rows)) in enumerate(zip(elements, gold)):
+        assert table.rows[0][1].text == name
+        expected_caption = "Chart type: " + {"pieChart": "pie", "lineChart": "line"}[kind]
+        assert table.caption_text == (expected_caption if position == 0 else "")
+        assert _rows(table) == [["범주", name]] + rows
+
+
+def test_chart_title_and_annotation_follow_ooxml_contract():
+    title = '<c:title><c:tx><c:rich><a:p><a:r><a:t>매출</a:t></a:r></a:p></c:rich></c:tx></c:title>'
+    xml = _chart(_series(), kind="barChart", title=title).replace(
+        b'</c:plotArea>',
+        ('<c:catAx><c:title><c:tx><c:rich><a:p><a:r><a:t>분기</a:t></a:r></a:p>'
+         '</c:rich></c:tx></c:title></c:catAx></c:plotArea>').encode())
+    elements, warnings = _parse(xml)
+    assert warnings == []
+    assert elements[0].heading_level == 3
+    assert elements[1].caption_text == "Chart type: column; Category axis: 분기"
+    assert elements[1].caption_side == "TOP"
+    assert _rows(elements[1])[0] == ["범주", "판매"]
+
+
+
+def test_cached_title_uses_only_validated_first_duplicate_value():
+    title = '<c:title><c:tx>%s</c:tx></c:title>' % _cache([(0, "RIGHT"), (0, "WRONG")])
+    elements, warnings = _parse(_chart(_series(), title=title))
+    assert elements[0].text == "RIGHT"
+    assert _warned(warnings, "duplicate_index")
+
+
+def test_chart_caption_is_emitted_once_on_first_valid_series():
+    elements, warnings = _parse(_chart(_series(sources="") + _series("A", 1) + _series("B", 2)))
+    assert _warned(warnings, "missing_cache")
+    assert [table.caption_text for table in _tables(elements)] == ["Chart type: line", ""]

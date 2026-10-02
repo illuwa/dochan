@@ -81,7 +81,7 @@ def test_body_order_title_and_switch_select_one_branch(tmp_path, wrapped):
     elems = doc.sections[0].elements
     assert [type(x) for x in elems] == [Paragraph, Paragraph, Table, Paragraph]
     assert [x.text for x in elems if isinstance(x, Paragraph)] == ["before", "제목", "after"]
-    assert rows(elems[2]) == [["범주", "값"], ["A", "0"], ["B", "2.00"]]
+    assert rows(elems[2]) == [["범주", "판매"], ["A", "0"], ["B", "2.00"]]
 
 
 @pytest.mark.parametrize("ref", [
@@ -242,7 +242,7 @@ def test_bounded_read_zip_lifetime_cache_isolation_and_reset(tmp_path, monkeypat
     assert len(tables) == 2 and len(reads) == 1
     tables[0].rows[1][1].paragraphs[0].runs[0].text = "changed"
     tables[0].caption[0].runs[0].text = "changed"
-    assert tables[1].caption_text == "판매" and rows(tables[1])[1][1] == "0"
+    assert tables[1].caption_text == "Chart type: pie" and rows(tables[1])[1][1] == "0"
     assert instance._chart_archive is None and instance._chart_cache == {}
     next_doc = instance.parse(path)
     assert next_doc.errors == [] and len(next_doc.find_all("table")) == 2
@@ -288,7 +288,7 @@ def test_normal_table_and_chart_share_document_cell_budget(tmp_path, monkeypatch
 def test_nested_chart_placement_is_preserved(tmp_path, wrapper):
     doc = Dochan(package(tmp_path, [paragraph(wrapper.format(switch(reference())))])).doc
     assert doc.errors == []
-    assert len([t for t in doc.find_all("table") if t.caption_text == "판매"]) == 1
+    assert len([t for t in doc.find_all("table") if t.rows and len(t.rows[0]) > 1 and t.rows[0][1].text == "판매"]) == 1
 
 
 def test_unhandled_chart_placement_is_not_silent(tmp_path):
@@ -375,7 +375,7 @@ def test_dochan_api_public_documents_match_independent_gold(name, digest, kind, 
     assert [[r[1] for r in data] for _, data in gold] == values
     doc = Dochan(path, include_assets=False).doc
     assert doc.errors == []
-    assert [(t.caption_text, rows(t)[1:]) for t in doc.find_all("table")] == gold
+    assert [(t.rows[0][1].text, rows(t)[1:]) for t in doc.find_all("table")] == gold
 
 
 @pytest.mark.parametrize("name,digest,count,unsupported", [
@@ -402,7 +402,7 @@ def test_many_chart_real_documents_account_for_every_reference(name, digest, cou
                 gold.extend(xml_gold(raw, kind))
     doc = Dochan(path, include_assets=False).doc
     tables = [t for t in doc.find_all("table") if t.caption_side == "TOP"]
-    assert [(t.caption_text, rows(t)[1:]) for t in tables] == gold
+    assert [(t.rows[0][1].text, rows(t)[1:]) for t in tables] == gold
     chart_errors = [e for e in doc.errors if '[chart:' in e]
     assert len(chart_errors) == len(skipped)
     for ref in skipped:

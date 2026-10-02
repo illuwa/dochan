@@ -1,8 +1,8 @@
 """Bounded, offline extraction of HWPX OOXML chart caches.
 
 parse_chart_xml returns an optional explicit title Paragraph followed by one
-Table per series. A table's TOP caption is the series name; columns are 범주/값
-or X/Y for scatter charts. Series follow c:order (stable XML-order fallback),
+Table per series. The first table's TOP caption uses the common OOXML chart
+type/axis annotation once; the series name is its value-column heading. Series follow c:order (stable XML-order fallback),
 rows follow zero-based c:pt/@idx, and number strings are never reformatted.
 
 Only stored caches/literals are read. Formula evaluation, workbook/ZIP access,
@@ -18,6 +18,7 @@ import lxml.etree as etree
 
 from ..model.document import Paragraph, TextRun
 from ..model.table import Cell, Table
+from ..ooxml.charts import chart_caption, chart_title
 
 MAX_XML_BYTES = 4 * 1024 * 1024
 MAX_SERIES = 128
@@ -210,7 +211,7 @@ def _series_table(series, position: int, scatter: bool, budget: _Budget,
         _warn(warnings, "empty_series", context + ": caches contain no points")
         return None
     budget.add_cells((extent + 1) * 2)
-    headers = ["X", "Y"] if scatter else ["범주", "값"]
+    headers = ["X", name] if scatter else ["범주", name]
     rows = [[Cell(paragraphs=[_paragraph(text)], row=0, col=column)
              for column, text in enumerate(headers)]]
     for index in range(extent):
@@ -218,7 +219,7 @@ def _series_table(series, position: int, scatter: bool, budget: _Budget,
             Cell(paragraphs=[_paragraph(cache.points.get(index, ""))], row=index + 1, col=column)
             for column, cache in enumerate((left, right))
         ])
-    return Table(rows=rows, caption=[_paragraph(name)], caption_side="TOP")
+    return Table(rows=rows)
 
 
 def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph, Table]]:
@@ -230,8 +231,16 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
         _warn(warnings, "invalid_structure", "expected one chart")
         return []
     chart = charts[0]
-    title = _text(chart.find(_C + "title/" + _C + "tx"), "title", budget, warnings)
+    # Still validate/count stored title cache nodes before using the shared
+    # display contract (space-separated title lines and heading level 3).
+    stored_title = _text(chart.find(_C + "title/" + _C + "tx"), "title", budget, warnings)
+    rich = chart.find(_C + "title/" + _C + "tx/" + _C + "rich")
+    # Cache selection has already rejected duplicate/invalid indices. Only rich
+    # text needs the shared line-break presentation; never re-read raw caches.
+    title = chart_title(root) if rich is not None and stored_title.strip() else stored_title
     elements: list[Union[Paragraph, Table]] = [_paragraph(title)] if title else []
+    if elements:
+        elements[0].heading_level = 3
     if root.find(_C + "externalData") is not None:
         _warn(warnings, "external_data", "external workbook ignored; using stored caches only")
     plots = chart.findall(_C + "plotArea")
@@ -266,9 +275,14 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
         ordered.append((order, position, series))
     if not ordered:
         _warn(warnings, "empty_chart", "chart has no series")
+    caption = chart_caption(root)
     for display_position, (_, _, series) in enumerate(sorted(ordered, key=lambda item: item[:2])):
         table = _series_table(series, display_position, group.tag == _SCATTER, budget, warnings)
         if table is not None:
+            if caption:
+                table.caption = [_paragraph(caption)]
+                caption = ""
+            table.caption_side = "TOP"
             elements.append(table)
     return elements
 

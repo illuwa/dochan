@@ -59,7 +59,7 @@ MAX_META_FILE_SIZE = 32 * 1024 * 1024
 # OUTLINE 레벨을 Markdown 헤딩으로 승격할 상한.
 # 한글 규정문서는 '개요 5' 같은 깊은 레벨을 평범한 본문 열거 항목에 쓰는 일이 잦아서,
 # 전 레벨을 승격하면 목록이 통째로 헤딩이 된다.
-MAX_OUTLINE_HEADING_LEVEL = 3
+from ..constants import MAX_OUTLINE_HEADING_LEVEL
 
 # 패키지 자체의 폭주 방어 — 엔트리 수·해제 총량·XML 크기·섹션 수 상한
 MAX_XML_FILE_SIZE = 32 * 1024 * 1024
@@ -129,6 +129,7 @@ DRAWING_TAGS = {
     'rect', 'ellipse', 'line', 'connectLine', 'curve', 'polygon',
     'arc', 'container', 'ole',
 }
+FORM_TAGS = {'btn', 'checkBtn', 'radioBtn', 'comboBox', 'edit'}
 
 # 스타일 이름에서 개요 수준을 읽어내기 위한 패턴 ("개요 1", "Outline 2", "Heading 3")
 _STYLE_HEADING_RE = re.compile(r'^\s*(?:개요|outline|heading)\s*(\d+)\s*$', re.IGNORECASE)
@@ -790,6 +791,9 @@ class HWPXParser:
                 elif tag == 'ctrl':
                     ctrl_elem = self._parse_ctrl(child)
                     if ctrl_elem:
+                        if isinstance(ctrl_elem, TextRun):
+                            runs.append(ctrl_elem)
+                            continue
                         if runs:
                             para = self._make_paragraph(runs, p_elem)
                             if para.text.strip():
@@ -894,6 +898,14 @@ class HWPXParser:
             elif tag == 'compose':
                 # 글자 겹치기 — 표시 문자는 composeText 속성에 있다
                 text_parts.append(child.get('composeText', '') or '')
+            elif tag in FORM_TAGS:
+                flush()
+                form = self._parse_form_run(child, TextRun(
+                    bold=bold, italic=italic, underline=underline,
+                    strikeout=strikeout, font_size_pt=font_size_pt,
+                    link=self._current_link()))
+                if form is not None:
+                    results.append(form)
             elif tag in DRAWING_TAGS:
                 # 도형(사각형/타원/그룹 등) 내부의 <drawText> 텍스트
                 drawn = self._parse_drawing_elem(child)
@@ -919,9 +931,16 @@ class HWPXParser:
                         self._pop_field()
                     continue
 
-                ctrl_result = self._parse_ctrl(child)
+                ctrl_result = self._parse_ctrl(child, TextRun(
+                    bold=bold, italic=italic, underline=underline,
+                    strikeout=strikeout, font_size_pt=font_size_pt,
+                    link=self._current_link()))
                 if ctrl_result is not None:
                     flush()
+                    if isinstance(ctrl_result, TextRun):
+                        # Forms remain inline, just like DOCX content controls.
+                        results.append(ctrl_result)
+                        continue
                     if isinstance(ctrl_result, Footnote) and \
                             ctrl_result.type in ('footnote', 'endnote'):
                         # 주석(comment)은 여기서 번호를 매기지 않는다 — 마커는
@@ -946,12 +965,51 @@ class HWPXParser:
         flush()
         return results
 
-    def _parse_ctrl(self, ctrl_elem):
+    def _parse_form_run(self, elem, context=None):
+        """Read the current displayed value, never command/name or option lists."""
+        if elem.tag not in {'{' + NS['hp'] + '}' + tag for tag in FORM_TAGS}:
+            return None
+        tag = _local_tag(elem.tag)
+        if tag in ('btn', 'checkBtn', 'radioBtn'):
+            text = elem.get('caption', '')
+            if tag in ('checkBtn', 'radioBtn'):
+                marker = '[x]' if elem.get('value') == 'CHECKED' else '[ ]'
+                text = marker + text
+        elif tag == 'edit':
+            if elem.get('passwordChar'):
+                return None
+            text_elem = elem.find('hp:text', namespaces=NS)
+            text = ''.join(text_elem.itertext()) if text_elem is not None else ''
+        else:
+            text = elem.get('selectedValue', '')
+            if text:
+                for item in elem.findall('hp:listItem', namespaces=NS):
+                    if item.get('value') == text:
+                        text = item.get('displayText') or text
+                        break
+        if not text:
+            return None
+        context = context or TextRun(link=self._current_link())
+        props = dict(bold=context.bold, italic=context.italic,
+                     underline=context.underline, strikeout=context.strikeout,
+                     font_size_pt=context.font_size_pt, link=context.link)
+        form_pr = elem.find('hp:formCharPr', namespaces=NS)
+        if form_pr is not None and form_pr.get('followContext') not in ('1', 'true'):
+            shape = self._char_shapes_by_id.get(_int_attr(form_pr, 'charPrIDRef', -1))
+            if shape is not None:
+                props.update(bold=shape['bold'], italic=shape['italic'],
+                             underline=shape['underline'], strikeout=shape['strikeout'],
+                             font_size_pt=shape['size_pt'])
+        return TextRun(text=text, **props)
+
+    def _parse_ctrl(self, ctrl_elem, context=None):
         """<ctrl> 요소 → Table/Equation/Image 등"""
         for child in _selected_descendants(ctrl_elem):
             tag = _local_tag(child.tag)
 
-            if tag == 'tbl':
+            if tag in FORM_TAGS:
+                return self._parse_form_run(child, context)
+            elif tag == 'tbl':
                 return self._parse_table_elem(child)
             elif tag == 'equation':
                 return _parse_equation_elem(child)

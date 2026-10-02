@@ -20,7 +20,9 @@ import olefile
 
 from dochan.office_binary.xls import (
     XLSReader, _cell_ref, _decode_formula_token_stream, _iter_records, _read_boundsheet_name,
+    _read_name_record, _parse_externsheet,
 )
+from dochan.office_binary.xls_formula import FormulaContext
 from dochan.utils.bounded_io import MAX_OLE_STREAM_SIZE, read_ole_stream
 
 _SAFE_XML = ET.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
@@ -161,9 +163,23 @@ def workbook_formula_evidence(data, coordinates):
     evidence; isolated warnings identify unsupported NameX/array tokens per cell.
     """
     sheets = []
+    context = FormulaContext()
+    link_records = []
     for _, kind, payload in _iter_records(data):
         if kind == 0x85 and len(payload) >= 8:
             sheets.append((struct.unpack_from('<I', payload)[0], _read_boundsheet_name(payload)))
+        elif kind == 0x1ae:
+            context.add_supbook(payload, None)
+            link_records.append({'kind': 'SupBook', 'bytes': payload.hex()})
+        elif kind == 0x23:
+            context.add_externname(payload, None)
+        elif kind == 0x18:
+            context.names.append(_read_name_record(payload))
+        elif kind == 0x17 and len(payload) >= 2:
+            context.xtis.extend(_parse_externsheet(payload))
+    context.sheets = [name for _, name in sheets]
+    decode_args = {'formula_context': context, 'external_sheets': context.xtis,
+                   'sheet_names': context.sheets, 'defined_names': [n.name for n in context.names]}
     sheets.sort()
     wanted, found = set(coordinates), {}
     for index, (start, name) in enumerate(sheets):
@@ -175,7 +191,7 @@ def workbook_formula_evidence(data, coordinates):
             if kind == 0x221 and len(payload) >= 14:
                 first_row, _, first_col = struct.unpack_from('<HHB', payload)
                 length = struct.unpack_from('<H', payload, 12)[0]
-                arrays[(first_row, first_col)] = payload[14:14 + length]
+                arrays[(first_row, first_col)] = (payload[14:14 + length], payload[14 + length:])
             if kind != 6 or len(payload) < 22:
                 continue
             row, col = struct.unpack_from('<HH', payload)
@@ -185,15 +201,21 @@ def workbook_formula_evidence(data, coordinates):
             length = struct.unpack_from('<H', payload, 20)[0]
             tokens = payload[22:22 + length]
             warnings = []
-            _decode_formula_token_stream(tokens, errors=warnings)
-            found[key] = {'tokens': tokens.hex(), 'token_warnings': warnings}
+            extra = payload[22 + length:]
+            _decode_formula_token_stream(tokens, extra_data=extra, errors=warnings, **decode_args)
+            found[key] = {'tokens': tokens.hex(), 'extra_data': extra.hex(), 'token_warnings': warnings}
+            if any(book.kind == 'external' for book in context.books):
+                found[key]['link_records'] = link_records
             sheet_formulas.append((key, tokens))
         for key, tokens in sheet_formulas:
             if len(tokens) == 5 and tokens[0] == 1:
                 template = arrays.get(struct.unpack_from('<HH', tokens, 1))
                 if template is not None:
-                    found[key]['array_template'] = template.hex()
-                    _decode_formula_token_stream(template, errors=found[key]['token_warnings'])
+                    tokens, extra = template
+                    found[key]['array_template'] = tokens.hex()
+                    found[key]['array_extra_data'] = extra.hex()
+                    _decode_formula_token_stream(tokens, extra_data=extra,
+                                                 errors=found[key]['token_warnings'], **decode_args)
     return found, [name for _, name in sheets]
 
 
@@ -202,6 +224,19 @@ def raw_formula_evidence(path, coordinates):
         stream = 'Workbook' if ole.exists('Workbook') else 'Book'
         data = read_ole_stream(ole, stream, max_bytes=MAX_OLE_STREAM_SIZE)
     return workbook_formula_evidence(data, coordinates)
+
+
+def normalize_external_workbook_qualifiers(formula):
+    """Normalize bracketed workbook identifiers only, preserving the target.
+
+    This is a mismatch diagnostic, not proof that different books are equivalent.
+    Quoted strings and structured table references must remain untouched.
+    """
+    pieces = re.split(r'("(?:[^"]|"")*")', formula)
+    pattern = r"\[[^\[\]]+\](?=(?:[^\s'!+*/^&=<>(),\[\]]+!|(?:[^']|'')+'!))"
+    for index in range(0, len(pieces), 2):
+        pieces[index] = re.sub(pattern, '[WORKBOOK]', pieces[index])
+    return ''.join(pieces)
 
 
 def mismatch_cause(check, evidence, source_sheets):
@@ -213,10 +248,12 @@ def mismatch_cause(check, evidence, source_sheets):
         return 'source formula absent'
     if re.search(r'\bF255\(', check['actual']):
         return 'UDF name indirection'
-    if '[External' in check['actual']:
-        return 'external workbook reference'
+    expected = normalize_external_workbook_qualifiers(check['expected'])
+    actual = normalize_external_workbook_qualifiers(check['actual'])
+    if expected == actual and expected != check['expected'] and actual != check['actual']:
+        return 'external workbook qualifier only'
     warnings = ' '.join(evidence['token_warnings'])
-    if not check['actual'] and 'token 0x39' in warnings:
+    if not check['actual'] and ('token 0x39' in warnings or 'NameX' in warnings):
         return 'NameX or add-in'
     if not check['actual'] and 'token 0x20' in warnings:
         return 'array constant'

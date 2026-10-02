@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 import struct
 
-import olefile
+from dochan import cfb as olefile  # olefile 호환 API 의 자체 [MS-CFB] 리더
 
 from dochan.model.table import Table
 from dochan.office_binary.xls import parse_biff_workbook

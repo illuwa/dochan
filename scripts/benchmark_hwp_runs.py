@@ -154,7 +154,7 @@ def measure(source_root, directory, kind, count):
                    'DocInfo': (directory / 'docinfo').read_bytes()}
         for index, path in enumerate(sorted(directory.glob('body*'))):
             streams['BodyText/Section%d' % index] = path.read_bytes()
-    with patch('dochan.reader.olefile.OleFileIO', lambda path: _StreamsOle(streams)):
+    with patch('dochan.reader.cfb.OleFileIO', lambda path: _StreamsOle(streams)):
         start = time.perf_counter()
         reader = Dochan(str(directory / ('input.' + kind)))
         parsed = time.perf_counter()

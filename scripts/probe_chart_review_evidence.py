@@ -93,7 +93,7 @@ def rk(value):
 
 
 def xls_cells(path):
-    import olefile
+    from dochan import cfb as olefile
     with olefile.OleFileIO(str(path)) as archive:
         stream = 'Workbook' if archive.exists('Workbook') else 'Book'
         data = archive.openstream(stream).read()
@@ -143,7 +143,7 @@ def chart_numbers(path):
     """차트의 모든 원시 숫자를 출력 값의 대조 근거로 수집한다."""
     result = []
     if path.suffix.lower() == '.xls':
-        import olefile
+        from dochan import cfb as olefile
         with olefile.OleFileIO(str(path)) as archive:
             stream = 'Workbook' if archive.exists('Workbook') else 'Book'
             data = archive.openstream(stream).read()

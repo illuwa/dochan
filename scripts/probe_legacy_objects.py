@@ -266,7 +266,8 @@ def probe(root):
         doc, storages = docs[name]
         raw = embedded_stream(storages[object_id], 'Workbook')
         cells = graph_cells(raw)
-        cell = lambda axis, point: display(cells.get((axis, point) if by_rows else (point, axis), ''))
+        def cell(axis, point):
+            return display(cells.get((axis, point) if by_rows else (point, axis), ''))
         names = [cell(axis, 0) for axis in axes]
         if name == '42520.ppt':
             names = ['Line 1']  # Saved SeriesText; datasheet has no label for this series.

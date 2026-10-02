@@ -77,7 +77,8 @@ def test_v5_font_position_is_metadata_when_mtcode_present():
 
 
 def test_v5_fence_and_full_size_fraction():
-    slot = lambda b: b'\x01\0' + b + b'\0'
+    def slot(b):
+        return b'\x01\0' + b + b'\0'
     frac = b'\x03\0\x0b\x02\0' + slot(char('a')) + slot(char('b')) + b'\0'
     fence = b'\x03\0\x01\x03\0' + slot(frac) + char('(', 0x96) + char(')', 0x96) + b'\0'
     assert parse_mtef(equation(fence)) == r'\left(\frac{a}{b}\right)'

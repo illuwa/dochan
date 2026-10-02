@@ -59,8 +59,10 @@ def test_mtef_v3_fence_and_overbar():
 
 
 def test_mtef_v5_char_and_fraction():
-    c = lambda s: b"".join(b"\x02\x00\x83" + struct.pack("<H", ord(x)) for x in s)
-    ln = lambda b: b"\x01\x00" + b + b"\x00"
+    def c(s):
+        return b"".join(b"\x02\x00\x83" + struct.pack("<H", ord(x)) for x in s)
+    def ln(b):
+        return b"\x01\x00" + b + b"\x00"
     raw = b"\x05\x01\x00\x06\x00DSMT6\x00\x00" + ln(
         b"\x03\x00\x0b\x00\x00" + ln(c("a")) + ln(c("b")) + b"\x00") + b"\x00"
     assert parse_mtef(raw) == r"\frac{a}{b}"

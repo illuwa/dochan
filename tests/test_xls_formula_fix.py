@@ -3,7 +3,7 @@ import struct
 
 import pytest
 
-from dochan.office_binary.xls import _decode_formula_token_stream, _decode_shared_formula
+from dochan.office_binary.xls import _decode_shared_formula
 from test_xls_formula_extended import (
     array_extra, formula, int_token, name, namex, record, texts, workbook, xti,
 )

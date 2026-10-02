@@ -123,7 +123,7 @@ def form_text(data):
 
 
 def clickhere_prompt(data):
-    """Return a click-here Direction, to be used only if its body is empty."""
+    """Inspect click-here Direction metadata; it is not stored body text."""
     if len(data) < 11 or data[:4] != b'klc%':
         return ''
     count = struct.unpack_from('<H', data, 9)[0]

@@ -721,7 +721,14 @@ class HWPXParser:
         return 0
 
     def _heading_level_for(self, p_elem, runs) -> int:
-        """개요(OUTLINE) 정보 → 스타일 이름 → 폰트 크기 순으로 제목 수준을 정한다."""
+        """직접 개요 → 스타일 이름/기본 개요 → 폰트 크기로 제목 수준을 정한다."""
+        direct_id = _int_attr(p_elem, 'paraPrIDRef', -1)
+        direct = self._para_prs.get(direct_id)
+        if direct and direct['heading_type'] == 'OUTLINE':
+            # 직접 지정은 스타일보다 우선한다. 제목 상한 밖의 개요도
+            # 스타일 개요로 되돌아가지 않고 글꼴 크기 폴백을 적용한다.
+            return self._outline_level(direct_id) or self._detect_heading_level_by_font(runs)
+
         style_id = _int_attr(p_elem, 'styleIDRef', -1)
         style = self._styles.get(style_id)
 
@@ -732,18 +739,12 @@ class HWPXParser:
             if level and level <= MAX_OUTLINE_HEADING_LEVEL:
                 return level
 
-            # (b) 스타일이 가리키는 paraPr 의 개요 정보
-            #     실측상 본문이 OUTLINE 에 닿는 경로는 거의 이것뿐이다.
-            level = self._outline_level(style['para_pr_id'])
+            # (b) 유효한 직접 문단 모양이 없을 때만 스타일의 기본 개요를 쓴다.
+            level = self._outline_level(style['para_pr_id']) if not direct else 0
             if level:
                 return level
 
-        # (c) 문단 자신의 paraPr
-        level = self._outline_level(_int_attr(p_elem, 'paraPrIDRef', -1))
-        if level:
-            return level
-
-        # (d) 폰트 크기 휴리스틱
+        # (c) 폰트 크기 휴리스틱
         return self._detect_heading_level_by_font(runs)
 
     def _outline_level(self, para_pr_id: int) -> int:

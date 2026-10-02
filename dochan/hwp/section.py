@@ -12,7 +12,7 @@ hwp/section.py — 섹션 파서 (트리 구축 + 컨트롤 식별)
 """
 
 import struct
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from dataclasses import dataclass, replace as _dc_replace
 from typing import List
 
@@ -36,7 +36,7 @@ from .records.ctrl_header import (
 )
 from .records.para_text import parse_para_text
 from .records.para_char_shape import parse_para_char_shape
-from .forms import form_text, clickhere_prompt
+from .forms import form_text
 from .revisions import project_text_result
 
 
@@ -73,6 +73,10 @@ MAX_HWP_TABLE_DEPTH = 32
 MAX_HWP_TABLE_CELLS = 200_000
 MAX_HWP_SECTION_CELLS = 200_000
 MAX_HWP_DOCUMENT_CELLS = 200_000
+
+
+class HWPRecordLimitError(ValueError):
+    """A section exceeded its record budget before building model objects."""
 
 
 class _HWPStructureError(ValueError):
@@ -115,26 +119,30 @@ class SectionParser:
         self._fatal_error_keys = set()
         self._table_failure_serial = 0
 
-    def parse_stream(self, stream_data: bytes, is_compressed: bool) -> Section:
+    def parse_stream(self, stream_data: bytes, is_compressed: bool,
+                     *, reject_record_limit: bool = False) -> Section:
         self._reset_section_limits()
         if is_compressed:
             stream_data = safe_zlib_decompress(stream_data)
 
-        records = self._read_all_records(stream_data)
+        records = self._read_all_records(stream_data, reject_record_limit=reject_record_limit)
         tree = self._build_tree(records)
         return self._tree_to_section(tree, reset_limits=False)
 
     # ── 레코드 읽기 ──
 
-    def _read_all_records(self, data: bytes) -> List[RawRecord]:
+    def _read_all_records(self, data: bytes, *, reject_record_limit: bool = False) -> List[RawRecord]:
         records = []
         i = 0
         while i < len(data) - 3:
             if len(records) >= MAX_HWP_RECORDS:
-                self.errors.append(
+                message = (
                     "ERR: HWP section record count exceeds limit: "
                     f"more than {MAX_HWP_RECORDS}"
                 )
+                if reject_record_limit:
+                    raise HWPRecordLimitError(message)
+                self.errors.append(message)
                 break
             try:
                 rec, new_i = self._read_one_record(data, i)
@@ -503,7 +511,7 @@ class SectionParser:
                     return
 
     def _form_text_result(self, text_result, ctrl_nodes):
-        """양식과 빈 누름틀 안내문을 원시 컨트롤 위치에 삽입한다."""
+        """양식 표시값만 삽입한다. 누름틀 Direction은 본문이 아니다."""
         queues = {}
         for node in ctrl_nodes:
             cid = parse_ctrl_id(node['record'].data)
@@ -527,37 +535,6 @@ class SectionParser:
             if value and end < len(raw_map):
                 insertions.append((end, raw_map[end], value))
 
-        form_ends = sorted(end for end, _, value in insertions if value)
-        stack = []
-        clicks = queues.get(b'klc%', [])
-        click_index = 0
-        for raw_pos, kind, cid in text_result.get('field_raw_marks', []):
-            if raw_pos >= len(raw_map):
-                continue
-            if kind == 'start':
-                node = None
-                if cid == b'klc%':
-                    if click_index < len(clicks):
-                        node = clicks[click_index]
-                    click_index += 1
-                stack.append((raw_pos, node))
-            elif stack:
-                start, node = stack.pop()
-                # 두 경계는 컨트롤을 소비한 뒤의 WCHAR 위치다.
-                # 정확히 필드 끝(8 WCHAR)만 있어야 빈 본문이며, 양식
-                # 표시값까지 삽입된 뒤에도 비어 있어야 한다.
-                has_form_text = bisect_right(form_ends, raw_pos) > bisect_left(form_ends, start)
-                data = node['record'].data if node else b''
-                clean = len(data) >= 8 and not (struct.unpack_from('<I', data, 4)[0] & (1 << 15))
-                if (node and clean and raw_pos - start == 8
-                        and raw_map[start] == raw_map[raw_pos] and not has_form_text):
-                    try:
-                        value = clickhere_prompt(node['record'].data)
-                    except ValueError as exc:
-                        self._append_fatal_once('click-data', 'WARN: ' + str(exc))
-                        continue
-                    if value:
-                        insertions.append((start, raw_map[start], value))
         if not insertions:
             return text_result, [node for node in ctrl_nodes if id(node) not in consumed]
         insertions.sort(key=lambda item: item[0])
@@ -669,7 +646,7 @@ class SectionParser:
         shapes = getattr(self.doc_info, 'para_shapes', [])
         direct = 0 <= para.para_shape_id < len(shapes)
         if direct and shapes[para.para_shape_id].heading_type == 1:
-            return self._outline_level(para.para_shape_id)
+            return self._outline_level(para.para_shape_id) or self._heading_level_by_font(para)
         # 1. Style 이름 기반
         if self.doc_info and hasattr(self.doc_info, 'styles') and 0 <= para.style_id < len(self.doc_info.styles):
             style = self.doc_info.styles[para.style_id]
@@ -678,7 +655,7 @@ class SectionParser:
             if '개요' in name or 'outline' in name or 'heading' in name:
                 for i in range(1, 7):
                     if str(i) in name:
-                        return i if i <= MAX_OUTLINE_HEADING_LEVEL else 0
+                        return i if i <= MAX_OUTLINE_HEADING_LEVEL else self._heading_level_by_font(para)
                 return 1  # default heading level
             if name.startswith(('부제목', 'subtitle')):
                 return 2
@@ -692,7 +669,11 @@ class SectionParser:
         if level:
             return level
 
-        # 2. Font size 기반 (CharShape 연결 후 작동)
+        return self._heading_level_by_font(para)
+
+    @staticmethod
+    def _heading_level_by_font(para) -> int:
+        # HWPX와 동일하게 지원 개요 범위 밖에서는 글꼴 크기로 판단한다.
         if para.runs:
             size = para.runs[0].font_size_pt
             if size >= 20:

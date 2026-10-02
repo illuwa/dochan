@@ -25,11 +25,11 @@ def _click(props=0):
 
 
 @pytest.mark.parametrize('body,props,expected', [
-    (b'', 0, 'PROMPT'), (b'', 1 << 15, ''),
+    (b'', 0, ''), (b'', 1 << 15, ''),
     (_inline(11, b' lbt'), 0, ''), (b'\x00\x00', 0, ''),
     ('VALUE'.encode('utf-16-le'), 0, 'VALUE'),
 ])
-def test_clickhere_requires_clean_raw_empty_body(body, props, expected):
+def test_clickhere_preserves_body_without_synthesizing_prompt(body, props, expected):
     raw = _inline(3, b'klc%') + body + _inline(4)
     result, _ = SectionParser()._form_text_result(parse_para_text(raw), [_click(props)])
     assert result['text'] == expected

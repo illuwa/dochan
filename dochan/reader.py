@@ -15,7 +15,7 @@ from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
 from .hwp.distdoc import decode_distribution_section
 from .hwp.doc_info import DocInfoParser
 from .hwp.header import FileHeader
-from .hwp.section import SectionParser
+from .hwp.section import HWPRecordLimitError, SectionParser
 from .hwpx.parser import HWPXParser
 from .hwpx.revisions import validate_revision_mode
 from .model.document import Document
@@ -396,7 +396,31 @@ class Dochan:
                         stream_data = decode_distribution_section(
                             stream_data, is_compressed=file_header.is_compressed,
                         )
-                    section = section_parser.parse_stream(stream_data, file_header.is_compressed)
+                    fallback_name = f"BodyText/Section{section_idx}"
+                    allow_body_fallback = (
+                        self._revision_mode == 'preserve'
+                        and file_header.is_track_change
+                        and not file_header.is_distribution
+                        and body_storage == 'ViewText'
+                        and ole.exists(fallback_name)
+                    )
+                    try:
+                        section = section_parser.parse_stream(
+                            stream_data, file_header.is_compressed,
+                            reject_record_limit=allow_body_fallback,
+                        )
+                    except HWPRecordLimitError:
+                        # Reject ViewText before model/cell budgets are consumed.
+                        # BodyText retains the same byte and record limits.
+                        self.doc.errors.append(
+                            f"WARN: HWP revision ViewText/Section{section_idx} record limit; "
+                            f"{fallback_name} preserved instead; deleted revision text unavailable"
+                        )
+                        stream_data = read_ole_stream(
+                            ole, fallback_name, max_bytes=MAX_OLE_STREAM_SIZE,
+                            budget=stream_budget,
+                        )
+                        section = section_parser.parse_stream(stream_data, file_header.is_compressed)
                     self.doc.sections.append(section)
                 except BoundedIOError:
                     raise

@@ -141,6 +141,19 @@ class TextStyleResolver:
             return None, master
         return None  # Notes masters, tables, chart and SmartArt text are out of scope.
 
+    def release_context(self, root):
+        """Drop content trees; only budgeted ancestor trees stay resident."""
+        path = self.root_paths.get(root)
+        if self.parts.get(path) is not root:
+            self.root_paths.pop(root, None)
+
+    def _node_key(self, node):
+        tree = node.getroottree()
+        path = self.root_paths.get(tree.getroot())
+        # Standalone nodes have no package identity. Package nodes use their
+        # structural position, since cNvPr IDs can be missing or duplicated.
+        return (path, tree.getpath(node)) if path is not None else node
+
     def _take_node(self, node):
         # Cache traversals and charge their work to the owning XML part, so one
         # malformed part cannot disable otherwise valid, unrelated parts.
@@ -278,7 +291,8 @@ class TextStyleResolver:
     def _list_properties(self, style, level, defaults=False):
         if style is None:
             return {}
-        if style not in self.list_styles:
+        cache_key = self._node_key(style)
+        if cache_key not in self.list_styles:
             indexed = {}
             tags = {'{%s}defPPr' % A: -1}
             tags.update(('{%s}lvl%dpPr' % (A, n + 1), n) for n in range(9))
@@ -295,28 +309,33 @@ class TextStyleResolver:
                     if prop.tag == '{%s}defRPr' % A:
                         indexed[key] = self.properties(prop)
                         break
-            self.list_styles[style] = indexed
-        return self.list_styles[style].get(-1 if defaults else level, {})
+            # Retain scalar properties, never the content XML node. Reparsed
+            # copies reuse the same result and do not spend the budget again.
+            self.list_styles[cache_key] = indexed
+        return self.list_styles[cache_key].get(-1 if defaults else level, {})
 
     def _shape_style(self, shape):
         if shape is None:
             return None
-        if shape not in self.shape_styles:
-            self.shape_styles[shape] = shape.find('p:txBody/a:lstStyle', NS)
-        return self.shape_styles[shape]
+        return shape.find('p:txBody/a:lstStyle', NS)
 
     def paragraph_defaults(self, layers, paragraph):
         if layers is None:
             return None
         level = self.level(paragraph)
         tx, master, layout, shape = layers
-        styles = (self.default, tx, self._shape_style(master),
-                  self._shape_style(layout), self._shape_style(shape))
-        values = {}
-        # PowerPoint deck1 S7: even a nearer defPPr loses to a farther lvlNpPr.
-        for defaults in (True, False):
-            for style in styles:
-                values.update(self._list_properties(style, level, defaults))
+        cache_key = (self._node_key(shape), level)
+        if cache_key not in self.shape_styles:
+            styles = (self.default, tx, self._shape_style(master),
+                      self._shape_style(layout), self._shape_style(shape))
+            values = {}
+            # PowerPoint deck1 S7: even a nearer defPPr loses to a farther lvlNpPr.
+            for defaults in (True, False):
+                for style in styles:
+                    values.update(self._list_properties(style, level, defaults))
+            self.shape_styles[cache_key] = values
+        # Paragraph overrides are local and must not contaminate the cache.
+        values = dict(self.shape_styles[cache_key])
         values.update(self.properties(paragraph.find('a:pPr/a:defRPr', NS)))
         return values
 

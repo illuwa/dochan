@@ -610,9 +610,112 @@ def test_style_budget_is_shared_by_trees_of_same_part(monkeypatch):
     import dochan.ooxml.pptx_styles as styles
     monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 2)
     resolver, parser = resolver_for_test()
-    for i in range(2):
+    # R2: identical XML reparses must reuse the first result. The old second
+    # expectation ({}) pinned the repeated-budget bug (888 lost styled runs).
+    for _ in range(2):
         node = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
                                 (A_NS, level('b="1"'))).encode(), parser)
         resolver.root_paths[node] = 'ppt/slides/slide1.xml'
-        assert resolver._list_properties(node, 0) == ({'b': '1'} if i == 0 else {})
-    assert any('limit exceeded' in e for e in resolver.errors)
+        assert resolver._list_properties(node, 0) == {'b': '1'}
+    assert resolver.nodes['ppt/slides/slide1.xml'] == 2
+    assert not resolver.errors
+
+
+def alternating_layout_package(tmp_path, slides, shapes=1, padding=0):
+    styles = ''.join(level('sz="3200" b="1"', n) for n in range(9))
+    path = package(tmp_path, slide='', default=level('sz="1000"'),
+                   layout='<!--%s-->%s' % ('x' * padding, ''.join(
+                       shape('static%d' % n, ph=None, style=styles) for n in range(shapes))))
+    with zipfile.ZipFile(path) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    parts['ppt/slideLayouts/slideLayout2.xml'] = parts['ppt/slideLayouts/slideLayout1.xml']
+    parts['ppt/slideLayouts/_rels/slideLayout2.xml.rels'] = parts['ppt/slideLayouts/_rels/slideLayout1.xml.rels']
+    ns = 'xmlns:p="%s" xmlns:a="%s" xmlns:r="%s"' % (P_NS, A_NS, R_NS)
+    parts['ppt/presentation.xml'] = (
+        '<p:presentation %s><p:sldIdLst>%s</p:sldIdLst><p:defaultTextStyle>%s'
+        '</p:defaultTextStyle></p:presentation>' % (ns, ''.join(
+            '<p:sldId id="%d" r:id="r%d"/>' % (255 + i, i) for i in range(1, slides + 1)),
+            level('sz="1000"')))
+    parts['ppt/_rels/presentation.xml.rels'] = '<Relationships xmlns="%s">%s</Relationships>' % (
+        REL_NS, ''.join('<Relationship Id="r%d" Type="%s/slide" Target="slides/slide%d.xml"/>' %
+                       (i, R_NS, i) for i in range(1, slides + 1)))
+    for i in range(1, slides + 1):
+        parts['ppt/slides/slide%d.xml' % i] = parts['ppt/slides/slide1.xml']
+        parts['ppt/slides/_rels/slide%d.xml.rels' % i] = (
+            '<Relationships xmlns="%s"><Relationship Id="r1" Type="%s/slideLayout" '
+            'Target="../slideLayouts/slideLayout%d.xml"/></Relationships>' %
+            (REL_NS, R_NS, 1 + (i - 1) % 2))
+    with zipfile.ZipFile(path, 'w') as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+    return path
+
+
+@pytest.mark.parametrize('slides', [100, 200])
+def test_alternating_layouts_do_not_retain_content_trees(tmp_path, slides):
+    from lxml import etree
+
+    def roots_in(value):
+        if isinstance(value, etree._Element):
+            return {value.getroottree().getroot()}
+        if isinstance(value, dict):
+            return roots_in(list(value.keys()) + list(value.values()))
+        if isinstance(value, (tuple, list)):
+            return {root for item in value for root in roots_in(item)}
+        return set()
+
+    reader = PPTXReader()
+    doc = reader.read(str(alternating_layout_package(tmp_path, slides, padding=100000)))
+    assert not doc.errors, doc.errors
+    assert len(doc.find_all('paragraph')) == slides
+    roots = roots_in(vars(reader._text_styles))
+    assert sum(root.tag == '{%s}sldLayout' % P_NS for root in roots) <= 2
+    assert not any(root.tag == '{%s}sld' % P_NS for root in roots)
+
+
+def test_alternating_layouts_preserve_styles_after_reparsing(tmp_path):
+    reader = PPTXReader()
+    doc = reader.read(str(alternating_layout_package(tmp_path, 60, shapes=200)))
+    runs = [r for p in doc.find_all('paragraph') for r in p.runs]
+    assert len(runs) == 12000
+    assert sum(r.font_size_pt == 32 and r.bold for r in runs) == 12000
+    assert not doc.errors, doc.errors
+
+
+def test_reparsed_style_cache_distinguishes_parts_shapes_and_levels(tmp_path):
+    path = alternating_layout_package(tmp_path, 4)
+    with zipfile.ZipFile(path) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    for part, size in [(1, 3200), (2, 4200)]:
+        styles = level('sz="%d" b="1"' % size) + level('sz="2100" i="1"', 1)
+        # Both shapes deliberately have cNvPr id=2. A paragraph override must
+        # not leak into the next paragraph or a later reparse of this layout.
+        first = shape(ph=None, style=styles, props='<a:pPr><a:defRPr b="0"/></a:pPr>')
+        first = first.replace('</a:p></p:txBody>', '</a:p>' +
+                              measured_paragraph('level1', '<a:pPr lvl="1"/>') +
+                              measured_paragraph('level0') + '</p:txBody>')
+        second = shape('other', ph=None, style=level('sz="1700"'))
+        parts['ppt/slideLayouts/slideLayout%d.xml' % part] = (
+            '<p:sldLayout xmlns:p="%s" xmlns:a="%s"><p:cSld><p:spTree>%s%s'
+            '</p:spTree></p:cSld></p:sldLayout>' % (P_NS, A_NS, first, second))
+    with zipfile.ZipFile(path, 'w') as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+    doc = PPTXReader().read(str(path))
+    assert not doc.errors, doc.errors
+    for section, size in zip(doc.sections, [32, 42, 32, 42]):
+        assert [(r.font_size_pt, r.bold, r.italic) for p in section.elements for r in p.runs] == [
+            (size, False, False), (21, False, True), (size, True, False), (17, False, False)]
+
+
+def test_content_tree_released_on_parse_failure(tmp_path, monkeypatch):
+    reader = PPTXReader()
+
+    def fail(*args, **kwargs):
+        raise ValueError('synthetic content failure')
+
+    monkeypatch.setattr(reader, '_collect_positioned_elements', fail)
+    doc = reader.read(str(alternating_layout_package(tmp_path, 2)))
+    assert any('synthetic content failure' in e for e in doc.errors)
+    assert reader._last_layout_content == ('', None)
+    assert not any(root.tag == '{%s}sldLayout' % P_NS for root in reader._text_styles.root_paths)

@@ -87,6 +87,8 @@ class PPTXReader:
                 source_format=self.format_name,
                 errors=[f"ERR: PPTX package parse failed: {exc}"],
             )
+        finally:
+            self._last_layout_content = ("", None)
 
     def _read_document(self, file_path: str) -> Document:
         doc = Document(source_format="pptx")
@@ -305,19 +307,22 @@ class PPTXReader:
     ) -> List[object]:
         positioned = []
         ordinal = [0]
-        style_context = self._text_styles.context(slide_root, slide_path)
-        for tree in slide_root.findall(".//p:spTree", namespaces=NS):
-            self._collect_positioned_elements(
-                package,
-                tree,
-                slide_number,
-                slide_path,
-                relationships,
-                positioned,
-                ordinal,
-                skip_placeholder_shapes=skip_placeholder_shapes,
-                style_context=style_context,
-            )
+        try:
+            style_context = self._text_styles.context(slide_root, slide_path)
+            for tree in slide_root.findall(".//p:spTree", namespaces=NS):
+                self._collect_positioned_elements(
+                    package,
+                    tree,
+                    slide_number,
+                    slide_path,
+                    relationships,
+                    positioned,
+                    ordinal,
+                    skip_placeholder_shapes=skip_placeholder_shapes,
+                    style_context=style_context,
+                )
+        finally:
+            self._text_styles.release_context(slide_root)
         elements = [item[-1] for item in sorted(positioned, key=lambda item: item[:3])]
         return elements
 

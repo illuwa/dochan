@@ -32,12 +32,15 @@ def find_pairs(directories: List[str]) -> List[Tuple[str, str, str]]:
             if name.lower().endswith(".hwp"):
                 stem = unicodedata.normalize("NFC", name[:-4])
                 hwp_by_stem.setdefault(stem, os.path.join(directory, name))
+        paired = set()
         for name in names:
             if not name.lower().endswith(".hwpx"):
                 continue
             stem = unicodedata.normalize("NFC", name[:-5])
             hwp_path = hwp_by_stem.get(stem)
-            if hwp_path:
+            # 정규화·대소문자만 다른 .hwpx 가 여럿이면 처음 것만 같은 .hwp 와 짝짓는다
+            if hwp_path and stem not in paired:
+                paired.add(stem)
                 pairs.append((stem, os.path.join(directory, name), hwp_path))
     return pairs
 

@@ -93,3 +93,16 @@ def test_find_pairs_ignores_extension_case(tmp_path):
     pairs = find_pairs([str(tmp_path)])
     assert [stem for stem, _, _ in pairs] == ["문서"]
     assert pairs[0][1].endswith("문서.HWPX") and pairs[0][2].endswith("문서.HWP")
+
+
+def test_find_pairs_pairs_each_hwp_once_when_hwpx_names_differ_only_in_normalization(monkeypatch):
+    # 정규화만 다른 같은 이름의 .hwpx 두 개(리눅스 ext4 등에서 공존 가능)가 같은 .hwp 에 두 번 짝지어지면 안 된다
+    nfc = "가나다"
+    nfd = unicodedata.normalize("NFD", nfc)
+    monkeypatch.setattr(
+        "scripts.compare_hwp_pairs.os.listdir",
+        lambda _d: [nfc + ".hwpx", nfd + ".hwpx", nfc + ".hwp", nfc + ".HWPX"],
+    )
+    pairs = find_pairs(["/virtual"])
+    # 경로 정렬 순서에서 먼저 나온 .hwpx 하나만 남는다
+    assert [stem for stem, _, _ in pairs] == [nfc]

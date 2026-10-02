@@ -10,7 +10,7 @@ from ..model.table import Cell, Table
 from .content import Fragment, across, along, assemble_lines
 from .layout import merge_lines
 from .paths import Segment
-from .connected_tables import split_connected
+from .connected_tables import SplitBudget, split_connected
 
 MAX_PAGE_CELLS = 50_000
 MAX_DOCUMENT_CELLS = 200_000
@@ -407,19 +407,23 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         _warn(warnings, 'WARN: PDF 괘선 교차 검사 수 한도(2000000) 초과 — 표 생략')
         return []
     separated = []
-    boxes = {}
+    component_boxes = {}
+    split_budget = SplitBudget()
     for i, (hs, vs) in enumerate(grouped):
         if len(hs) >= 2 and len(vs) >= 2:
             xs = sorted(set(v[0] for v in vs))
             _extend_to_rule_extents(xs, hs, tolerance)
-            boxes[i] = (xs[0], min(h[0] for h in hs), xs[-1], max(h[0] for h in hs))
+            component_boxes[i] = (xs[0], min(h[0] for h in hs), xs[-1], max(h[0] for h in hs))
     for i, (hs, vs) in enumerate(grouped):
         # 독립 성분 안의 연결형은 깊이·부모 셀 채택까지 얽힌다. 그 경우는
         # 기존 경로를 유지하고 최상위 성분만 두 노드로 분리한다.
         eligible = (len(grouped) < MAX_PAGE_COMPONENTS and MAX_NESTED_DEPTH >= 1
-                    and i in boxes and not any(
-                        _inside(boxes[i], box) for j, box in boxes.items() if i != j))
-        split = (split_connected(hs, vs, tolerance, index, warnings=warnings)
+                    and i in component_boxes and not any(
+                        _inside(component_boxes[i], box)
+                        for j, box in component_boxes.items() if i != j))
+        split = (split_connected(hs, vs, tolerance, index, warnings=warnings,
+                                 split_budget=split_budget, dash_runs=dash_runs,
+                                 max_cells=budget.remaining if budget is not None else MAX_PAGE_CELLS)
                  if eligible else [(hs, vs)])
         separated.extend(split)
     if len(separated) > len(grouped):
@@ -479,9 +483,9 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             continue
         grid_hs, grid_vs = (_supplement_rules(hs, vs, xs, ys, dash_runs)
                             if has_text else (hs, vs))
-        grid, owners, boxes = _make_grid(grid_hs, grid_vs, xs, ys, tolerance, page_number)
+        grid, owners, cell_boxes = _make_grid(grid_hs, grid_vs, xs, ys, tolerance, page_number)
         reserved += cells
-        nodes.append(_TableNode(bbox, xs, ys, grid, owners, boxes, cells,
+        nodes.append(_TableNode(bbox, xs, ys, grid, owners, cell_boxes, cells,
                                 parent, owner_key, depth))
 
     used_orders = set()

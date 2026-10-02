@@ -246,6 +246,7 @@ dochan/
 ├── cli.py             # CLI 도구 (convert·batch·info, --images-dir, --password-stdin)
 ├── batch.py           # 디렉토리 일괄 변환
 ├── conversion.py      # AssetRef 등 변환 계약
+├── cfb.py             # [MS-CFB] OLE 복합 파일 리더 (HWP·DOC·PPT·XLS·내장 OLE 공용, 외부 의존성 없음)
 ├── crypto/            # 암호화 Office 문서 ([MS-OFFCRYPTO], 외부 의존성 없음)
 │   ├── ooxml.py       #   OOXML Standard/Agile (EncryptionInfo + EncryptedPackage)
 │   ├── legacy.py      #   DOC·XLS XOR·RC4·RC4 CryptoAPI
@@ -347,15 +348,16 @@ dochan은 다음 프로젝트와 자료를 기반으로 개발되었습니다:
 - [OWPML (KS X 6101:2011)](https://www.kssn.net/) — HWPX 국가 표준
 
 **오픈소스**
-- [olefile](https://github.com/decalage2/olefile) — OLE2 파일 파싱 (Philippe Lagadec, BSD)
 - [lxml](https://lxml.de/) — XML 파싱 (BSD)
 - [pdfplumber](https://github.com/jsvine/pdfplumber) — 품질 검증용 PDF 추출 (MIT)
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) — 이미지 텍스트 추출 (Apache 2.0)
 
-**선행 연구**
-- [hwplib](https://github.com/neolord0/hwplib) (Java) — HWP 레코드 구조 참조
-- [hwp.js](https://github.com/niceeee/hwp.js) — 레코드 트리 구축 참조
+**선행 연구** (공개 HWP 파서 프로젝트. dochan 의 구현 근거는 한컴 공개 명세와 실물 바이트 관찰이며, 이 프로젝트들의 코드는 쓰지 않는다. 과거 참고 이력은 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) 에 기록)
+- [hwplib](https://github.com/neolord0/hwplib) (Java)
+- [hwp.js](https://github.com/niceeee/hwp.js)
 - [pyhwp](https://github.com/mete0r/pyhwp) — Python HWP 파서 선구자
+
+OLE2(CFB) 컨테이너는 1.8.0 부터 [MS-CFB] 명세로 자체 구현한 `dochan/cfb.py` 로 읽는다(이전 버전은 olefile 을 썼다).
 
 ## License
 

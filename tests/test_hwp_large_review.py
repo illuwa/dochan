@@ -71,7 +71,7 @@ def _reader(monkeypatch, tmp_path, streams, flags):
             struct.pack_into("<BBBBI", header, 32, 0, 0, 0, 5, flags)
             self.streams = dict(streams, FileHeader=bytes(header),
                                 DocInfo=_deflate(b"") if flags & 1 else b"")
-    monkeypatch.setattr("dochan.reader.olefile.OleFileIO", FixtureOle)
+    monkeypatch.setattr("dochan.reader.cfb.OleFileIO", FixtureOle)
     path = tmp_path / "synthetic.hwp"
     path.write_bytes(b"\xd0\xcf\x11\xe0")
     return Dochan(path)

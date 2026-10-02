@@ -97,7 +97,7 @@ def parse_public(contents):
     with tempfile.TemporaryDirectory(prefix="dochan-synthetic-") as directory:
         filename = Path(directory) / "synthetic.hwp"
         filename.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
-        with patch("dochan.reader.olefile.OleFileIO", side_effect=lambda *_: MemoryOle(contents)):
+        with patch("dochan.reader.cfb.OleFileIO", side_effect=lambda *_: MemoryOle(contents)):
             start = time.perf_counter()
             reader = Dochan(str(filename))
             parse_time = time.perf_counter() - start

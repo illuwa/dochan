@@ -14,7 +14,7 @@ import struct
 import time
 import zipfile
 
-import olefile
+from dochan import cfb
 from lxml import etree
 
 from dochan.hwp.distdoc import decode_distribution_section
@@ -74,7 +74,7 @@ def scan_records(data):
 def scan_hwp(path):
     validate_file_size(str(path))
     out = {"sections": [], "errors": []}
-    with olefile.OleFileIO(str(path)) as ole:
+    with cfb.OleFileIO(str(path)) as ole:
         header = FileHeader.parse(read_ole_stream(ole, "FileHeader"))
         out["distribution"] = header.is_distribution
         out["track_change"] = header.is_track_change

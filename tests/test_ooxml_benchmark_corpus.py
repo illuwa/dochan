@@ -128,7 +128,7 @@ def test_generate_corpus_writes_ooxml_files_and_expected_manifest(tmp_path):
         "ABC Company manufactures native converters.",
     ]
     assert expected["sample.xlsx"]["expected_tables"][0][14] == ["($1,234.50)", "(1,234)", "(12.5%)"]
-    assert expected["sample.xlsx"]["expected_tables"][0][15] == ["12:00", "1.5", ""]
+    assert expected["sample.xlsx"]["expected_tables"][0][15] == ["12:00", "36:00:00", ""]
     assert expected["sample.xlsx"]["expected_tables"][0][16] == ["00123", "123-4567", ""]
     assert expected["sample.xlsx"]["expected_tables"][0][17] == ["Financials", "Revenue", "809127967.92"]
     assert expected["sample.xlsx"]["expected_tables"][0][18] == ["", "EBITDA", "847831.96"]
@@ -164,7 +164,7 @@ def test_generate_corpus_writes_ooxml_files_and_expected_manifest(tmp_path):
         "ABC Company manufactures native converters.",
     ] in expected["sample.xlsx"]["expected_table_rows"]
     assert ["($1,234.50)", "(1,234)", "(12.5%)"] in expected["sample.xlsx"]["expected_table_rows"]
-    assert ["12:00", "1.5", ""] in expected["sample.xlsx"]["expected_table_rows"]
+    assert ["12:00", "36:00:00", ""] in expected["sample.xlsx"]["expected_table_rows"]
     assert ["00123", "123-4567", ""] in expected["sample.xlsx"]["expected_table_rows"]
     assert ["Financials", "Revenue", "809127967.92"] in expected["sample.xlsx"]["expected_table_rows"]
     assert ["", "EBITDA", "847831.96"] in expected["sample.xlsx"]["expected_table_rows"]

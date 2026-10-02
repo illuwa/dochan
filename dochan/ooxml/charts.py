@@ -377,11 +377,12 @@ def _number_format_reader(format_code, date_1904):
 
 
 def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
-    """지원하는 날짜·시각만 표시하며 나머지는 원시 숫자를 보존한다.
+    """지원하는 날짜·시각·경과 시간을 표시하며 나머지는 원시 숫자를 보존한다.
 
     시각 일련값이 하루 이상이면 정수 일수를 잃지 않도록 날짜를 붙인다.
     이는 시각 서식만 표시하는 Excel과 의도적으로 다른 출력이다.
-    경과 시간·소수 초·단일 s·음수 날짜/시각은 원시 값으로 남긴다.
+    단순 경과 시간은 총 단위를 표시한다. 소수 초·단일 s 시각·음수
+    날짜/시각/경과 시간과 미지원 경과 서식은 원시 값으로 남긴다.
     """
     if not format_code or format_code.lower() == "general" or len(format_code) > MAX_NUMBER_FORMAT_LENGTH:
         return value

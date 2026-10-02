@@ -1601,11 +1601,15 @@ class XLSXReader:
                 # Unsupported fraction patterns must not become rounded whole
                 # numbers when a padding placeholder (_?) is discarded.
                 return value
-            # Elapsed units, subsecond precision and single-second tokens are
-            # not faithfully represented by the normalized minute/second API.
-            # Preserve their raw serial, as for negative Excel date/time.
+            # Negative temporal values have no supported display contract.
+            # Elapsed formats use total units, independently of the date epoch.
+            if metadata.kind == "duration":
+                formatted = self._excel_duration(number, sections[position]) if number >= 0 else None
+                return formatted if formatted is not None else value
+            # Preserve subsecond and single-second wall-clock formats until
+            # the normalized time API can represent them faithfully.
             if metadata.kind in ("date", "time", "duration") and (
-                metadata.kind == "duration" or number < 0
+                number < 0
                 or re.search(r"(?<!s)s(?!s)|s+\.0+", clean)
             ):
                 return value
@@ -1790,13 +1794,31 @@ class XLSXReader:
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}" if include_seconds else f"{hours:02d}:{minutes:02d}"
 
-    def _excel_duration(self, serial: float, include_seconds: bool = False) -> str:
+    def _excel_duration(self, serial: float, fmt: str) -> Optional[str]:
+        """Display simple elapsed units; leave unsupported patterns untouched."""
+        match = re.fullmatch(
+            r'((?:"[^"]*")*)\[(h+|m+|s+)\](?::(m{1,2}|s{1,2}))?'
+            r'(?::(s{1,2}))?((?:"[^"]*")*)', fmt, re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        prefix, unit, tail, seconds, suffix = match.groups()
+        unit, tail = unit.lower(), (tail or "").lower()
+        if ((unit[0] == "h" and tail not in ("", "m", "mm"))
+                or (unit[0] == "m" and (tail not in ("", "s", "ss") or seconds))
+                or (unit[0] == "s" and (tail or seconds))):
+            return None
+        # Round once to the nearest second, then truncate any undisplayed
+        # smaller units. Do not wrap at midnight or slice a wall-clock string.
         total_seconds = int(round(serial * 86400))
-        sign = "-" if total_seconds < 0 else ""
-        total_seconds = abs(total_seconds)
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        return f"{sign}{hours}:{minutes:02d}:{seconds:02d}" if include_seconds else f"{sign}{hours}:{minutes:02d}"
+        divisor = {"h": 3600, "m": 60, "s": 1}[unit[0]]
+        result = str(total_seconds // divisor).zfill(len(unit))
+        if tail:
+            component = (total_seconds // 60 if tail[0] == "m" else total_seconds) % 60
+            result += ":" + str(component).zfill(len(tail))
+        if seconds:
+            result += ":" + str(total_seconds % 60).zfill(len(seconds))
+        return prefix.replace('"', "") + result + suffix.replace('"', "")
 
     def _zero_filled_number(self, number: float, pattern: str) -> str:
         sign = "-" if number < 0 else ""

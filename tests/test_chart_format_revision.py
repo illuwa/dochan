@@ -1,4 +1,4 @@
-"""3차 리뷰의 원시 값 보존 및 서식 토큰 계약을 합성 입력으로 검증한다."""
+"""리뷰의 경과 시간 표시, 원시 값 보존 및 서식 토큰 계약을 합성 입력으로 검증한다."""
 import pytest
 
 from dochan.ooxml import charts
@@ -22,10 +22,12 @@ def test_spacing_fill_and_literals_are_not_time_tokens(fmt, expected):
 
 
 @pytest.mark.parametrize("value,fmt", [
-    ("1.5", "[h]:mm:ss"), ("1.5", "[hh]:mm:ss"),
-    ("0.0423", "[mm]:ss"), ("0.5", "[ss]"),
-    ("3.14159", "[ss].000"), ("0.5", "[hhh]"),
-    ("0.000011574074074074074", "[s]"),
+    ("3.14159", "[ss].000"), ("0.5", "ss.00"),
+    ("-1.5", "[h]:mm:ss"), ("-0.25", "[mm]:ss"),
+    ("1.5", "[h]:ss"), ("1.5", "[m]:mm"), ("1.5", "[s]:ss"),
+    ("1.5", "[h]:mmm"), ("1.5", "[h]:mm:ss.000"),
+    ("1.5", "[h] mm"), ("1.5", "[h]:mm:hh"),
+    ("1.5", '[h]":"mm'), ("1.5", "[h]:[m]"),
     ("0.1702084490740741", "h:m:s.00"),
     ("0.1702084490740741", "hh:mm:ss.000"),
     ("0.1702084490740741", "h:m:s"), ("0.5", "s"),
@@ -105,8 +107,9 @@ def test_fraction_fallback_does_not_change_formats_without_padding():
 
 
 @pytest.mark.parametrize("value,fmt", [
-    ("1.5", "0.00_h"), ("1.5", "0.00*h"), ("0.5", "[ss]"),
-    ("1.5", "[mm]:ss"), ("-0.25", "h:mm"), ("0.125", "hh:mm:ss.000"),
+    ("1.5", "0.00_h"), ("1.5", "0.00*h"), ("0.5", "[ss].000"),
+    ("1.5", "[h]:ss"), ("-0.25", "h:mm"), ("0.125", "hh:mm:ss.000"),
+    ("-1.5", "[h]:mm:ss"), ("0.5", "h:m:s"),
 ])
 def test_temporal_fallback_reaches_all_four_chart_readers(value, fmt):
     from dochan.office_binary.xls_chart import parse_chart_substreams
@@ -120,3 +123,59 @@ def test_temporal_fallback_reaches_all_four_chart_readers(value, fmt):
     assert next(element for element in elements if hasattr(element, "rows")).rows[1][0].text == value
     data = chart(biff_series(formatted_brai(2, 164)), cache(2, [float(value)]), cache(1, [2]))
     assert rows(parse_chart_substreams(data, number_formats={164: fmt})[0])[1] == [value, "2"]
+
+
+ELAPSED_CASES = [
+    ("1.5", "[h]:mm:ss", "36:00:00"),
+    ("1.5", "[hh]:mm:ss", "36:00:00"),
+    ("0.04", "[h]:mm", "0:57"),
+    ("0.0423", "[mm]:ss", "60:55"),
+    ("0.0423", "[hh]:mm:ss", "01:00:55"),
+    ("3.14159", "[ss]", "271433"),
+    ("0.5", "[hhh]", "012"),
+    ("0.000011574074074074074", "[s]", "1"),
+    ("0.5", "[ss]", "43200"),
+    ("1.5", "[mm]:ss", "2160:00"),
+    ("0", "[hh]:mm:ss", "00:00:00"),
+    ("0", "[mm]", "00"),
+    ("0", "[ss]", "00"),
+    ("0.0423", "[h]:m:s", "1:0:55"),
+    ("0.0423", "[h]:m:ss", "1:0:55"),
+    ("0.0423", "[h]:mm:s", "1:00:55"),
+    ("0.00002", "[m]:s", "0:2"),
+    ("0.00002", "[m]:ss", "0:02"),
+    ("0.00002", "[s]", "2"),
+    ("0.999999", "[h]:mm:ss", "24:00:00"),
+    ("0.999999", "[m]", "1440"),
+    ("0.00069", "[h]:mm", "0:01"),
+    ("0.0423", "[HH]:MM:SS", "01:00:55"),
+    ("0.0423", '"elapsed "[hh]:mm:ss" total"', "elapsed 01:00:55 total"),
+    ("0.0423", '"h;"[m]:ss"s"', "h;60:55s"),
+]
+
+
+@pytest.mark.parametrize("value,fmt,expected", ELAPSED_CASES)
+@pytest.mark.parametrize("date_1904", [False, True])
+def test_supported_elapsed_displays_total_units(value, fmt, expected, date_1904):
+    reader = XLSXReader()
+    reader._date_1904 = date_1904
+    assert reader._format_cell_value(value, fmt) == expected
+    display = charts.format_chart_number(value, fmt, date_1904)
+    assert display == expected
+    assert display.raw == value
+
+
+@pytest.mark.parametrize("value,fmt,expected", ELAPSED_CASES)
+def test_elapsed_display_reaches_all_four_chart_readers(value, fmt, expected):
+    from dochan.office_binary.xls_chart import parse_chart_substreams
+    from test_xls_chart import cache, chart, rows, series as biff_series
+    from test_xls_chart_details import formatted_brai
+
+    xml = root('<c:scatterChart>' + series('S', [value], [value], True, fmt, fmt) + '</c:scatterChart>')
+    for reader_type in (XLSXReader, PPTXReader):
+        assert table(reader_type, xml)[1] == [expected, expected]
+    elements, _ = parse_chart_xml(etree.tostring(xml), display_values=True)
+    assert [cell.text for cell in next(e for e in elements if hasattr(e, "rows")).rows[1]] == [expected, expected]
+    data = chart(biff_series(formatted_brai(2, 164), formatted_brai(1, 164)),
+                 cache(2, [float(value)]), cache(1, [float(value)]))
+    assert rows(parse_chart_substreams(data, number_formats={164: fmt})[0])[1] == [expected, expected]

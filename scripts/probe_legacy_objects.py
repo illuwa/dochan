@@ -259,7 +259,7 @@ def probe(root):
         docs[name] = (PPTReader().read(str(path)), ppt_storages(path))
     for name, object_id, slide, by_rows, axes, points, extra, title, kind in [
         ('42520.ppt', 57, 16, True, [1], range(1, 15), [], None, 'line'),
-        ('bug61881.ppt', 1, 27, True, [1, 2], range(1, 6), ['North'], None, 'column'),
+        ('bug61881.ppt', 1, 27, True, [1, 2], range(1, 6), [], None, 'column'),
         ('37625.ppt', 80, 13, False, [1], range(1, 5), [], None, 'pie'),
         ('37625.ppt', 521, 4, False, [1], range(1, 14), [], '… large share of old vehicles', 'line'),
     ]:

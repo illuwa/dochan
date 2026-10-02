@@ -41,6 +41,8 @@ class Presentation:
     slides: List[Sheet] = field(default_factory=list)
     masters: Dict[int, Sheet] = field(default_factory=dict)
     notes: Dict[int, Sheet] = field(default_factory=dict)
+    embedded: Dict[int, Record] = field(default_factory=dict)
+    embedded_progids: Dict[int, str] = field(default_factory=dict)
 
 
 def resolve_presentation(data: bytes, current_user: bytes, errors=None) -> Optional[Presentation]:
@@ -137,6 +139,36 @@ def resolve_presentation(data: bytes, current_user: bytes, errors=None) -> Optio
     if document is None:
         return None
     result = Presentation(document)
+    from .ole_objects import supported_progid
+    # ExEmbed/ExControl CString instance 2 stores the object's ProgID.
+    for container in walk_records(document.children):
+        progid = next((bytes(c.data[:4096]).decode('utf-16le', errors='replace').rstrip('\0')
+                       for c in container.children
+                       if c.header.rec_type == 4026 and c.header.rec_instance == 2), '')
+        for atom in container.children:
+            if (atom.header.rec_type == 4035 and len(atom.data) >= 24 and progid
+                    and len(result.embedded_progids) < 256):
+                result.embedded_progids[struct.unpack_from('<I', atom.data, 8)[0]] = progid
+    # Resolve only the latest directory and objects named by ExOleObjAtom.
+    # Historical ExOleObjStg records can contain superseded object contents.
+    for atom in walk_records(document.children):
+        if atom.header.rec_type != 4035 or len(atom.data) < 24:
+            continue
+        _aspect, kind, object_id, _subtype, pid = struct.unpack_from('<5I', atom.data)
+        if kind != 0:  # Embedded only; never dereference external links/controls.
+            continue
+        progid = result.embedded_progids.get(object_id, '')
+        if progid and not supported_progid(progid):
+            continue
+        if len(result.embedded) >= 256:
+            warn(errors, 'embedded object count limit exceeded')
+            break
+        if pid in offsets:
+            obj = read_object(offsets[pid], {4113})
+            if obj is not None:
+                result.embedded[object_id] = obj
+        elif supported_progid(progid):
+            warn(errors, 'embedded object persist reference missing')
     for listing in document.children:
         if listing.header.rec_type != 4080 or listing.header.rec_instance not in (0, 1, 2):
             continue

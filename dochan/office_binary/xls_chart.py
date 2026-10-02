@@ -58,7 +58,8 @@ def _records(data, errors):
 def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
                            current_sheet: int = 0, path: str = 'Workbook',
                            sheet_name: Optional[str] = None, errors=None,
-                           budget=None, internal_supbooks=None, formula_values=None) -> List[object]:
+                           budget=None, internal_supbooks=None, formula_values=None,
+                           category_start=0) -> List[object]:
     """Read embedded charts or a chart sheet from a BIFF byte sequence.
 
     ``sheets`` holds zero-based worksheet cell mappings; ``external_sheets``
@@ -69,6 +70,8 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
     and holds remaining output cells, visited points, and charts. A legacy
     one-item list is extended in place. formula_values parallels sheets and maps
     formula coordinates to cached scalars (None means no calculated value).
+    ``category_start`` keeps the historical XLS fallback labels by default;
+    native embedded Office charts request the one-based Office positions.
     All malformed chart diagnostics are warnings, never document failures.
     """
     errors = errors if errors is not None else []
@@ -111,7 +114,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
             if not oversized:
                 elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                                 current_sheet, f'{path}#chart{chart_index}',
-                                sheet_name, errors, budget, internal_supbooks, formula_values))
+                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start))
             chart_records = None
             depth = 0
             continue
@@ -122,7 +125,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
             if not oversized:
                 elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                                 current_sheet, f'{path}#chart{chart_index}',
-                                sheet_name, errors, budget, internal_supbooks, formula_values))
+                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start))
             chart_records = None
             continue
         if depth != 1 or oversized:
@@ -139,7 +142,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
         if not oversized and depth <= MAX_DEPTH:
             elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                             current_sheet, f'{path}#chart{chart_index}', sheet_name,
-                            errors, budget, internal_supbooks, formula_values))
+                            errors, budget, internal_supbooks, formula_values, category_start))
     return elements
 
 
@@ -246,7 +249,7 @@ def _reference_values(tokens, sheets, external_sheets, current_sheet, errors, bu
 
 
 def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_name, errors, budget,
-                 internal_supbooks=None, formula_values=None):
+                 internal_supbooks=None, formula_values=None, category_start=0):
     if budget[0] < 2:
         _warn(errors, 'output cell limit exceeded')
         return []
@@ -389,7 +392,7 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
             _warn(errors, 'output cell limit exceeded')
             return elements
         rows = [['Category'] + [name or f'Series {i + 1}' for i, (name, _, _) in enumerate(items)]]
-        rows.extend([[labels.get(i, str(i))] + [ys.get(i, '') for _, _, ys in items] for i in sorted(indexes)])
+        rows.extend([[labels.get(i, str(i + category_start))] + [ys.get(i, '') for _, _, ys in items] for i in sorted(indexes)])
     count = sum(len(row) for row in rows)
     if count > budget[0]:
         _warn(errors, 'output cell limit exceeded')

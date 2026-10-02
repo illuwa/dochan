@@ -16,11 +16,12 @@ def _unicode(text):
 
 
 class StructureRenderer:
-    def __init__(self, binary, doc, stories, pictures):
+    def __init__(self, binary, doc, stories, pictures, objects=None):
         self.binary = binary
         self.doc = doc
         self.stories = stories
         self.pictures = pictures
+        self.objects = objects
         self.depth = 0
 
     def _chunks(self, record):
@@ -93,10 +94,18 @@ class StructureRenderer:
             if self.stories.hidden(cp):
                 continue
             if char in ('\x01', '\x08'):
+                embedded = self.objects.at(cp, props, provenance) if self.objects is not None else []
+                if embedded:
+                    flush()
+                    blocks.extend(embedded)
+                    continue
                 image = self.pictures.image_at(cp, props)
                 if image is not None:
                     flush()
                     blocks.append(image)
+                elif self.objects is not None and cp in self.objects.labels:
+                    flush()
+                    blocks.append(Paragraph(runs=[TextRun(text=self.objects.labels[cp])], provenance=provenance))
                 if char == '\x08' and hasattr(self.pictures, 'textbox_at'):
                     index = self.pictures.textbox_at(cp)
                     if index is not None:
@@ -127,7 +136,7 @@ class StructureRenderer:
             self.depth -= 1
 
 
-def parse_structured_doc(word, table, data=b''):
+def parse_structured_doc(word, table, data=b'', ole=None):
     """Return None for pre-97/invalid FIBs so callers retain text recovery."""
     from .doc_images import DocImages
     from .doc_stories import Stories
@@ -137,7 +146,9 @@ def parse_structured_doc(word, table, data=b''):
         return None
     doc = Document(source_format='doc')
     stories = Stories(binary, doc)
-    renderer = StructureRenderer(binary, doc, stories, DocImages(binary, doc))
+    from .ole_objects import DocObjects
+    objects = DocObjects(ole, binary, stories.fields, doc.errors) if ole is not None else None
+    renderer = StructureRenderer(binary, doc, stories, DocImages(binary, doc), objects)
     start, end = binary.stories['main']
     # Preserve the legacy output contract: explicit page/section breaks divide
     # model Sections. A Word section break also carries the preceding PAPX.

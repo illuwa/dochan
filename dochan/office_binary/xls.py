@@ -328,7 +328,8 @@ def _recover_next_record_offset(data: bytes, start: int) -> Optional[int]:
     return None
 
 
-def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Document:
+def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
+                        embedded_chart_offset=None, chart_budget=None) -> Document:
     doc = Document(source_format="xls")
     normalized_stream = workbook_stream or "Workbook"
     sheets: List[_SheetInfo] = []
@@ -451,14 +452,17 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
     # 워크북 전체가 실체화할 수 있는 셀 총량. 시트별 상한만으로는 시트를 여럿 두는
     # 우회를 막을 수 없다(실측: 10.7KB 스트림으로 1,920만 셀을 만들 수 있었다).
     workbook_budget = [MAX_WORKBOOK_CELLS]
-    chart_budget = [200000]
+    chart_budget = chart_budget if chart_budget is not None else [200000]
     try:
-        drawing_reader = XlsDrawingReader(data, errors=doc.errors)
+        drawing_reader = (XlsDrawingReader(data, errors=doc.errors)
+                          if embedded_chart_offset is None else None)
     except Exception as exc:
         doc.errors.append('WARN: XLS drawing initialization failed: %s' % exc)
         drawing_reader = None
 
     for sheet_index, sheet in enumerate(sorted_sheets):
+        if embedded_chart_offset is not None and sheet.offset != embedded_chart_offset:
+            continue
         sheet_path = f"{normalized_stream}#{sheet.name}"
         section = Section(
             provenance=Provenance(
@@ -469,20 +473,22 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook") -> Docum
                 hidden=sheet.visibility in {1, 2},
             )
         )
-        if sheet_index == 0:
-            section.elements.extend(defined_name_elements)
-        for paragraph in _sheet_header_footer_elements(sheet, path=sheet_path):
-            section.elements.append(paragraph)
-        table = _sheet_to_table(sheet, path=sheet_path, errors=doc.errors, budget=workbook_budget)
-        if table.rows:
-            section.elements.append(table)
+        if embedded_chart_offset is None:
+            if sheet_index == 0:
+                section.elements.extend(defined_name_elements)
+            for paragraph in _sheet_header_footer_elements(sheet, path=sheet_path):
+                section.elements.append(paragraph)
+            table = _sheet_to_table(sheet, path=sheet_path, errors=doc.errors, budget=workbook_budget)
+            if table.rows:
+                section.elements.append(table)
         try:
             section.elements.extend(parse_chart_substreams(
                 sheet_streams[sheet_index], sheets=[s.cells for s in unique_sheets],
                 formula_values=[s.formula_values for s in unique_sheets],
                 external_sheets=external_sheets, internal_supbooks=internal_supbooks,
                 current_sheet=unique_sheets.index(sheet),
-                path=sheet_path, sheet_name=sheet.name, errors=doc.errors, budget=chart_budget))
+                path=sheet_path, sheet_name=sheet.name, errors=doc.errors, budget=chart_budget,
+                category_start=1 if embedded_chart_offset is not None else 0))
         except Exception as exc:
             doc.errors.append('WARN: XLS chart parsing failed: %s' % exc)
         if drawing_reader is not None:

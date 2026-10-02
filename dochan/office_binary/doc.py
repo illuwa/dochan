@@ -407,7 +407,8 @@ class DOCReader:
                         and word_data[:2] == b"\xec\xa5"):
                     try:
                         from .doc_structure import parse_structured_doc
-                        structured = parse_structured_doc(word_data, candidate, load_data_stream)
+                        object_options = {'ole': ole} if ole.exists('ObjectPool') else {}
+                        structured = parse_structured_doc(word_data, candidate, load_data_stream, **object_options)
                         if structured is not None:
                             structured.errors.extend(doc.errors)
                             return structured

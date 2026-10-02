@@ -41,6 +41,8 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
     links = read_hyperlinks(presentation.document.children, [s.slide_id for s in presentation.slides])
     entries = read_bstore(presentation.document.children, delayed_stream=pictures, errors=errors)
     renderer = _Renderer(doc, entries, links, stream_name)
+    from .ole_objects import PptObjects
+    renderer.objects = PptObjects(presentation.embedded, errors, presentation.embedded_progids)
     renderer.font_names = {a.header.rec_instance: bytes(a.data[:64]).decode('utf-16le', errors='replace').split('\0')[0]
                            for a in walk_records(presentation.document.children) if a.header.rec_type == 4023}
     for index, slide in enumerate(presentation.slides, 1):
@@ -105,6 +107,7 @@ class _Renderer:
         self.comment_record_budget = 100000
         self.font_names = {}
         self.field_values = {}
+        self.objects = None
 
     def text(self, block, provenance, link=""):
         if len(block.text) > self.remaining_text or self.remaining_paragraphs <= 0:
@@ -211,6 +214,14 @@ class _Renderer:
                 return []
             if notes and ph in (5, 7, 8, 9, 10, 11):
                 return []  # Slide thumbnails, date/header/footer/slide number.
+            object_id = None
+            if self.objects is not None:
+                for atom in parse_records(shape.client_data, errors=self.doc.errors):
+                    if atom.header.rec_type == 3009 and len(atom.data) >= 4:
+                        object_id = struct.unpack_from('<I', atom.data)[0]
+                        embedded = self.objects.at(object_id, provenance)
+                        if embedded:
+                            return embedded
             if shape.children:
                 table = table_from_shape(shape, render, provenance, errors=self.doc.errors,
                                          cell_budget=self.cell_budget)
@@ -237,6 +248,8 @@ class _Renderer:
                     elements.extend(self.text(TextBlock(text=wordart), provenance, link))
             if shape.pib:
                 elements.extend(self.image(shape, provenance, images))
+            if object_id is not None and object_id in self.objects.supported and not elements:
+                elements.extend(self.text(TextBlock(text=shape.description or shape.name or '[내장 개체]'), provenance))
             return elements
 
         elements = []

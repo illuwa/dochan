@@ -3,10 +3,11 @@
 parse_chart_xml returns an optional explicit title Paragraph followed by one
 Table per series. The first table's TOP caption uses the common OOXML chart
 type/axis annotation once; the series name is its value-column heading. Series follow c:order (stable XML-order fallback),
-rows follow zero-based c:pt/@idx, and number strings are never reformatted.
+rows follow zero-based c:pt/@idx. By default number strings remain unchanged.
 
-Only stored caches/literals are read. Formula evaluation, workbook/ZIP access,
-axis formatting, automatic titles and chart rendering belong outside this API.
+Only stored caches/literals are read. display_values enables shared temporal
+formatting and explicit automatic titles. Formula evaluation, workbook/ZIP
+access and chart rendering remain outside this API.
 See docs/benchmarks/hwpx/chart-validation.md for the supported/verified scope.
 """
 import re
@@ -18,7 +19,7 @@ import lxml.etree as etree
 
 from ..model.document import Paragraph, TextRun
 from ..model.table import Cell, Table
-from ..ooxml.charts import chart_caption, chart_title
+from ..ooxml.charts import chart_caption, chart_title, chart_point_formatter
 
 MAX_XML_BYTES = 4 * 1024 * 1024
 MAX_SERIES = 128
@@ -47,6 +48,7 @@ class _LimitExceeded(Exception):
 class _Budget:
     points: int = 0
     cells: int = 0
+    display_values: bool = False
 
     def add_points(self, count: int) -> None:
         if count > MAX_POINTS or self.points + count > MAX_TOTAL_POINTS:
@@ -100,6 +102,7 @@ def _read_cache(node, numeric: bool, context: str, budget: _Budget,
     if declared is not None and declared != len(point_nodes):
         _warn(warnings, "count_mismatch", context + ": ptCount differs from point node count")
     points = {}
+    format_point = chart_point_formatter(node) if budget.display_values and numeric else None
     for point in point_nodes:
         index = _unsigned(point.get("idx"), MAX_POINTS - 1)
         if index is None:
@@ -122,7 +125,7 @@ def _read_cache(node, numeric: bool, context: str, budget: _Budget,
             if not valid:
                 _warn(warnings, "invalid_number", context + ": non-decimal value left blank")
                 value = ""
-        points[index] = value
+        points[index] = format_point(point, value) if format_point is not None and value else value
 
     observed = max(points, default=-1) + 1
     if declared is not None and observed > declared:
@@ -284,15 +287,27 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
                 caption = ""
             table.caption_side = "TOP"
             elements.append(table)
+    # Reuse the already validated series name; do not reread rejected title or
+    # duplicate cache nodes through the permissive OOXML title helper.
+    deleted = chart.find(_C + "autoTitleDeleted")
+    auto_deleted = deleted is not None and deleted.get("val", "1").lower() in ("1", "true")
+    if (budget.display_values and chart.find(_C + "title/" + _C + "tx") is None and deleted is not None and not auto_deleted and len(ordered) == 1
+            and len(elements) == 1 and isinstance(elements[0], Table)
+            and not any('[chart:missing_name]' in warning for warning in warnings)):
+        heading = _paragraph(elements[0].rows[0][1].text)
+        heading.heading_level = 3
+        elements.insert(0, heading)
     return elements
 
 
-def parse_chart_xml(data: bytes) -> tuple[list[Union[Paragraph, Table]], list[str]]:
+def parse_chart_xml(data: bytes, display_values: bool = False) -> tuple[list[Union[Paragraph, Table]], list[str]]:
     """Return title/series tables and separate diagnostics without any I/O.
 
     Malformed/unsafe XML and budget overruns return no elements. Missing caches
     skip the affected series; unsupported/mixed types may retain the explicit
     title. Callers own bounded ZIP part reads and placement in the document.
+    display_values opts into formatted numbers and automatic titles; the default
+    retains the raw-cache API. The HWPX document reader uses display values.
     Warnings start with '[chart:<code>]' and never include raw source text.
     """
     warnings: list[str] = []
@@ -313,7 +328,7 @@ def parse_chart_xml(data: bytes) -> tuple[list[Union[Paragraph, Table]], list[st
         _warn(warnings, "doctype", "DTD/entity declarations are unsupported")
         return [], warnings
     try:
-        elements = _extract(root, _Budget(), warnings)
+        elements = _extract(root, _Budget(display_values=display_values), warnings)
     except _LimitExceeded as error:
         _warn(warnings, "limit", str(error))
         return [], warnings

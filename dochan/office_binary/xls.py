@@ -167,7 +167,22 @@ def _format_biff_error(value: int) -> str:
     return _BIFF_ERROR_NAMES.get(value, f"#ERR{value}")
 
 
+class _NumericString(str):
+    """원시 수치와 서식을 차트까지 보존하되 기존 셀 문자열 계약은 유지한다."""
+
+    def __new__(cls, text, number=None, number_format=""):
+        instance = super().__new__(cls, text)
+        instance.number = number
+        instance.number_format = number_format
+        return instance
+
+
 def _format_number_with_format(value: float, format_string: str = "", date_1904: bool = False) -> str:
+    return _NumericString(_display_number_with_format(value, format_string, date_1904),
+                          value, format_string)
+
+
+def _display_number_with_format(value: float, format_string: str = "", date_1904: bool = False) -> str:
     normalized = format_string.lower()
     if _is_date_format(normalized):
         return _excel_serial_to_date(value, date_1904=date_1904)
@@ -498,7 +513,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                 external_sheets=external_sheets, internal_supbooks=internal_supbooks,
                 current_sheet=unique_sheets.index(sheet),
                 path=sheet_path, sheet_name=sheet.name, errors=doc.errors, budget=chart_budget,
-                category_start=1 if embedded_chart_offset is not None else 0))
+                category_start=1 if embedded_chart_offset is not None else 0,
+                number_formats=formats, date_1904=date_1904))
         except Exception as exc:
             doc.errors.append('WARN: XLS chart parsing failed: %s' % exc)
         if drawing_reader is not None:

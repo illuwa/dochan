@@ -1,17 +1,18 @@
 """OOXML 차트 파트(c:chartSpace)에서 형식과 무관하게 같은 방식으로 읽는 부분.
 
-PPTX·XLSX 리더가 함께 쓴다. 계열 데이터 표와 자원 한도는 각 리더가 맡고, 여기서는
+DOCX·PPTX·XLSX·HWPX 리더가 함께 쓴다. 계열 데이터 표와 자원 한도는 각 리더가 맡고, 여기서는
 차트 제목, "데이터 표에 붙일 설명 한 줄"(차트 종류·축 제목), 그리고 둘을 표와 엮는 순서를 맡는다.
 
-- 제목은 `c:chart/c:title` 만 본다. 축 제목(`c:catAx/c:title` 등)은 차트 제목이 아니다.
+- 명시적 제목을 우선하고, 자동 생성을 명시한 단일 계열 제목은 계열 이름을 쓴다.
 - 종류는 `c:plotArea` 의 직계 자식만 보고 사람이 읽는 말로 바꾼다. 모르는 종류의 태그
   이름은 내보내지 않는다. 혼합 차트는 문서 순서대로 ` + ` 로 잇는다.
 - 세로/가로 막대는 태그가 아니라 `c:barDir` 로 갈린다(스키마 기본값 col).
-- 축 제목은 축 종류(범주·값·날짜·계열)로 부르고, 숨긴 축(`c:delete`)은 뺀다. 분산형의 두 값 축을
-  X/Y 로 가르지는 않는다 — `c:axPos` 는 생성기에 따라 두 축 모두 `l` 이라 믿을 수 없다.
+- 숨긴 축은 빼고, 분산형의 참조된 값 축 쌍은 위치와 교차 참조로 X/Y를 구분한다.
 - `mc:AlternateContent` 는 차트 요소를 가진 첫 갈래(Choice 순서, 그다음 Fallback) 하나만 읽는다.
   두 갈래를 다 읽으면 같은 내용이 두 번 나온다.
 """
+from functools import lru_cache
+from itertools import islice
 from typing import Callable, List, Optional, Tuple
 
 from ..model.document import Paragraph, TextRun
@@ -24,11 +25,14 @@ MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _C = f"{{{C_NS}}}"
 _A = f"{{{A_NS}}}"
 _MC = f"{{{MC_NS}}}"
+_DISPLAY = "{urn:dochan:chart-display}"
 _MAX_ALTERNATE_DEPTH = 4
 
 # 실제 차트의 축은 주·보조 범주/값 축과 3-D 계열 축을 합쳐도 다섯 개 남짓이다.
 # 조작된 파트가 축 수십만 개로 한 줄 캡션을 수 MB 로 키우지 못하게 막는다.
 MAX_CAPTION_AXES = 8
+MAX_CHART_GROUPS = 1000
+MAX_NUMBER_FORMAT_LENGTH = 255
 
 _TYPE_LABELS = {
     "areaChart": "area",
@@ -97,8 +101,9 @@ def xy_series_rows(series_items, xy: bool, implicit_x=None) -> Optional[List[Lis
     """
     if not xy or len(series_items) < 2:
         return None
-    first_xs = series_items[0][1]
-    if all(xs == first_xs for _, xs, _ in series_items[1:]):
+    raw_xs = [{index: getattr(value, 'raw', value) for index, value in xs.items()}
+              for _, xs, _ in series_items]
+    if all(xs == raw_xs[0] for xs in raw_xs[1:]):
         return None
     implicit_x = implicit_x or [False] * len(series_items)
     rows = [["Series", "X", "Y"]]
@@ -138,7 +143,25 @@ def chart_title(chart_root) -> str:
     chart = _chart(chart_root)
     if chart is None:
         return ""
-    return _title_text(_child(chart, "title"))
+    title = _child(chart, "title")
+    if title is not None and _child(title, "tx") is not None:
+        return _title_text(title)
+    # Preserve omitted-state behavior until its Office display is verified.
+    # Only an explicit non-deleted automatic title enables this fallback.
+    if _child(chart, "autoTitleDeleted") is None or _flag(chart, "autoTitleDeleted"):
+        return ""
+    series = chart_series(chart_root)
+    if len(series) != 1:
+        return ""
+    tx = _child(series[0], "tx")
+    if tx is None:
+        return ""
+    value = _child(tx, "v")
+    if value is not None:
+        return (value.text or "").strip()
+    ref = _child(tx, "strRef")
+    return " ".join(node.text or "" for node in ref.iterfind(
+        "c:strCache/c:pt/c:v", namespaces=_NS)).strip() if ref is not None else ""
 
 
 def chart_caption(chart_root) -> str:
@@ -236,8 +259,22 @@ def _type_label(name: str, elem) -> str:
 
 def _axis_titles(plot_area) -> List[str]:
     titles = []
-    for name, child in _chart_children(plot_area):
-        label = _AXIS_LABELS.get(name)
+    roles = {}
+    children = list(_chart_children(plot_area))
+    axes = _axis_index(children)
+    groups = 0
+    for name, group in children:
+        if name in ("scatterChart", "bubbleChart"):
+            groups += 1
+            if groups > MAX_CHART_GROUPS:
+                break
+            x_axis, y_axis = _group_axes(group, plot_area, axes)
+            if x_axis is not None:
+                roles[x_axis] = "X axis"
+            if y_axis is not None:
+                roles[y_axis] = "Y axis"
+    for name, child in children:
+        label = roles.get(child, _AXIS_LABELS.get(name))
         if not label or _flag(child, "delete"):
             continue
         text = _title_text(_child(child, "title"))
@@ -246,6 +283,154 @@ def _axis_titles(plot_area) -> List[str]:
             if len(titles) >= MAX_CAPTION_AXES:
                 break
     return titles
+
+
+def _axis_index(children):
+    axes = {}
+    for name, node in children:
+        if name in _AXIS_LABELS:
+            identity = _val(node, "axId")
+            if identity in axes or len(axes) >= MAX_CAPTION_AXES:
+                return {}
+            axes[identity] = node
+    return axes
+
+
+def _group_axes(group, plot_area, axis_index=None):
+    """ECMA-376 21.2: axId selects axes; axPos gives their orientation.
+
+    Cross references keep primary/secondary pairs separate. When a producer
+    stores the same axPos twice, use its X/Y reference order only for a mutually
+    crossing pair. Unreferenced or ambiguous axes retain their generic labels.
+    """
+    ids = list(islice((_val_id.get("val", "") for name, _val_id in _chart_children(group)
+                      if name == "axId"), 4))
+    xy = group.tag in (_C + "scatterChart", _C + "bubbleChart")
+    if len(ids) not in ((2,) if xy else (2, 3)) or len(set(ids)) != len(ids):
+        return None, None
+    if axis_index is None:
+        axis_index = _axis_index(_chart_children(plot_area))
+    axes = {identity: axis_index[identity] for identity in ids if identity in axis_index}
+    if len(axes) != len(ids):
+        return None, None
+    if not xy:
+        categories = [axis for axis in axes.values() if axis.tag in (_C + "catAx", _C + "dateAx")]
+        values = [axis for axis in axes.values() if axis.tag == _C + "valAx"]
+        if len(categories) == len(values) == 1:
+            return categories[0], values[0]
+        return None, None
+    first, second = (axes[i] for i in ids)
+    if first.tag != _C + "valAx" or second.tag != _C + "valAx":
+        return None, None
+    if _val(first, "crossAx") != ids[1] or _val(second, "crossAx") != ids[0]:
+        return None, None
+    positions = (_val(first, "axPos"), _val(second, "axPos"))
+    if positions[0] in ("l", "r") and positions[1] in ("b", "t"):
+        return second, first
+    return first, second
+
+
+def is_xy_series(series):
+    group = series.getparent()
+    return (group is not None and group.tag in (_C + "scatterChart", _C + "bubbleChart")) or _child(series, "xVal") is not None
+
+
+def mixed_series_rows(series_items, xy_flags, sizes=None, implicit_x=None):
+    """범주 계열과 XY 계열이 공존하면 Category와 X를 서로 다른 열로 보존한다."""
+    if not any(xy_flags) or all(xy_flags):
+        return None
+    sizes = sizes or [{} for _ in series_items]
+    implicit_x = implicit_x or [False] * len(series_items)
+    bubbles = any(sizes)
+    rows = [["Series", "Category", "X", "Y"] + (["Bubble size"] if bubbles else [])]
+    for position, ((name, xs, ys), xy, size, implicit) in enumerate(zip(series_items, xy_flags, sizes, implicit_x)):
+        for index in sorted(set(xs) | set(ys) | set(size)):
+            x = xs.get(index, str(index + 1) if implicit and not xs else "")
+            rows.append([name or "Series %d" % (position + 1), "" if xy else x,
+                         x if xy else "", ys.get(index, "")]
+                        + ([size.get(index, "")] if bubbles else []))
+    return rows
+
+
+class _ChartDisplayValue(str):
+    """표시 문자열과 표 병합에 필요한 원시 좌표를 함께 보존한다."""
+
+    def __new__(cls, text, raw):
+        result = super().__new__(cls, text)
+        result.raw = raw
+        return result
+
+    def __getnewargs__(self):
+        return str(self), self.raw
+
+
+@lru_cache(maxsize=128)
+def _number_format_reader(format_code, date_1904):
+    from .xlsx import XLSXReader
+    reader = XLSXReader()
+    reader._date_1904 = date_1904
+    reader._errors = None
+    reader._format_metadata(format_code)
+    return reader
+
+
+def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
+    """날짜·시간·경과 시간만 표시하고 그 외에는 원시 숫자 문자열을 보존한다."""
+    if not format_code or format_code.lower() == "general" or len(format_code) > MAX_NUMBER_FORMAT_LENGTH:
+        return value
+    reader = _number_format_reader(format_code, date_1904)
+    try:
+        number = float(value)
+    except ValueError:
+        return value
+    selected = reader._conditional_format_section(format_code, number)
+    if selected == format_code:
+        sections = reader._format_sections(format_code)
+        position = 1 if number < 0 and len(sections) > 1 else 2 if number == 0 and len(sections) > 2 else 0
+        selected = sections[position]
+    format_code = selected
+    kind = reader._format_metadata(format_code).kind
+    if kind not in ("date", "time", "duration"):
+        return value
+    formatted = reader._format_cell_value(value, format_code)
+    if kind == "time" and formatted != value:
+        try:
+            if abs(float(value)) >= 1:
+                formatted = reader._format_cell_value(value, "yyyy-mm-dd " + format_code)
+        except (ValueError, OverflowError):
+            return value
+    if len(formatted) > len(value) + 64 or len(formatted) > 128:
+        return value
+    return _ChartDisplayValue(formatted, value) if formatted != value else value
+
+
+def chart_point_formatter(parent):
+    """한 데이터 원천의 표시 정책을 한 번만 계산하여 점 수 × 축 수 순회를 피한다."""
+    caches = [parent] if parent.tag in (_C + "numCache", _C + "numLit") else [
+        node for node in parent.iter() if node.tag in (_C + "numCache", _C + "numLit")]
+    formatters = {cache: _numeric_cache_formatter(cache) for cache in caches}
+
+    def display(point, value):
+        formatter = formatters.get(point.getparent())
+        return formatter(point, value) if formatter is not None else value
+
+    return display
+
+
+def _numeric_cache_formatter(cache):
+    cache_format = cache.findtext(_C + "formatCode", "")
+    root = cache
+    while root.getparent() is not None:
+        root = root.getparent()
+    explicit_epoch = _child(root, "date1904") is not None
+    epoch = _flag(root, "date1904")
+
+    def display(point, value):
+        fmt = cache_format or point.get(_DISPLAY + "format", "")
+        date_1904 = epoch if explicit_epoch else point.get(_DISPLAY + "date1904") == "1"
+        return format_chart_number(value, fmt, date_1904)
+
+    return display
 
 
 def _val(elem, name: str) -> str:
@@ -336,6 +521,14 @@ MAX_REFERENCE_SERIES = 1000
 MAX_REFERENCE_BYTES_TOTAL = 64 * 1024 * 1024
 
 
+class _ChartValues(dict):
+    """Resolver 값과 좌표별 표시 메타데이터. 기존 dict 호출 계약을 유지한다."""
+    def __init__(self, values, formats, date_1904):
+        super().__init__(values)
+        self.formats = formats
+        self.date_1904 = date_1904
+
+
 def _reference_state(package):
     state = getattr(package, "_chart_reference_state", None)
     if state is None:
@@ -361,11 +554,13 @@ def workbook_chart_resolver(package, errors, budget=None):
     initialized = False
     sheets = {}
     shared = []
+    styles = []
     cells_by_sheet = {}
+    formats_by_sheet = {}
     exhausted = False
 
     def resolve(formula):
-        nonlocal initialized, shared, sheets, exhausted
+        nonlocal initialized, shared, sheets, styles, exhausted
         if exhausted:
             return {}
         match = re.fullmatch(
@@ -390,6 +585,9 @@ def workbook_chart_resolver(package, errors, budget=None):
             workbook = package.read_xml_part("xl/workbook.xml")
             sheets = dict(reader._read_sheets(workbook, reader._read_workbook_relationships(package)))
             shared = reader._read_shared_strings(package)
+            styles = reader._read_styles(package)
+            properties = workbook.find("s:workbookPr", namespaces=_namespaces(workbook))
+            reader._date_1904 = properties is not None and properties.get("date1904", "0").lower() in ("1", "true")
             initialized = True
         path = sheets.get(name)
         if not path or not package.exists(path):
@@ -401,6 +599,7 @@ def workbook_chart_resolver(package, errors, budget=None):
                 return {}
             root = package.read_xml_part(path)
             cells = {}
+            formats = {}
             for fallback_row, row in enumerate(root.iterfind("s:sheetData/s:row", namespaces=_namespaces(root))):
                 row_index = reader._sheet_row_index(row, fallback_row)
                 if row_index is None:
@@ -429,19 +628,29 @@ def workbook_chart_resolver(package, errors, budget=None):
                     elif kind == "inlineStr":
                         text = reader._text_runs(cell.find("s:is", namespaces=_namespaces(cell)))
                     cells[coordinate] = text
+                    if kind in ("", "n"):
+                        formats[coordinate] = reader._cell_format(cell, styles)
             if reader._errors:
                 _chart_warning(errors, "invalid chart source cell coordinate")
                 reader._errors.clear()
             cells_by_sheet[name] = cells
+            formats_by_sheet[name] = formats
         budget["remaining"] -= count
         cells = cells_by_sheet[name]
         width = col2 - col1 + 1
-        return {
+        values = {
             (row - row1) * width + col - col1: cells[(row, col)]
             for row in range(row1, row2 + 1)
             for col in range(col1, col2 + 1)
             if cells.get((row, col), "") != ""
         }
+        formats = {
+            (row - row1) * width + col - col1: formats_by_sheet[name].get((row, col), "")
+            for row in range(row1, row2 + 1)
+            for col in range(col1, col2 + 1)
+            if cells.get((row, col), "") != ""
+        }
+        return _ChartValues(values, formats, reader._date_1904)
 
     return resolve
 
@@ -469,7 +678,11 @@ def hydrate_chart_references(chart_root, package, chart_path, errors, resolver=N
         if ref.tag not in (_C + "strRef", _C + "numRef"):
             continue
         cache_name = "strCache" if ref.tag == _C + "strRef" else "numCache"
-        if ref.find(_C + cache_name) is not None:
+        cache = ref.find(_C + cache_name)
+        if cache is not None:
+            # A complete cache without formatCode still supplies usable raw
+            # numbers. Optional formatting must not consume the shared budget
+            # required by subsequent charts with no data cache at all.
             continue
         formula = ref.find(_C + "f")
         if formula is not None and formula.text:
@@ -488,11 +701,22 @@ def hydrate_chart_references(chart_root, package, chart_path, errors, resolver=N
             if len(values) > MAX_REFERENCE_CELLS:
                 _chart_warning(errors, "chart reference cell limit exceeded")
                 continue
-            cache = etree.SubElement(ref, _C + cache_name)
-            etree.SubElement(cache, _C + "ptCount", val=str(max(values) + 1))
-            for index, value in sorted(values.items()):
-                point = etree.SubElement(cache, _C + "pt", idx=str(index))
-                etree.SubElement(point, _C + "v").text = str(value)
+            cache = ref.find(_C + cache_name)
+            if cache is None:
+                cache = etree.SubElement(ref, _C + cache_name)
+                etree.SubElement(cache, _C + "ptCount", val=str(max(values) + 1))
+                for index, value in sorted(values.items()):
+                    point = etree.SubElement(cache, _C + "pt", idx=str(index))
+                    etree.SubElement(point, _C + "v").text = str(value)
+            if cache_name == "numCache" and isinstance(values, _ChartValues):
+                for point in cache.iterfind(_C + "pt"):
+                    raw = point.get("idx", "")
+                    if not raw.isascii() or not raw.isdigit() or len(raw) > 10:
+                        continue
+                    fmt = values.formats.get(int(raw), "")
+                    if fmt:
+                        point.set(_DISPLAY + "format", fmt)
+                    point.set(_DISPLAY + "date1904", "1" if values.date_1904 else "0")
 
     try:
         if resolver is not None:
@@ -565,6 +789,16 @@ def normalize_chart(chart_root, errors):
     from lxml import etree
 
     if chart_root.tag != _CX + "chartSpace":
+        chart = _chart(chart_root)
+        plot = _child(chart, "plotArea") if chart is not None else None
+        if plot is not None:
+            groups = 0
+            for name, _ in _chart_children(plot):
+                if name.endswith("Chart"):
+                    groups += 1
+                    if groups > MAX_CHART_GROUPS:
+                        _chart_warning(errors, "chart group limit exceeded")
+                        return etree.Element(_C + "chartSpace")
         return chart_root
     root = etree.Element(_C + "chartSpace")
     chart = etree.SubElement(root, _C + "chart")
@@ -638,6 +872,13 @@ def normalize_chart(chart_root, errors):
                 etree.SubElement(ref, _C + "f").text = formula.text
             if levels:
                 cache = etree.SubElement(ref, _C + ("numCache" if numeric else "strCache"))
+                if numeric:
+                    # A numeric dimension's first level supplies the values
+                    # below, so its format belongs to the same emitted cache.
+                    level = dim.find(_CX + "lvl")
+                    code = level.get("formatCode", "") if level is not None else ""
+                    if code:
+                        etree.SubElement(cache, _C + "formatCode").text = code
                 indexes = set(index for level in levels for index in level)
                 for index in sorted(indexes):
                     values = [level.get(index, "") for level in reversed(levels)]

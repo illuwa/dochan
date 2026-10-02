@@ -363,7 +363,7 @@ class HWPXParser:
         # Count raw nodes even in unsupported groups and invalid/duplicate caches.
         self._chart_series += series
         self._chart_points += points
-        elements, warnings = charts.parse_chart_xml(data)
+        elements, warnings = charts.parse_chart_xml(data, display_values=True)
         for warning in warnings:
             self.errors.append(f"{warning} ({label}, chart #{self._chart_count})")
         cells = sum(len(row) for item in elements if isinstance(item, Table) for row in item.rows)

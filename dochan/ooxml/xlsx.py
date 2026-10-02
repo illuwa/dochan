@@ -1,7 +1,9 @@
 """Native XLSX reader."""
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from fractions import Fraction
+import math
 import posixpath
 import re
 import zipfile
@@ -14,7 +16,7 @@ from ..model.header_footer import HeaderFooter
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
 from .charts import (chart_elements, chart_series, text_table, xy_series_rows,
-                     bubble_series_rows, hydrate_chart_references,
+                     bubble_series_rows, mixed_series_rows, is_xy_series, chart_point_formatter, hydrate_chart_references,
                      normalize_chart, workbook_chart_resolver, chart_drawing_references)
 from .core import core_property_elements, read_core_properties
 from .package import MAX_XML_PART_SIZE, OOXMLPackage
@@ -1023,10 +1025,12 @@ class XLSXReader:
         series_items = []
         implicit_x = []
         sizes = []
+        xy_flags = []
         xy = False
         for series in series_elements:
             has_x_values = series.find("c:xVal", namespaces=NS) is not None
-            xy = xy or has_x_values
+            xy_flags.append(is_xy_series(series))
+            xy = xy or xy_flags[-1]
             implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
             series_name = self._chart_series_name(series)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
@@ -1036,7 +1040,9 @@ class XLSXReader:
         if not series_items or not any(values for _, _, values in series_items):
             return Table()
 
-        long_rows = bubble_series_rows(series_items, sizes, implicit_x)
+        long_rows = mixed_series_rows(series_items, xy_flags, sizes, implicit_x)
+        if long_rows is None:
+            long_rows = bubble_series_rows(series_items, sizes, implicit_x)
         if long_rows is None:
             long_rows = xy_series_rows(series_items, xy, implicit_x)
         if long_rows is not None:
@@ -1128,6 +1134,7 @@ class XLSXReader:
             for index in sorted(set(index for mapping in level_points for index in mapping)):
                 points[index] = " / ".join(mapping[index] for mapping in reversed(level_points) if mapping.get(index))
             return points
+        format_point = chart_point_formatter(parent)
         for point in parent.findall(".//c:pt", namespaces=NS):
             raw_index = point.get("idx")
             if (
@@ -1144,7 +1151,7 @@ class XLSXReader:
                 continue
             value = "".join(node.text or "" for node in point.findall("c:v", namespaces=NS)).strip()
             if value:
-                points[index] = value
+                points[index] = format_point(point, value)
         return points
 
     def _record_invalid_chart_point_index(self) -> None:
@@ -1568,22 +1575,47 @@ class XLSXReader:
         return ""
 
     def _format_cell_value(self, value: str, fmt: str) -> str:
-        if not value or not fmt:
+        if not value or not fmt or len(fmt) > 255:
             return value
-        metadata = self._format_metadata(fmt)
         try:
             number = float(value)
         except ValueError:
             return value
         try:
+            if not math.isfinite(number):
+                raise ValueError("nonfinite numeric value")
+            selected = self._conditional_format_section(fmt, number)
+            conditional_integer = selected != fmt and selected.strip() == "0"
+            fmt = selected
+            sections = self._format_sections(fmt)
+            position = 1 if number < 0 and len(sections) > 1 else 2 if number == 0 and len(sections) > 2 else 0
+            # A comma after the last numeric placeholder scales by 1000;
+            # emitting its suffix without scaling would change the meaning.
+            # Keep the raw value until that display operation is supported.
+            if re.search(r"[0#?],+(?![0#?,])", self._format_code_tokens(sections[position])):
+                return value
+            metadata = self._format_metadata(fmt)
+            clean = self._format_code_tokens(fmt).lower()
+            if conditional_integer:
+                return str(Decimal(value).quantize(Decimal(1), rounding=ROUND_HALF_UP))
             if metadata.kind == "duration":
-                return self._excel_duration(number, include_seconds="ss" in fmt.lower())
+                return self._excel_duration(number, include_seconds="s" in clean)
             if metadata.kind == "time":
-                return self._excel_time(number, include_seconds="ss" in fmt.lower())
+                formatted = self._excel_time(number, include_seconds="ss" in clean)
+                return formatted[3:] if "h" not in clean and "ss" in clean else formatted
             if metadata.kind == "date":
+                has_time = "h" in clean or "ss" in clean
+                if has_time:
+                    # Round the whole serial once so midnight carries into the
+                    # date too; rounding its fractional day alone loses a day.
+                    number = round(number * 86400) / 86400
                 if not getattr(self, "_date_1904", False) and 60 <= number < 61:
-                    return "1900-02-29"
-                return self._excel_date(number).strftime("%Y-%m-%d")
+                    formatted = "1900-02-29"
+                else:
+                    formatted = self._excel_date(number).strftime("%Y-%m-%d")
+                if has_time:
+                    formatted += " " + self._excel_time(number, include_seconds="ss" in clean)
+                return formatted
             if metadata.kind == "zero_fill":
                 formatted = self._zero_filled_number(number, metadata.pattern)
                 return self._apply_literal_affixes(formatted, metadata)
@@ -1594,7 +1626,16 @@ class XLSXReader:
                 formatted = f"{number:.{metadata.decimals}E}"
                 return self._apply_literal_affixes(formatted, metadata)
             if metadata.kind == "percent":
-                formatted = f"{abs(number) * 100:.{metadata.decimals}f}%" if metadata.negative_parentheses and number < 0 else f"{number * 100:.{metadata.decimals}f}%"
+                # Excel stores double values and rounds ties away from zero.
+                # Normalize equivalent XML spellings to the double's shortest
+                # decimal first, then avoid binary multiplication artifacts.
+                with localcontext() as context:
+                    context.prec = max(32, len(value) + metadata.decimals + 4)
+                    scaled = Decimal(str(number)) * 100
+                    if metadata.negative_parentheses and number < 0:
+                        scaled = abs(scaled)
+                    scaled = scaled.quantize(Decimal(1).scaleb(-metadata.decimals), rounding=ROUND_HALF_UP)
+                    formatted = f"{scaled:.{metadata.decimals}f}%"
                 formatted = self._apply_literal_affixes(formatted, metadata)
                 return f"({formatted})" if metadata.negative_parentheses and number < 0 else formatted
             if metadata.kind == "decimal":
@@ -1604,12 +1645,35 @@ class XLSXReader:
                 formatted = f"{metadata.currency_symbol}{formatted}"
                 formatted = self._apply_literal_affixes(formatted, metadata)
                 return f"({formatted})" if metadata.negative_parentheses and number < 0 else formatted
-        except (OverflowError, ValueError):
+        except (OverflowError, ValueError, InvalidOperation):
             warning = f"WARN: XLSX formatted numeric value is out of range: {value[:80]}"
             errors = getattr(self, "_errors", None)
             if errors is not None and warning not in errors:
                 errors.append(warning)
         return value
+
+    def _conditional_format_section(self, fmt: str, number: float) -> str:
+        """Select explicit numeric conditions before classifying their tokens."""
+        sections = self._format_sections(fmt)
+        condition = re.compile(r"\[(<=|>=|<>|=|<|>)(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\]")
+        # Keep offsets while masking literals, so removing an actual condition
+        # cannot also remove identical bracket text inside a quoted label.
+        masks = [re.sub(r'"[^"]*"|\\.', lambda match: " " * len(match.group()), section)
+                 for section in sections]
+        if not any(condition.search(mask) for mask in masks[:2]):
+            return fmt
+        for section, mask in zip(sections[:3], masks[:3]):
+            match = condition.search(mask)
+            if match is None:
+                return section
+            operator, threshold = match.groups()
+            bound = float(threshold)
+            accepted = {"<": number < bound, "<=": number <= bound,
+                        ">": number > bound, ">=": number >= bound,
+                        "=": number == bound, "<>": number != bound}[operator]
+            if accepted:
+                return section[:match.start()] + section[match.end():]
+        return "General"
 
     def _format_metadata(self, fmt: str) -> _FormatMetadata:
         cache = getattr(self, "_format_metadata_cache", None)
@@ -1619,7 +1683,8 @@ class XLSXReader:
         cached = cache.get(fmt)
         if cached is not None:
             return cached
-        lower_fmt = fmt.lower()
+        clean_fmt = self._format_code_tokens(fmt)
+        lower_fmt = clean_fmt.lower()
         if self._is_duration_format(lower_fmt):
             metadata = _FormatMetadata(kind="duration")
         elif self._is_time_only_format(lower_fmt):
@@ -1650,7 +1715,7 @@ class XLSXReader:
                 literal_prefix=literal_prefix,
                 literal_suffix=literal_suffix,
             )
-        elif "%" in fmt:
+        elif "%" in clean_fmt:
             literal_prefix, literal_suffix = self._literal_affixes(fmt)
             metadata = _FormatMetadata(
                 kind="percent",
@@ -1680,6 +1745,7 @@ class XLSXReader:
         return metadata
 
     def _is_date_format(self, lower_fmt: str) -> bool:
+        lower_fmt = self._format_code_tokens(lower_fmt)
         if "%" in lower_fmt:
             return False
         return any(token in lower_fmt for token in ("yy", "mm", "dd", "mmm", "h:mm"))
@@ -1689,10 +1755,11 @@ class XLSXReader:
         return "[h]" in clean_fmt or "[m]" in clean_fmt or "[s]" in clean_fmt
 
     def _is_time_only_format(self, lower_fmt: str) -> bool:
-        clean_fmt = self._format_without_literals(lower_fmt)
-        if not any(token in clean_fmt for token in ("h:mm", "hh:mm")):
+        clean_fmt = self._format_sections(self._format_code_tokens(lower_fmt))[0]
+        # Separators can be quoted localized text, not only colons.
+        if "h" not in clean_fmt and "ss" not in clean_fmt:
             return False
-        return not any(token in clean_fmt for token in ("yy", "dd", "mmm", "m/d", "d/m"))
+        return not any(token in clean_fmt for token in ("y", "d", "mmm"))
 
     def _excel_date(self, serial: float) -> datetime:
         if getattr(self, "_date_1904", False):
@@ -1761,12 +1828,12 @@ class XLSXReader:
         return f"{sign}{metadata.literal_prefix}{text}{metadata.literal_suffix}"
 
     def _decimal_places_before_percent(self, fmt: str) -> int:
-        before_percent = fmt.split("%", 1)[0]
+        before_percent = self._format_code_tokens(fmt).split("%", 1)[0]
         decimals = self._decimal_places(before_percent)
         return decimals if decimals is not None else 0
 
     def _decimal_places(self, fmt: str):
-        match = re.search(r"0\.([0#]+)", fmt)
+        match = re.search(r"0\.([0#]+)", self._format_code_tokens(fmt))
         if match:
             return len(match.group(1))
         return None
@@ -1811,7 +1878,12 @@ class XLSXReader:
         bracketed = re.search(r"\[\$([^-\]]+)", clean_fmt)
         if bracketed:
             return bracketed.group(1)
-        return "$" if "$" in clean_fmt else ""
+        return "$" if "$" in re.sub(r"\[[^\]]*\]", "", clean_fmt) else ""
+
+    def _format_code_tokens(self, fmt: str) -> str:
+        """Ignore literal text, colors, conditions and locale annotations."""
+        clean = self._format_without_literals(fmt)
+        return re.sub(r"\[(?![hmsHMS]+\])[^\]]*\]", "", clean)
 
     def _format_without_literals(self, fmt: str) -> str:
         without_quoted = re.sub(r'"[^"]*"', "", fmt)

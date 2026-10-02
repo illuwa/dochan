@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from ..conversion import Provenance
 from ..model.document import Paragraph, TextRun
-from ..ooxml.charts import text_table, xy_series_rows
+from ..ooxml.charts import format_chart_number, mixed_series_rows, text_table, xy_series_rows
 
 MAX_CHARTS = 256
 MAX_SERIES = 256
@@ -23,12 +23,23 @@ MAX_CHART_BYTES = 16 * 1024 * 1024
 MAX_DEPTH = 64
 
 
+class _CachedNumber(str):
+    """NUMBER 캐시와 숫자처럼 생긴 LABEL 범주를 구분하는 표지다."""
+
+
 @dataclass
 class _Series:
     name: str = ''
     references: dict = field(default_factory=dict)
     source_types: dict = field(default_factory=dict)
     auxiliary: bool = False
+    formats: dict = field(default_factory=dict)
+    group: Optional[int] = None
+
+
+@dataclass
+class _Group:
+    kind: str = ''
 
 
 @dataclass
@@ -59,7 +70,8 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
                            current_sheet: int = 0, path: str = 'Workbook',
                            sheet_name: Optional[str] = None, errors=None,
                            budget=None, internal_supbooks=None, formula_values=None,
-                           category_start=0, excluded_series=None) -> List[object]:
+                           category_start=0, excluded_series=None, number_formats=None,
+                           date_1904=False) -> List[object]:
     """Read embedded charts or a chart sheet from a BIFF byte sequence.
 
     ``sheets`` holds zero-based worksheet cell mappings; ``external_sheets``
@@ -114,7 +126,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
             if not oversized:
                 elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                                 current_sheet, f'{path}#chart{chart_index}',
-                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start, excluded_series))
+                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start, excluded_series, number_formats, date_1904))
             chart_records = None
             depth = 0
             continue
@@ -125,7 +137,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
             if not oversized:
                 elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                                 current_sheet, f'{path}#chart{chart_index}',
-                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start, excluded_series))
+                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start, excluded_series, number_formats, date_1904))
             chart_records = None
             continue
         if depth != 1 or oversized:
@@ -142,7 +154,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
         if not oversized and depth <= MAX_DEPTH:
             elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                             current_sheet, f'{path}#chart{chart_index}', sheet_name,
-                            errors, budget, internal_supbooks, formula_values, category_start, excluded_series))
+                            errors, budget, internal_supbooks, formula_values, category_start, excluded_series, number_formats, date_1904))
     return elements
 
 
@@ -174,7 +186,8 @@ def _cell_value(value):
 
 
 def _reference_values(tokens, sheets, external_sheets, current_sheet, errors, budget,
-                      internal_supbooks=None, formula_values=None):
+                      internal_supbooks=None, formula_values=None,
+                      format_code=None, date_1904=False):
     if not tokens:
         return None
     # BRAI chart formulas use absolute Ref/Area and Ref3d/Area3d tokens.
@@ -240,20 +253,30 @@ def _reference_values(tokens, sheets, external_sheets, current_sheet, errors, bu
     for row, col, value in candidates:
         if formulas is not None:
             value = formulas.get((row, col), value)
-            value = '' if value is None else str(value)
+            value = '' if value is None else value
+        # XLS numeric cells retain their scalar before worksheet formatting.
+        # Use it for both source-linked formats and explicit BRAI overrides.
+        raw = getattr(value, 'number', None)
+        if raw is not None:
+            code = format_code if format_code is not None else value.number_format
+            value = format_chart_number(_value(float(raw)), code, date_1904)
         else:
-            value = _cell_value(str(value))
+            # LABEL/LABELSST strings can look numeric (e.g. "001"). BRAI's
+            # IFmt never changes their type; apply it only to numeric sources.
+            value = str(value) if formulas is not None else _cell_value(str(value))
         if value:
             values[(row - r1) * (c2 - c1 + 1) + col - c1] = value
     return values
 
 
 def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_name, errors, budget,
-                 internal_supbooks=None, formula_values=None, category_start=0, excluded_series=None):
+                 internal_supbooks=None, formula_values=None, category_start=0, excluded_series=None,
+                 number_formats=None, date_1904=False):
     if budget[0] < 2:
         _warn(errors, 'output cell limit exceeded')
         return []
     series = []
+    groups = {}
     texts = []
     stack = []
     pending = None
@@ -283,6 +306,16 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
             item = _Series()
             series.append(item)
             pending = item
+        elif sid == 0x1014 and len(data) >= 20:  # ChartFormat.icrt, [MS-XLS] 2.4.48.
+            item = _Group()
+            group_id = struct.unpack_from('<H', data, 18)[0]
+            if group_id in groups:
+                _warn(errors, 'duplicate ChartFormat group identifier')
+            else:
+                groups[group_id] = item
+            pending = item
+        elif sid == 0x1045 and len(data) >= 2 and isinstance(context, _Series):
+            context.group = struct.unpack_from('<H', data)[0]
         elif sid == 0x104a and isinstance(context, _Series):
             context.auxiliary = True
         elif sid == 0x1025:  # Text, paired with ObjectLink for semantic role.
@@ -307,6 +340,8 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
             if isinstance(context, _Series):
                 context.references[role] = tokens
                 context.source_types[role] = source
+                flags, ifmt = struct.unpack_from('<HH', data, 2)
+                context.formats[role] = (bool(flags & 1), ifmt)
             elif isinstance(context, _Text) and source == 2:
                 values = _reference_values(tokens, sheets, external_sheets, current_sheet, errors, budget, internal_supbooks, formula_values)
                 context.text = next(iter((values or {}).values()), '')
@@ -322,7 +357,7 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
                 return []
             value = ''
             if sid == 0x0203 and len(data) >= 14:
-                value = _value(struct.unpack_from('<d', data, 6)[0])
+                value = _CachedNumber(_value(struct.unpack_from('<d', data, 6)[0]))
             elif sid == 0x0204:
                 value = _unicode_text(data, 6)
             elif sid == 0x0205 and len(data) >= 8:
@@ -333,14 +368,22 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
             three_d = True
         else:
             kind = _chart_kind(sid, data)
-            if kind and kind not in kinds:
-                kinds.append(kind)
+            if kind:
+                if isinstance(context, _Group):
+                    context.kind = kind
+                if kind not in kinds:
+                    kinds.append(kind)
     if three_d:
         kinds = [('3-D ' + kind) if kind in ('column', 'bar', 'line', 'pie', 'area', 'surface') else kind for kind in kinds]
     title = next((t.text for t in texts if t.link == 1 and t.text), '')
     axes = []
-    for item in texts:
-        label = {2: 'Value axis', 3: 'Category axis', 7: 'Series axis'}.get(item.link)
+    xy = any(kind in ('scatter', 'bubble') for kind in kinds)
+    pure_xy = xy and all(kind in ('scatter', 'bubble') for kind in kinds)
+    axis_labels = {2: 'Y axis', 3: 'X axis', 7: 'Series axis'} if pure_xy else {
+        2: 'Value axis', 3: 'Category axis', 7: 'Series axis'}
+    axis_texts = sorted(texts, key=lambda item: {3: 0, 2: 1}.get(item.link, 2)) if pure_xy else texts
+    for item in axis_texts:
+        label = axis_labels.get(item.link)
         if label and item.text and len(axes) < 8:
             axes.append(f'{label}: {item.text}')
     caption = '; '.join((['Chart type: ' + ' + '.join(kinds)] if kinds else []) + axes)
@@ -356,29 +399,45 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
         elements.append(heading)
     items = []
     implicit = []
+    xy_flags = []
+    from ..ooxml.xlsx import BUILTIN_NUM_FORMATS
     for index, item in enumerate(series):
         if item.auxiliary or index in (excluded_series or ()):
             continue
         resolved = {}
         for role in (0, 1, 2):
             points = None
+            unlinked, ifmt = item.formats.get(role, (False, 0))
+            code = (number_formats or {}).get(ifmt, BUILTIN_NUM_FORMATS.get(ifmt, ''))
             if item.source_types.get(role) == 2:
-                points = _reference_values(item.references.get(role, b''), sheets, external_sheets, current_sheet, errors, budget, internal_supbooks, formula_values)
-            resolved[role] = points if points is not None else cache.get((index, role), {})
+                points = _reference_values(item.references.get(role, b''), sheets, external_sheets,
+                                           current_sheet, errors, budget, internal_supbooks,
+                                           formula_values, code if unlinked else None, date_1904)
+            values = points if points is not None else cache.get((index, role), {})
+            # A cache has no displayed strings, so its stored IFmt is the fallback.
+            if points is None and code:
+                values = {idx: format_chart_number(value, code, date_1904)
+                          if isinstance(value, _CachedNumber) else value
+                          for idx, value in values.items()}
+            resolved[role] = values
         name = item.name or next(iter(resolved[0].values()), '')
         items.append((name, resolved[2], resolved[1]))
         implicit.append(item.source_types.get(2, 0) in (0, 1) and not resolved[2])
+        group = groups.get(item.group)
+        kind = group.kind if group is not None else ''
+        xy_flags.append(kind in ('scatter', 'bubble') if kind else xy)
     if not items:
         if axes:
             elements.append(paragraph(caption))
         return elements
-    xy = any(kind in ('scatter', 'bubble') for kind in kinds)
+    mixed = any(xy_flags) and not all(xy_flags)
     # Bound the maximum long table before the shared helper allocates it.
     long_count = 1 + sum(len(set(xs) | set(ys)) for _, xs, ys in items)
-    if xy and len(items) > 1 and 3 * long_count > budget[0]:
+    width = 4 if mixed else 3
+    if xy and len(items) > 1 and width * long_count > budget[0]:
         _warn(errors, 'output cell limit exceeded')
         return elements
-    rows = xy_series_rows(items, xy, implicit)
+    rows = mixed_series_rows(items, xy_flags, implicit_x=implicit) if mixed else xy_series_rows(items, xy, implicit)
     if rows is None:
         indexes = set()
         labels = {}

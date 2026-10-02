@@ -13,7 +13,7 @@ from ..model.table import Cell, Table
 from ..model.equation import Equation
 from .math import omml_to_latex
 from .charts import (chart_elements, chart_series, text_table, xy_series_rows,
-                     bubble_series_rows, hydrate_chart_references, normalize_chart)
+                     bubble_series_rows, mixed_series_rows, is_xy_series, chart_point_formatter, hydrate_chart_references, normalize_chart)
 from .core import core_property_elements, read_core_properties
 from .package import OOXMLPackage
 
@@ -1090,6 +1090,7 @@ class PPTXReader:
         series_items = []
         implicit_x = []
         sizes = []
+        xy_flags = []
         xy = False
         for series in chart_series(chart_root):
             if not self._reserve_chart_resource(
@@ -1102,7 +1103,8 @@ class PPTXReader:
             series_name = self._chart_series_name(series)
             # 분산형·거품형은 c:cat/c:val 대신 c:xVal/c:yVal 에 값을 둔다.
             has_x_values = series.find("c:xVal", namespaces=NS) is not None
-            xy = xy or has_x_values
+            xy_flags.append(is_xy_series(series))
+            xy = xy or xy_flags[-1]
             implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
@@ -1115,7 +1117,9 @@ class PPTXReader:
 
         if not any(values for _, _, values in series_items) and not any(sizes):
             return Table()
-        long_rows = bubble_series_rows(series_items, sizes, implicit_x)
+        long_rows = mixed_series_rows(series_items, xy_flags, sizes, implicit_x)
+        if long_rows is None:
+            long_rows = bubble_series_rows(series_items, sizes, implicit_x)
         if long_rows is None:
             long_rows = xy_series_rows(series_items, xy, implicit_x)
         if long_rows is not None:
@@ -1190,6 +1194,7 @@ class PPTXReader:
         parent = series.find(parent_path, namespaces=NS)
         if parent is None:
             return points
+        format_point = chart_point_formatter(parent)
         for point in parent.iterfind(".//c:pt", namespaces=NS):
             if not self._reserve_chart_resource(
                 "_chart_points_remaining",
@@ -1204,7 +1209,7 @@ class PPTXReader:
                 index = len(points)
             value = "".join(node.text or "" for node in point.findall("c:v", namespaces=NS)).strip()
             if value:
-                points[index] = value
+                points[index] = format_point(point, value)
         return points
 
     def _reserve_chart_resource(

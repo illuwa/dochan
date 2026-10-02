@@ -391,6 +391,7 @@ def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
         number = float(value)
     except ValueError:
         return value
+    original = format_code
     selected = reader._conditional_format_section(format_code, number)
     if selected == format_code:
         sections = reader._format_sections(format_code)
@@ -400,7 +401,9 @@ def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
     kind = reader._format_metadata(format_code).kind
     if kind not in ("date", "time", "duration"):
         return value
-    formatted = reader._format_cell_value(value, format_code)
+    # Format with the whole code so the cell formatter applies Excel's section
+    # rules (an explicit negative section shows the absolute value).
+    formatted = reader._format_cell_value(value, original)
     if kind == "time" and formatted != value:
         try:
             if abs(float(value)) >= 1:

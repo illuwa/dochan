@@ -96,3 +96,27 @@ def test_selected_time_section_in_real_reader(tmp_path):
     )
     doc = XLSXReader().read(str(path))
     assert [cell.text for cell in doc.sections[0].elements[0].rows[0]] == ['12:00', '12:00']
+
+
+def test_explicit_negative_elapsed_section_does_not_double_the_sign():
+    # 음수 전용 구역을 명시하면 Excel 은 절댓값을 그 구역 서식으로 쓰고 자동 부호를 붙이지 않는다(1904 체계).
+    from dochan.ooxml import charts
+    from dochan.ooxml.xlsx import XLSXReader
+    reader = XLSXReader()
+    reader._date_1904 = True
+    assert reader._format_cell_value("-0.25", "[h]:mm;-[h]:mm") == "-6:00"
+    assert reader._format_cell_value("-0.25", "[h]:mm;(\\[h]:mm)".replace("\\[", "[")) == "(6:00)"
+    assert reader._format_cell_value("-0.25", "[h]:mm") == "-6:00"
+    assert charts.format_chart_number("-0.25", "[h]:mm;-[h]:mm", True) == "-6:00"
+
+
+def test_month_token_is_not_rendered_as_minutes():
+    # 시·초와 붙지 않은 m/mm 는 월이다. 시각 렌더러가 다루지 않으므로 원시값을 남긴다.
+    from dochan.ooxml import charts
+    from dochan.ooxml.xlsx import XLSXReader
+    reader = XLSXReader()
+    reader._date_1904 = True
+    assert reader._format_cell_value("0.5", "ss.000 mm") == "0.5"
+    assert charts.format_chart_number("0.5", "ss.000 mm", True) == "0.5"
+    assert reader._format_cell_value("0.5", "h:mm") == "12:00"
+    assert reader._format_cell_value("0.0423", "mm:ss") == "00:55"

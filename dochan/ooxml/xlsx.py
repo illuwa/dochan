@@ -1611,7 +1611,10 @@ class XLSXReader:
                 # numbers when a padding placeholder (_?) is discarded.
                 return value
             if metadata.kind == "duration":
-                formatted = self._excel_duration(number, section) if (
+                # An explicit negative section is applied to the absolute value
+                # without an automatic minus sign (Excel section rules).
+                shown = abs(number) if position == 1 else number
+                formatted = self._excel_duration(shown, section) if (
                     number >= 0 or getattr(self, "_date_1904", False)) else None
                 return formatted if formatted is not None else value
             if metadata.kind in ("date", "time") and number < 0:
@@ -1855,6 +1858,16 @@ class XLSXReader:
         precision = self._second_precision(self._format_code_tokens(fmt))
         if precision is None:
             return None
+        # A plain m/mm is minutes only next to an hour or second token;
+        # otherwise it is a month, which this time renderer does not handle.
+        plain = [unit for unit in units if not unit.startswith("[")]
+        for index, unit in enumerate(plain):
+            if unit[0] != "m":
+                continue
+            before = plain[index - 1][0] if index else ""
+            after = plain[index + 1][0] if index + 1 < len(plain) else ""
+            if before != "h" and after != "s" and not (elapsed and units[0].startswith("[h")):
+                return None
         ticks = self._temporal_ticks(serial, precision)
         seconds, fraction = divmod(ticks, 10 ** precision)
         result = []
@@ -1884,7 +1897,7 @@ class XLSXReader:
                 if previous_unit != "s" or len(token) - 1 != precision:
                     return None
                 result.append("." + str(fraction).zfill(precision))
-            elif token in (":", " ", "-", "/", ",", "."):
+            elif token in (":", " ", "-", "/", ",", ".", "(", ")", "+"):
                 result.append(token)
             else:
                 return None

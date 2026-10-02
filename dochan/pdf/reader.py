@@ -16,13 +16,15 @@ from .images import extract_image_bytes
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
 from .widths import WidthMap
+from .core14 import Core14Decoder, canonical_font, glyph_names
+from .core14_metrics import GLYPH_WIDTHS
 from .tables import TableBudget, build_tables
 from .text_tables import detect_text_tables
 from .layout import merge_lines
 from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
                          continues, merge_continued, page_bounds, page_rotation,
                          repeated_header_rows)
-from .notes import detect_notes
+from .notes import detect_notes, detect_endnotes, endnote_references
 from .running import detect_running
 from .annotations import CommentExtractor, DestinationResolver, attach_links, link_regions, text_string
 
@@ -50,6 +52,7 @@ class _PageDraft:
     images: list = field(default_factory=list)
     comments: list = field(default_factory=list)
     notes: list = field(default_factory=list)
+    note_markers: list = field(default_factory=list)
 
 
 def _drop_decoder(raw: bytes) -> str:
@@ -186,6 +189,7 @@ class PDFReader:
                         draft.notes = notes
                         for fragment in page_content.fragments:
                             fragment.note_ref = references.get(fragment.order, 0)
+                        draft.note_markers = endnote_references(page_content.fragments, pdf.warnings)
                         page_content.fragments = [fragment for fragment in page_content.fragments
                                                   if fragment.order not in consumed_notes]
                     except Exception as e:
@@ -288,6 +292,10 @@ class PDFReader:
                 for elements, original_length in inserted:
                     del elements[original_length:]
                 drops = {}
+            try:
+                next_note_number = detect_endnotes(drafts, drops, next_note_number, pdf.warnings)
+            except Exception as e:
+                pdf.warnings.append(f"WARN: PDF 미주 구역 복원 실패: {e!r}")
             for draft in drafts:
                 removed = drops.get(draft.page_number, set())
                 self._safe_finalize_draft(draft, removed, pdf.warnings)
@@ -556,6 +564,7 @@ class PDFReader:
                     subtype == "Type0" and str(pdf.resolve(font.get("Encoding"))) == "Identity-H")
         encoding = pdf.resolve(font.get("Encoding"))
         has_unicode_map = getattr(getattr(decoder, "__self__", None), "mapping", None)
+        reliable = reliable and getattr(getattr(decoder, "__self__", None), "reliable", True)
         if not has_unicode_map:
             base_font = str(pdf.resolve(font.get("BaseFont")) or "")
             standard_font = base_font in {
@@ -598,7 +607,30 @@ class PDFReader:
         if isinstance(first, int) and isinstance(arr, list):
             resolved = [pdf.resolve(w) for w in arr]
             return WidthMap.simple(first, resolved, default=500.0)
+        base, names = self._core14_encoding(pdf, font)
+        if names is not None and "Widths" not in font:
+            metrics = GLYPH_WIDTHS[base]
+            return WidthMap({code: metrics[glyph] for code, glyph in names.items()
+                             if glyph in metrics}, 500.0)
         return WidthMap({}, 500.0)
+
+    def _core14_encoding(self, pdf: PDFFile, font: dict):
+        if str(font.get("Subtype", "")) not in ("Type1", "TrueType", "MMType1"):
+            return None, None
+        base = str(pdf.resolve(font.get("BaseFont")) or "")
+        descriptor = pdf.resolve(font.get("FontDescriptor"))
+        if isinstance(descriptor, dict) and any(key in descriptor for key in
+                                               ("FontFile", "FontFile2", "FontFile3")):
+            return None, None
+        encoding = pdf.resolve(font.get("Encoding"))
+        if isinstance(encoding, dict):
+            encoding = {key: pdf.resolve(value) for key, value in encoding.items()}
+            if isinstance(encoding.get("Differences"), list):
+                if len(encoding["Differences"]) > 4096:
+                    pdf.warnings.append("WARN: PDF 글꼴 Differences 한도(4096) 초과 — 인코딩 보류")
+                    return None, None
+                encoding["Differences"] = [pdf.resolve(value) for value in encoding["Differences"][:4096]]
+        return canonical_font(base), glyph_names(base, encoding)
 
     def _cid_widths(self, pdf: PDFFile, font: dict) -> WidthMap:
         descendants = pdf.resolve(font.get("DescendantFonts"))
@@ -611,9 +643,25 @@ class PDFReader:
         default = float(dw) if isinstance(dw, (int, float)) else 1000.0
         w = pdf.resolve(cid_font.get("W"))
         if isinstance(w, list):
-            resolved = [pdf.resolve(x) for x in w]
-            return WidthMap.cid(resolved, default_width=default)
-        return WidthMap({}, default)
+            resolved = []
+            budget = 65536
+            truncated = len(w) > 65536
+            for item in w[:65536]:
+                value = pdf.resolve(item)
+                if isinstance(value, list):
+                    truncated = truncated or len(value) > budget
+                    resolved.append([pdf.resolve(entry) for entry in value[:budget]])
+                    budget -= min(len(value), budget)
+                else:
+                    resolved.append(value)
+            widths = WidthMap.cid(resolved, default_width=default)
+            if truncated:
+                pdf.warnings.append("WARN: PDF CID 폭 배열 항목 한도(65536) 초과")
+                widths.reliable = False
+        else:
+            widths = WidthMap.cid([], default_width=default)
+        pdf.warnings.extend(widths.warnings)
+        return widths
 
     def _build_font_decoder(self, pdf: PDFFile, name: str, font: dict) -> Callable[[bytes], str]:
         to_unicode = pdf.resolve(font.get("ToUnicode"))
@@ -623,6 +671,9 @@ class PDFReader:
                 cmap = parse_tounicode(cmap_data, pdf.warnings)
                 if cmap.mapping:
                     return cmap.decode
+        _base, names = self._core14_encoding(pdf, font)
+        if names is not None:
+            return Core14Decoder(names).decode
         # ToUnicode 없는 CID 폰트를 cp1252 로 해석하면 NUL 등 제어문자가
         # 본문으로 새어 나간다 — 경고를 남기고 해당 텍스트는 버린다 (감수 M4)
         encoding = pdf.resolve(font.get("Encoding"))

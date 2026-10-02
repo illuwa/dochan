@@ -1,5 +1,6 @@
 """PDF 주석과 목적지의 제한된 네이티브 해석."""
 import math
+from bisect import bisect_right
 from dataclasses import dataclass
 from lxml import etree
 
@@ -290,11 +291,36 @@ def link_regions(pdf, page, destinations):
 
 def attach_links(fragments, regions, warnings):
     """글리프 중앙점이 주석 사각형에 있는 문자만 링크로 만든다."""
+    # Identical annotations do not change geometry. Keep every annotation in
+    # the input (and benchmark denominator), but spend the bounded work once.
+    unique = {}
+    groups = {}
+    for region in regions:
+        key = (region.target, tuple(tuple(polygon) for polygon in region.polygons))
+        unique.setdefault(key, region)
+        groups.setdefault(key, []).append(region)
+    _attach_unique_links(fragments, list(unique.values()), warnings)
+    for key, original in unique.items():
+        if original.matched:
+            for region in groups[key]:
+                region.matched = True
+
+
+def _attach_unique_links(fragments, regions, warnings):
     checks = 0
     spans = []
     matched = set()
     blocked = set()
     blocked_targets = set()
+    bounds = []
+    for index, region in enumerate(regions):
+        points = [point for polygon in region.polygons for point in polygon]
+        if points:
+            bounds.append((min(y for _, y in points), index,
+                           min(x for x, _ in points), max(x for x, _ in points),
+                           max(y for _, y in points)))
+    bounds.sort()
+    lower_edges = [bound[0] for bound in bounds]
     for frag in fragments:
         if frag.link_geometry_reliable and len(frag.char_offsets) == len(frag.text) + 1:
             continue
@@ -321,13 +347,28 @@ def attach_links(fragments, regions, warnings):
             continue
         ux, uy = frag.dir_x / direction, frag.dir_y / direction
         vx, vy = frag.up_x / up, frag.up_y / up
+        # Broad phase: all tested character points lie on this baseline-parallel
+        # segment. Disjoint regions cannot select or cut any glyph in the run.
+        ends = [(frag.x + ux * d + vx * frag.size * 0.5,
+                 frag.y + uy * d + vy * frag.size * 0.5)
+                for d in (min(frag.char_offsets), max(frag.char_offsets))]
+        left, right = min(x for x, _ in ends), max(x for x, _ in ends)
+        bottom, top = min(y for _, y in ends), max(y for _, y in ends)
+        candidates = []
+        for low, region_index, x0, x1, high in bounds[:bisect_right(lower_edges, top + 1e-7)]:
+            checks += 1
+            if checks > 2000000:
+                warnings.append("WARN: PDF 링크 기하 검사 한도 초과 — 본문 연결 생략")
+                return
+            if high + 1e-7 >= bottom and x1 + 1e-7 >= left and x0 - 1e-7 <= right:
+                candidates.append((region_index, regions[region_index]))
         targets = []
         for index, char in enumerate(frag.text):
             # 폰트 코드 폭으로 계산한 진행 중앙과 글자 높이 중앙이다.
             distance = (frag.char_offsets[index] + frag.char_offsets[index + 1]) / 2
             x, y = frag.x + ux * distance + vx * frag.size * 0.5, frag.y + uy * distance + vy * frag.size * 0.5
             hits = []
-            for region_index, region in enumerate(regions):
+            for region_index, region in candidates:
                 if region_index in blocked:
                     continue
                 for polygon in region.polygons:

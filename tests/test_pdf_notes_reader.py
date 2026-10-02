@@ -17,7 +17,8 @@ def test_pdf_reader_moves_note_definitions_and_numbers_repeated_page_markers(tmp
         4: "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>",
         5: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
         6: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
-        7: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        7: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+           "/FirstChar 0 /Widths [" + "500 " * 256 + "] >>",
     }
     path = tmp_path / "notes.pdf"
     path.write_bytes(_build_pdf(objects))

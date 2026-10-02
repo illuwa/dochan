@@ -80,7 +80,8 @@ def test_pdf_reader_mixed_size_note_definition_is_output_once(tmp_path):
            "/Resources << /Font << /F1 5 0 R >> >> >>",
         3: "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
         4: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
-        5: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        5: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+           "/FirstChar 0 /Widths [" + "500 " * 256 + "] >>",
     }
     path = tmp_path / "mixed-size-note.pdf"
     path.write_bytes(_build_pdf(objects))
@@ -94,7 +95,8 @@ def test_pdf_reader_mixed_size_note_definition_is_output_once(tmp_path):
 def test_pdf_reader_running_footer_stays_outside_note_definitions(tmp_path):
     objects = {
         1: "<< /Type /Catalog /Pages 2 0 R >>",
-        7: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        7: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+           "/FirstChar 0 /Widths [" + "500 " * 256 + "] >>",
     }
     kids = []
     for page in range(4):

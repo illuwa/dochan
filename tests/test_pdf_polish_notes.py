@@ -46,7 +46,8 @@ def test_reader_preserves_wrapped_note_below_sixty_points(tmp_path):
            "/Resources << /Font << /F1 5 0 R >> >> >>",
         3: "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
         4: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
-        5: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        5: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+           "/FirstChar 0 /Widths [" + "500 " * 256 + "] >>",
     }
     path = tmp_path / "wrapped-note.pdf"
     path.write_bytes(_build_pdf(objects))

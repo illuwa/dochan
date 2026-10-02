@@ -1596,10 +1596,21 @@ class XLSXReader:
                 return value
             metadata = self._format_metadata(fmt)
             clean = self._format_code_tokens(fmt).lower()
+            if (metadata.kind == "decimal" and re.search(r"[0#?].*/.*[0#?]", clean)
+                    and "_?" in re.findall(r'"[^"]*"|[\\_*].', fmt)):
+                # Unsupported fraction patterns must not become rounded whole
+                # numbers when a padding placeholder (_?) is discarded.
+                return value
+            # Elapsed units, subsecond precision and single-second tokens are
+            # not faithfully represented by the normalized minute/second API.
+            # Preserve their raw serial, as for negative Excel date/time.
+            if metadata.kind in ("date", "time", "duration") and (
+                metadata.kind == "duration" or number < 0
+                or re.search(r"(?<!s)s(?!s)|s+\.0+", clean)
+            ):
+                return value
             if conditional_integer:
                 return str(Decimal(value).quantize(Decimal(1), rounding=ROUND_HALF_UP))
-            if metadata.kind == "duration":
-                return self._excel_duration(number, include_seconds="s" in clean)
             if metadata.kind == "time":
                 formatted = self._excel_time(number, include_seconds="ss" in clean)
                 return formatted[3:] if "h" not in clean and "ss" in clean else formatted
@@ -1627,11 +1638,11 @@ class XLSXReader:
                 return self._apply_literal_affixes(formatted, metadata)
             if metadata.kind == "percent":
                 # Excel stores double values and rounds ties away from zero.
-                # Normalize equivalent XML spellings to the double's shortest
-                # decimal first, then avoid binary multiplication artifacts.
+                # Excel's display precision is 15 significant decimal digits.
+                # Round there first, then avoid binary multiplication artifacts.
                 with localcontext() as context:
                     context.prec = max(32, len(value) + metadata.decimals + 4)
-                    scaled = Decimal(str(number)) * 100
+                    scaled = Decimal(format(number, ".15g")) * 100
                     if metadata.negative_parentheses and number < 0:
                         scaled = abs(scaled)
                     scaled = scaled.quantize(Decimal(1).scaleb(-metadata.decimals), rounding=ROUND_HALF_UP)
@@ -1658,7 +1669,7 @@ class XLSXReader:
         condition = re.compile(r"\[(<=|>=|<>|=|<|>)(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\]")
         # Keep offsets while masking literals, so removing an actual condition
         # cannot also remove identical bracket text inside a quoted label.
-        masks = [re.sub(r'"[^"]*"|\\.', lambda match: " " * len(match.group()), section)
+        masks = [re.sub(r'"[^"]*"|[\\_*].', lambda match: " " * len(match.group()), section)
                  for section in sections]
         if not any(condition.search(mask) for mask in masks[:2]):
             return fmt
@@ -1752,12 +1763,12 @@ class XLSXReader:
 
     def _is_duration_format(self, lower_fmt: str) -> bool:
         clean_fmt = self._format_without_literals(lower_fmt)
-        return "[h]" in clean_fmt or "[m]" in clean_fmt or "[s]" in clean_fmt
+        return bool(re.search(r"\[(?:h+|m+|s+)\]", clean_fmt, re.IGNORECASE))
 
     def _is_time_only_format(self, lower_fmt: str) -> bool:
         clean_fmt = self._format_sections(self._format_code_tokens(lower_fmt))[0]
         # Separators can be quoted localized text, not only colons.
-        if "h" not in clean_fmt and "ss" not in clean_fmt:
+        if "h" not in clean_fmt and "s" not in clean_fmt:
             return False
         return not any(token in clean_fmt for token in ("y", "d", "mmm"))
 
@@ -1886,8 +1897,8 @@ class XLSXReader:
         return re.sub(r"\[(?![hmsHMS]+\])[^\]]*\]", "", clean)
 
     def _format_without_literals(self, fmt: str) -> str:
-        without_quoted = re.sub(r'"[^"]*"', "", fmt)
-        return re.sub(r"\\.", "", without_quoted)
+        # Consume lexical pairs together: _" and \" do not open a quote.
+        return re.sub(r'"[^"]*"|[\\_*].', "", fmt)
 
     def _literal_affixes(self, fmt: str) -> Tuple[str, str]:
         section = self._format_sections(fmt)[0]
@@ -1910,6 +1921,11 @@ class XLSXReader:
         index = 0
         while index < len(fmt):
             char = fmt[index]
+            if char in "_*":
+                if char == "_" and index + 1 < len(fmt):
+                    tokens.append((" ", False))
+                index += 2
+                continue
             if char == '"':
                 end = fmt.find('"', index + 1)
                 if end == -1:
@@ -1952,7 +1968,7 @@ class XLSXReader:
                 current.append(char)
                 escaped = False
                 continue
-            if char == "\\":
+            if char in "\\_*" and not in_quote:
                 current.append(char)
                 escaped = True
                 continue

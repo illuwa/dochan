@@ -2,7 +2,7 @@
 
 2026-10-03에 `illuwa/w-chart-details`에서 공개 POI·LibreOffice 표본을 읽기 전용으로 검사했다. 원본 문서는 저장소에 복사하지 않았다. 구현은 저장소의 기존 파서, ECMA-376 21.2의 차트 요소 구조, Microsoft [MS-XLS] 명세와 원시 XML·BIFF 레코드 관찰을 근거로 했다. BIFF8의 구체적인 근거는 [MS-XLS] v20250819의 2.4.29 BRAI, 2.4.48 ChartFormat, 2.4.182 ObjectLink, 2.4.256 SerToCrt, 2.5.165 IFmt다. 외부 프로젝트의 구현 코드는 읽거나 옮기지 않았다. Office GUI 렌더링을 새로 실행한 검증은 아니다. 축 제목의 독립 정답은 차트 XML의 제목·축 위치·교차 연결이다.
 
-리뷰 반영 최종 출력 검증과 칸별 제안은 [chart-details-fix 실물 검증](2026-10-02-chart-details-fix-real-docs.md)에 기록한다. 아래는 재실행한 기존 파트 프로브의 보조 근거이며, 원시 표 비교만으로 표시 출력의 무손실을 주장하지 않는다.
+리뷰 반영 최종 출력 검증과 칸별 제안은 [chart-details-fix 실물 검증](2026-10-02-chart-details-fix-real-docs.md)에 기록한다. 아래 전수 비교 수치는 이전 리뷰의 기준 `107e18d`에 대한 이력이다. 이번 3차 리뷰의 기준 `62b8c3e` 및 최종 수치는 링크 문서를 따른다. 아래는 기존 파트 프로브의 보조 근거이며, 원시 표 비교만으로 표시 출력의 무손실을 주장하지 않는다.
 
 ## 출력 계약과 구현
 
@@ -10,15 +10,15 @@
 
 막대와 분산형이 함께 있으면 `Series | Category | X | Y` 표를 사용한다. 거품 크기도 있으면 마지막에 `Bubble size`를 붙인다. 범주 계열은 Category에만, 분산 계열은 X에만 값을 쓴다. 두 계열의 범주 문자열과 숫자가 우연히 같아도 열을 합치지 않는다. 기존 `Table`, `Cell`, Markdown·JSON 출력 경로를 그대로 쓴다.
 
-차트 데이터는 원시 숫자 문자열을 기본으로 출력한다. 숫자 캐시의 `formatCode` 또는 캐시 없는 참조에서 얻은 원본 셀 서식은 날짜·시간·경과 시간에만 적용한다. 축의 `numFmt`는 눈금 레이블 서식이므로 데이터 값에 적용하지 않는다. 백분율도 0.0891처럼 원시 값을 보존하며 일반 숫자·과학·회계 서식을 이용한 반올림은 하지 않는다. 문자열 범주에는 숫자 서식을 적용하지 않는다.
+차트 데이터는 원시 숫자 문자열을 기본으로 출력한다. 숫자 캐시의 `formatCode` 또는 캐시 없는 참조에서 얻은 원본 셀 서식은 지원하는 날짜·시각에만 적용한다. 경과 시간 `[h+]`·`[m+]`·`[s+]`, 소수 초, 한 글자 s 및 음수 날짜·시각은 원시 값을 보존한다. 축의 `numFmt`는 눈금 레이블 서식이므로 데이터 값에 적용하지 않는다. 백분율도 0.0891처럼 원시 값을 보존하며 일반 숫자·과학·회계 서식을 이용한 반올림은 하지 않는다. 문자열 범주에는 숫자 서식을 적용하지 않는다.
 
-날짜는 ISO 날짜, 시간은 24시간 표기를 사용한다. `h:mm`의 일련값에 날짜 부분이 있으면 날짜도 보존한다. `mm:ss`는 분·초 표시이며 시트와 같은 계약을 따른다. 표의 좌표 동일성은 표시 문자열에 붙인 원시 숫자를 비교하므로 날짜·시간 표시가 같아도 서로 다른 X 좌표를 합치지 않는다. 표시값 메타데이터는 내부 문자열 확장이며 공유 모델과 JSON 스키마를 바꾸지 않았다.
+날짜는 ISO 날짜, 시간은 24시간 표기를 사용한다. `h:mm`의 일련값에 날짜 부분이 있으면 날짜도 보존한다. Excel의 시각 전용 표시에는 없는 날짜 접두를 붙이는 것은 일수를 잃지 않기 위한 의도적 차이다. `mm:ss`는 분·초 표시이며 시트와 같은 계약을 따른다. 표의 좌표 동일성은 표시 문자열에 붙인 원시 숫자를 비교하므로 날짜·시간 표시가 같아도 서로 다른 X 좌표를 합치지 않는다. 표시값 메타데이터는 내부 문자열 확장이며 공유 모델과 JSON 스키마를 바꾸지 않았다.
 
 이미 캐시가 있는 참조에서 서식만 얻기 위해 원본 셀을 조회하지 않는다. 이는 뒤 차트의 누락 캐시 보충 예산을 보존한다. XLS BRAI의 연결 서식도 실제 숫자에만 같은 정책으로 적용한다. 서식은 255자 이하로 제한하고 서식기 LRU는 128개, 결과는 128자 및 원시값 대비 추가 64자 이하로 제한한다.
 
 HWPX의 `parse_chart_xml(data)`는 기존 원시 캐시 API를 보존한다. 추가 인자 `display_values=True`가 표시 서식과 명시적 자동 제목을 사용하며, HWPX 문서 리더가 이를 켠다. 따라서 기존 원시값 테스트의 단언을 바꿀 필요가 없다.
 
-자동 제목은 제목의 `c:tx`가 없고 이름 있는 계열이 하나이며 `autoTitleDeleted`가 명시적으로 false인 경우에만 생성한다. true 및 값 없는 요소는 생성하지 않는다. 요소 자체가 생략된 경우는 기존 무제목 동작을 유지한다. 생략 상태의 Office 동작은 이번 코퍼스로 확인하지 못했으므로 이 처리를 Office 전체 규칙 검증 완료로 주장하지 않는다. `c:tx`가 있는 명시적 빈 제목은 보존한다. `c:title`만 있고 `c:tx`가 없는 실물 자동 제목은 이번 리뷰에서 추가 검증했다. 자동 제목 README 칸은 변경하지 않는다.
+자동 제목은 `c:title`이 있고 그 안의 `c:tx`가 없고 이름 있는 계열이 하나이며 `autoTitleDeleted`가 명시적으로 false인 경우에만 생성한다. autoTitleDeleted가 true이거나 값 없는 요소이면 생성하지 않는다. c:title 또는 autoTitleDeleted 자체가 생략된 경우도 무제목을 유지한다. 생략 상태의 Office 동작은 이번 코퍼스로 확인하지 못했으므로 이 처리를 Office 전체 규칙 검증 완료로 주장하지 않는다. `c:tx`가 있는 명시적 빈 제목은 보존한다. `c:title`만 있고 `c:tx`가 없는 실물 자동 제목은 이번 리뷰에서 추가 검증했다. 자동 제목 README 칸은 변경하지 않는다.
 
 ## 항목별 실물 판정
 
@@ -35,12 +35,12 @@ HWPX의 `parse_chart_xml(data)`는 기존 원시 캐시 API를 보존한다. 추
 | chartEx 군집 막대·파레토·txData 제목 | 해당 표본을 찾지 못했다. | POI 지정 세 폴더와 LO 전체의 OOXML 2,719개를 조사했다. | 실제 해당 종류와 셀 연결 제목으로 대조해야 한다. | chartEx 3개는 sunburst, boxWhisker, waterfall이었다. | 미검증이므로 ⬜를 유지한다. |
 | chartEx 기존 종류 회귀 | POI `chartex.docx`, LO `forum-mso-de-138303.pptx` | chartEx 원시 차원 캐시·제목 | 기존 3개 파트의 값이 보존돼야 한다. | 원시 값 비교와 기존 제목 검사가 유지됐다. | 회귀 검증을 통과했다. |
 | 자동 제목 삭제 상태 | 이름 있는 단일 계열·제목 없는 공개 파트 23개 | 원시 autoTitleDeleted=1 | 제목을 생성하지 않아야 한다. | 23/23에서 무제목이 유지됐다. | 삭제 상태만 실물 검증을 통과했다. |
-| 자동 제목 생성·요소 생략 상태 | 공개 HWPX를 포함한 실물 표본이 있다. | c:title에 c:tx가 없고 autoTitleDeleted=0이며 계열이 하나인 원시 XML이다. | 저장된 계열 이름을 제목으로 내야 한다. | 최종 출력 및 표본별 판정은 리뷰 벤치마크에 기록했다. | 사용자 결정에 따라 ⬜를 유지한다. |
+| c:tx 없는 제목 요소의 자동 제목 생성 | 공개 HWPX를 포함한 실물 표본이 있다. | c:title에 c:tx가 없고 autoTitleDeleted=0이며 계열이 하나인 원시 XML이다. | 저장된 계열 이름을 제목으로 내야 한다. | 최종 출력 및 표본별 판정은 리뷰 벤치마크에 기록했다. | 사용자 결정에 따라 ⬜를 유지한다. |
 | HWPX 표시 서식 연결 | hwp-public의 차트 포함 HWPX 41개다. | 원시 XML과 HEAD 대비 Markdown·JSON 출력이다. | 공용 서식과 원시 API 호환성을 함께 유지해야 한다. | 41개를 최종 출력 검증에 포함했다. | 세부 판정은 리뷰 벤치마크를 따른다. |
 
 ## 전수 비교와 제한
 
-OOXML 후보 2,719개에서 차트가 있는 문서 91개, 차트 파트 140개를 찾았다. 구성은 DOCX 64파트, XLSX 38파트, PPTX 36파트, XLSM 2파트다. 손상된 ZIP·비ZIP 48개는 별도 오류로 집계하고 성공 표본으로 세지 않았다. 기준 출력은 구현 전 HEAD에서 확보했다.
+OOXML 후보 2,719개에서 차트가 있는 문서 91개, 차트 파트 140개를 찾았다. 구성은 DOCX 64파트, XLSX 38파트, PPTX 36파트, XLSM 2파트다. 손상된 ZIP·비ZIP 48개는 별도 오류로 집계하고 성공 표본으로 세지 않았다. 이 절의 기준 출력은 원래 구현 전 `107e18d`에서 확보한 이력이다.
 
 140개 파트의 원시 Y 값은 2,873/2,873으로 일치했다. 표시 서식만 제거한 복제본의 표는 변경 전후 140/140이 동일했다. 새 계약의 날짜·시간 표시 및 백분율 원시 문자열 검사는 재실행에서 106/106이었다. HEAD 대비 바뀐 파트는 20개로, 제목 13파트·표 값 5파트·축 캡션 2파트다. 최종 변경 파일·값 수는 문서 출력 수준의 리뷰 벤치마크에서 집계한다.
 
@@ -56,10 +56,10 @@ XLS에서는 차트 문서 36개, 차트 97개, 비어 있지 않은 계열 Y �
 
 ```bash
 /usr/bin/python3 -m scripts.probe_chart_details \
-  --roots /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/document \
-  /Users/illuwa/dev/personal/dochan/corpus/lo-src \
+  --roots corpus/poi-src/test-data/spreadsheet \
+  corpus/poi-src/test-data/slideshow \
+  corpus/poi-src/test-data/document \
+  corpus/lo-src \
   --baseline .codex-work/chart-details-all-before.json \
   --output .codex-work/chart-details-fix-after.json
 /usr/bin/python3 -m scripts.probe_chart_details_integration \
@@ -67,14 +67,14 @@ XLS에서는 차트 문서 36개, 차트 97개, 비어 있지 않은 계열 Y �
   --baseline .codex-work/chart-details-integration-before.json \
   --output .codex-work/chart-details-fix-integration.json
 /usr/bin/python3 -m scripts.probe_xls_chart_details \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet \
-  /Users/illuwa/dev/personal/dochan/corpus/lo-src/sc/qa/unit/data/xls \
+  corpus/poi-src/test-data/spreadsheet \
+  corpus/lo-src/sc/qa/unit/data/xls \
   --baseline .codex-work/xls-chart-before.json \
   --output .codex-work/xls-chart-after.json
 /usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
 ruff check dochan scripts tests
 ```
 
-새 테스트는 먼저 실패를 확인한 뒤 구현했다. 1차 핵심 동작은 14개 실패를 확인했고, 이후 원본 셀 서식·날짜시간·HWPX 표시·chartEx 숫자 서식·3차원 축 문제도 실패를 재현했다. BIFF8에서는 6개 실패를 먼저 확인했다. 기존 테스트의 단언은 수정하지 않았다. 앞선 3,316개 통과 기록은 리뷰 전 결과다. 리뷰 후 최종 전체 테스트 수와 Ruff·diff 검사 결과는 `.codex-work/report.md`의 리뷰 반영 절에 기록한다. HEAD에 있는 테스트 단언은 그대로이며, 이번 작업의 미커밋 신규 테스트 중 반올림·축 서식·날짜 누락을 기대했던 단언만 원시 값 정책으로 정정했다.
+새 테스트는 먼저 실패를 확인한 뒤 구현했다. 1차 핵심 동작은 14개 실패를 확인했고, 이후 원본 셀 서식·날짜시간·HWPX 표시·chartEx 숫자 서식·3차원 축 문제도 실패를 재현했다. BIFF8에서는 6개 실패를 먼저 확인했다. 이전 리뷰 당시 기존 테스트의 단언은 수정하지 않았다. 앞선 3,316개 통과 기록은 리뷰 전 결과다. 리뷰 후 최종 전체 테스트 수와 Ruff·diff 검사 결과는 `.codex-work/report.md`의 리뷰 반영 절에 기록한다. 3차 리뷰에서는 명시적 원시 값 보존 결정에 따라 기존 경과 시간 단언 두 개와 합성 벤치마크 기대 두 곳을 정정했다. c:title 없는 자동 제목 테스트 두 개는 검증된 c:title 존재 픽스처로 고쳤으며, 제목이 없는 경우 무제목임을 새 테스트로 검증한다. 정확한 변경 근거는 리뷰 보고서에 기록한다.
 
 README와 CHANGELOG는 수정하지 않았다. 실물이 없는 항목을 ✅로 제안하지 않는다.

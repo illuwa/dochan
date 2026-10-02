@@ -144,6 +144,8 @@ def chart_title(chart_root) -> str:
     if chart is None:
         return ""
     title = _child(chart, "title")
+    if title is None:
+        return ""
     if title is not None and _child(title, "tx") is not None:
         return _title_text(title)
     # Preserve omitted-state behavior until its Office display is verified.
@@ -375,7 +377,12 @@ def _number_format_reader(format_code, date_1904):
 
 
 def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
-    """날짜·시간·경과 시간만 표시하고 그 외에는 원시 숫자 문자열을 보존한다."""
+    """지원하는 날짜·시각만 표시하며 나머지는 원시 숫자를 보존한다.
+
+    시각 일련값이 하루 이상이면 정수 일수를 잃지 않도록 날짜를 붙인다.
+    이는 시각 서식만 표시하는 Excel과 의도적으로 다른 출력이다.
+    경과 시간·소수 초·단일 s·음수 날짜/시각은 원시 값으로 남긴다.
+    """
     if not format_code or format_code.lower() == "general" or len(format_code) > MAX_NUMBER_FORMAT_LENGTH:
         return value
     reader = _number_format_reader(format_code, date_1904)

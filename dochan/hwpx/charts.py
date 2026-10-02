@@ -291,7 +291,8 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
     # duplicate cache nodes through the permissive OOXML title helper.
     deleted = chart.find(_C + "autoTitleDeleted")
     auto_deleted = deleted is not None and deleted.get("val", "1").lower() in ("1", "true")
-    if (budget.display_values and chart.find(_C + "title/" + _C + "tx") is None and deleted is not None and not auto_deleted and len(ordered) == 1
+    if (budget.display_values and chart.find(_C + "title") is not None
+            and chart.find(_C + "title/" + _C + "tx") is None and deleted is not None and not auto_deleted and len(ordered) == 1
             and len(elements) == 1 and isinstance(elements[0], Table)
             and not any('[chart:missing_name]' in warning for warning in warnings)):
         heading = _paragraph(elements[0].rows[0][1].text)

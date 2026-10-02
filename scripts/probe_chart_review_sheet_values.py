@@ -2,7 +2,7 @@
 import argparse
 from collections import Counter
 import csv
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_EVEN, ROUND_HALF_UP
 import json
 from pathlib import Path
 import re
@@ -15,6 +15,35 @@ def check(entry):
     raw = evidence['raw']
     fmt = evidence['format']
     value = (entry['after'] or '').split(' (=')[0]
+    # Accounting layout is not part of the numeric value. Independently check
+    # the source precision and currency, while requiring layout tokens gone.
+    if ('_' in fmt or '*' in fmt) and '_' not in value and '*' not in value:
+        first = fmt.split(';', 1)[0]
+        pattern = re.search(r'(?<![\dA-Za-z])(?:#,##0|0)(?:\.(0+))?', first)
+        if pattern:
+            decimals = len(pattern.group(1) or '')
+            rounded = Decimal.from_float(abs(float(raw))).quantize(
+                Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_EVEN)
+            currency = '$' if '$$-' in first or re.search(r'(?<!\[)\$', first) else ''
+            separator = ',' if ',' in pattern.group() else ''
+            expected = currency + format(rounded, separator + '.%df' % decimals)
+            # Verify the observed decimal layout family independently: source
+            # leading/trailing _x each contributes one space, *x none, and the
+            # quoted euro suffix is literal. This is not a general Excel TEXT
+            # interpreter; other affix layouts stay unverified.
+            prefix, suffix = first[:pattern.start()], first[pattern.end():]
+            known_prefix = prefix in ('', '"$"', '[$$-409]', '_(* ', '_-\\$* ',
+                                      '_([$$-409]* ', '_-* ')
+            known_suffix = suffix in ('_)', '_ ', '\\ "€"_-')
+            if known_prefix and known_suffix:
+                expected = (' ' if prefix.startswith('_') else '') + expected
+                expected += ' € ' if '€' in suffix else ' '
+                if Decimal(raw) < 0:
+                    # Locale currency is prepended to the signed decimal in
+                    # the existing sheet contract; quoted currency is an affix.
+                    expected = '$-' + expected[1:] if prefix == '[$$-409]' else '-' + expected
+                if value == expected:
+                    return '회계 수치·정밀도·통화·공백 정확 일치', expected
     if number(value) is not None and not value.endswith('%') and number(value) == number(raw):
         return '원시 수치 보존', raw
     if value.endswith('%'):
@@ -23,7 +52,7 @@ def check(entry):
         percent = re.fullmatch(r'0(?:\.(0+))?%', fmt)
         if percent:
             decimals = len(percent.group(1) or '')
-            expected = (Decimal(str(float(raw))) * 100).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
+            expected = (Decimal(format(float(raw), '.15g')) * 100).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
             display = format(expected, '.%df' % decimals) + '%'
             if value == display:
                 return '백분율 지정 자릿수 HALF_UP', display
@@ -55,7 +84,7 @@ def main():
         counts[entry['verdict']] += 1
     args.output.write_text(json.dumps({'summary': dict(counts), 'cells': entries}, ensure_ascii=False, indent=2) + '\n')
     with args.csv.open('w', newline='', encoding='utf-8') as output:
-        writer = csv.writer(output)
+        writer = csv.writer(output, lineterminator='\n')
         writer.writerow(['공개 파일', '셀', '원시 XML/레코드 위치', '원시 값', '서식', 'HEAD', '수정본', '독립 기대', '판정'])
         for entry in entries:
             evidence = entry['evidence']

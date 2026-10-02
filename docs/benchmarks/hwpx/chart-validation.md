@@ -1,6 +1,6 @@
 # HWPX XML 캐시 차트 구현·검증
 
-검증일: 2026-09-19. 기준 사양: [chart-spec.md](chart-spec.md).
+초기 검증일: 2026-09-19. 표시 계약 갱신일: 2026-10-03. 기준 사양: [chart-spec.md](chart-spec.md).
 구현: `dochan/hwpx/charts.py`. 검증: `tests/test_hwpx_charts.py`.
 이 문서는 XML 해석 모듈의 계약을 기록한다. ZIP/API 연결 검증은
 [chart-integration-validation.md](chart-integration-validation.md)에 별도로 기록한다.
@@ -11,7 +11,7 @@
 from dochan.hwpx.charts import parse_chart_xml
 
 elements, warnings = parse_chart_xml(data)
-# parse_chart_xml(data: bytes) -> tuple[list, list[str]]
+# parse_chart_xml(data: bytes, display_values: bool = False) -> tuple[list, list[str]]
 ~~~
 
 입력은 ZIP에서 이미 읽은 **차트 파트의 XML bytes**다. 이 모듈은 파일·ZIP·
@@ -20,11 +20,14 @@ switch/OLE 대체 분기 선택, 경고 전달을 담당한다. 현재 `parser.p
 
 1. 명시적 차트 제목이 있으면 Paragraph(runs=[TextRun(...)]) 하나를 먼저 반환한다.
    c:title/c:tx/c:rich의 DrawingML 텍스트·줄바꿈·문단 또는 문자열 캐시를 읽는다.
-   c:title/c:txPr, 축 제목, 계열명으로 차트 제목을 만들어 내지 않는다.
+   기본 API는 c:title/c:txPr, 축 제목, 계열명으로 제목을 만들지 않는다.
+   문서 리더는 `display_values=True`를 사용한다. 이 모드에서 c:title은 있지만
+   c:tx가 없고 autoTitleDeleted가 명시적 false인 단일 계열만 검증된 계열명을
+   제목으로 사용한다. c:title 자체가 없는 경우는 실물 미검증으로 생성하지 않는다.
 2. 계열마다 독립된 Table 하나를 반환한다. 서로 다른 범주나 X 값을 가진 계열을
-   한 격자에 합치지 않는다. 계열명은 Table.caption의 Paragraph/TextRun,
-   caption_side="TOP"에 둔다.
-3. 첫 행은 범주형 ["범주", "값"], 산점도 ["X", "Y"]다.
+   한 격자에 합치지 않는다. 차트 유형과 축 제목은 첫 표의 Table.caption에
+   Paragraph/TextRun으로 두며 caption_side="TOP"을 사용한다.
+3. 첫 행은 범주형 ["범주", 계열명], 산점도 ["X", 계열명]이다.
    각 Cell에 row/col과 텍스트 문단을 설정한다. 별도 차트 모델은 추가하지 않는다.
 4. 계열은 c:order 숫자 오름차순이다. 동률은 XML 순서를 유지한다.
    누락·잘못된 order는 해당 계열의 0기준 XML 위치를 정렬 키로 쓰고 경고한다.
@@ -32,7 +35,7 @@ switch/OLE 대체 분기 선택, 경고 전달을 담당한다. 현재 `parser.p
 5. 행은 c:pt/@idx의 0기준 순서다. ptCount와 관찰한 최대 idx로 길이를 정한다.
    범주/값 및 X/Y를 **같은 idx끼리** 대응시키며 X 값 자체로 정렬하지 않는다.
 6. 계열명이 없거나 빈 문자열이면 표시 순서 기준 "계열 N"을 생성하고
-   missing_name 경고를 반환한다. 자동 차트 제목은 생성하지 않는다.
+   missing_name 경고를 반환한다. 이 대체 이름으로 자동 차트 제목을 만들지 않는다.
 
 ## 데이터 보존·오류 처리
 
@@ -54,10 +57,17 @@ switch/OLE 대체 분기 선택, 경고 전달을 담당한다. 현재 `parser.p
 | XML 오류·DTD·예산 초과 | 요소 전체를 비우고 해당 경고 반환 |
 
 문자열은 XML 파서의 표준 개행·엔티티 정규화를 거친 텍스트다.
-숫자 표시 형식이나 날짜 일련번호를 적용·변환하지 않는다.
+기본 API는 숫자 표시 형식이나 날짜 일련번호를 적용·변환하지 않는다.
+문서 리더의 `display_values=True`에서는 숫자 캐시에 지정된 날짜·시각을
+공용 차트 서식기로 표시한다. 경과 시간 `[h+]`·`[m+]`·`[s+]`, 소수 초,
+한 글자 s 및 음수 날짜·시각은 원시 값을 보존한다. 일반 숫자와 백분율도
+반올림하지 않는다. `_x`·`*x`·따옴표 리터럴·이스케이프는 시간 분류에서 제외한다.
+하루 이상인 시각 일련값에는 날짜를 붙여 일수를 보존한다. 이 접두는 Excel의
+시각 전용 표시와 의도적으로 다르며 UI 렌더링 동일성의 근거가 아니다.
 c:f 수식·관계·원본 워크북·OLE는 평가하거나 따라가지 않으며 출력 모델에도
 별도로 담지 않는다. 반환 수치는 **저장된 캐시 또는 literal**이며 원본 시트의 최신 값이 아니다.
-축·범례 레이아웃·서식·색상·렌더링도 반환하지 않는다.
+차트 유형과 축 제목은 표 캡션으로 반환하지만 축·범례의 시각적 레이아웃,
+색상 및 렌더링은 반환하지 않는다.
 
 경고는 별도 list[str]이고 [chart:code]로 시작한다. 같은 계열/캐시의
 같은 문제는 중복 경고하지 않는다. 원문 수식·숫자·XML 오류 전문은 경고에 넣지 않는다.
@@ -77,12 +87,17 @@ Strict OOXML URI, bubble/stock/surface, 다단계 범주, 한 plotArea의 여러
 | pieChart, lineChart의 strRef/strCache·numRef/numCache | 제목 유무, 계열명, 범주/값, 다중계열 표 | 아래 공개 실물 2유형 + 합성 테스트 |
 | pie3DChart, doughnutChart, line3DChart, barChart, bar3DChart, areaChart, area3DChart, radarChart | 동일한 cat/val 캐시 추출 | 합성 XML만 검증; 3D/시각적 재현 아님 |
 | scatterChart | numRef/numCache 또는 numLit의 xVal/yVal을 계열별 idx로 결합 | 합성 XML의 다중계열·비단조 X·0·희소·다른 길이 검증 |
-| strLit, numLit, 숫자 범주 | 문자·숫자·날짜 일련번호 원문 유지 | 합성 XML만 검증 |
+| strLit, numLit, 숫자 범주 | 기본 API는 원문을 유지하고 문서 리더는 위 표시 계약을 적용한다. | 기본 API 합성 검증과 아래 추가 공개 출력 검증을 구분한다. |
 | 명시적 rich-text/문자열 캐시 제목 | run/줄바꿈/문단 텍스트 추출 | 합성 XML만 검증; 실물 두 표본에는 명시적 제목 없음 |
 | 빈값·누락·중복·잘못된 값·외부 참조 | 위 정책에 따른 출력과 경고 | 합성 XML만 검증 |
 
 실물 검증을 하지 않은 범위를 README의 지원 완료 표시로 승격하지 않는다.
 전체 XSD 적합성, 한글 UI 렌더링 동일성, 워크북 재계산 결과를 검증한 것은 아니다.
+
+2026-10-03 리뷰에서는 공개 HWPX 차트 문서 41개를 실제 Markdown·JSON 비교에
+포함했다. 37파일의 73개 차트 표와 출력 가능한 자동 제목 8개를 확인했다.
+세부 수치와 미출력 유형은 [리뷰 실물 검증](../2026-10-02-chart-details-fix-real-docs.md)에
+기록한다. 이 추가 기록은 아래 초기 2개 표본 검증과 구분한다.
 
 ## 보안·자원 예산
 

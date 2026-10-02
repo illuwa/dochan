@@ -1,0 +1,139 @@
+공개 파일,파트,TEXT 셀,수식,원시 값,서식,1904 날짜,Excel 캐시,HEAD,수정본,판정
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",12.343999999999999,0.00,True,12.34,12.34,12.34,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A3,"TEXT(C3, B3)",12.343999999999999,0.0,True,12.3,12.3,12.3,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A6,"TEXT(C6, B6)",12.3,###.##,True,12.3,12.3,12.3,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A17,"TEXT(C17, B17)",12.3,"\a $#.00"" profit""",True,a $12.30 profit,a $12 profit,a $12 profit,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A24,"TEXT(C24, B24)",1234567,"#,###",True,"1,234,567","1,234,567","1,234,567",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A40,"TEXT(C40, B40)",1234567,"?,???",True,"1,234,567","1,234,567","1,234,567",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A47,"TEXT(C47, B47)",12,"?,?",True,12,12,12,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A63,"TEXT(C63, B63)",1234567,"0,000",True,"1,234,567","1,234,567","1,234,567",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A70,"TEXT(C70, B70)",-12,"0,0",True,-12,-12,-12,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A76,"TEXT(C76, B76)",-1234567,"?,???",True,"-1,234,567","-1,234,567","-1,234,567",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A83,"TEXT(C83, B83)",-12,"?,?",True,-12,-12,-12,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A92,"TEXT(C92, B92)",1234567,"0.#,",True,1234.6,1234567,1234567,원시 값 폴백
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A99,"TEXT(C99, B99)",1.23E-2,0.00%,True,1.23%,1.23%,1.23%,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A102,"TEXT(C102, B102)",-1.23E-2,0.00%,True,-1.23%,-1.23%,-1.23%,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A103,"TEXT(C103, B103)",-123.45,"0,0.00%",True,"-12,345.00%",-12345.00%,-12345.00%,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A104,"TEXT(C104, B104)",-123.45,"0,0.00%%",True,"-1,234,500.00%%",-12345.00%,-12345.00%,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A105,"TEXT(C105, B105)",3.5E-4,"#,##0.00%",True,0.04%,0.04%,0.04%,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A107,"TEXT(C107, B107)",1.1000000000000001,|?.?|,True,|1.1|,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A111,"TEXT(C111, B111)",1234567,"?,?",True,"1,234,567","1,234,567","1,234,567",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A112,"TEXT(C112, B112)",1234567,"?,?????????",True,"    1,234,567","1,234,567","1,234,567",표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A117,"TEXT(C117, B117)",-1234567,"?,?",True,"-1,234,567","-1,234,567","-1,234,567",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A118,"TEXT(C118, B118)",-1234567,"?,?????????",True,"-    1,234,567","-1,234,567","-1,234,567",표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A121,"TEXT(C121, B121)",-23.75,|#\:#/#|,True,-|23:3/4|,-|24|,-|24|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A122,"TEXT(C122, B122)",0.75,|#\:#/#|,True,|3/4|,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A123,"TEXT(C123, B123)",-0.75,|#\:#/#|,True,-|3/4|,-|1|,-|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A124,"TEXT(C124, B124)",0,|#\:#/#|,True,|0|,|0|,|0|,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A127,"TEXT(C127, B127)",23.75,|#-#-#\:#/#|,True,|-2-3:3/4|,|24|,|24|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A128,"TEXT(C128, B128)",-23.75,|#-#-#\:#/#|,True,-|-2-3:3/4|,-|24|,-|24|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A129,"TEXT(C129, B129)",0.75,|#-#-#\:#/#|,True,|--3/4|,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A130,"TEXT(C130, B130)",-0.75,|#-#-#\:#/#|,True,-|--3/4|,-|1|,-|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A135,"TEXT(C135, B135)",-23.75,|#\:#=/=#|,True,-|23:3=/=4|,-|24|,-|24|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A136,"TEXT(C136, B136)",0,|#\:#=/=#|,True,|0|,|0|,|0|,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A140,"TEXT(C140, B140)",-23.75,|#\:#=/=?|,True,-|23:3=/=4|,-|23 3/4|,-|23 3/4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A141,"TEXT(C141, B141)",0,|#\:#=/=?|,True,|0      |,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A145,"TEXT(C145, B145)",-23.75,|#\:#=/=0|,True,-|23:3=/=4|,-|24|,-|24|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A146,"TEXT(C146, B146)",0,|#\:#=/=0|,True,|0|,|0|,|0|,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A150,"TEXT(C150, B150)",-23.75,|#\:? ?=/=#|,True,-|2:3 3=/=4|,-|23 3/4|,-|23 3/4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A153,"TEXT(C153, B153)",-1,|#\:? ?=/=#|,True,-|:1      |,-|1|,-|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A155,"TEXT(C155, B155)",-23.75,|#\:? ?=/=?|,True,-|2:3 3=/=4|,-|23 3/4|,-|23 3/4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A156,"TEXT(C156, B156)",0,|#\:? ?=/=?|,True,|:0      |,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A160,"TEXT(C160, B160)",23.75,|#\:? ?0#/000,True,|2:3  03/004,|23 3/4,|23 3/4,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A163,"TEXT(C163, B163)",1,|#\:? ?0#/000,True,|:1  00/001,|1,|1,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A166,"TEXT(C166, B166)",-3.75,|#_#/#|,True,-|15 /4|,-|4|,-|4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A167,"TEXT(C167, B167)",0.75,|#_#/#|,True,|3 /4|,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A168,"TEXT(C168, B168)",-0.75,|#_#/#|,True,-|3 /4|,-|1|,-|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A169,"TEXT(C169, B169)",0,|#_#/#|,True,|0 /1|,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A173,"TEXT(C173, B173)",-3.75,|#_#=/=#|,True,-|15 =/=4|,-|4|,-|4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A174,"TEXT(C174, B174)",0,|#_#=/=#|,True,|0 =/=1|,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A178,"TEXT(C178, B178)",-3.75,|#_#=/=?|,True,-|15 =/=4|,-|3 3/4|,-|3 3/4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A179,"TEXT(C179, B179)",0,|#_#=/=?|,True,|0 =/=1|,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A183,"TEXT(C183, B183)",-3.75,|#_#=/=0|,True,-|15 =/=4|,-|4|,-|4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A184,"TEXT(C184, B184)",0,|#_#=/=0|,True,|0 =/=1|,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A188,"TEXT(C188, B188)",-3.75,|#_?=/=#|,True,-|15 =/=4|,-|3 3/4|,-3.75,원시 값 폴백
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A189,"TEXT(C189, B189)",0,|#_?=/=#|,True,|0 =/=1|,|0|,0,원시 값 폴백
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A193,"TEXT(C193, B193)",-3.75,|#_?=/=?|,True,-|15 =/=4|,-|3 3/4|,-|3 3/4|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A194,"TEXT(C194, B194)",0,|#_?=/=?|,True,|0 =/=1|,|0|,|0|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A198,"TEXT(C198, B198)",0,|#\:#=/=#|,True,|0|,|0|,|0|,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A225,"TEXT(C225, B225)",0.75,|#\:#=/=#|,True,|3=/=4|,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A252,"TEXT(C252, B252)",1,|#\:#=/=#|,True,|1|,|1|,|1|,Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A256,"TEXT(C256, B256)",1,|#\:?=/=?|,True,|1      |,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A265,"TEXT(C265, B265)",1,|?\:?=/=?|,True,|1      |,|1|,|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A319,"TEXT(C319, B319)",-1,|?\:?=/=?|,True,-|1      |,-|1|,-|1|,표시 미지원
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A334,"TEXT(C334, B334)",314159,"#,##0.00",True,"314,159.00","314,159.00","314,159.00",Excel 표시 정확 일치
+NumberFormatTests.xlsx,xl/worksheets/sheet2.xml,A335,"TEXT(C335, B335)",314159,"$000,000,000",True,"$000,314,159","$314,159","$314,159",표시 미지원
+DateFormatTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",17816.607951388887,d-m-y,True,11-10-52,17816.607951388887,17816.607951388887,원시 값 폴백
+DateFormatTests.xlsx,xl/worksheets/sheet2.xml,A3,"TEXT(C3, B3)",17816.607951388887,dd-mm-yy,True,11-10-52,1952-10-11,1952-10-11,표시 미지원
+DateFormatTests.xlsx,xl/worksheets/sheet2.xml,A4,"TEXT(C4, B4)",17816.607951388887,ddd-mmm-yyy,True,Sat-Oct-1952,1952-10-11,1952-10-11,표시 미지원
+DateFormatTests.xlsx,xl/worksheets/sheet2.xml,A8,"TEXT(C8, B8)",17816.607951388887,DDD-MMM-YYY,True,Sat-Oct-1952,1952-10-11,1952-10-11,표시 미지원
+DateFormatTests.xlsx,xl/worksheets/sheet2.xml,A21,"TEXT(C21, B21)",36191.170208437499,d-m-y,True,1-2-03,36191.170208437499,36191.170208437499,원시 값 폴백
+DateFormatTests.xlsx,xl/worksheets/sheet2.xml,A40,"TEXT(C40, B40)",36191.170208437499,h:m:s.00,True,4:5:6.01,04:05,36191.170208437499,원시 값 폴백
+ElapsedFormatTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",3.1415899999999999,[h]:m:s.000,True,75:23:53.376,75:23:53,3.1415899999999999,원시 값 폴백
+ElapsedFormatTests.xlsx,xl/worksheets/sheet2.xml,A7,"TEXT(C7, B7)",3.1415899999999999,[ss].000,True,271433.376,23:53,3.1415899999999999,원시 값 폴백
+ElapsedFormatTests.xlsx,xl/worksheets/sheet2.xml,A8,"TEXT(C8, B8)",3.1415899999999999,"s:m"" @ hour ""[hh]",True,53:23 @ hour 75,03:23,3.1415899999999999,원시 값 폴백
+ElapsedFormatTests.xlsx,xl/worksheets/sheet2.xml,A11,"TEXT(C11, B11)",3.1415899999999999,"[s]"" [yes, ""ss""] seconds""",True,"271433 [yes, 271433] seconds",75:23:53,3.1415899999999999,원시 값 폴백
+ElapsedFormatTests.xlsx,xl/worksheets/sheet2.xml,A21,"TEXT(C21, B21)",8.5462962962962963E-2,"[s]"" [yes, ""ss""] seconds""",True,"7384 [yes, 7384] seconds",2:03:04,8.5462962962962963E-2,원시 값 폴백
+ElapsedFormatTests.xlsx,xl/worksheets/sheet2.xml,A31,"TEXT(C31, B31)",0,"[s]"" [yes, ""ss""] seconds""",True,"0 [yes, 00] seconds",0:00:00,0,원시 값 폴백
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",1.5,"[<10]#"" Wow""",True,2 Wow,2 Wow,2 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A3,"TEXT(C3, B3)",10,"[<10]#"" Wow""",True,10,10,10,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A8,"TEXT(C8, B8)",1,"[<=10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A9,"TEXT(C9, B9)",10,"[<=10]#"" Wow""",True,10 Wow,10 Wow,10 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A12,"TEXT(C12, B12)",11,"[>=10]#"" Big""",True,11 Big,11 Big,11 Big,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A14,"TEXT(C14, B14)",1,"[=10]#"" Wow""",True,1,1,1,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A15,"TEXT(C15, B15)",10,"[=10]#"" Wow""",True,10 Wow,10 Wow,10 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A17,"TEXT(C17, B17)",1,"[<>10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A18,"TEXT(C18, B18)",10,"[<>10]#"" Wow""",True,10,10,10,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A21,"TEXT(C21, B21)",1,"[<10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A22,"TEXT(C22, B22)",10,"[<10]#"" Wow""",True,10,10,10,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A23,"TEXT(C23, B23)",1,"[< 10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A24,"TEXT(C24, B24)",10,"[< 10]#"" Wow""",True,10,10 Wow,10 Wow,표시 미지원
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A25,"TEXT(C25, B25)",1,"[<      10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatChoiceTests.xlsx,xl/worksheets/sheet2.xml,A26,"TEXT(C26, B26)",10,"[<      10]#"" Wow""",True,10,10 Wow,10 Wow,표시 미지원
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",1,"[<10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A3,"TEXT(C3, B3)",10,"[<10]#"" Wow""",True,10,10,10,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A8,"TEXT(C8, B8)",1,"[<=10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A9,"TEXT(C9, B9)",10,"[<=10]#"" Wow""",True,10 Wow,10 Wow,10 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A12,"TEXT(C12, B12)",11,"[>=10]#"" Big""",True,11 Big,11 Big,11 Big,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A14,"TEXT(C14, B14)",1,"[=10]#"" Wow""",True,1,1,1,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A15,"TEXT(C15, B15)",10,"[=10]#"" Wow""",True,10 Wow,10 Wow,10 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A17,"TEXT(C17, B17)",1,"[<>10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A18,"TEXT(C18, B18)",10,"[<>10]#"" Wow""",True,10,10,10,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A24,"TEXT(C24, B24)",-9,"[>-10]#"" Big""",True,-9 Big,-9 Big,-9 Big,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A29,"TEXT(C29, B29)",-10,"[>=-10]#"" Big""",True,-10 Big,-10 Big,-10 Big,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A32,"TEXT(C32, B32)",-11,"[=-10]#"" Wow""",True,-11,-11,-11,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A34,"TEXT(C34, B34)",-9,"[=-10]#"" Wow""",True,-9,-9,-9,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A35,"TEXT(C35, B35)",-11,"[<>-10]#"" Wow""",True,-11 Wow,-11 Wow,-11 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A37,"TEXT(C37, B37)",-9,"[<>-10]#"" Wow""",True,-9 Wow,-9 Wow,-9 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A39,"TEXT(C39, B39)",1,"[<10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A40,"TEXT(C40, B40)",10,"[<10]#"" Wow""",True,10,10,10,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A41,"TEXT(C41, B41)",1,"[< 10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A42,"TEXT(C42, B42)",10,"[< 10]#"" Wow""",True,10,10 Wow,10 Wow,표시 미지원
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A43,"TEXT(C43, B43)",1,"[<      10]#"" Wow""",True,1 Wow,1 Wow,1 Wow,Excel 표시 정확 일치
+FormatConditionTests.xlsx,xl/worksheets/sheet2.xml,A44,"TEXT(C44, B44)",10,"[<      10]#"" Wow""",True,10,10 Wow,10 Wow,표시 미지원
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",1,General,True,1,1,1,Excel 표시 정확 일치
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A3,"TEXT(C3, B3)",12,General,True,12,12,12,Excel 표시 정확 일치
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A6,"TEXT(C6, B6)",12345,General,True,12345,12345,12345,Excel 표시 정확 일치
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A11,"TEXT(C11, B11)",1.2345678899999999,General,True,1.23456789,1.2345678899999999,1.2345678899999999,원시 값 폴백
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A19,"TEXT(C19, B19)",110000000000,General,True,1.1E+11,110000000000,110000000000,원시 값 폴백
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A22,"TEXT(C22, B22)",112345000000,General,True,1.12345E+11,112345000000,112345000000,원시 값 폴백
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A31,"TEXT(C31, B31)",1.123E-10,General,True,1.123E-10,1.123E-10,1.123E-10,Excel 표시 정확 일치
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A36,"TEXT(C36, B36)",-1,General,True,-1,-1,-1,Excel 표시 정확 일치
+GeneralFormatTests.xlsx,xl/worksheets/sheet2.xml,A37,"TEXT(C37, B37)",-12,General,True,-12,-12,-12,Excel 표시 정확 일치
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",123456.789,"|#,e-#|",True,|1e5|,123456.789,123456.789,원시 값 폴백
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A3,"TEXT(C3, B3)",123456.789,"|#e-#,|",True,|1e5|,123456.789,123456.789,원시 값 폴백
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A4,"TEXT(C4, B4)",123456.789,|#%e-#|,True,|1%e5|,|12345679%|,|12345679%|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A21,"TEXT(C21, B21)",123456.789,"|#,e+#|",True,|1e+5|,123456.789,123456.789,원시 값 폴백
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A40,"TEXT(C40, B40)",123456.789,|#.#|E-|#|,True,|1.2|E|5|,|123457|,|123457|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A41,"TEXT(C41, B41)",123456.789,|#.#|E+|#|,True,|1.2|E|+5|,|123457|,|123457|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A67,"TEXT(C67, B67)",1.23456789E-4,|#.####|e+|#|,True,|1.2346|e|-4|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A74,"TEXT(C74, B74)",1.23456789E-5,|##.####|e+|#|,True,|12.3457|e|-6|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A79,"TEXT(C79, B79)",1.23456789E-6,|#.####|e+|#|,True,|1.2346|e|-6|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A81,"TEXT(C81, B81)",1.23456789E-6,|###.####|e+|#|,True,|1.2346|e|-6|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A82,"TEXT(C82, B82)",1.23456789E-6,|####.####|e+|#|,True,|123.4568|e|-8|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A97,"TEXT(C97, B97)",1.23456789E-5,|#.#|E+|#|,True,|1.2|E|-5|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A201,"TEXT(C201, B201)",-1.23456789E-5,|#|e+|#|,True,-|1|e|-5|,-|0|,-|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A218,"TEXT(C218, B218)",1.2345678000000001E+142,|#.#|e+|#|,True,|1.2|e|+142|,|12345678000000000872705545928613910582158520503032952279740348655310129457604523147059920493878239078387645969430659026652634336203251212353536|,|12345678000000000872705545928613910582158520503032952279740348655310129457604523147059920493878239078387645969430659026652634336203251212353536|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A238,"TEXT(C238, B238)",1.2345678000000001E-142,|#.#|e+|#|,True,|1.2|e|-142|,|0|,|0|,표시 미지원
+NumberFormatApproxTests.xlsx,xl/worksheets/sheet2.xml,A243,"TEXT(C243, B243)",1.2345678000000001E-142,|#.#|e+|00000|,True,|1.2|e|-00142|,|0|,|0|,표시 미지원
+DateFormatNumberTests.xlsx,xl/worksheets/sheet2.xml,A2,"TEXT(C2, B2)",1,yyyy-mm-dd hh:mm:ss.000,True,1904-01-02 00:00:00.000,1904-01-02 00:00:00,1,원시 값 폴백

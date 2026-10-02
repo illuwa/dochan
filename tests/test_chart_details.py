@@ -91,7 +91,7 @@ def test_chart_1904_dates_and_non_numeric_cache_strings():
 @pytest.mark.parametrize('deleted,expected', [('', ''), ('<c:autoTitleDeleted val="0"/>', 'Revenue'),
                                                            ('<c:autoTitleDeleted/>', ''), ('<c:autoTitleDeleted val="1"/>', '')])
 def test_single_named_series_automatic_title(deleted, expected):
-    chart = root('<c:barChart>' + series('Revenue', ['Q1'], ['1']) + '</c:barChart>', extra=deleted)
+    chart = root('<c:barChart>' + series('Revenue', ['Q1'], ['1']) + '</c:barChart>', extra='<c:title/>' + deleted)
     assert charts.chart_title(chart) == expected
 
 
@@ -133,7 +133,7 @@ def test_source_linked_missing_cache_reads_cell_style(tmp_path):
 
 def test_hwpx_chart_cache_uses_same_number_formats():
     from dochan.hwpx.charts import parse_chart_xml
-    chart = root('<c:scatterChart>' + series('S', ['0.5'], ['0.125'], True, 'h:mm', '0.0%') + '</c:scatterChart>', extra='<c:autoTitleDeleted val="0"/>')
+    chart = root('<c:scatterChart>' + series('S', ['0.5'], ['0.125'], True, 'h:mm', '0.0%') + '</c:scatterChart>', extra='<c:title/><c:autoTitleDeleted val="0"/>')
     elements, warnings = parse_chart_xml(etree.tostring(chart), display_values=True)
     result = next(e for e in elements if hasattr(e, 'rows'))
     assert [[c.text for c in row] for row in result.rows] == [['X', 'S'], ['12:00', '0.125']]

@@ -12,6 +12,7 @@ from .xls_hyperlink import parse_hlink
 from .xls_chart import parse_chart_substreams
 from .xls_drawing import XlsDrawingReader
 from .xls_ftab import FUNCTION_NAMES, FIXED_ARGUMENT_COUNTS
+from .xls_formula import FormulaContext, FormulaDataError, FormulaName, ExtraReader, warn as formula_warn
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
@@ -66,6 +67,8 @@ class _SheetInfo:
 class _DefinedName:
     name: str
     tokens: bytes = b""
+    scope: int = 0
+    extra: bytes = b""
 
 
 MAX_BIFF_ROWS = 65536
@@ -339,7 +342,7 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
     fonts: List[Tuple[bool, bool, bool, bool]] = []
     xf_fonts: List[int] = []
     external_sheets: List[Tuple[int, int]] = []
-    supbooks = []
+    formula_context = FormulaContext()
     defined_name_records: List[_DefinedName] = []
     date_1904 = False
 
@@ -364,12 +367,15 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
             shared_strings = _parse_sst_segments(sst_segments)
         elif record_type == 0x0017 and len(record_data) >= 2:  # EXTERNSHEET
             external_sheets.extend(_parse_externsheet(record_data))
-        elif record_type == 0x01AE:  # SupBook; 0x0401 denotes this workbook.
-            supbooks.append(len(record_data) == 4 and record_data[2:4] == b'\x01\x04')
-        elif record_type == 0x0018 and len(record_data) >= 15:  # NAME
+        elif record_type == 0x01AE:  # SupBook
+            formula_context.add_supbook(record_data, doc.errors)
+        elif record_type == 0x0023:  # EXTERNNAME belongs to the preceding SupBook.
+            formula_context.add_externname(record_data, doc.errors)
+        elif record_type == 0x0018:  # NAME indices include malformed entries.
             defined_name = _read_name_record(record_data)
-            if defined_name.name:
-                defined_name_records.append(defined_name)
+            defined_name_records.append(defined_name)
+            if not defined_name.name:
+                formula_warn(doc.errors, 'invalid NAME record')
         elif record_type == 0x0022 and len(record_data) >= 2:  # DATEMODE
             date_1904 = bool(struct.unpack_from("<H", record_data, 0)[0])
         elif record_type == 0x041E and len(record_data) >= 5:  # FORMAT
@@ -408,18 +414,21 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
 
     sorted_sheets = sorted(unique_sheets, key=lambda sheet: sheet.offset)
     sheet_names = [sheet.name for sheet in unique_sheets]
-    internal_supbooks = {i for i, internal in enumerate(supbooks) if internal}
-    if not supbooks:
+    internal_supbooks = {i for i, book in enumerate(formula_context.books) if book.kind == 'internal'}
+    if not formula_context.books:
         # Older BIFF and legacy synthetic records have no SupBook table.
         external_sheets = [(first, last) for _, first, last in external_sheets]
     defined_names = [defined_name.name for defined_name in defined_name_records]
+    formula_context.xtis = external_sheets
+    formula_context.sheets = sheet_names
+    formula_context.names = defined_name_records
     defined_name_elements = _defined_name_elements(
         defined_name_records,
         external_sheets,
         sheet_names,
         defined_names,
         path=normalized_stream,
-        errors=doc.errors, internal_supbooks=internal_supbooks,
+        errors=doc.errors, internal_supbooks=internal_supbooks, formula_context=formula_context,
     )
     sheet_streams = []
     rich_cache = {}
@@ -446,7 +455,7 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
             xf_fonts=xf_fonts,
             rich_cache=rich_cache,
             rich_budget=rich_budget,
-            internal_supbooks=internal_supbooks,
+            internal_supbooks=internal_supbooks, formula_context=formula_context,
         )
 
     # 워크북 전체가 실체화할 수 있는 셀 총량. 시트별 상한만으로는 시트를 여럿 두는
@@ -517,6 +526,9 @@ def _parse_externsheet(record_data: bytes) -> List[Tuple[int, int]]:
 
 
 def _read_name_record(record_data: bytes) -> _DefinedName:
+    if len(record_data) < 15:
+        return _DefinedName("")
+    scope = struct.unpack_from("<H", record_data, 8)[0]
     name_length = record_data[3]
     formula_length = struct.unpack_from("<H", record_data, 4)[0]
     menu_length = record_data[10]
@@ -533,10 +545,20 @@ def _read_name_record(record_data: bytes) -> _DefinedName:
         return _DefinedName("")
     raw = record_data[offset:offset + byte_count]
     name = raw.decode("utf-16-le" if flags & 0x01 else "cp1252", errors="replace")
+    if struct.unpack_from('<H', record_data)[0] & 0x20:  # Lbl.fBuiltin.
+        builtin_names = (
+            'Consolidate_Area', 'Auto_Open', 'Auto_Close', 'Extract', 'Database',
+            'Criteria', 'Print_Area', 'Print_Titles', 'Recorder', 'Data_Form',
+            'Auto_Activate', 'Auto_Deactivate', 'Sheet_Title', '_FilterDatabase',
+        )
+        name = builtin_names[ord(name)] if len(name) == 1 and ord(name) < len(builtin_names) else ''
     offset += byte_count
     tokens = record_data[offset:offset + formula_length]
-    offset += formula_length + menu_length + description_length + help_length + status_length
-    return _DefinedName(name, tokens) if offset <= len(record_data) else _DefinedName("")
+    offset += formula_length
+    if offset > len(record_data):
+        return _DefinedName("")
+    # RgbExtra precedes the optional menu/description/help/status strings.
+    return _DefinedName(name, tokens, scope, record_data[offset:])
 
 
 def _defined_name_elements(
@@ -547,17 +569,18 @@ def _defined_name_elements(
     path: str,
     errors=None,
     internal_supbooks=None,
+    formula_context=None,
 ) -> List[Paragraph]:
     elements = []
     for defined_name in defined_names:
-        if not defined_name.tokens:
+        if not defined_name.name or not defined_name.tokens:
             continue
         target = _decode_formula_token_stream(
-            defined_name.tokens,
+            defined_name.tokens, extra_data=defined_name.extra,
             external_sheets=external_sheets,
             sheet_names=sheet_names,
             defined_names=name_labels,
-            errors=errors, internal_supbooks=internal_supbooks,
+            errors=errors, internal_supbooks=internal_supbooks, formula_context=formula_context,
         )
         if not target:
             continue
@@ -760,6 +783,7 @@ def _parse_sheet_records(
     rich_cache=None,
     rich_budget=None,
     internal_supbooks=None,
+    formula_context=None,
 ):
     rich_cache = {} if rich_cache is None else rich_cache
     rich_budget = [MAX_RICH_RUNS, MAX_RICH_BYTES] if rich_budget is None else rich_budget
@@ -796,6 +820,7 @@ def _parse_sheet_records(
     # 기형 파일 하나가 65536x256 번 반복하게 만든다. 채울 수 있는 총량을 제한한다.
     range_fill_budget = MAX_RANGE_FILL_CELLS
     shared_formula_templates: Dict[Tuple[int, int], bytes] = {}
+    shared_formula_extras: Dict[Tuple[int, int], bytes] = {}
     array_formulas = {}
     chart_depth = 0
     records = iter(_iter_records(data))
@@ -1057,7 +1082,7 @@ def _parse_sheet_records(
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
             formatted = _decode_formula_cached_result(record_data, _format_for_xf(xf_index, formats, xf_formats))
             formula = _decode_formula_tokens(record_data, external_sheets, sheet_names, defined_names,
-                                             errors=sheet.errors, internal_supbooks=internal_supbooks)
+                                             errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context)
             if not _set_sheet_cell(
                 sheet,
                 row,
@@ -1084,7 +1109,8 @@ def _parse_sheet_records(
                         external_sheets,
                         sheet_names,
                         defined_names,
-                        errors=sheet.errors, internal_supbooks=internal_supbooks,
+                        errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context,
+                        extra_data=shared_formula_extras.get(formula_anchor, b''),
                     )
                     _set_sheet_cell(
                         sheet,
@@ -1131,9 +1157,9 @@ def _parse_sheet_records(
                 continue
             anchor = (first_row, first_col)
             formula = _decode_formula_token_stream(
-                record_data[14:14 + size], external_sheets=external_sheets,
+                record_data[14:14 + size], extra_data=record_data[14 + size:], external_sheets=external_sheets,
                 sheet_names=sheet_names, defined_names=defined_names,
-                errors=sheet.errors, internal_supbooks=internal_supbooks)
+                errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context)
             array_formulas[anchor] = formula
             for cell in shared_formula_cells.get(anchor, []):
                 cached = sheet.formula_values.get(cell) or ''
@@ -1141,9 +1167,10 @@ def _parse_sheet_records(
             if pending_formula_cell in shared_formula_cells.get(anchor, []):
                 pending_formula_text = formula
         elif record_type == 0x04BC and pending_shared_formula_anchor is not None:  # SHRFMLA
-            tokens = _shared_formula_tokens(record_data)
+            tokens, extra_data = _shared_formula_data(record_data)
             if tokens:
                 shared_formula_templates[pending_shared_formula_anchor] = tokens
+                shared_formula_extras[pending_shared_formula_anchor] = extra_data
                 for cell in shared_formula_cells.get(pending_shared_formula_anchor, []):
                     _set_sheet_cell(
                         sheet,
@@ -1158,7 +1185,8 @@ def _parse_sheet_records(
                                 external_sheets,
                                 sheet_names,
                                 defined_names,
-                                errors=sheet.errors, internal_supbooks=internal_supbooks,
+                                errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context,
+                                extra_data=extra_data,
                             ),
                         ),
                         "shared FORMULA",
@@ -1167,7 +1195,8 @@ def _parse_sheet_records(
                 pending_formula_text = _decode_shared_formula_for_cell(
                     tokens, pending_shared_formula_anchor, pending_formula_cell,
                     external_sheets, sheet_names, defined_names,
-                    errors=sheet.errors, internal_supbooks=internal_supbooks,
+                    errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context,
+                    extra_data=extra_data,
                 )
             pending_shared_formula_anchor = None
         elif record_type == 0x00E5 and len(record_data) >= 2:  # MERGEDCELLS
@@ -1416,18 +1445,23 @@ def _decode_formula_tokens(
     defined_names: Optional[List[str]] = None,
     errors: Optional[List[str]] = None,
     internal_supbooks=None,
+    formula_context=None,
 ) -> str:
     if len(record_data) < 22:
         return ""
     token_size = struct.unpack_from("<H", record_data, 20)[0]
+    if token_size > len(record_data) - 22:
+        from .xls_formula import warn
+        warn(errors, 'truncated FORMULA token data')
+        return ""
     tokens = record_data[22:22 + token_size]
     return _decode_formula_token_stream(
-        tokens,
+        tokens, extra_data=record_data[22 + token_size:],
         external_sheets=external_sheets,
         sheet_names=sheet_names,
         defined_names=defined_names,
         errors=errors,
-        internal_supbooks=internal_supbooks,
+        internal_supbooks=internal_supbooks, formula_context=formula_context,
     )
 
 
@@ -1442,19 +1476,24 @@ def _formula_exp_anchor(record_data: bytes) -> Optional[Tuple[int, int]]:
 
 
 def _decode_shared_formula(record_data: bytes) -> str:
-    return _decode_formula_token_stream(_shared_formula_tokens(record_data))
+    tokens, extra_data = _shared_formula_data(record_data)
+    return _decode_formula_token_stream(tokens, extra_data=extra_data)
 
 
 def _shared_formula_tokens(record_data: bytes) -> bytes:
-    if len(record_data) >= 10:
-        token_size = struct.unpack_from("<H", record_data, 8)[0]
-        tokens = record_data[10:10 + token_size]
-        if tokens:
-            return tokens
-    if len(record_data) >= 11:
-        token_size = struct.unpack_from("<H", record_data, 9)[0]
-        return record_data[11:11 + token_size]
-    return b""
+    return _shared_formula_data(record_data)[0]
+
+
+def _shared_formula_data(record_data: bytes) -> Tuple[bytes, bytes]:
+    # Standard SHRFMLA and the existing legacy fallback must share their rgce
+    # boundary with RgbExtra. Never return a truncated primary candidate.
+    for start in (10, 11):
+        if len(record_data) >= start:
+            token_size = struct.unpack_from('<H', record_data, start - 2)[0]
+            end = start + token_size
+            if token_size and end <= len(record_data):
+                return record_data[start:end], record_data[end:]
+    return b'', b''
 
 
 def _decode_shared_formula_for_cell(
@@ -1466,9 +1505,11 @@ def _decode_shared_formula_for_cell(
     defined_names: Optional[List[str]] = None,
     errors: Optional[List[str]] = None,
     internal_supbooks=None,
+    formula_context=None,
+    extra_data=b'',
 ) -> str:
     return _decode_formula_token_stream(
-        tokens,
+        tokens, extra_data=extra_data,
         row_delta=cell[0] - anchor[0],
         col_delta=cell[1] - anchor[1],
         base_row=cell[0],
@@ -1477,7 +1518,7 @@ def _decode_shared_formula_for_cell(
         sheet_names=sheet_names,
         defined_names=defined_names,
         errors=errors,
-        internal_supbooks=internal_supbooks,
+        internal_supbooks=internal_supbooks, formula_context=formula_context,
     )
 
 
@@ -1492,6 +1533,8 @@ def _decode_formula_token_stream(
     base_col: int = 0,
     errors: Optional[List[str]] = None,
     internal_supbooks=None,
+    formula_context=None,
+    extra_data=b"",
 ) -> str:
     def warn(message):
         if errors is not None:
@@ -1503,6 +1546,11 @@ def _decode_formula_token_stream(
     if len(tokens) > 65535:
         warn("token byte limit exceeded")
         return ""
+    try:
+        extra = ExtraReader(extra_data)
+    except FormulaDataError as exc:
+        warn(str(exc))
+        return ""
     offset = 0
     while offset < len(tokens):
         token = tokens[offset]
@@ -1513,7 +1561,43 @@ def _decode_formula_token_stream(
         if token == 0x16:  # PtgMissArg occupies one function argument.
             stack.append("")
             continue
-        if token == 0x2C and offset + 4 <= len(tokens):  # PtgRefN / RgceLocRel
+        if token == 0x20:  # PtgArray: 7 reserved bytes, values in RgbExtra.
+            if offset + 7 > len(tokens):
+                warn("truncated array token")
+                return ""
+            try:
+                stack.append(extra.array())
+            except FormulaDataError as exc:
+                warn("array constant token 0x20: " + str(exc))
+                return ""
+            offset += 7
+        elif token == 0x39 and offset + 6 <= len(tokens):  # PtgNameX
+            xti_index, name_index = struct.unpack_from("<HI", tokens, offset)
+            try:
+                if formula_context is None:
+                    raise FormulaDataError("unresolved NameX without link table")
+                stack.append(formula_context.namex(xti_index, name_index))
+            except FormulaDataError as exc:
+                warn(str(exc))
+                return ""
+            offset += 6
+        elif token in (0x2A, 0x2B, 0x3C, 0x3D):  # Deleted Ref/Area, including 3d.
+            size = {0x2A: 4, 0x2B: 8, 0x3C: 6, 0x3D: 10}[token]
+            if offset + size > len(tokens):
+                warn('truncated deleted reference token')
+                return ''
+            prefix = ''
+            if token in (0x3C, 0x3D):
+                xti_index = struct.unpack_from('<H', tokens, offset)[0]
+                try:
+                    prefix = _formula_3d_prefix(xti_index, external_sheets, sheet_names,
+                                               internal_supbooks, errors, formula_context)
+                except FormulaDataError as exc:
+                    warn(str(exc))
+                    return ''
+            stack.append(prefix + '#REF!' if prefix != '#REF!' else prefix)
+            offset += size
+        elif token == 0x2C and offset + 4 <= len(tokens):  # PtgRefN / RgceLocRel
             row, col = struct.unpack_from("<HH", tokens, offset)
             stack.append(_formula_relative_cell_ref(row, col, base_row, base_col))
             offset += 4
@@ -1537,21 +1621,31 @@ def _decode_formula_token_stream(
             offset += 8
         elif token == 0x3A and offset + 6 <= len(tokens):  # ptgRef3d
             xti_index, row, col = struct.unpack_from("<HHH", tokens, offset)
-            stack.append(
-                f"{_formula_3d_prefix(xti_index, external_sheets, sheet_names, internal_supbooks, errors)}"
-                f"{_formula_cell_ref(row, col)}"
-            )
+            try:
+                prefix = _formula_3d_prefix(xti_index, external_sheets, sheet_names, internal_supbooks, errors, formula_context)
+            except FormulaDataError as exc:
+                warn(str(exc))
+                return ""
+            stack.append(f"{prefix}{_formula_cell_ref(row, col)}")
             offset += 6
         elif token == 0x3B and offset + 10 <= len(tokens):  # ptgArea3d
             xti_index, first_row, last_row, first_col, last_col = struct.unpack_from("<HHHHH", tokens, offset)
-            prefix = _formula_3d_prefix(xti_index, external_sheets, sheet_names, internal_supbooks, errors)
+            try:
+                prefix = _formula_3d_prefix(xti_index, external_sheets, sheet_names, internal_supbooks, errors, formula_context)
+            except FormulaDataError as exc:
+                warn(str(exc))
+                return ""
             stack.append(
                 f"{prefix}{_formula_cell_ref(first_row, first_col)}:"
                 f"{_formula_cell_ref(last_row, last_col)}"
             )
             offset += 10
         elif token == 0x23 and offset + 4 <= len(tokens):  # ptgName
-            name_index, _ = struct.unpack_from("<HH", tokens, offset)
+            name_index, = struct.unpack_from("<I", tokens, offset)
+            # Preserve the established low-word compatibility for producers
+            # that leave nonzero bytes in the high word of the name index.
+            if name_index > 0xffff:
+                name_index &= 0xffff
             stack.append(_formula_name(name_index, defined_names))
             offset += 4
         elif token in {0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11} and len(stack) >= 2:
@@ -1579,14 +1673,18 @@ def _decode_formula_token_stream(
                 if not is_known or argument_count is None:
                     warn("unknown fixed function %d; expression omitted" % function_index)
                     return ""
-            if not is_known:
-                warn("unknown variable function %d" % function_index)
             if len(stack) < argument_count:
                 warn("function argument stack underflow")
                 return ""
             args = stack[-argument_count:] if argument_count else []
             if argument_count:
                 del stack[-argument_count:]
+            if function_index == 255 and args and isinstance(args[0], FormulaName):
+                function_name = args[0].function_name
+                args = args[1:]
+                is_known = True
+            if not is_known:
+                warn("unknown variable function %d" % function_index)
             stack.append(f"{function_name}({','.join(args)})")
             offset += size
         elif token == 0x1E and offset + 2 <= len(tokens):  # ptgInt
@@ -1659,7 +1757,10 @@ def _formula_3d_prefix(
     sheet_names: Optional[List[str]],
     internal_supbooks=None,
     errors=None,
+    formula_context=None,
 ) -> str:
+    if formula_context is not None and formula_context.books:
+        return formula_context.prefix(xti_index)
     if not external_sheets or not sheet_names or xti_index >= len(external_sheets):
         return ""
     entry = external_sheets[xti_index]
@@ -1689,7 +1790,8 @@ def _quote_sheet_name(name: str) -> str:
 def _formula_name(name_index: int, defined_names: Optional[List[str]]) -> str:
     if not defined_names or name_index <= 0 or name_index > len(defined_names):
         return f"Name{name_index}"
-    return defined_names[name_index - 1]
+    name = defined_names[name_index - 1]
+    return FormulaName(name) if name else f"Name{name_index}"
 
 
 def _formula_relative_cell_ref(row: int, col_flags: int, base_row: int, base_col: int) -> str:
@@ -1759,7 +1861,7 @@ def _formula_operator(token: int) -> str:
 
 def _formula_function_name(function_index: int) -> tuple[str, bool]:
     # 0x00FF labels a UDF, whose actual name requires Name/NameX resolution.
-    # Keep the existing F255 + warning behavior until that path is supported.
+    # Unresolved UDF operands retain F255 + WARN; resolved names override it.
     if function_index in FUNCTION_NAMES and function_index != 0x00FF:
         return FUNCTION_NAMES[function_index], True
     return f"F{function_index}", False

@@ -320,7 +320,7 @@ class FormulaExtractor:
                 attr = self.pdf.resolve(attr)
                 if isinstance(attr, dict):
                     keys = ("mathvariant", "display", "linethickness", "open", "close", "separators",
-                            "width", "rowspan", "columnspan", "bevelled")
+                            "width", "rowspan", "columnspan", "bevelled", "linebreak")
                     if tag in ("math", "mstyle"):
                         # Preserve descendant defaults so the converter can
                         # reject unsupported inheritance, including new names.

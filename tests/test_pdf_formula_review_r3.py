@@ -101,3 +101,20 @@ def test_namespace_math_root_cannot_drop_inherited_attributes(tmp_path):
     })
     assert not doc.find_all("equation")
     assert "GLYPH" in to_markdown(doc)
+
+
+def test_namespace_mspace_linebreak_preserves_glyphs(tmp_path):
+    # AF 없이 구조 트리 namespace MathML 만 있을 때도 줄바꿈 mspace 는 변환을 거부하고 두 줄의 글리프를 보존한다.
+    content = (b"/Formula <</MCID 0>> BDC BT /F1 12 Tf 100 700 Td (XLEFT) Tj ET EMC "
+               b"/Formula <</MCID 1>> BDC BT /F1 12 Tf 100 680 Td (YRIGHT) Tj ET EMC")
+    doc = semantic(tmp_path, content=content, kids="[0 1]", extra={
+        7: "<< /S /Formula /Pg 3 0 R /K 10 0 R >>",
+        10: "<< /S /math /NS 12 0 R /K [11 0 R 13 0 R 14 0 R] >>",
+        11: "<< /S /mi /NS 12 0 R /K 0 >>",
+        12: "<< /NS (http://www.w3.org/1998/Math/MathML) >>",
+        13: "<< /S /mspace /NS 12 0 R /A << /O /NSO /linebreak (newline) >> >>",
+        14: "<< /S /mi /NS 12 0 R /K 1 >>",
+    })
+    markdown = to_markdown(doc)
+    assert not doc.find_all("equation")
+    assert "XLEFT" in markdown and "YRIGHT" in markdown

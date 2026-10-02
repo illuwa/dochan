@@ -3,6 +3,8 @@ output/markdown.py — Markdown 변환
 AI/LLM에 최적화된 Markdown 출력
 """
 
+from dataclasses import replace
+
 from ..model.document import Document, Paragraph, TextRun
 from ..model.table import Table, Cell, flatten_block_texts
 from ..model.equation import Equation
@@ -175,8 +177,36 @@ def _paragraph_to_md(para: Paragraph, ctx=None) -> str:
     return text
 
 
+def _ppt_markdown_runs(runs):
+    """Coalesce only the PPT Markdown view; retain source runs and font sizes."""
+    fields = ('bold', 'italic', 'underline', 'strikeout', 'superscript',
+              'subscript', 'link', 'note_ref')
+    result = []
+    index = 0
+    while index < len(runs):
+        run = runs[index]
+        provenance = getattr(run, 'provenance', None)
+        if getattr(provenance, 'source_format', '') != 'ppt' or getattr(run, 'note_ref', 0):
+            result.append(run)
+            index += 1
+            continue
+        key = tuple(getattr(run, name, None) for name in fields)
+        end = index + 1
+        while end < len(runs):
+            following = runs[end]
+            if (following.provenance != provenance
+                    or tuple(getattr(following, name, None) for name in fields) != key):
+                break
+            end += 1
+        result.append(replace(run, text=''.join(r.text for r in runs[index:end]))
+                      if end > index + 1 else run)
+        index = end
+    return result
+
+
 def _runs_to_md(runs: list, ctx=None) -> str:
     """런 목록을 Markdown 으로. 연속하는 동일 링크 런은 하나로 묶어 감싼다."""
+    runs = _ppt_markdown_runs(runs)
     parts = []
     index = 0
     total = len(runs)
@@ -338,6 +368,7 @@ def _escape_cell(text: str) -> str:
 
 def _runs_to_cell_text(runs: list) -> str:
     """셀용 런 렌더 — 링크와 각주 참조만 적용하고 문자 서식은 평문으로."""
+    runs = _ppt_markdown_runs(runs)
     parts = []
     index = 0
     total = len(runs)

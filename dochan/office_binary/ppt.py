@@ -219,8 +219,17 @@ def _fallback_text_lines(data: bytes) -> List[str]:
     return lines
 
 
-def parse_ppt_document_stream(data: bytes, stream_name: str = "PowerPoint Document") -> Document:
+def parse_ppt_document_stream(data: bytes, stream_name: str = "PowerPoint Document",
+                              current_user: bytes = b"", pictures: bytes = b"") -> Document:
     doc = Document(source_format="ppt")
+    if current_user:
+        from .ppt_render import read_structured_ppt
+        try:
+            structured = read_structured_ppt(data, current_user, pictures, stream_name, doc.errors)
+            if structured is not None:
+                return structured
+        except Exception as exc:
+            doc.errors.append("WARN: PPT structure recovery failed; using legacy text: %s" % exc)
     slide_lines = _extract_slide_and_notes_records(data)
     if not slide_lines:
         slide_lines = _extract_slide_text_records(data)
@@ -336,7 +345,19 @@ class PPTReader:
                     continue
 
                 try:
-                    candidate = parse_ppt_document_stream(ppt_data, stream_name)
+                    auxiliary = {}
+                    if stream_name == "PowerPoint Document" and ole.exists("Current User"):
+                        for name in ("Current User", "Pictures"):
+                            if ole.exists(name):
+                                try:
+                                    auxiliary[name] = read_ole_stream(
+                                        ole, name, max_bytes=MAX_OLE_STREAM_SIZE, budget=stream_budget,
+                                    )
+                                except Exception as exc:
+                                    doc.errors.append("WARN: PPT %s stream unavailable: %s" % (name, exc))
+                    candidate = parse_ppt_document_stream(
+                        ppt_data, stream_name, auxiliary.get("Current User", b""), auxiliary.get("Pictures", b""),
+                    )
                 except Exception as exc:
                     doc.errors.append(f"ERR: PPT {stream_name} stream 파싱 실패: {exc}")
                     continue

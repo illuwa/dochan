@@ -38,12 +38,15 @@ print(doc.to_markdown())
 | 기능 | 설명 |
 |------|------|
 | **HWP + HWPX + Office + PDF** | HWP/HWPX, Office OOXML(.docx/.pptx/.xlsx), legacy Office(.doc/.ppt/.xls), PDF(.pdf)를 native parser로 파싱 |
-| **PDF 텍스트·표 추출** | CTM(그래픽 상태) 기반 좌표 레이아웃으로 문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀·셀 안 중첩 표·페이지에 걸친 표 포함)를 재구성. 줄바꿈으로 갈라진 한글 어절은 문자 통계 모델로 공백을 복원. 괘선 없는 표는 `pdf_text_tables=True` 옵션(실험적)으로 텍스트 정렬 기반 추정. 페이지 번호 provenance, 한글 ToUnicode, 표준 암호화(빈 암호) 지원. 스캔 PDF 는 이미지 추출+OCR 로 처리 |
+| **PDF 텍스트·표 추출** | CTM(그래픽 상태) 기반 좌표 레이아웃으로 문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀·셀 안 중첩 표·페이지에 걸친 표 포함)를 재구성. 줄바꿈으로 갈라진 한글 어절은 문자 통계 모델로 공백을 복원. 괘선 없는 표는 `pdf_text_tables=True` 옵션(실험적)으로 텍스트 정렬 기반 추정. 반복 머리글/바닥글, 주석(코멘트), 내부·외부 링크, 세로쓰기, LZW·TIFF predictor, 표준 암호화(빈 암호·사용자 암호) 지원. 스캔 PDF 는 이미지 추출+OCR 로 처리 |
+| **legacy Office 구조 해석** | `.doc`·`.ppt`·`.xls` 를 Microsoft 공개 명세대로 해석해 서식·병합 셀·중첩 표·각주·주석·변경 추적·그림·하이퍼링크·노트·차트·수식(Equation 3.0)을 복원 |
+| **암호화 문서** | OOXML(Standard/Agile), DOC·PPT·XLS(XOR·RC4·CryptoAPI), PDF(사용자 암호), HWP 배포용 문서. 암호는 `password=` 또는 CLI 표준 입력으로만 받는다 |
+| **차트** | DOCX·PPTX·XLSX·XLS·PPT·HWPX 차트의 제목·종류·축 제목·데이터를 표로 |
 | **Markdown 출력** | 제목, 표, 서식(bold/italic), 수식까지 AI가 바로 쓸 수 있는 Markdown |
 | **표 파싱** | 셀 병합, 중첩 표, 좌표 배치 지원 |
 | **서식 보존** | CharShape 기반 bold/italic/글자크기 → TextRun 연결 |
 | **제목 자동 감지** | Style 이름 + 글자 크기 기반 heading 레벨 판별 |
-| **수식 LaTeX** | HWP 수식 스크립트 → LaTeX 기본 변환 |
+| **수식 LaTeX** | HWP 수식 스크립트, DOCX·PPTX OMML, DOC·PPT MathType(MTEF) → LaTeX |
 | **JSON / Plain Text** | Markdown 외 구조화 JSON, 플레인 텍스트 출력 |
 | **OCR (선택)** | Tesseract 연동, 이미지 속 텍스트 추출 |
 | **CLI** | `dochan convert 문서.hwp` 한 줄로 변환 |
@@ -90,6 +93,15 @@ for eq in doc.find_all('equation'):
 
 # 메타데이터
 print(doc.metadata)
+
+# 문서 속 이미지 바이너리를 파일로 저장 (<파일이름>-image-NNN.<확장자>)
+doc.save_images("images/")
+
+# 암호화 문서 (키워드 전용; 암호 값은 오류·로그에 남지 않는다)
+doc = Dochan("암호문서.docx", password="비밀번호")
+
+# HWP/HWPX 변경 추적: preserve(기본, 모든 텍스트) · final(삭제 제외) · original(삽입 제외)
+doc = Dochan("검토본.hwpx", revision_mode="final")
 ```
 
 ### CLI
@@ -124,6 +136,15 @@ dochan convert 표.xls
 
 # PDF 텍스트 추출
 dochan convert 문서.pdf
+
+# 이미지 바이너리도 함께 저장
+dochan convert 문서.docx -o 문서.md --images-dir images/
+
+# 암호화 문서: 표준 입력 첫 줄 또는 DOCHAN_PASSWORD (명령줄 인자로는 받지 않는다)
+echo "$PASSWORD" | dochan convert 암호문서.xlsx --password-stdin
+
+# PDF 괘선 없는 표 복원(실험적)
+dochan convert 문서.pdf --pdf-text-tables
 
 # 디렉토리 일괄 변환
 dochan batch input_dir/ output_dir/ --format markdown --workers 4
@@ -212,50 +233,73 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 
 ```
 dochan/
-├── reader.py          # 통합 진입점 (Dochan 클래스)
-├── cli.py             # CLI 도구
+├── reader.py          # 통합 진입점 (Dochan 클래스; password=·revision_mode=·include_assets=)
+├── cli.py             # CLI 도구 (convert·batch·info, --images-dir, --password-stdin)
+├── batch.py           # 디렉토리 일괄 변환
+├── conversion.py      # AssetRef 등 변환 계약
+├── crypto/            # 암호화 Office 문서 ([MS-OFFCRYPTO], 외부 의존성 없음)
+│   ├── ooxml.py       #   OOXML Standard/Agile (EncryptionInfo + EncryptedPackage)
+│   ├── legacy.py      #   DOC·XLS XOR·RC4·RC4 CryptoAPI
+│   └── ppt.py         #   PPT CryptSession10Container
 ├── hwp/               # HWP 5.0 바이너리 파서
 │   ├── header.py      #   FileHeader (256바이트)
-│   ├── doc_info.py    #   DocInfo (서식/스타일)
+│   ├── doc_info.py    #   DocInfo (서식/스타일/변경 추적 정보)
 │   ├── section.py     #   섹션 (레코드 트리 → 모델)
+│   ├── distdoc.py     #   배포용 문서 ViewText 복호화 (한컴 공개 명세)
+│   ├── revisions.py   #   변경 추적 범위 투영
+│   ├── forms.py       #   양식 개체·누름틀 표시 텍스트
+│   ├── bin_data.py    #   BinData 이미지 연결
 │   └── records/       #   개별 레코드 파서
 ├── hwpx/              # HWPX (OWPML) XML 파서
-│   └── parser.py
-├── ooxml/             # Office Open XML native 파서
-│   ├── package.py     #   안전한 ZIP/XML 패키지 유틸
-│   ├── docx.py        #   DOCX 문단/서식/표 파서
-│   ├── pptx.py        #   PPTX 슬라이드/텍스트/표 파서
-│   └── xlsx.py        #   XLSX workbook/sheet/cell 파서
-├── office_binary/     # Legacy Office OLE native 파서
-│   ├── structure.py   #   legacy 텍스트 heading/table/list 구조화
-│   ├── doc.py         #   DOC WordDocument 텍스트/기초 구조 파서
-│   ├── ppt.py         #   PPT slide/text/기초 구조 파서
-│   └── xls.py         #   XLS BIFF workbook/sheet/cell 파서
+│   ├── parser.py
+│   ├── charts.py      #   내장 차트 캐시
+│   └── revisions.py   #   변경 추적 투영
+├── ooxml/             # Office Open XML native 파서 (Strict 정규화 포함)
+│   ├── package.py     #   안전한 ZIP/XML 패키지 유틸, Strict → Transitional
+│   ├── docx.py        #   DOCX 문단/서식/표/캡션/차트
+│   ├── pptx.py        #   PPTX 슬라이드/텍스트/표/수식/미디어
+│   ├── xlsx.py        #   XLSX workbook/sheet/cell/차트
+│   ├── charts.py      #   DOCX·PPTX·XLSX 공용 차트(종류·축 제목·캐시 없는 참조·chartEx)
+│   └── math.py        #   OMML → LaTeX
+├── office_binary/     # Legacy Office OLE native 파서 ([MS-DOC]/[MS-PPT]/[MS-XLS])
+│   ├── doc.py         #   DOC 진입점 (구조 해석 실패 시 텍스트 경로)
+│   ├── doc_binary.py  #   FIB·CLX·FKP·sprm·STSH
+│   ├── doc_tables.py · doc_stories.py · doc_images.py · doc_captions.py · doc_structure.py
+│   ├── ppt.py         #   PPT 진입점
+│   ├── ppt_structure.py · ppt_text.py · ppt_shapes.py · ppt_render.py
+│   ├── xls.py         #   XLS BIFF workbook/sheet/cell
+│   ├── xls_formula.py · xls_ftab.py · xls_chart.py · xls_drawing.py · xls_hyperlink.py
+│   ├── officeart.py   #   [MS-ODRAW] 공용 OfficeArt(BLIP·도형·속성)
+│   ├── ole_objects.py #   내장 OLE 차트(Excel·MS Graph)·수식 개체
+│   ├── mtef.py        #   MathType MTEF → LaTeX
+│   ├── symbol_fonts.py#   Symbol·Wingdings 문자 대응
+│   └── structure.py   #   legacy 텍스트 경로의 구조화
 ├── pdf/               # 네이티브 PDF 파서
 │   ├── objects.py     #   객체 문법 파서
-│   ├── filters.py     #   Flate/ASCIIHex/ASCII85 + PNG predictor
+│   ├── filters.py     #   Flate/LZW/ASCIIHex/ASCII85 + PNG·TIFF predictor
 │   ├── structure.py   #   xref/트레일러/페이지 트리/객체 스트림
-│   ├── crypto.py      #   표준 보안 핸들러(RC4/AES)
-│   ├── cmap.py        #   ToUnicode CMap
-│   ├── widths.py      #   글리프 폭 맵
-│   ├── content.py     #   콘텐츠 스트림 해석(CTM·텍스트 좌표)
-│   ├── paths.py       #   경로 연산자 → 괘선 수집
-│   ├── tables.py      #   괘선 격자 → 표/병합 셀
-│   ├── layout.py      #   줄 → 문단 병합
+│   ├── crypto.py      #   표준 보안 핸들러(RC4/AES, 사용자 암호 R2–R6)
+│   ├── cmap.py · widths.py · core14.py  # ToUnicode·글리프 폭·표준 14 글꼴(Adobe AFM 폭)
+│   ├── content.py     #   콘텐츠 스트림 해석(CTM·텍스트 좌표·세로쓰기)
+│   ├── paths.py · tables.py · text_tables.py · pagination.py  # 괘선·표·페이지 걸침
+│   ├── layout.py · spacing.py  # 줄 → 문단, 한글 줄바꿈 공백 모델
+│   ├── running.py     #   반복 머리글/바닥글
+│   ├── annotations.py #   주석(코멘트)·링크·내부 목적지
+│   ├── notes.py       #   각주 휴리스틱
 │   ├── images.py      #   이미지 XObject 추출
 │   └── reader.py      #   PDFReader (페이지 → Document)
-├── model/             # Document 모델
-│   ├── document.py    #   Document, Section, Paragraph
-│   ├── table.py       #   Table, Cell
-│   └── equation.py    #   Equation (LaTeX 변환)
-├── output/            # 출력 포맷
-│   ├── markdown.py    #   Markdown (AI/LLM 최적)
-│   ├── json_out.py    #   구조화 JSON
-│   └── plain_text.py  #   플레인 텍스트
+├── model/             # Document 모델 (Document·Section·Paragraph·Table·Image·Equation·HeaderFooter·Footnote·Comment)
+├── output/            # 출력 포맷 (markdown.py·json_out.py·plain_text.py)
+├── quality/           # 품질 검사·교차 검증
 └── utils/             # 유틸리티
-    ├── ocr.py         #   Tesseract OCR
+    ├── aes.py         #   FIPS-197 AES (표 기반, 외부 의존성 없음)
+    ├── bounded_io.py  #   신뢰할 수 없는 OLE 스트림의 상한 읽기
+    ├── image_export.py#   이미지 바이너리 저장
+    ├── ocr.py         #   Tesseract OCR (선택, Python 3.10+)
     └── safe_decompress.py  # Zip Bomb 방어
 ```
+
+외부 출처와 의존성은 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) 에 정리돼 있다.
 
 ## Security
 

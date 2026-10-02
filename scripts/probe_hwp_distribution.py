@@ -39,8 +39,8 @@ def _raw_decrypt(raw):
     if header & 1023 != HWPTAG_DISTRIBUTE_DOC_DATA or header >> 20 != 256:
         raise ValueError("unexpected distribution record header")
     block = bytearray(raw[4:260])
-    _descramble(block)
     offset = 4 + (block[0] & 15)
+    _descramble(block)
     return aes128_ecb_decrypt(bytes(block[offset:offset + 16]), raw[260:])
 
 

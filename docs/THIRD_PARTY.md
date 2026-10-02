@@ -58,20 +58,30 @@ dochan으로 한컴의 「한글문서파일형식 배포용 문서 revision 1.2
 
 2.2절은 MS Visual C의 `srand`와 `rand`를 지정하지만 `214013`, `2531011`, 32비트
 상태 및 상위 비트 반환 규칙의 수치 정의를 싣지 않았다. 이 구현은 해당 난수열에
-대한 알려진 호환 규칙을 직접 수식으로 작성했다. 그 수치의 별도 일차 문서는
-이번 입력 자료에서 찾지 못했으므로 “모든 상수가 한컴 명세에 있다”고 주장하지 않는다.
+대한 알려진 호환 규칙을 직접 수식으로 작성했다. 같은 매개변수(법 2^32, 곱수 214013,
+증분 2531011, 상태의 16~30비트 반환)는 선형 합동 생성기의 널리 쓰이는 매개변수 표
+(예: 위키백과 “Linear congruential generator”)에 Microsoft Visual C/C++ 항목으로 실려 있다.
+`srand(1)` 직후 처음 다섯 값 41, 18467, 6334, 26500, 19169를 테스트로 고정했다.
+한컴 명세의 일차 문서가 아니므로 “모든 상수가 한컴 명세에 있다”고 주장하지 않는다.
 공개 65섹션에서 복호화 후 CRC32와 원문 길이가 모두 일치한 것은 호환성 근거다.
+
+명세의 횟수 식 `(rand() & 0x0F + 1)`은 C 연산자 우선순위대로 읽으면 `rand() & 0x10`이
+된다. 이 구현은 문장의 뜻(1~16회)에 맞는 `(rand() & 0x0F) + 1`로 해석했고, 공개 실물은
+이 해석에서만 복호화된다. 2.3절대로 offset은 XOR 전에 seed로 구하고 256바이트 전체를
+XOR한다(결과의 앞 4바이트는 쓰지 않는다). 테스트 픽스처(`tests/conftest.py`)의 난수
+배열 생성기는 같은 절을 다른 표현으로 따로 작성한 정답지이며, 구현과 결과를 대조한다.
 
 명세에는 압축 뒤 CRC32·ISIZE의 두 16바이트 정렬 블록이나 연속 8바이트 배치가
 명시되어 있지 않다. 전자는 공개 64섹션, 후자는 공개 1섹션에서 직접 검증했다.
 길이 없는 임의 trailer를 허용하지 않고 실제 배치와 영 패딩을 검사한다. trailer가
-없는 AES 정렬 데이터는 기존 합성 테스트 계약을 유지한다. 원래 seed 네 바이트를
-보존하는 내부 함수 동작도 프로브 호출 계약이며, 키 위치 이후 XOR 결과에는 영향을
-주지 않는다. 이 한계를 포함한 검증 결과는
+없는 AES 정렬 데이터는 기존 합성 테스트 계약을 유지한다. 이 한계를 포함한 검증 결과는
 [`2026-10-02-license-clean-real-docs.md`](benchmarks/2026-10-02-license-clean-real-docs.md)에 있다.
 
 따라서 이번 결과는 함수 본문을 읽지 않고 수행한 재구현과 동작 검증으로 한정한다.
 과거 참조 이력을 지우거나, 저장소 전체의 법적 클린룸 절차가 입증되었다고 선언하지 않는다.
+과거 이력: 커밋 `8b5b0cd`까지의 `distdoc.py`와 테스트 설명은 pyhwp(AGPL-3.0)·hwplib
+구현을 참고했다고 기록되어 있었다. 이 구현은 `ec42aeb`(1.7.0 포함)에서 위 재작성으로
+대체됐고, 테스트 픽스처의 난수 배열 생성기와 설명은 그 다음 변경에서 명세 기준으로 다시 썼다.
 
 ## 검증 자료와 외부 정답지
 
@@ -99,11 +109,11 @@ PDFium, Poppler, pdfplumber, Open Dataloader, pikepdf/qpdf, pypdf, openpyxl 등�
 명시하면 보수적으로 분류하고, 문서·정답·이슈만 언급하면 “기대값 근거·호환성 비교”로
 분류했다. 기존 주석은 이번 파일 소유권 밖이므로 수정하지 않았다.
 
-53개 일치 위치를 파일 38개로 묶었다. 다음 줄 번호는 이번 변경 후 상태다.
+53개 일치 위치를 파일 38개로 묶었다. 다음 줄 번호는 이번 변경 후 상태다(그 뒤 `tests/test_distdoc.py:4`와
+`dochan/hwp/records/ctrl_header.py:24`의 참조 설명을 명세 인용으로 바꿔 표에서 뺐다).
 
 | 파일과 줄 | 분류 | 언급의 역할 |
 | --- | --- | --- |
-| `dochan/hwp/records/ctrl_header.py:24` | 구현 참고가 포함되어 있다. | hwplib와 제어 ID를 대조했다는 기록이다. 실물 관찰과 혼재하므로 별도 출처 확인을 남긴다. |
 | `dochan/hwp/section.py:11` | 기대값 근거·호환성 비교다. | hwplib 이슈에서 레코드 순서 사례를 인용한다. 구현 코드 인용이라고 쓰여 있지는 않다. |
 | `dochan/quality/batch_validate.py:17, 18, 159, 209, 221` | 기대값 근거·호환성 비교다. | pdfplumber·Open Dataloader를 선택적 검증 엔진으로 호출한다. |
 | `dochan/quality/cross_validator.py:4, 5, 175, 179` | 기대값 근거·호환성 비교다. | 독립 PDF 추출 결과를 비교하는 어댑터다. |
@@ -134,7 +144,6 @@ PDFium, Poppler, pdfplumber, Open Dataloader, pikepdf/qpdf, pypdf, openpyxl 등�
 | `scripts/probe_xls_review_cells.py:113` | 기대값 근거·호환성 비교다. | 외부 공개 코퍼스·테스트 기대값 또는 독립 도구 출력을 검증에 사용한다. |
 | `scripts/run_apache_poi_probe.py:1` | 기대값 근거·호환성 비교다. | 외부 공개 코퍼스·테스트 기대값 또는 독립 도구 출력을 검증에 사용한다. |
 | `scripts/verify_ooxml_docx.py:1, 3` | 기대값 근거·호환성 비교다. | 외부 공개 코퍼스·테스트 기대값 또는 독립 도구 출력을 검증에 사용한다. |
-| `tests/test_distdoc.py:4` | 구현 참고의 과거 기록이다. | hwplib·pyhwp 참조 구현 교차검증을 명시한다. 기존 단언과 설명을 그대로 보존했다. |
 | `tests/test_ooxml_charts.py:108` | 기대값 근거·호환성 비교다. | openpyxl 등 작성기의 축 위치 속성을 관찰한 설명이다. |
 | `tests/test_pdf_crypto.py:5, 51` | 기대값 근거·호환성 비교다. | pikepdf/qpdf로 생성한 암호화 합성 픽스처의 출처다. |
 | `tests/test_pdf_crypto_password.py:3` | 기대값 근거·호환성 비교다. | pypdf 참조 인코더로 만든 암호문·숫자의 출처다. |
@@ -144,8 +153,9 @@ PDFium, Poppler, pdfplumber, Open Dataloader, pikepdf/qpdf, pypdf, openpyxl 등�
 
 기존 `distdoc.py`의 모듈 docstring은 hwplib·pyhwp 구현을 상수 단위로 확인했다고
 명시했으므로 변경 전에는 “구현 참고”였다. 현재 docstring은 한컴 절 번호와 명세의
-공백만 기록한다. `tests/test_distdoc.py:4`의 과거 참조 설명은 그대로 남아 있다.
-`ctrl_header.py:24`도 실물 관찰과 구현 대조가 함께 적혀 있어 잔여 출처 검토 항목이다.
+공백만 기록한다. `tests/test_distdoc.py`의 과거 참조 설명도 명세 절 인용으로 바꿨다.
+`ctrl_header.py:24`의 머리말·꼬리말 컨트롤 ID는 「한글 문서 파일 구조 5.0」 4.2.10절 표에 그대로
+실려 있음을 확인하고 주석을 명세 인용으로 바꿔 표에서 뺐다.
 
 fontTools 생성기 참조와 생성물의 MIT 고지는 이번 변경으로 제거했다. 현재 조사한
 주석·docstring에서는 msoffcrypto·pdfminer·PyMuPDF를 찾지 못했다. 이름이 없다는 사실만으로

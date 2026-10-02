@@ -1,11 +1,10 @@
 """
 tests/test_distdoc.py — 배포용(distribution-copy) 문서 ViewText 복호화 테스트
 
-ViewText/SectionN 스트림 레이아웃 (HWP5 스펙 + hwplib/pyhwp 레퍼런스 구현 교차검증):
+ViewText/SectionN 스트림 레이아웃 (한컴 「배포용 문서 revision 1.2」 2.1~2.4절):
   [0:4]    레코드 헤더 (HWPTAG_DISTRIBUTE_DOC_DATA, size=256)
-  [4:260]  DistributeDocData 256바이트 — LCG 기반 XOR 스크램블 상태
-           (스크램블 해제 후 앞 4바이트가 LCG 시드, offset 4+(seed&0xF) 위치에
-           AES-128 키로 쓰이는 16바이트가 있음)
+  [4:260]  배포용 문서 데이터 256바이트 — 첫 4바이트가 seed, 나머지는 2.2절 난수 배열과
+           XOR 된 상태 (XOR 해제 후 offset 4+(seed&0xF) 위치의 앞 16바이트가 AES-128 키)
   [260:]   AES-128-ECB 암호문 (그 안에 raw-deflate 압축된 섹션 레코드가 들어있음)
 
 실제 사례로 corpus/hwp-public/hwp/alhangeul-macos-hwpspec.hwp 의

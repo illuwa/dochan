@@ -32,21 +32,32 @@ def _read_record_header(data: bytes):
     return start
 
 
+def _msvc_rand(seed: int):
+    """srand(seed) 뒤의 rand() 값을 차례로 낸다(MS Visual C 런타임의 선형 합동 생성기)."""
+    # 2.2절은 MS Visual C rand를 지정하지만 이 상수들을 직접 싣지는 않는다.
+    state = seed & 0xFFFFFFFF
+    while True:
+        state = (state * 214013 + 2531011) & 0xFFFFFFFF
+        yield (state >> 16) & 0x7FFF
+
+
+def _random_array(seed: int) -> bytes:
+    """2.2절의 난수 배열: 홀수번째 rand() & 0xFF 를 짝수번째 (rand() & 0x0F) + 1 번 채운다."""
+    rand = _msvc_rand(seed)
+    array = bytearray()
+    while len(array) < 256:
+        fill = next(rand) & 0xFF
+        array += bytes([fill]) * ((next(rand) & 0x0F) + 1)
+    return bytes(array[:256])
+
+
 def _descramble(seed_block: bytearray):
-    """2.1~2.3절의 난수 배열을 XOR하고 호출부가 쓰는 원래 seed는 보존한다."""
+    """2.3절대로 256바이트 전체를 난수 배열과 XOR한다. offset은 호출부가 먼저 구한다."""
     if len(seed_block) != 256:
         raise ValueError("DISTRIBUTE_DOC_DATA requires 256 bytes")
-    state = int.from_bytes(seed_block[:4], "little")
-    position = 0
-    while position < 256:
-        # 2.2절은 MS Visual C rand를 지정하지만 이 상수들을 직접 싣지는 않는다.
-        state = (state * 214013 + 2531011) & 0xFFFFFFFF
-        value = (state >> 16) & 255
-        state = (state * 214013 + 2531011) & 0xFFFFFFFF
-        end = min(256, position + ((state >> 16) & 15) + 1)
-        for index in range(max(4, position), end):
-            seed_block[index] ^= value
-        position = end
+    mask = _random_array(int.from_bytes(seed_block[:4], "little"))
+    for index, value in enumerate(mask):
+        seed_block[index] ^= value
 
 
 def _compressed_payload(data: bytes):
@@ -96,7 +107,7 @@ def decode_distribution_section(raw_stream: bytes, *, is_compressed: bool = Fals
     if not ciphertext or len(ciphertext) % 16:
         raise ValueError("Distribution ciphertext requires complete AES blocks")
     key_data = bytearray(raw_stream[start:start + 256])
-    offset = 4 + (key_data[0] & 15)
+    offset = 4 + (key_data[0] & 15)  # 2.3절 1항: XOR 전에 seed로 구한다
     _descramble(key_data)
     plaintext = aes128_ecb_decrypt(bytes(key_data[offset:offset + 16]), ciphertext)
     return _compressed_payload(plaintext) if is_compressed else plaintext

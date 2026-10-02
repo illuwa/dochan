@@ -21,8 +21,8 @@ CTRL_EQUATION    = _make_4chid('e', 'q', 'e', 'd')   # b'\x64\x65\x71\x65'
 CTRL_GSO         = _make_4chid('g', 's', 'o', ' ')
 CTRL_SECTION_DEF = _make_4chid('s', 'e', 'c', 'd')
 CTRL_COLUMN_DEF  = _make_4chid('c', 'o', 'l', 'd')
-# ★ 실파일 실측(회계규칙 등 test_pairs) + hwplib 확인: 머리말/꼬리말은
-#   'hdr '/'ftr ' 가 아니라 'head'/'foot' 다.
+# ★ 머리말/꼬리말은 'hdr '/'ftr ' 가 아니라 'head'/'foot' 다
+#   (「한글 문서 파일 구조 5.0」 4.2.10절 표 '그 외의 컨트롤', 실물 문서로도 확인).
 CTRL_HEADER_HF   = _make_4chid('h', 'e', 'a', 'd')
 CTRL_FOOTER_HF   = _make_4chid('f', 'o', 'o', 't')
 CTRL_FOOTNOTE    = _make_4chid('f', 'n', ' ', ' ')

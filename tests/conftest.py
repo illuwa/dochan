@@ -9,25 +9,30 @@ import struct
 from dochan.utils import aes as _aes
 
 
-def scramble_distdoc_seed_block(seed_block: bytearray) -> None:
-    """DistributeDocData 256바이트 스크램블 (XOR 은 자기 역산이라 인코드/디코드 동일)."""
-    seed = struct.unpack_from("<I", seed_block, 0)[0]
-    random_seed = seed
+def msvc_rand_sequence(seed: int, count: int) -> list:
+    """srand(seed) 뒤 rand() 결과 count 개.
 
-    def rand():
-        nonlocal random_seed
-        random_seed = (random_seed * 214013 + 2531011) & 0xFFFFFFFF
-        return (random_seed >> 16) & 0x7FFF
+    MS Visual C 런타임: 상태 = 상태 × 214013 + 2531011 (mod 2^32), 반환 = 상태의 16~30비트.
+    """
+    values, state = [], seed % 2 ** 32
+    for _ in range(count):
+        state = (state * 214013 + 2531011) % 2 ** 32
+        values.append(state // 2 ** 16 % 2 ** 15)
+    return values
 
-    n = 0
-    value = 0
-    for i in range(256):
-        if n == 0:
-            value = rand() & 0xFF
-            n = (rand() & 0xF) + 1
-        if i >= 4:
-            seed_block[i] ^= value
-        n -= 1
+
+def distdoc_random_array(seed: int) -> list:
+    """배포용 문서 명세 2.2절의 256바이트 난수 배열 (테스트 정답지용 독립 작성).
+
+    rand() 를 두 번씩 묶어 (값, 횟수) 로 쓴다. 한 쌍이 최소 1바이트를 채우므로 256쌍이면 충분하다.
+    """
+    calls = msvc_rand_sequence(seed, 512)
+    array = []
+    for value, count in zip(calls[0::2], calls[1::2]):
+        array.extend([value % 256] * (count % 16 + 1))
+        if len(array) >= 256:
+            break
+    return array[:256]
 
 
 def _sub_bytes(state):
@@ -80,16 +85,16 @@ def build_distdoc_view_text_stream(seed: int, aes_key: bytes, plaintext_tail: by
     """
     assert len(aes_key) == 16
 
-    seed_block = bytearray(256)
-    struct.pack_into("<I", seed_block, 0, seed)
-    offset = 4 + (seed & 0xF)
-    seed_block[offset:offset + 16] = aes_key
-
-    scramble_distdoc_seed_block(seed_block)  # in-place: 평문 → 스크램블 상태
+    # 2.1절: 저장된 첫 4바이트가 seed. 2.3절: offset = (seed & 0x0F) + 4 에 해시코드(앞 16바이트가 AES 키).
+    offset = 4 + (seed & 0x0F)
+    merged = bytearray(256)
+    merged[offset:offset + 16] = aes_key
+    mask = distdoc_random_array(seed)
+    seed_block = struct.pack("<I", seed) + bytes(m ^ x for m, x in zip(merged[4:], mask[4:]))
 
     header = struct.pack("<I", (256 << 20) | (0 << 10) | 28)  # tag=DISTRIBUTE_DOC_DATA size=256
 
     padded_tail = plaintext_tail + b"\x00" * ((-len(plaintext_tail)) % 16)
     ciphertext = aes128_ecb_encrypt(aes_key, padded_tail)
 
-    return header + bytes(seed_block) + ciphertext
+    return header + seed_block + ciphertext

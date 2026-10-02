@@ -6,6 +6,7 @@ signature guessing is used to associate a picture with a character.
 """
 import struct
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Optional
 
 from ..conversion import AssetRef, Provenance
@@ -17,6 +18,171 @@ _MAX_PICTURES = 10000
 _MIME = {'png': 'image/png', 'jpg': 'image/jpeg', 'bmp': 'image/bmp',
          'tiff': 'image/tiff', 'emf': 'image/x-emf', 'wmf': 'image/x-wmf',
          'pict': 'image/x-pict'}
+
+
+def _direct_wmf(payload):
+    """Validate a packed WMF METAHEADER and every record before exporting it."""
+    if len(payload) < 24:
+        return None
+    kind, header, version, words, _, max_record, reserved = struct.unpack_from('<HHHIHIH', payload)
+    end = words * 2
+    if (kind not in (1, 2) or header != 9 or version not in (0x100, 0x300)
+            or reserved or end < 24 or end > len(payload) or max_record < 3):
+        return None
+    offset = 18
+    for _ in range(100000):
+        if offset + 6 > end:
+            return None
+        size, function = struct.unpack_from('<IH', payload, offset)
+        if size < 3 or size > max_record or size * 2 > end - offset:
+            return None
+        offset += size * 2
+        if function == 0:
+            return bytes(payload[:end]) if size == 3 and offset == end else None
+    return None
+
+
+def legacy_inline_images(word, doc):
+    """Follow non-complex Word 6/95 FIB -> BTE -> CHPX -> PICF references.
+
+    This intentionally accepts only the observed single-byte, contiguous text
+    layout. It never searches the stream for picture signatures. Word 6/95
+    uses 16-bit BTE page numbers and a one-byte SPRM opcode; unknown CHPX
+    operands stop that run instead of interpreting their payload as opcodes.
+    """
+    if len(word) < 192:
+        return {}
+    ident, version = struct.unpack_from('<HH', word)
+    flags, = struct.unpack_from('<H', word, 10)
+    if ident not in (0xa5db, 0xa5dc) or version not in (101, 104) or flags & 0x1104:
+        return {}
+    first, last = struct.unpack_from('<II', word, 24)
+    start, length = struct.unpack_from('<II', word, 184)
+    if (not 0 < first < last <= len(word) or length < 4 or (length - 4) % 6
+            or length > 6 * _MAX_PICTURES + 4 or start + length > len(word)):
+        return {}
+    count = (length - 4) // 6
+    locations = {}
+    seen_pages = set()
+    inspected_runs = 0
+    inspected_characters = 0
+    # Operand lengths observed in the relevant Word 6/95 CHPX records.
+    fixed = {0x50: 2, 0x55: 1, 0x56: 1, 0x61: 2, 0x62: 1, 0x63: 2, 0x75: 1}
+    for index in range(count):
+        pn, = struct.unpack_from('<H', word, start + 4 * (count + 1) + 2 * index)
+        if pn in seen_pages:
+            continue
+        seen_pages.add(pn)
+        page = word[pn * 512:(pn + 1) * 512]
+        if len(page) != 512:
+            continue
+        runs = page[511]
+        if 4 * (runs + 1) + runs > 511:
+            continue
+        for run in range(runs):
+            inspected_runs += 1
+            if inspected_runs > 100000:
+                if len(doc.errors) < 1000:
+                    doc.errors.append('WARN: DOC legacy image CHPX run limit exceeded')
+                return {}
+            lo, hi = struct.unpack_from('<II', page, run * 4)
+            if not first <= lo < hi <= last or hi - lo > _MAX_PICTURES:
+                continue
+            at = page[4 * (runs + 1) + run] * 2
+            if at < 4 * (runs + 1) + runs or at >= 511:
+                continue
+            end = at + 1 + page[at]
+            if end > 511:
+                continue
+            at += 1
+            special, location, valid = False, None, True
+            while at < end:
+                opcode = page[at]
+                at += 1
+                if opcode == 0x44:
+                    if at + 5 > end or page[at] != 4:
+                        valid = False
+                        break
+                    location, = struct.unpack_from('<I', page, at + 1)
+                    at += 5
+                elif opcode in fixed and at + fixed[opcode] <= end:
+                    if opcode == 0x75:
+                        special = page[at] == 1
+                    at += fixed[opcode]
+                else:
+                    valid = False
+                    break
+            if valid and special and location is not None:
+                inspected_characters += hi - lo
+                if inspected_characters > 1000000:
+                    if len(doc.errors) < 1000:
+                        doc.errors.append('WARN: DOC legacy image character inspection limit exceeded')
+                    return {}
+                for fc in range(lo, hi):
+                    if word[fc] == 1 and len(locations) < _MAX_PICTURES:
+                        locations[fc - first] = location
+    if not locations:
+        return {}
+    binary = SimpleNamespace(word=word, data=word, text=word[first:last].decode('latin1'),
+                             blob=lambda index: b'')
+    pictures = DocImages(binary, doc)
+    images = {}
+    for cp, location in sorted(locations.items()):
+        image = pictures.image_at(cp, {'special': True, 'pic_location': location})
+        if image is not None:
+            images[cp] = image
+    return images
+
+
+def replace_legacy_image_markers(elements, markers, depth=0):
+    """Replace transient tokens in existing paragraphs and table cells in order."""
+    from ..model.document import Paragraph
+    if depth > 32:
+        return elements
+    result = []
+
+    def append_paragraph(paragraph, runs):
+        # The normal fallback strips paragraph boundaries. Splitting an
+        # inline image introduces new boundaries that need the same cleanup.
+        while runs and not runs[0].text.strip():
+            runs.pop(0)
+        while runs and not runs[-1].text.strip():
+            runs.pop()
+        if runs:
+            runs[0] = replace(runs[0], text=runs[0].text.lstrip())
+            runs[-1] = replace(runs[-1], text=runs[-1].text.rstrip())
+            result.append(replace(paragraph, runs=runs))
+
+    for element in elements:
+        if hasattr(element, 'rows'):
+            for row in element.rows:
+                for cell in row:
+                    cell.paragraphs = replace_legacy_image_markers(cell.paragraphs, markers, depth + 1)
+        if (not isinstance(element, Paragraph)
+                or not any('\ue000' in run.text for run in element.runs)):
+            result.append(element)
+            continue
+        runs = []
+        for run in element.runs:
+            text = run.text
+            while '\ue000' in text:
+                before, _, after = text.partition('\ue000')
+                key, separator, remaining = after.partition('\ue001')
+                marker = '\ue000' + key + '\ue001'
+                if not separator or marker not in markers:
+                    break
+                if before:
+                    runs.append(replace(run, text=before))
+                if runs:
+                    append_paragraph(element, runs)
+                    runs = []
+                result.append(markers[marker])
+                text = remaining
+            if text:
+                runs.append(replace(run, text=text))
+        if runs:
+            append_paragraph(element, runs)
+    return result
 
 
 class DocImages:
@@ -124,10 +290,24 @@ class DocImages:
             self._warn('PICF location outside Data stream')
             return None
         size, header_size, mapping_mode = struct.unpack_from('<IHH', data, location)
-        if (header_size < 68 or header_size > size or size > len(data) - location
+        minimum_header = 58 if mapping_mode == 8 else 68
+        if (header_size < minimum_header or header_size > size or size > len(data) - location
                 or size > self.limits.max_record_bytes):
             self._warn('truncated or oversized PICF')
             return None
+        if mapping_mode == 8:
+            payload = data[location + header_size:location + size]
+            if (len(payload) > self.limits.max_image_bytes
+                    or len(payload) > self.limits.max_total_image_bytes - self._decoded_total):
+                self._warn('direct WMF byte limit exceeded')
+                return None
+            payload = _direct_wmf(payload)
+            if payload is None:
+                self._warn('invalid direct WMF header or records')
+                return None
+            self._decoded_total += len(payload)
+            self._inline[location] = (('wmf', payload), '')
+            return self._inline[location]
         if mapping_mode not in (0x64, 0x66):
             # Other PICF variants can be OLE objects rather than pictures.
             return None

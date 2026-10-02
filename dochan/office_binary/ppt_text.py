@@ -34,6 +34,7 @@ class TextBlock:
     character_symbol_fonts: list = field(default_factory=list)
     paragraph_fonts: list = field(default_factory=list)
     paragraph_numbers: list = field(default_factory=list)
+    character_masks: list = field(default_factory=list)
 
 
 def _warn(errors, message):
@@ -112,9 +113,9 @@ def _character_properties(cursor, mask, font_ids=None, symbol_ids=None):
     size = cursor.read('<H') if mask & 0x20000 else 10
     if mask & 0x40000:
         cursor.skip(4)
-    if mask & 0x80000:
-        cursor.skip(2)
-    return (bool(flags & 1), bool(flags & 2), bool(flags & 4), float(size))
+    baseline = cursor.read('<h') if mask & 0x80000 else 0
+    return (bool(flags & mask & 1), bool(flags & mask & 2), bool(flags & mask & 4),
+            float(size), baseline)
 
 
 def _parse_style(block, errors):
@@ -143,6 +144,7 @@ def _parse_style(block, errors):
                 raise ValueError('style run has zero length')
             props = _character_properties(cursor, mask, block.character_fonts, block.character_symbol_fonts)
             block.character_runs.append((end, end + count, props))
+            block.character_masks.append(mask)
             end += count
     except (ValueError, struct.error) as exc:
         # An unknown property's length prevents reading subsequent runs, but
@@ -197,6 +199,8 @@ def apply_auto_numbers(blocks, data, errors=None):
 
     TextPFException9 mask bits 23/25/24 serialize blip reference, auto-number
     flag, then the scheme/start pair. Completed entries survive truncation.
+    TextCFException9's pp10ext field (bit 20) occupies four bytes. It is
+    separate from the base TextCFException, where that bit is reserved.
     Unknown trailing CF/SI properties stop parsing rather than guessing sizes.
     """
     cursor = _Cursor(data)
@@ -213,8 +217,16 @@ def apply_auto_numbers(blocks, data, errors=None):
                 enabled = cursor.read('<H') if mask & 0x02000000 else 0
                 scheme, start = cursor.read('<Hh') if mask & 0x01000000 else (3, 1)
                 block.paragraph_numbers.append((scheme, start) if enabled else None)
-                if cursor.read('<I') or cursor.read('<I'):
+                cf_mask = cursor.read('<I')
+                if cf_mask & ~0x100000:
                     raise ValueError('unsupported auto-number CF/SI extension')
+                if cf_mask & 0x100000:
+                    cursor.skip(4)
+                si_mask = cursor.read('<I')
+                if si_mask & ~0x40:
+                    raise ValueError('unsupported auto-number CF/SI extension')
+                if si_mask & 0x40:
+                    cursor.skip(2)  # TextSIException.bidi
     except (ValueError, struct.error) as exc:
         _warn(errors, str(exc))
 
@@ -328,7 +340,8 @@ def _ranges(block, hyperlinks, slide_index=0, slide_count=0):
 
 def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
                 max_output_chars=MAX_OUTPUT_CHARS, errors=None, font_names=None,
-                fragment_budget=None, slide_index=0, slide_count=0) -> List[Paragraph]:
+                fragment_budget=None, slide_index=0, slide_count=0,
+                default_styles=None) -> List[Paragraph]:
     """Return PPTX-compatible paragraphs and literal ``label <target>`` links."""
     font_names = font_names or {}
     if fragment_budget is None:
@@ -341,6 +354,9 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
     boundaries = {0, units}
     for start, end, _props in styles + links:
         boundaries.update((max(0, min(start, units)), max(0, min(end, units))))
+    if default_styles:
+        for start, end, _level in block.paragraph_levels:
+            boundaries.update((max(0, min(start, units)), max(0, min(end, units))))
     if units == len(block.text):
         offsets = sorted(boundaries)
     else:
@@ -371,6 +387,7 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
     runs = []
     linked_paragraph = False
     style_index = 0
+    level_index = 0
     bullet_index = 0
     link_index = 0
     link_events = sorted((start, order, end, target) for order, (start, end, target) in enumerate(links))
@@ -391,7 +408,8 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
                 return
             chunk = text[offset:min(offset + MAX_OUTPUT_RUN_CHARS, accepted)]
             runs.append(TextRun(text=chunk, bold=props[0], italic=props[1], underline=props[2],
-                                font_size_pt=props[3], provenance=provenance))
+                                font_size_pt=props[3], superscript=len(props) > 4 and props[4] > 0,
+                                subscript=len(props) > 4 and props[4] < 0, provenance=provenance))
             remaining -= len(chunk)
             output_runs += 1
 
@@ -455,9 +473,20 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
             continue
         while style_index < len(styles) and styles[style_index][1] <= start:
             style_index += 1
-        props = (False, False, False, 10.0)
+        props = [False, False, False, 10.0, 0]
+        if default_styles:
+            from .ppt_styles import style_for
+            while level_index < len(block.paragraph_levels) and block.paragraph_levels[level_index][1] <= start:
+                level_index += 1
+            level = block.paragraph_levels[level_index][2] if level_index < len(block.paragraph_levels) else 0
+            for prop, value in style_for(default_styles, block.text_type, level).items():
+                props[prop] = value
         if style_index < len(styles) and styles[style_index][0] <= start < styles[style_index][1]:
-            props = styles[style_index][2]
+            explicit = styles[style_index][2]
+            mask = block.character_masks[style_index] if style_index < len(block.character_masks) else 0xEFFFFF
+            for prop, bit in enumerate((1, 2, 4, 0x20000, 0x80000)):
+                if mask & bit and prop < len(explicit):
+                    props[prop] = explicit[prop]
         while link_index < len(link_events) and link_events[link_index][0] <= start:
             _begin, order, link_end, target = link_events[link_index]
             heapq.heappush(active_links, (order, link_end, target))

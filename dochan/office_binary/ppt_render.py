@@ -10,6 +10,7 @@ from .officeart import Limits, parse_records, read_bstore, read_shapes, walk_rec
 from .ppt_structure import resolve_presentation, warn
 from .ppt_text import TextBlock, apply_auto_numbers, read_hyperlinks, render_text, shape_hyperlink, text_blocks
 from .ppt_shapes import positioned_shapes, table_from_shape
+from .ppt_styles import merge_styles, read_master_styles
 
 MAX_SHAPES = 100000
 MAX_IMAGES = 10000
@@ -44,6 +45,25 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
     renderer = _Renderer(doc, entries, links, stream_name)
     renderer.slide_count = len(presentation.slides)
     renderer.link_labels = labels
+    environment_styles = read_master_styles(walk_records(presentation.document.children), errors)
+    environment_styles.update({(-1, level): dict(values)
+                               for (kind, level), values in list(environment_styles.items()) if kind == 4})
+    style_cache = {}
+
+    def defaults(sheet):
+        # fFollowMasterObjects controls displayed objects, not character
+        # inheritance. A slide can hide master graphics and still use its font.
+        chain = []
+        seen = set()
+        current = sheet
+        while current is not None and id(current) not in seen and len(chain) < 32:
+            seen.add(id(current))
+            key = id(current)
+            if key not in style_cache:
+                style_cache[key] = read_master_styles(current.record.children, errors)
+            chain.append(style_cache[key])
+            current = presentation.masters.get(current.master_id)
+        return merge_styles(environment_styles, *reversed(chain))
     from .ole_objects import PptObjects
     renderer.objects = PptObjects(presentation.embedded, errors, presentation.embedded_progids)
     unresolved_reference = False
@@ -78,8 +98,8 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
             warn(errors, "master slide cycle")
         for master in reversed(masters):
             mp = Provenance(source_format="ppt", slide=index, path=path + "#master")
-            section.elements.extend(renderer.sheet(master, mp, images, inherited=True))
-        section.elements.extend(renderer.sheet(slide, provenance, images))
+            section.elements.extend(renderer.sheet(master, mp, images, inherited=True, styles=defaults(master)))
+        section.elements.extend(renderer.sheet(slide, provenance, images, styles=defaults(slide)))
         if slide.notes_id:
             notes = presentation.notes.get(slide.notes_id)
             if notes is not None:
@@ -127,6 +147,7 @@ class _Renderer:
         self.objects = None
         self.slide_count = 0
         self.link_labels = {}
+        self.default_styles = {}
 
     def text(self, block, provenance, link=""):
         if len(block.text) > self.remaining_text or self.remaining_paragraphs <= 0:
@@ -181,7 +202,8 @@ class _Renderer:
         paragraphs = render_text(block, provenance, self.links, link,
                                  max_output_chars=self.remaining_text, errors=self.doc.errors,
                                  font_names=self.font_names, fragment_budget=self.fragment_budget,
-                                 slide_index=getattr(provenance, 'slide', 0) or 0, slide_count=self.slide_count)
+                                 slide_index=getattr(provenance, 'slide', 0) or 0, slide_count=self.slide_count,
+                                 default_styles=self.default_styles)
         if len(paragraphs) > self.remaining_paragraphs:
             warn(self.doc.errors, "document paragraph count limit exceeded")
             paragraphs = paragraphs[:self.remaining_paragraphs]
@@ -189,7 +211,7 @@ class _Renderer:
         self.remaining_text -= sum(len(run.text) for para in paragraphs for run in para.runs)
         return paragraphs
 
-    def sheet(self, sheet, provenance, images, inherited=False, notes=False):
+    def sheet(self, sheet, provenance, images, inherited=False, notes=False, styles=None):
         if (self.remaining <= 0 or self.remaining_text <= 0 or self.remaining_paragraphs <= 0
                 or self.shape_visit_budget[0] <= 0):
             warn(self.doc.errors, "document rendering budget exceeded")
@@ -197,6 +219,7 @@ class _Renderer:
         if getattr(sheet, 'recovery_record', None) is not None:
             sheet = replace(sheet, record=sheet.recovery_record)
         self.field_values = {}
+        self.default_styles = styles or {}
         # Local HeaderFooter values are saved display text, unlike master prompts.
         for container in sheet.record.children:
             if container.header.rec_type == 4057:

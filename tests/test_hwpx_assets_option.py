@@ -236,3 +236,24 @@ def test_false_rejects_ooxml_and_ambiguous_packages(tmp_path, part, hwpx_marker)
 
     with pytest.raises(ValueError, match=r"include_assets=False.*HWPX"):
         Dochan(path, include_assets=False)
+
+
+def test_reader_classifies_zip_package_once(hwpx_path, monkeypatch):
+    import dochan.reader as reader_module
+
+    calls = {"ooxml": 0, "hwpx": 0}
+    detect = reader_module.detect_ooxml_format
+    is_hwpx = Dochan._is_hwpx_package
+
+    def counting_detect(path):
+        calls["ooxml"] += 1
+        return detect(path)
+
+    def counting_is_hwpx(reader):
+        calls["hwpx"] += 1
+        return is_hwpx(reader)
+
+    monkeypatch.setattr(reader_module, "detect_ooxml_format", counting_detect)
+    monkeypatch.setattr(Dochan, "_is_hwpx_package", counting_is_hwpx)
+    reader = Dochan(str(hwpx_path), include_assets=False, revision_mode="final")
+    assert calls == {"ooxml": 1, "hwpx": 1}

@@ -66,16 +66,15 @@ class Dochan:
                 revision_mode가 잘못되었거나 비기본 모드에 HWPX가 아닌 입력.
         """
         self.file_path = file_path
+        self._zip_kind_cache = None
         # 옵션 오류는 문서 파싱 오류와 달리 호출자에게 직접 알린다.
         validate_revision_mode(revision_mode)
-        if revision_mode != "preserve" and (
-            not self._is_hwpx_package() or detect_ooxml_format(file_path)
-        ):
+        if revision_mode != "preserve" and not self._is_plain_hwpx():
             raise ValueError("revision_mode other than 'preserve' is supported only for HWPX packages")
         if not include_assets:
             if ocr:
                 raise ValueError("ocr=True cannot be used with include_assets=False")
-            if not self._is_hwpx_package() or detect_ooxml_format(file_path):
+            if not self._is_plain_hwpx():
                 raise ValueError("include_assets=False is supported only for HWPX packages")
         self.doc = Document()
         self._ocr = ocr
@@ -123,8 +122,7 @@ class Dochan:
             return
 
         if magic[:2] == b'PK':
-            ooxml_format = detect_ooxml_format(self.file_path)
-            is_hwpx = self._is_hwpx_package()
+            ooxml_format, is_hwpx = self._zip_kind()
             if ooxml_format and ooxml_format != 'ambiguous' and is_hwpx:
                 self.doc.errors.append("ERR: 모호한 ZIP 문서 형식")
             elif ooxml_format == 'docx':
@@ -174,6 +172,18 @@ class Dochan:
             self._parse_pdf_family()
         else:
             self.doc.errors.append(f"ERR: 알 수 없는 파일 형식: {self.file_path}")
+
+    def _zip_kind(self):
+        """(OOXML 형식, HWPX 여부)를 한 번만 판별한다 — 옵션 검증과 분기가 공유."""
+        if self._zip_kind_cache is None:
+            self._zip_kind_cache = (
+                detect_ooxml_format(self.file_path), self._is_hwpx_package(),
+            )
+        return self._zip_kind_cache
+
+    def _is_plain_hwpx(self) -> bool:
+        ooxml_format, is_hwpx = self._zip_kind()
+        return is_hwpx and not ooxml_format
 
     def _is_hwpx_package(self) -> bool:
         import zipfile

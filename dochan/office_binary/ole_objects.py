@@ -486,7 +486,8 @@ class PptObjects:
                         provenance = replace(provenance, path=(provenance.path or '') + '#ole%d' % object_id)
                     return self.pool.read(ole, [], provenance)
                 finally:
-                    append_recovery_warnings(ole, self.pool.errors)
+                    append_recovery_warnings(ole, self.pool.errors,
+                                             path='ole%d' % object_id, scope='embedded')
         except Exception as exc:
             self.pool.remaining -= 1
             if object_id in self.supported:

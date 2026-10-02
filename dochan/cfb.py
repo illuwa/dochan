@@ -26,8 +26,8 @@ ENDOFCHAIN = 0xfffffffe
 FATSECT = 0xfffffffd
 DIFSECT = 0xfffffffc
 STGTY_STORAGE, STGTY_STREAM, STGTY_ROOT = 1, 2, 5
-# Accepted for the existing embedded-storage validation call. All dangerous
-# defects are rejected regardless of this compatibility keyword.
+# Compatibility threshold for callers that reject even metadata deviations.
+# Embedded storage uses strict_recovery to reject only address/content loss.
 DEFECT_INCORRECT = 30
 MAX_FILE_SIZE = 512 * 1024 * 1024
 MAX_STREAM_SIZE = 256 * 1024 * 1024
@@ -48,28 +48,53 @@ _RECOVERY_CATEGORIES = frozenset((
     'duplicate directory name omitted', 'stream read failed',
 ))
 _WARNING_PREFIX = 'WARN: OLE/CFB 컨테이너 손상 복구: '
+_RESOURCE_CATEGORY = 'stream resource limit exceeded'
+_TRUNCATION_CATEGORIES = frozenset((
+    'stream size exceeds available sectors',
+    'truncated chain points outside allocation table',
+    'truncated chain does not match declared size', 'truncated stream payload',
+))
 
 
-def append_recovery_warnings(ole, errors, path=''):
-    """Forward content-loss diagnostics once per category, across all readers.
+def _issue_group(category):
+    return 'truncated stream' if category in _TRUNCATION_CATEGORIES else category
 
-    The optional path describes a container or stream, not a filesystem path.
-    Reference backends and older test doubles have no recovery diagnostics.
+
+def _warning_prefix(scope, resource=False):
+    name = 'embedded OLE/CFB' if scope == 'embedded' else 'OLE/CFB'
+    return 'WARN: ' + name + (' 자원 제한: ' if resource else ' 컨테이너 손상 복구: ')
+
+
+def append_recovery_warnings(ole, errors, path='', scope='outer'):
+    """Fold derived truncation reasons by stream, with independent scope budgets.
+
+    Keep at most 16 outer and 16 embedded diagnostics per document. Embedded
+    object paths qualify stream names; neither kind can silence the other.
+    Paths describe CFB objects, never filesystem paths. Metadata is excluded.
     """
     issues = getattr(ole, 'recovery_issues', ())
     if not isinstance(issues, (list, tuple)):
         return
-    seen = {message[len(_WARNING_PREFIX):].split(' (', 1)[0]
-            for message in errors if message.startswith(_WARNING_PREFIX)}
+    prefixes = (_warning_prefix(scope), _warning_prefix(scope, resource=True))
+    seen = set()
+    for message in errors:
+        for prefix in prefixes:
+            if message.startswith(prefix):
+                category, _, location = message[len(prefix):].partition(' (')
+                seen.add((_issue_group(category), location.removesuffix(')')))
     for category, stream_path in issues[:MAX_RECOVERY_WARNINGS]:
         if len(seen) >= MAX_RECOVERY_WARNINGS:
             break
-        if category not in _RECOVERY_CATEGORIES or category in seen:
+        if category not in _RECOVERY_CATEGORIES and category != _RESOURCE_CATEGORY:
             continue
-        location = stream_path or path or '/'
+        location = ('/'.join(part for part in (path, stream_path) if part)
+                    if scope == 'embedded' else stream_path or path) or '/'
         location = ''.join(ch if ch.isprintable() else '?' for ch in str(location)[:256])
-        errors.append(_WARNING_PREFIX + category + ' (' + location + ')')
-        seen.add(category)
+        key = (_issue_group(category), location)
+        if key not in seen:
+            prefix = _warning_prefix(scope, category == _RESOURCE_CATEGORY)
+            errors.append(prefix + category + ' (' + location + ')')
+            seen.add(key)
 
 
 class CFBError(OSError):
@@ -77,6 +102,10 @@ class CFBError(OSError):
 
     def __init__(self, message):
         super().__init__('OLE/CFB: ' + message)
+
+
+class CFBResourceError(CFBError):
+    """A configured resource ceiling, not evidence of damaged bytes."""
 
 
 OleFileError = CFBError
@@ -211,7 +240,7 @@ class OleFileIO:
         try:
             if isinstance(filename, (bytes, bytearray, memoryview)):
                 if len(filename) > MAX_FILE_SIZE:
-                    raise CFBError('CFB file size limit exceeded')
+                    raise CFBResourceError('CFB file size limit exceeded')
                 self._fp = io.BytesIO(filename)
                 self._owned = True
             elif isinstance(filename, (str, os.PathLike)):
@@ -222,7 +251,7 @@ class OleFileIO:
             self._fp.seek(0, 2)
             self._file_size = self._fp.tell()
             if self._file_size > MAX_FILE_SIZE:
-                raise CFBError('CFB file size limit exceeded')
+                raise CFBResourceError('CFB file size limit exceeded')
             self._parse()
         except Exception:
             self.close()
@@ -244,8 +273,10 @@ class OleFileIO:
             self._record_recovery(category)
 
     def _record_recovery(self, category):
+        key = (_issue_group(category), self._issue_path)
         if (len(self.recovery_issues) < MAX_RECOVERY_WARNINGS
-                and not any(item[0] == category for item in self.recovery_issues)):
+                and not any((_issue_group(item[0]), item[1]) == key
+                            for item in self.recovery_issues)):
             self.recovery_issues.append((category, self._issue_path))
 
     def _read_at(self, offset, size):
@@ -298,9 +329,16 @@ class OleFileIO:
         claimed = []
         try:
             while sid != ENDOFCHAIN:
+                if count is not None and len(result) >= count:
+                    # The directory/header count defines the logical extent.
+                    # A spare link cannot alter payload, ownership or work for
+                    # another stream. V3 directories have no count and still
+                    # require a terminating, cycle-free complete chain.
+                    self._metadata_defect('CFB stream has excess allocated sectors')
+                    break
                 self._chain_steps += 1
                 if self._chain_steps > MAX_CHAIN_STEPS:
-                    raise CFBError('CFB cumulative chain work limit exceeded')
+                    raise CFBResourceError('CFB cumulative chain work limit exceeded')
                 if sid in visited:
                     raise CFBError('CFB duplicate sector allocation or cyclic chain')
                 if not 0 <= sid < min(bound, len(table)):
@@ -309,35 +347,23 @@ class OleFileIO:
                     self._metadata_defect('CFB truncated chain points outside allocation table')
                     break
                 if len(result) >= limit:
-                    raise CFBError('CFB chain length limit or cycle')
-                if (recover and count is not None and len(result) >= count
-                        and owners[sid] not in (-1, owner)):
-                    self._metadata_defect('CFB unused stream tail aliases another allocation')
-                    break
-                if (owner < 0 and owner != -5) or count is None or len(result) < count:
-                    self._claim(sid, owner, mini)
-                    claimed.append(sid)
+                    raise CFBResourceError('CFB chain length limit exceeded')
+                self._claim(sid, owner, mini)
+                claimed.append(sid)
                 visited.add(sid)
                 result.append(sid)
                 sid = table[sid]
             if count is not None and len(result) != count:
-                if (owner >= 0 or owner == -5) and len(result) > count:
-                    # Validate spare links without claiming them as payload;
-                    # expose only the declared logical stream extent.
-                    self._metadata_defect('CFB stream has excess allocated sectors')
-                else:
-                    if not recover:
-                        raise CFBError('CFB chain length does not match declared size')
-                    self._metadata_defect('CFB truncated chain does not match declared size')
+                if not recover:
+                    raise CFBError('CFB chain length does not match declared size')
+                self._metadata_defect('CFB truncated chain does not match declared size')
         except Exception:
             # A failed optional stream must not poison ownership for subsequent
             # reads. Only claims from this attempt are rolled back.
             for sid in claimed:
                 owners[sid] = -1
             raise
-        # Extra MiniFAT links are checked, but never become allocator words
-        # or steal ownership from streams beyond the header's declared count.
-        return result[:count] if owner == -5 and count is not None else result
+        return result
 
     def _extent(self, chain, size, mini=False):
         """Size of the contiguous, physically present prefix of a stream."""
@@ -545,10 +571,10 @@ class OleFileIO:
                 raise CFBError('CFB duplicate root entry')
             path = parent + (ent.name,)
             if len(path) > MAX_STORAGE_DEPTH:
-                raise CFBError('CFB storage depth limit exceeded')
+                raise CFBResourceError('CFB storage depth limit exceeded')
             path_components += len(path)
             if path_components > MAX_PATH_COMPONENTS:
-                raise CFBError('CFB cumulative path component limit exceeded')
+                raise CFBResourceError('CFB cumulative path component limit exceeded')
             # Index each local name once. Re-encoding every ancestor for every
             # leaf would multiply memory use by attacker-controlled depth.
             key = (parent_id, _name_key(ent.name))
@@ -566,7 +592,7 @@ class OleFileIO:
     @staticmethod
     def _check_size(size):
         if size > MAX_STREAM_SIZE:
-            raise CFBError('CFB stream size limit exceeded')
+            raise CFBResourceError('CFB stream size limit exceeded')
 
     def _mini_offset(self, sid):
         position = sid * 64
@@ -620,8 +646,9 @@ class OleFileIO:
         self._issue_path = path if isinstance(path, str) else '/'.join(path)
         try:
             return self._openstream(index)
-        except CFBError:
-            self._record_recovery('stream read failed')
+        except CFBError as exc:
+            self._record_recovery(_RESOURCE_CATEGORY if isinstance(exc, CFBResourceError)
+                                  else 'stream read failed')
             raise
         finally:
             self._issue_path = previous_path

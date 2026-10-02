@@ -50,6 +50,9 @@ def hwp_container(damage=None):
     if damage == 'image_cycle':
         sid = struct.unpack_from('<I', records[7], 116)[0]
         links[sid] = sid
+        # Require a second sector: cycling after a complete one-sector image
+        # is only unused metadata and cannot justify a content-loss warning.
+        struct.pack_into('<Q', records[7], 120, 65)
     if damage == 'image_crosslink':
         records[8][116:120] = records[7][116:120]
     raw[4096:8192] = b''.join(records).ljust(4096, b'\0')

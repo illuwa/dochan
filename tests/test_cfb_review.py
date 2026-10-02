@@ -88,6 +88,7 @@ def test_warning_categories_are_deduplicated_bounded_and_ignore_metadata():
         assert errors == [
             'existing',
             'WARN: OLE/CFB 컨테이너 손상 복구: invalid directory entry omitted (one)',
+            'WARN: OLE/CFB 컨테이너 손상 복구: invalid directory entry omitted (two)',
         ]
 
 

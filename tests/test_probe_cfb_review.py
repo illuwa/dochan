@@ -76,3 +76,42 @@ def test_review_worker_imports_requested_tree_and_hashes_all_outputs(tmp_path):
     assert result['hashes'] == {'markdown': digest('sentinel markdown'),
                                 'json': digest('sentinel json'),
                                 'errors': digest('["warning"]')}
+
+
+def test_opus_sample_keeps_all_office_and_difat_then_seeded_hwp(tmp_path):
+    import random
+    import struct
+    from scripts.probe_cfb_review import discover_opus_sample
+    office = tmp_path / 'poi-src/test-data/document'
+    hwp = tmp_path / 'hwp-public/hwp'
+    office.mkdir(parents=True)
+    hwp.mkdir(parents=True)
+    header = bytearray(512)
+    header[:8] = bytes.fromhex('d0cf11e0a1b11ae1')
+    (office / 'sample.doc').write_bytes(header)
+    for number in range(5):
+        (hwp / ('%d.hwp' % number)).write_bytes(header)
+    struct.pack_into('<I', header, 72, 1)
+    (hwp / 'difat.hwp').write_bytes(header)
+    actual = discover_opus_sample(tmp_path, hwp_count=2)
+    expected_hwp = random.Random(4242).sample(
+        ['hwp-public/hwp/%d.hwp' % i for i in range(5)], 2)
+    assert actual == ['poi-src/test-data/document/sample.doc',
+                      'hwp-public/hwp/difat.hwp'] + expected_hwp
+
+
+def test_explicit_review_paths_reject_private_and_missing_files(tmp_path):
+    import pytest
+    from scripts.probe_cfb_review import select_paths
+    public = tmp_path / 'poi-src/test-data/document'
+    public.mkdir(parents=True)
+    (public / 'sample.doc').write_bytes(bytes.fromhex('d0cf11e0a1b11ae1'))
+    manifest = tmp_path / 'paths.json'
+    manifest.write_text(json.dumps(['poi-src/test-data/document/sample.doc']))
+    assert select_paths(tmp_path, 'all', manifest) == [
+        'poi-src/test-data/document/sample.doc']
+    for name in ('local-samples/private.doc', '../outside.doc',
+                 'poi-src/test-data/document/missing.doc'):
+        manifest.write_text(json.dumps([name]))
+        with pytest.raises(ValueError):
+            select_paths(tmp_path, 'all', manifest)

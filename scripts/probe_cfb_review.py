@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 import resource
+import random
+import struct
 import subprocess
 import sys
 import threading
@@ -42,6 +44,45 @@ def discover_public(corpus):
             except (OSError, ValueError):
                 continue
     return sorted(found)
+
+
+def discover_opus_sample(corpus, hwp_count=400):
+    """Reproduce the review's all-Office + DIFAT + seeded HWP selection."""
+    corpus = Path(corpus).resolve()
+    allowed = set(discover_public(corpus))
+    office, hwp, difat = [], [], []
+    for sub in PUBLIC_ROOTS:
+        for directory, dirs, names in os.walk(corpus / sub):
+            dirs.sort()
+            for name in sorted(names):
+                path = Path(directory) / name
+                relative = path.relative_to(corpus).as_posix()
+                if relative not in allowed:
+                    continue
+                if sub != 'hwp-public/hwp':
+                    office.append(relative)
+                    continue
+                with path.open('rb') as source:
+                    header = source.read(76)
+                if len(header) >= 76 and struct.unpack_from('<I', header, 72)[0]:
+                    difat.append(relative)
+                else:
+                    hwp.append(relative)
+    return office + difat + random.Random(4242).sample(hwp, min(hwp_count, len(hwp)))
+
+
+def select_paths(corpus, selection='all', manifest=None):
+    if manifest is None:
+        return (discover_opus_sample(corpus) if selection == 'opus'
+                else discover_public(corpus))
+    paths = json.loads(Path(manifest).read_text())
+    if (not isinstance(paths, list) or any(not isinstance(p, str) for p in paths)
+            or len(paths) != len(set(paths))):
+        raise ValueError('manifest must be a unique list of public relative paths')
+    allowed = set(discover_public(corpus))
+    if any(path not in allowed for path in paths):
+        raise ValueError('manifest contains a missing or nonpublic path')
+    return paths
 
 
 def digest(value):
@@ -170,6 +211,9 @@ def main(argv=None):
     snap.add_argument('--tree', type=Path, required=True)
     snap.add_argument('--output', type=Path, required=True)
     snap.add_argument('--jobs', type=int, default=8)
+    snap.add_argument('--selection', choices=('all', 'opus'), default='all')
+    snap.add_argument('--paths', type=Path, help='JSON list of public corpus-relative paths')
+    snap.add_argument('--label', default='', help='Source commit or baseline label')
     snap.add_argument('--timeout', type=float, default=120)
     snap.add_argument('--memory-mb', type=int, default=1536)
     compare = subs.add_parser('compare')
@@ -181,7 +225,7 @@ def main(argv=None):
     if args.mode == 'snapshot':
         if args.jobs < 1 or args.timeout <= 0 or args.memory_mb < 1:
             parser.error('jobs, timeout and memory-mb must be positive')
-        files = discover_public(args.corpus)
+        files = select_paths(args.corpus, args.selection, args.paths)
         print('CFB inputs: %d' % len(files), flush=True)
         results = {}
         with ThreadPoolExecutor(args.jobs) as pool:
@@ -191,11 +235,13 @@ def main(argv=None):
                 results[path] = result
                 if len(results) % 500 == 0:
                     print('completed: %d/%d' % (len(results), len(files)), flush=True)
-        report = {'roots': PUBLIC_ROOTS, 'results': results,
+        report = {'roots': PUBLIC_ROOTS, 'source_label': args.label,
+                  'selection': 'manifest' if args.paths else args.selection, 'results': results,
                   'summary': dict(Counter(r['status'] for r in results.values()))}
     else:
-        old = json.loads(args.baseline.read_text())['results']
-        new = json.loads(args.current.read_text())['results']
+        old_snapshot = json.loads(args.baseline.read_text())
+        new_snapshot = json.loads(args.current.read_text())
+        old, new = old_snapshot['results'], new_snapshot['results']
         from scripts.audit_cfb_defects import audit_bytes
         changed = compare_runs(old, new)['changes']
         allowed = set(discover_public(args.corpus))
@@ -210,6 +256,8 @@ def main(argv=None):
                 new[path]['raw_findings'] = findings
                 new[path]['damage'] = damage_evidence(findings)
         report = compare_runs(old, new)
+        report['baseline_label'] = old_snapshot.get('source_label', '')
+        report['current_label'] = new_snapshot.get('source_label', '')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(report['summary'], ensure_ascii=False), flush=True)

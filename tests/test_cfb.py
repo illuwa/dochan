@@ -289,7 +289,7 @@ def test_root_overallocated_chain_is_fully_checked_but_payload_is_sized():
         assert ole.openstream('Folder/한글').read() == b'a' * 64 + b'ending'
         assert ole.parsing_issues
     with pytest.raises(cfb.CFBError):
-        cfb.OleFileIO(change(raw, 1024 + 12 * 4, 3))
+        cfb.OleFileIO(change(raw, 1024 + 12 * 4, 3), raise_defects=cfb.DEFECT_INCORRECT)
     with pytest.raises(cfb.CFBError):
         cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT)
 
@@ -368,7 +368,7 @@ def test_regular_excess_chain_keeps_declared_extent_and_checks_cycles():
         assert ole.openstream('Regular').read() == payload
         assert ole.parsing_issues
     with pytest.raises(cfb.CFBError):
-        with cfb.OleFileIO(change(raw, 1024 + 12 * 4, 4)) as ole:
+        with cfb.OleFileIO(change(raw, 1024 + 12 * 4, 4), raise_defects=cfb.DEFECT_INCORRECT) as ole:
             ole.openstream('Regular')
 
 

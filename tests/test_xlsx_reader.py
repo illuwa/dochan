@@ -2687,3 +2687,228 @@ def test_xlsx_embedded_image_bytes_extracted_for_ocr(tmp_path):
     images = doc.find_all("image")
     assert images and images[0].has_data
     assert images[0].image_data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def _write_chart_part_xlsx(path, chart_children_xml):
+    """시트 하나에 차트 하나. chart_children_xml 은 <c:chart> 의 자식 XML."""
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="ChartData" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheetData/>
+              <drawing r:id="rIdDrawing"/>
+            </worksheet>
+            """
+        },
+        workbook_rels_xml="""
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+        </Relationships>
+        """,
+        extra_parts={
+            "xl/worksheets/_rels/sheet1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+            </Relationships>
+            """,
+            "xl/drawings/drawing1.xml": """
+            <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+              xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+              <xdr:twoCellAnchor>
+                <xdr:from><xdr:col>1</xdr:col><xdr:row>2</xdr:row></xdr:from>
+                <xdr:graphicFrame>
+                  <a:graphic><a:graphicData><c:chart r:id="rIdChart"/></a:graphicData></a:graphic>
+                </xdr:graphicFrame>
+              </xdr:twoCellAnchor>
+            </xdr:wsDr>
+            """,
+            "xl/drawings/_rels/drawing1.xml.rels": """
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rIdChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+            </Relationships>
+            """,
+            "xl/charts/chart1.xml": f"""
+            <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <c:chart>{chart_children_xml}</c:chart>
+            </c:chartSpace>
+            """,
+        },
+    )
+
+
+_XLSX_CHART_SERIES_XML = """
+<c:ser>
+  <c:tx><c:v>ARR</c:v></c:tx>
+  <c:cat><c:strRef><c:strCache>
+    <c:pt idx="0"><c:v>Q1</c:v></c:pt>
+    <c:pt idx="1"><c:v>Q2</c:v></c:pt>
+  </c:strCache></c:strRef></c:cat>
+  <c:val><c:numRef><c:numCache>
+    <c:pt idx="0"><c:v>10</c:v></c:pt>
+    <c:pt idx="1"><c:v>20</c:v></c:pt>
+  </c:numCache></c:numRef></c:val>
+</c:ser>
+"""
+
+
+def _xlsx_chart_rich_title(text):
+    return f"<c:title><c:tx><c:rich><a:p><a:r><a:t>{text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"
+
+
+def _xlsx_chart_tables(document):
+    return [
+        element
+        for section in document.sections
+        for element in section.elements
+        if hasattr(element, "rows") and element.rows and element.rows[0][0].text == "Category"
+    ]
+
+
+def test_xlsx_chart_table_carries_chart_type_and_axis_titles_as_top_caption(tmp_path):
+    path = tmp_path / "chart-type.xlsx"
+    _write_chart_part_xlsx(
+        path,
+        _xlsx_chart_rich_title("Revenue Chart")
+        + f"<c:plotArea><c:lineChart>{_XLSX_CHART_SERIES_XML}</c:lineChart>"
+        + f"<c:catAx>{_xlsx_chart_rich_title('Quarter')}</c:catAx>"
+        + f"<c:valAx>{_xlsx_chart_rich_title('KRW')}</c:valAx>"
+        + "</c:plotArea>",
+    )
+
+    document = XLSXReader().read(str(path))
+    (table,) = _xlsx_chart_tables(document)
+
+    assert table.caption_text == "Chart type: line; Category axis: Quarter; Value axis: KRW"
+    assert table.caption_side == "TOP"
+    assert table.caption[0].provenance.path == "xl/charts/chart1.xml"
+    markdown = to_markdown(document)
+    assert (
+        "### Revenue Chart\n\n"
+        "*Chart type: line; Category axis: Quarter; Value axis: KRW*\n\n"
+        "| Category | ARR |"
+    ) in markdown
+
+
+def test_xlsx_axis_title_alone_is_not_promoted_to_chart_heading(tmp_path):
+    path = tmp_path / "axis-only.xlsx"
+    _write_chart_part_xlsx(
+        path,
+        f"<c:plotArea><c:barChart>{_XLSX_CHART_SERIES_XML}</c:barChart>"
+        + f"<c:catAx>{_xlsx_chart_rich_title('Quarter')}</c:catAx></c:plotArea>",
+    )
+
+    document = XLSXReader().read(str(path))
+    (table,) = _xlsx_chart_tables(document)
+
+    assert table.caption_text == "Chart type: column; Category axis: Quarter"
+    assert "### Quarter" not in to_markdown(document)
+    assert not [
+        element
+        for section in document.sections
+        for element in section.elements
+        if getattr(element, "heading_level", 0) == 3
+    ]
+
+
+def test_xlsx_combo_chart_caption_lists_both_types(tmp_path):
+    path = tmp_path / "combo-chart.xlsx"
+    line_series = _XLSX_CHART_SERIES_XML.replace("ARR", "Margin")
+    _write_chart_part_xlsx(
+        path,
+        f"<c:plotArea><c:barChart><c:barDir val=\"bar\"/>{_XLSX_CHART_SERIES_XML}</c:barChart>"
+        f"<c:lineChart>{line_series}</c:lineChart></c:plotArea>",
+    )
+
+    (table,) = _xlsx_chart_tables(XLSXReader().read(str(path)))
+
+    assert table.caption_text == "Chart type: bar + line"
+    assert [cell.text for cell in table.rows[0]] == ["Category", "ARR", "Margin"]
+
+
+def test_xlsx_chart_without_data_keeps_axis_titles_as_plain_paragraph(tmp_path):
+    path = tmp_path / "axis-without-data.xlsx"
+    _write_chart_part_xlsx(
+        path,
+        "<c:plotArea><c:barChart/>"
+        + f"<c:catAx>{_xlsx_chart_rich_title('Quarter')}</c:catAx>"
+        + "</c:plotArea>",
+    )
+
+    document = XLSXReader().read(str(path))
+    paragraphs = [
+        element
+        for section in document.sections
+        for element in section.elements
+        if getattr(element, "text", "") == "Chart type: column; Category axis: Quarter"
+    ]
+
+    assert len(paragraphs) == 1
+    assert paragraphs[0].heading_level == 0
+    assert "### Quarter" not in to_markdown(document)
+
+
+def _xlsx_xy_series(name, points):
+    xs = "".join(f'<c:pt idx="{index}"><c:v>{x}</c:v></c:pt>' for index, (x, _) in enumerate(points))
+    ys = "".join(f'<c:pt idx="{index}"><c:v>{y}</c:v></c:pt>' for index, (_, y) in enumerate(points))
+    return (
+        f"<c:ser><c:tx><c:v>{name}</c:v></c:tx>"
+        f"<c:xVal><c:numRef><c:numCache>{xs}</c:numCache></c:numRef></c:xVal>"
+        f"<c:yVal><c:numRef><c:numCache>{ys}</c:numCache></c:numRef></c:yVal></c:ser>"
+    )
+
+
+def test_xlsx_scatter_series_with_different_x_values_keep_their_own_x(tmp_path):
+    path = tmp_path / "scatter-different-x.xlsx"
+    _write_chart_part_xlsx(
+        path,
+        "<c:plotArea><c:scatterChart>"
+        + _xlsx_xy_series("A", [("1", "10"), ("2", "11")])
+        + _xlsx_xy_series("B", [("100", "20")])
+        + "</c:scatterChart></c:plotArea>",
+    )
+
+    tables = [
+        element
+        for section in XLSXReader().read(str(path)).sections
+        for element in section.elements
+        if hasattr(element, "rows") and element.rows
+    ]
+
+    assert [[[cell.text for cell in row] for row in table.rows] for table in tables] == [[
+        ["Series", "X", "Y"],
+        ["A", "1", "10"],
+        ["A", "2", "11"],
+        ["B", "100", "20"],
+    ]]
+
+
+def test_xlsx_long_scatter_table_counts_against_output_cell_budget(tmp_path, monkeypatch):
+    path = tmp_path / "scatter-cell-limit.xlsx"
+    monkeypatch.setattr(xlsx_module, "MAX_CHART_OUTPUT_CELLS", 11)
+    _write_chart_part_xlsx(
+        path,
+        "<c:plotArea><c:scatterChart>"
+        + _xlsx_xy_series("A", [("1", "10"), ("2", "11")])
+        + _xlsx_xy_series("B", [("100", "20")])
+        + "</c:scatterChart></c:plotArea>",
+    )
+
+    doc = XLSXReader().read(str(path))
+
+    assert any("XLSX chart output cell budget exceeded" in error for error in doc.errors)
+    assert not any(
+        hasattr(element, "rows") and element.rows and element.rows[0][0].text == "Series"
+        for section in doc.sections
+        for element in section.elements
+    )

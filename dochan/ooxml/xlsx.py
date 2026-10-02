@@ -13,6 +13,7 @@ from ..conversion import AssetRef, Provenance
 from ..model.header_footer import HeaderFooter
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
+from .charts import chart_elements, text_table, xy_series_rows
 from .core import core_property_elements, read_core_properties
 from .package import MAX_XML_PART_SIZE, OOXMLPackage
 
@@ -923,22 +924,11 @@ class XLSXReader:
         if not chart_path or not package.exists(chart_path):
             return []
         chart_root = package.read_xml_part(chart_path)
-        elements = []
-        title = self._chart_title(chart_root)
-        if title:
-            title_paragraph = self._drawing_paragraph(title, sheet_name, chart_path)
-            title_paragraph.heading_level = 3
-            elements.append(title_paragraph)
-        table = self._chart_series_table(chart_root)
-        if table.rows:
-            elements.append(table)
-        return elements
-
-    def _chart_title(self, chart_root) -> str:
-        title = chart_root.find(".//c:title", namespaces=NS)
-        if title is None:
-            return ""
-        return self._chart_text(title)
+        return chart_elements(
+            chart_root,
+            self._chart_series_table(chart_root),
+            lambda text: self._drawing_paragraph(text, sheet_name, chart_path),
+        )
 
     def _chart_series_table(self, chart_root) -> Table:
         if not hasattr(self, "_chart_series_remaining"):
@@ -979,13 +969,21 @@ class XLSXReader:
         self._chart_points_remaining -= point_count
 
         series_items = []
+        xy = False
         for series in series_elements:
+            xy = xy or series.find("c:xVal", namespaces=NS) is not None
             series_name = self._chart_series_name(series)
             categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
             values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
             series_items.append((series_name, categories, values))
         if not series_items:
             return Table()
+
+        long_rows = xy_series_rows(series_items, xy)
+        if long_rows is not None:
+            if not self._reserve_chart_output_cells(3 * len(long_rows)):
+                return Table()
+            return text_table(long_rows)
 
         category_labels = {}
         indexes = set()
@@ -995,16 +993,8 @@ class XLSXReader:
             for index, category in categories.items():
                 category_labels.setdefault(index, category)
 
-        output_cell_count = (len(series_items) + 1) * (len(indexes) + 1)
-        if output_cell_count > self._chart_output_cells_remaining:
-            self._record_chart_limit_error(
-                "output cell",
-                output_cell_count,
-                self._chart_output_cells_remaining,
-            )
-            self._chart_output_cells_remaining = 0
+        if not self._reserve_chart_output_cells((len(series_items) + 1) * (len(indexes) + 1)):
             return Table()
-        self._chart_output_cells_remaining -= output_cell_count
 
         rows = [
             [
@@ -1026,6 +1016,18 @@ class XLSXReader:
                 ]
             )
         return Table(rows=rows)
+
+    def _reserve_chart_output_cells(self, count: int) -> bool:
+        if count > self._chart_output_cells_remaining:
+            self._record_chart_limit_error(
+                "output cell",
+                count,
+                self._chart_output_cells_remaining,
+            )
+            self._chart_output_cells_remaining = 0
+            return False
+        self._chart_output_cells_remaining -= count
+        return True
 
     def _record_chart_limit_error(self, kind: str, actual: int, remaining: int) -> None:
         error = (

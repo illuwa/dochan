@@ -30,6 +30,14 @@ def _write_pptx(path, presentation_xml, slide_xmls, presentation_rels_xml=None, 
 
 
 def _write_chart_pptx(path, series_xml):
+    _write_chart_part_pptx(
+        path,
+        f"<c:plotArea><c:barChart>{series_xml}</c:barChart></c:plotArea>",
+    )
+
+
+def _write_chart_part_pptx(path, chart_children_xml):
+    """슬라이드 하나에 차트 하나. chart_children_xml 은 <c:chart> 의 자식 XML."""
     _write_pptx(
         path,
         """
@@ -57,12 +65,32 @@ def _write_chart_pptx(path, series_xml):
             </Relationships>
             """,
             "ppt/charts/chart1.xml": f"""
-            <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
-              <c:chart><c:plotArea><c:barChart>{series_xml}</c:barChart></c:plotArea></c:chart>
+            <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <c:chart>{chart_children_xml}</c:chart>
             </c:chartSpace>
             """,
         },
     )
+
+
+_CHART_SERIES_XML = """
+<c:ser>
+  <c:tx><c:v>Sales</c:v></c:tx>
+  <c:cat><c:strRef><c:strCache>
+    <c:pt idx="0"><c:v>Q1</c:v></c:pt>
+    <c:pt idx="1"><c:v>Q2</c:v></c:pt>
+  </c:strCache></c:strRef></c:cat>
+  <c:val><c:numRef><c:numCache>
+    <c:pt idx="0"><c:v>10</c:v></c:pt>
+    <c:pt idx="1"><c:v>20</c:v></c:pt>
+  </c:numCache></c:numRef></c:val>
+</c:ser>
+"""
+
+
+def _chart_rich_title(text):
+    return f"<c:title><c:tx><c:rich><a:p><a:r><a:t>{text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"
 
 
 def _write_two_chart_pptx(path):
@@ -1748,3 +1776,258 @@ def test_pptx_embedded_image_bytes_extracted_for_ocr(tmp_path):
     images = doc.find_all("image")
     assert images and images[0].has_data
     assert images[0].image_data[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_pptx_chart_table_carries_chart_type_as_top_caption(tmp_path):
+    path = tmp_path / "chart-type.pptx"
+    _write_chart_part_pptx(
+        path,
+        _chart_rich_title("Revenue Chart")
+        + f'<c:plotArea><c:barChart><c:barDir val="bar"/>{_CHART_SERIES_XML}</c:barChart></c:plotArea>',
+    )
+
+    document = PPTXReader().read(str(path))
+    elements = document.sections[0].elements
+
+    assert len(elements) == 2
+    assert elements[0].text == "Revenue Chart"
+    assert elements[0].heading_level == 3
+    assert elements[1].caption_text == "Chart type: bar"
+    assert elements[1].caption_side == "TOP"
+    assert elements[1].caption[0].provenance.path == "ppt/charts/chart1.xml"
+    markdown = to_markdown(document)
+    assert "### Revenue Chart\n\n*Chart type: bar*\n\n| Category | Sales |" in markdown
+
+
+def test_pptx_untitled_chart_stays_a_single_table_with_type_caption(tmp_path):
+    path = tmp_path / "untitled-chart.pptx"
+    _write_chart_part_pptx(
+        path,
+        f"<c:plotArea><c:lineChart>{_CHART_SERIES_XML}</c:lineChart></c:plotArea>",
+    )
+
+    elements = PPTXReader().read(str(path)).sections[0].elements
+
+    assert len(elements) == 1
+    assert elements[0].rows[0][1].text == "Sales"
+    assert elements[0].caption_text == "Chart type: line"
+
+
+def test_pptx_chart_heading_excludes_axis_titles_and_caption_keeps_them(tmp_path):
+    path = tmp_path / "axis-titles.pptx"
+    _write_chart_part_pptx(
+        path,
+        _chart_rich_title("Revenue Chart")
+        + f"<c:plotArea><c:barChart>{_CHART_SERIES_XML}</c:barChart>"
+        + f"<c:catAx>{_chart_rich_title('Quarter')}</c:catAx>"
+        + f"<c:valAx>{_chart_rich_title('KRW')}</c:valAx>"
+        + "</c:plotArea>",
+    )
+
+    elements = PPTXReader().read(str(path)).sections[0].elements
+
+    assert elements[0].text == "Revenue Chart"
+    assert elements[1].caption_text == (
+        "Chart type: column; Category axis: Quarter; Value axis: KRW"
+    )
+
+
+def test_pptx_axis_title_alone_is_not_promoted_to_chart_heading(tmp_path):
+    path = tmp_path / "axis-only.pptx"
+    _write_chart_part_pptx(
+        path,
+        f"<c:plotArea><c:barChart>{_CHART_SERIES_XML}</c:barChart>"
+        + f"<c:catAx>{_chart_rich_title('Quarter')}</c:catAx></c:plotArea>",
+    )
+
+    elements = PPTXReader().read(str(path)).sections[0].elements
+
+    assert len(elements) == 1
+    assert elements[0].caption_text == "Chart type: column; Category axis: Quarter"
+
+
+def test_pptx_combo_chart_caption_lists_both_types(tmp_path):
+    path = tmp_path / "combo-chart.pptx"
+    line_series = _CHART_SERIES_XML.replace("Sales", "Margin").replace(
+        "<c:v>10</c:v>", "<c:v>3</c:v>"
+    ).replace("<c:v>20</c:v>", "<c:v>8</c:v>")
+    _write_chart_part_pptx(
+        path,
+        f"<c:plotArea><c:barChart>{_CHART_SERIES_XML}</c:barChart>"
+        f"<c:lineChart>{line_series}</c:lineChart></c:plotArea>",
+    )
+
+    table = PPTXReader().read(str(path)).sections[0].elements[0]
+
+    assert table.caption_text == "Chart type: column + line"
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["Category", "Sales", "Margin"],
+        ["Q1", "10", "3"],
+        ["Q2", "20", "8"],
+    ]
+
+
+def test_pptx_scatter_chart_reads_x_and_y_values(tmp_path):
+    path = tmp_path / "scatter-chart.pptx"
+    _write_chart_part_pptx(
+        path,
+        """
+        <c:plotArea><c:scatterChart><c:ser>
+          <c:tx><c:v>Trial</c:v></c:tx>
+          <c:xVal><c:numRef><c:numCache>
+            <c:pt idx="0"><c:v>1.5</c:v></c:pt>
+            <c:pt idx="1"><c:v>2.5</c:v></c:pt>
+          </c:numCache></c:numRef></c:xVal>
+          <c:yVal><c:numRef><c:numCache>
+            <c:pt idx="0"><c:v>30</c:v></c:pt>
+            <c:pt idx="1"><c:v>40</c:v></c:pt>
+          </c:numCache></c:numRef></c:yVal>
+        </c:ser></c:scatterChart></c:plotArea>
+        """,
+    )
+
+    table = PPTXReader().read(str(path)).sections[0].elements[0]
+
+    assert table.caption_text == "Chart type: scatter"
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["Category", "Trial"],
+        ["1.5", "30"],
+        ["2.5", "40"],
+    ]
+
+
+def test_pptx_chart_without_series_emits_nothing(tmp_path):
+    path = tmp_path / "empty-chart.pptx"
+    _write_chart_part_pptx(path, "<c:plotArea><c:pieChart/></c:plotArea>")
+
+    assert PPTXReader().read(str(path)).sections[0].elements == []
+
+
+def test_pptx_chart_without_data_keeps_axis_titles_as_plain_paragraph(tmp_path):
+    path = tmp_path / "axis-without-data.pptx"
+    _write_chart_part_pptx(
+        path,
+        "<c:plotArea><c:barChart/>"
+        + f"<c:catAx>{_chart_rich_title('Quarter')}</c:catAx>"
+        + f"<c:valAx>{_chart_rich_title('KRW')}</c:valAx>"
+        + "</c:plotArea>",
+    )
+
+    elements = PPTXReader().read(str(path)).sections[0].elements
+
+    assert len(elements) == 1
+    assert elements[0].text == "Chart type: column; Category axis: Quarter; Value axis: KRW"
+    assert elements[0].heading_level == 0
+
+
+def test_pptx_titled_chart_without_data_keeps_heading_and_axis_paragraph(tmp_path):
+    path = tmp_path / "titled-axis-without-data.pptx"
+    _write_chart_part_pptx(
+        path,
+        _chart_rich_title("Revenue Chart")
+        + "<c:plotArea><c:lineChart/>"
+        + f"<c:valAx>{_chart_rich_title('KRW')}</c:valAx>"
+        + "</c:plotArea>",
+    )
+
+    elements = PPTXReader().read(str(path)).sections[0].elements
+
+    assert [(element.text, element.heading_level) for element in elements] == [
+        ("Revenue Chart", 3),
+        ("Chart type: line; Value axis: KRW", 0),
+    ]
+
+
+def test_rejects_pptx_scatter_points_above_document_budget_once(tmp_path, monkeypatch):
+    path = tmp_path / "scatter-point-limit.pptx"
+    monkeypatch.setattr(pptx_module, "MAX_CHART_POINTS", 1, raising=False)
+    _write_chart_part_pptx(
+        path,
+        """
+        <c:plotArea><c:scatterChart><c:ser>
+          <c:tx><c:v>Trial</c:v></c:tx>
+          <c:xVal><c:numRef><c:numCache>
+            <c:pt idx="0"><c:v>1.5</c:v></c:pt>
+            <c:pt idx="1"><c:v>2.5</c:v></c:pt>
+          </c:numCache></c:numRef></c:xVal>
+          <c:yVal><c:numRef><c:numCache>
+            <c:pt idx="0"><c:v>30</c:v></c:pt>
+            <c:pt idx="1"><c:v>40</c:v></c:pt>
+          </c:numCache></c:numRef></c:yVal>
+        </c:ser></c:scatterChart></c:plotArea>
+        """,
+    )
+
+    doc = PPTXReader().read(str(path))
+
+    assert [error for error in doc.errors if "chart point limit" in error] == [
+        "ERR: PPTX chart point limit exceeded"
+    ]
+    assert doc.find_all("table") == []
+
+
+def _xy_series(name, points):
+    xs = "".join(f'<c:pt idx="{index}"><c:v>{x}</c:v></c:pt>' for index, (x, _) in enumerate(points))
+    ys = "".join(f'<c:pt idx="{index}"><c:v>{y}</c:v></c:pt>' for index, (_, y) in enumerate(points))
+    return (
+        f"<c:ser><c:tx><c:v>{name}</c:v></c:tx>"
+        f"<c:xVal><c:numRef><c:numCache>{xs}</c:numCache></c:numRef></c:xVal>"
+        f"<c:yVal><c:numRef><c:numCache>{ys}</c:numCache></c:numRef></c:yVal></c:ser>"
+    )
+
+
+def test_pptx_scatter_series_with_different_x_values_keep_their_own_x(tmp_path):
+    path = tmp_path / "scatter-different-x.pptx"
+    _write_chart_part_pptx(
+        path,
+        "<c:plotArea><c:scatterChart>"
+        + _xy_series("A", [("1", "10"), ("2", "11")])
+        + _xy_series("B", [("100", "20")])
+        + "</c:scatterChart></c:plotArea>",
+    )
+
+    table = PPTXReader().read(str(path)).sections[0].elements[0]
+
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["Series", "X", "Y"],
+        ["A", "1", "10"],
+        ["A", "2", "11"],
+        ["B", "100", "20"],
+    ]
+    assert table.caption_text == "Chart type: scatter"
+
+
+def test_pptx_scatter_series_sharing_x_values_stay_one_column_per_series(tmp_path):
+    path = tmp_path / "scatter-shared-x.pptx"
+    _write_chart_part_pptx(
+        path,
+        "<c:plotArea><c:scatterChart>"
+        + _xy_series("A", [("1", "10"), ("2", "11")])
+        + _xy_series("B", [("1", "20"), ("2", "21")])
+        + "</c:scatterChart></c:plotArea>",
+    )
+
+    table = PPTXReader().read(str(path)).sections[0].elements[0]
+
+    assert [[cell.text for cell in row] for row in table.rows] == [
+        ["Category", "A", "B"],
+        ["1", "10", "20"],
+        ["2", "11", "21"],
+    ]
+
+
+def test_rejects_pptx_long_scatter_table_above_document_cell_budget(tmp_path, monkeypatch):
+    path = tmp_path / "scatter-cell-limit.pptx"
+    monkeypatch.setattr(pptx_module, "MAX_CHART_OUTPUT_CELLS", 11, raising=False)
+    _write_chart_part_pptx(
+        path,
+        "<c:plotArea><c:scatterChart>"
+        + _xy_series("A", [("1", "10"), ("2", "11")])
+        + _xy_series("B", [("100", "20")])
+        + "</c:scatterChart></c:plotArea>",
+    )
+
+    doc = PPTXReader().read(str(path))
+
+    assert any("PPTX chart output cell limit exceeded" in error for error in doc.errors)
+    assert doc.find_all("table") == []

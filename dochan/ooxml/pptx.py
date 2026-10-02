@@ -9,6 +9,7 @@ from lxml import etree
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
+from .charts import chart_elements, text_table, xy_series_rows
 from .core import core_property_elements, read_core_properties
 from .package import OOXMLPackage
 
@@ -829,20 +830,11 @@ class PPTXReader:
         if not chart_path or not package.exists(chart_path):
             return []
         chart_root = package.read_xml_part(chart_path)
-        elements = []
-        title = " ".join(
-            text
-            for text in (node.text or "" for node in chart_root.findall(".//c:title//a:t", namespaces=NS))
-            if text
-        ).strip()
-        if title:
-            title_paragraph = self._text_paragraph(title, slide_number, chart_path)
-            title_paragraph.heading_level = 3
-            elements.append(title_paragraph)
-        table = self._chart_series_table(chart_root)
-        if table.rows:
-            elements.append(table)
-        return elements
+        return chart_elements(
+            chart_root,
+            self._chart_series_table(chart_root),
+            lambda text: self._text_paragraph(text, slide_number, chart_path),
+        )
 
     def _parse_smartart(
         self,
@@ -879,6 +871,7 @@ class PPTXReader:
         if getattr(self, "_chart_budget_exhausted", False):
             return Table()
         series_items = []
+        xy = False
         for series in chart_root.iterfind(".//c:ser", namespaces=NS):
             if not self._reserve_chart_resource(
                 "_chart_series_remaining",
@@ -888,13 +881,26 @@ class PPTXReader:
             ):
                 return Table()
             series_name = self._chart_series_name(series)
-            categories = self._chart_points(series, "c:cat")
-            values = self._chart_points(series, "c:val")
+            # 분산형·거품형은 c:cat/c:val 대신 c:xVal/c:yVal 에 값을 둔다.
+            xy = xy or series.find("c:xVal", namespaces=NS) is not None
+            categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
+            values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
             if getattr(self, "_chart_budget_exhausted", False):
                 return Table()
             series_items.append((series_name, categories, values))
         if not series_items:
             return Table()
+
+        long_rows = xy_series_rows(series_items, xy)
+        if long_rows is not None:
+            if not self._reserve_chart_resource(
+                "_chart_output_cells_remaining",
+                3 * len(long_rows),
+                MAX_CHART_OUTPUT_CELLS,
+                "output cell",
+            ):
+                return Table()
+            return text_table(long_rows)
 
         category_labels = {}
         indexes = set()

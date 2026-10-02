@@ -882,6 +882,9 @@ def _process_single(
     input_root: str = "",
     relative_path: str = "",
     source_identity: Optional[_SourceIdentity] = None,
+    *,
+    include_assets: bool = True,
+    revision_mode: str = 'preserve',
 ) -> BatchResult:
     """단일 파일 처리 (별도 프로세스에서 실행)"""
     from .reader import Dochan
@@ -890,7 +893,13 @@ def _process_single(
 
     try:
         def convert(source_path: str) -> Tuple[str, List[str]]:
-            reader = Dochan(source_path)
+            options = {}
+            if not include_assets:
+                options['include_assets'] = False
+            if revision_mode != 'preserve':
+                options['revision_mode'] = revision_mode
+            # 기본 경로에서는 기존 Dochan(source_path) 호출 계약을 유지한다.
+            reader = Dochan(source_path, **options)
             if output_format == 'json':
                 rendered = reader.to_json()
             elif output_format == 'text':
@@ -941,6 +950,9 @@ def batch_convert(
     output_format: str = 'markdown',
     max_workers: int = 4,
     extensions: tuple = ('.hwp', '.hwpx', '.doc', '.ppt', '.xls', '.docx', '.pptx', '.xlsx', '.pdf'),
+    *,
+    include_assets: bool = True,
+    revision_mode: str = 'preserve',
 ) -> BatchSummary:
     """
     디렉토리 내 HWP 파일 일괄 변환
@@ -951,10 +963,17 @@ def batch_convert(
         output_format: 'markdown', 'json', 'text'
         max_workers: 병렬 워커 수
         extensions: 처리할 확장자
+        include_assets: False면 HWPX 이미지 바이너리 로딩을 생략한다.
+        revision_mode: preserve(기본), final(삭제 제외), original(삽입 제외).
+            비기본 HWPX 옵션은 다른 형식의 파일을 실패 처리한다.
+            해당 파일의 기존 출력은 보존하며 나머지 파일은 계속 처리한다.
 
     Returns:
         BatchSummary
     """
+    from .hwpx.revisions import validate_revision_mode
+
+    validate_revision_mode(revision_mode)
     if output_format not in _OUTPUT_EXTENSIONS:
         valid_formats = ', '.join(sorted(_OUTPUT_EXTENSIONS))
         raise ValueError(
@@ -1000,6 +1019,8 @@ def batch_convert(
                 str(resolved_input),
                 str(relative_path),
                 source_identity,
+                include_assets=include_assets,
+                revision_mode=revision_mode,
             )
             summary.results.append(result)
             if result.success:
@@ -1024,6 +1045,8 @@ def batch_convert(
                 str(resolved_input),
                 str(relative_path),
                 source_identity,
+                include_assets=include_assets,
+                revision_mode=revision_mode,
             ): str(file_path)
             for file_path, output_path, relative_path, source_identity in work_items
         }

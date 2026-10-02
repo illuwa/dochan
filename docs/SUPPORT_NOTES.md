@@ -35,6 +35,10 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 ## 서식·스타일·제목
 
+- **스타일 상속 · PPT**: 문서 기본(Environment) → 마스터 수준별 기본 서식 → 특수 텍스트 유형 → 개별 런 순서로 글자 크기·굵게·기울임·밑줄·첨자를 정한다
+  (속성별 마스크 비트가 켜진 값만 적용). Microsoft PowerPoint 실측 대조: 공개 PPT 38개 1,537문단에서 크기 99.3%·굵게 99.0%·기울임 99.2%·밑줄·첨자 100%
+  (상속 구현 전 크기 73.1%). 확장 서식 마스크는 실물에서 확인한 CF9 pp10ext·SI bidi 길이만 해석한다.
+
 - **스타일 상속 · PPTX**: 슬라이드 → 같은 자리표시자의 레이아웃 → 마스터 → `p:txStyles` → `p:defaultTextStyle` 순서와 각 단계 `a:lstStyle` 의 수준별 값으로
   글자 크기·굵게·기울임·밑줄·위/아래첨자를 정한다. 규칙은 Microsoft PowerPoint 로 직접 측정해 정했다(글상자·일반 도형·날짜·바닥글에는 otherStyle 을 쓰지 않고,
   그림·표·차트 자리표시자는 본문 계열, 레이아웃·마스터 안내 문단의 서식은 상속하지 않는다). PowerPoint 실측 대조: 통제 덱 28/28, 공개 PPTX 30개 143문단에서
@@ -74,7 +78,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 ## Legacy Office 세부
 
-- **이미지 참조 · DOC**: BStore(FBSE)·PICF 그림을 복원한다. BLIP 이 없는 빈 그림 정보는 이미지가 아니다.
+- **이미지 참조 · DOC**: BStore(FBSE)·PICF 그림을 복원한다. BLIP 이 없는 빈 그림 정보는 이미지가 아니다. Word 6/95(비복합) 문서는 CHPX→PICF 의 직접 WMF 를 복원한다(공개 실물 1개 바이트 일치, 복합 저장·직접 DIB 는 미지원).
 - **이미지 OCR · DOC·PPT·XLS**: OCR 은 Python 3.10 이상과 Tesseract 가 필요하다. 바이트가 같은 그림의 OCR 결과가 OOXML 판과
   같음(PPT 8/8, XLS 16/16)과 DOC 그림의 글자 대조로 검증했다. EMF·WMF 같은 벡터 그림은 OCR 결과가 비어 있다.
 - **차트 · DOC (⬜)**: 내장 Excel·MS Graph 차트를 읽는 경로는 PPT 와 같지만, DOC 안에 차트가 든 공개 실물을 찾지 못했다.

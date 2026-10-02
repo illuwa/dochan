@@ -158,3 +158,38 @@ def test_grid_budget_covers_all_segment_visits(monkeypatch):
     tables._make_grid(hs, vs, xs, ys, 1.5, None)
     assert sum(visits) == 250
     assert connected_tables._grid_cost(hs, vs, xs, ys) >= sum(visits) + 20
+
+
+def _large_connected_content():
+    content = ['0 0 2000 10000 re S']
+    content.extend('0 %d m 2000 %d l S' % (40 * i, 40 * i) for i in range(1, 250))
+    content.append('0 10 1000 20 re S')
+    content.extend('%d 10 m %d 30 l S' % (5 * i, 5 * i) for i in range(1, 200))
+    content.append('BT /F1 2 Tf 1 18 Td (A) Tj 5 0 Td (B) Tj ET '
+                   'BT /F1 10 Tf 20 55 Td (body) Tj ET')
+    return ' '.join(content).encode()
+
+
+def test_large_connected_pdf_counts_parent_and_child_cells_separately(tmp_path):
+    doc = _read(tmp_path, _large_connected_content())
+    outer, = [block for block in doc.sections[0].elements if isinstance(block, Table)]
+    assert len(doc.find_all('table')) == 2
+    child, = _nested(outer)
+    assert (outer.row_count, outer.col_count) == (250, 1)
+    assert (child.row_count, child.col_count) == (1, 200)
+    assert sum(len(row) for table in (outer, child) for row in table.rows) == 450
+    assert [cell.text for cell in child.rows[0] if cell.text] == ['A', 'B']
+    assert outer.rows[-2][0].text == 'body'
+    assert not doc.errors
+
+
+@pytest.mark.parametrize('remaining, expected_parts', [(449, 1), (450, 2)])
+def test_large_connected_split_respects_combined_cell_limit(remaining, expected_parts):
+    content = _large_connected_content()
+    hs, vs = runs(content)
+    page = ContentTextExtractor().extract_page(content)
+    result = connected_tables.split_connected(
+        hs, vs, 1.5, tables._fragment_index(page.fragments), max_cells=remaining)
+    assert len(result) == expected_parts
+    if expected_parts == 1:
+        assert result == [(hs, vs)]

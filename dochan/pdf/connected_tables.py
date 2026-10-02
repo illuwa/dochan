@@ -67,6 +67,21 @@ def _articulations(adjacency):
     return sorted(cuts)
 
 
+def _has_cycle(adjacency):
+    """차수 0·1 정점을 제거해 닫힌 격자가 없는 숲을 선형 비용으로 거른다."""
+    degrees = [len(neighbours) for neighbours in adjacency]
+    pending = [i for i, degree in enumerate(degrees) if degree < 2]
+    removed = 0
+    while pending:
+        node = pending.pop()
+        removed += 1
+        for other in adjacency[node]:
+            degrees[other] -= 1
+            if degrees[other] == 1:
+                pending.append(other)
+    return removed < len(adjacency)
+
+
 def _bbox(hs, vs):
     points = [(lo, y, hi, y) for y, lo, hi in hs]
     points += [(x, lo, x, hi) for x, lo, hi in vs]
@@ -115,9 +130,6 @@ def split_connected(horizontal, vertical, tolerance, fragment_index,
     size = len(horizontal) + len(vertical)
     if size > MAX_COMPONENT_LINES or len(horizontal) < 2 or len(vertical) < 2:
         return unchanged
-    xs, ys = axes(horizontal, vertical)
-    if (len(xs) - 1) * (len(ys) - 1) > MAX_PAGE_CELLS:
-        return unchanged
     if not split_budget.spend(size):
         return exhausted()
     adjacency = [set() for _ in range(size)]
@@ -130,8 +142,16 @@ def split_connected(horizontal, vertical, tolerance, fragment_index,
             if vertical[j][1] - tolerance <= y <= vertical[j][2] + tolerance:
                 adjacency[i].add(len(horizontal) + j)
                 adjacency[len(horizontal) + j].add(i)
-    if not split_budget.spend(size + sum(len(neighbours) for neighbours in adjacency)):
+    graph_cost = size + sum(len(neighbours) for neighbours in adjacency)
+    if not split_budget.spend(graph_cost):
         return exhausted()
+    # 합친 축의 곱은 분리 후 셀 수의 하한이 아니다. 닫힘 가능성만
+    # 먼저 검사하고, 셀 상한은 아래 후보별 부모·자식 합으로 판정한다.
+    if graph_cost - size < 2 * size:
+        if not _has_cycle(adjacency):
+            return unchanged
+        if not split_budget.spend(graph_cost):
+            return exhausted()
     accepted = None
     # 단절점만 조사하여 보통의 격자는 선 수마다 그래프 전체를 다시 걷지 않는다.
     for cut in _articulations(adjacency):

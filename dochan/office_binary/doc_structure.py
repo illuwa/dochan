@@ -125,7 +125,10 @@ class StructureRenderer:
                             flush()
                             blocks.extend(content)
                 continue
-            if char == '\x0c' and cp + 1 in self.section_breaks:
+            if char == '\x0c' and (cp + 1 in self.section_breaks
+                                    or not blocks and not runs and not chunks):
+                # A page break before paragraph content changes layout only;
+                # interior page breaks still separate surrounding words.
                 continue
             if char in ('\x0b', '\x0c', '\x0e'):
                 char = '\n'

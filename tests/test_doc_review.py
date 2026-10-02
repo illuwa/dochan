@@ -119,3 +119,15 @@ def test_doc_review_bad_header_plc_retains_story_text_without_guessing_kind():
     assert not headers
     assert [p.text for p in trailers] == ['Header content']
     assert any('headers' in error for error in doc.errors)
+
+
+def test_doc_review_leading_page_break_has_no_leading_newline():
+    streams = native('\x0c\x0cAlpha\x0cBeta\r')
+    doc = parse_structured_doc(streams['WordDocument'], streams['0Table'])
+    assert [p.text for p in doc.find_all('paragraph')] == ['Alpha\nBeta']
+
+
+def test_doc_review_leading_line_break_is_preserved():
+    streams = native('\x0bAlpha\r')
+    doc = parse_structured_doc(streams['WordDocument'], streams['0Table'])
+    assert [p.text for p in doc.find_all('paragraph')] == ['\nAlpha']

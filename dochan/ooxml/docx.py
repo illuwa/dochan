@@ -33,6 +33,7 @@ DC_NS = "http://purl.org/dc/elements/1.1/"
 W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml"
 V_NS = "urn:schemas-microsoft-com:vml"
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+DGM_NS = "http://schemas.openxmlformats.org/drawingml/2006/diagram"
 NS = {
     "w": W_NS,
     "r": R_NS,
@@ -44,6 +45,7 @@ NS = {
     "w15": W15_NS,
     "v": V_NS,
     "m": M_NS,
+    "dgm": DGM_NS,
 }
 MAX_NESTED_TABLE_DEPTH = 32
 MAX_TABLE_CELLS = 200000
@@ -54,6 +56,9 @@ MAX_NUMBERING_TEMPLATE_CHARS = 256
 MAX_IMAGE_ASSET_REFS = 10000
 MAX_DIAGNOSTIC_PATH_CHARS = 256
 MAX_DOCUMENT_CHARTS = 128
+MAX_SMARTART_PARTS = 128
+MAX_SMARTART_BYTES = 16 * 1024 * 1024
+MAX_SMARTART_OUTPUT_CHARS = 1000000
 MAX_CHART_BYTES_TOTAL = 64 * 1024 * 1024
 _STRUCTURE_DEPTH_ERROR = (
     f"ERR: DOCX structure depth limit exceeded ({MAX_STRUCTURE_DEPTH})"
@@ -236,6 +241,10 @@ class DOCXReader:
         self._image_elements = []
         self._image_occurrences = 0
         self._caption_styles = set()
+        self._smartart_targets = set()
+        self._smartart_parts = {}
+        self._smartart_bytes = 0
+        self._smartart_output_chars = 0
         self._chart_parts = {}
         self._chart_cell_counts = {}
         self._chart_occurrences = 0
@@ -250,6 +259,7 @@ class DOCXReader:
                 root = package.read_xml_part("word/document.xml")
                 self._document_relationships = self._read_document_relationships(package)
                 self._active_relationships = self._document_relationships
+                self._preload_smartart(package, self._document_relationships)
                 self._alt_chunk_data = self._read_alt_chunk_data(package, self._document_relationships)
                 self._image_data_cache = self._preload_image_bytes(package)
                 self._record_embedded_relationship_assets(package)
@@ -872,18 +882,68 @@ class DOCXReader:
         return styles
 
     def _read_run_styles(self, package: OOXMLPackage) -> Dict[str, _RunStyle]:
+        self._style_definitions = {}
+        self._default_paragraph_style = ""
+        self._default_run_style = _RunStyle()
         if not package.exists("word/styles.xml"):
             return {}
         root = package.read_xml_part("word/styles.xml")
+        self._default_run_style = self._run_style_from_rpr(
+            root.find("w:docDefaults/w:rPrDefault/w:rPr", namespaces=NS))
         styles = {}
         for style in root.findall("w:style", namespaces=NS):
-            if _w_attr(style, "type") != "character":
-                continue
+            kind = _w_attr(style, "type")
             style_id = _w_attr(style, "styleId")
-            if not style_id:
+            if kind not in {"paragraph", "character"} or not style_id:
                 continue
-            styles[style_id] = self._run_style_from_rpr(style.find("w:rPr", namespaces=NS))
+            r_pr = style.find("w:rPr", namespaces=NS)
+            self._style_definitions[style_id] = (
+                _w_attr(style.find("w:basedOn", namespaces=NS), "val"), r_pr)
+            if kind == "paragraph" and _w_attr(style, "default") in {"1", "true", "on"}:
+                self._default_paragraph_style = style_id
+            if kind == "character":
+                styles[style_id] = self._run_style_from_rpr(r_pr)
         return styles
+
+    def _inherited_run_style(self, r_elem, r_pr):
+        style = replace(getattr(self, "_default_run_style", _RunStyle()))
+        paragraph = next((node for node in r_elem.iterancestors()
+                          if node.tag == f"{{{W_NS}}}p"), None)
+        paragraph_style = ""
+        if paragraph is not None:
+            paragraph_style = _w_attr(paragraph.find("w:pPr/w:pStyle", namespaces=NS), "val")
+        paragraph_style = paragraph_style or getattr(self, "_default_paragraph_style", "")
+        character_style = _w_attr(r_pr.find("w:rStyle", namespaces=NS), "val") if r_pr is not None else ""
+        definitions = getattr(self, "_style_definitions", {})
+        for style_id in (paragraph_style, character_style):
+            chain, visited = [], set()
+            while style_id in definitions and style_id not in visited and len(chain) < MAX_STRUCTURE_DEPTH:
+                visited.add(style_id)
+                style_id, properties = definitions[style_id]
+                if properties is not None:
+                    chain.append(properties)
+                else:
+                    chain.append(None)
+            if style_id in definitions:
+                warning = "WARN: DOCX run style inheritance cycle or depth limit"
+                if warning not in self._active_document_errors:
+                    self._active_document_errors.append(warning)
+            for properties in reversed(chain):
+                if properties is None:
+                    continue
+                # ISO 29500 toggle properties invert at style levels, whereas
+                # direct run properties below assign the final on/off value.
+                for tag, attr in (("b", "bold"), ("i", "italic"), ("strike", "strikeout")):
+                    if _w_on_off_enabled(properties.find("w:" + tag, namespaces=NS)):
+                        setattr(style, attr, not getattr(style, attr))
+                underline = properties.find("w:u", namespaces=NS)
+                if underline is not None:
+                    style.underline = _w_on_off_enabled(underline, false_values={"none"})
+                align = properties.find("w:vertAlign", namespaces=NS)
+                if align is not None:
+                    value = _w_attr(align, "val")
+                    style.superscript, style.subscript = value == "superscript", value == "subscript"
+        return style
 
     def _run_style_from_rpr(self, r_pr) -> _RunStyle:
         style = _RunStyle()
@@ -924,7 +984,7 @@ class DOCXReader:
                 )
                 if resolved:
                     relationships[rel_id] = resolved
-            elif rel_type.endswith("/image") or rel_type.endswith("/chart") or rel_type.endswith("/chartEx"):
+            elif rel_type.endswith("/image") or rel_type.endswith("/chart") or rel_type.endswith("/chartEx") or rel_type.endswith("/diagramData"):
                 resolved = self._validated_internal_relationship_target(
                     "word", target, rels_path, rel_id,
                 )
@@ -942,7 +1002,59 @@ class DOCXReader:
                 )
                 if resolved:
                     relationships[rel_id] = resolved
+            if rel_type.endswith("/diagramData") and rel_id in relationships:
+                self._smartart_targets.add(relationships[rel_id])
         return relationships
+
+    def _smartart_warning(self, detail):
+        warning = "WARN: DOCX SmartArt " + detail
+        if warning not in self._active_document_errors:
+            self._active_document_errors.append(warning)
+
+    def _preload_smartart(self, package, relationships):
+        for target in dict.fromkeys(relationships.values()):
+            if target not in self._smartart_targets or target in self._smartart_parts:
+                continue
+            if len(self._smartart_parts) >= MAX_SMARTART_PARTS:
+                self._smartart_warning("part count limit exceeded")
+                break
+            self._smartart_parts[target] = []
+            try:
+                size = package.part_size(target)
+                if self._smartart_bytes + size > MAX_SMARTART_BYTES:
+                    self._smartart_warning("byte limit exceeded")
+                    break
+                self._smartart_bytes += size
+                root = package.read_xml_part(target)
+                texts = []
+                for container in root.iter(f"{{{DGM_NS}}}t"):
+                    paragraphs = []
+                    for para in container.findall("a:p", namespaces=NS):
+                        text = "".join(node.text or "" for node in para.iter(f"{{{A_NS}}}t")).strip()
+                        if text:
+                            paragraphs.append(text)
+                    if paragraphs:
+                        texts.append("\n".join(paragraphs))
+                self._smartart_parts[target] = texts
+            except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+                self._smartart_warning("data could not be read: %s (%s)" %
+                                       (_bounded_diagnostic_path(target), type(exc).__name__))
+
+    def _smartart_blocks(self, node):
+        target = getattr(self, "_active_relationships", {}).get(_r_attr(node, "dm"), "")
+        texts = getattr(self, "_smartart_parts", {}).get(target, [])
+        if not texts:
+            self._smartart_warning("text unavailable: " + _bounded_diagnostic_path(target or "unresolved diagramData"))
+            return []
+        blocks = []
+        for text in texts:
+            if self._smartart_output_chars + len(text) > MAX_SMARTART_OUTPUT_CHARS:
+                self._smartart_warning("output character limit exceeded")
+                break
+            self._smartart_output_chars += len(text)
+            provenance = Provenance(source_format="docx", section=0, path=target)
+            blocks.append(Paragraph(runs=[TextRun(text=text, provenance=provenance)], provenance=provenance))
+        return blocks
 
     def _read_chart_parts(self, package):
         targets = [target for target in dict.fromkeys(self._document_relationships.values())
@@ -1051,7 +1163,7 @@ class DOCXReader:
                 if rel_type.endswith("/hyperlink"):
                     relationships[rel_id] = target
                 continue
-            if rel_type.endswith("/image"):
+            if rel_type.endswith("/image") or rel_type.endswith("/diagramData"):
                 resolved = self._validated_internal_relationship_target(
                     part_dir, target, rels_path, rel_id,
                 )
@@ -1069,6 +1181,9 @@ class DOCXReader:
                 )
                 if resolved:
                     relationships[rel_id] = resolved
+            if rel_type.endswith("/diagramData") and rel_id in relationships:
+                self._smartart_targets.add(relationships[rel_id])
+        self._preload_smartart(package, relationships)
         return relationships
 
     def _validated_internal_relationship_target(
@@ -1188,13 +1303,16 @@ class DOCXReader:
         if num_pr is None:
             return
         num_id = _w_attr(num_pr.find("w:numId", namespaces=NS), "val")
-        ilvl = self._validated_numbering_level(
-            _w_attr(num_pr.find("w:ilvl", namespaces=NS), "val") or "0",
-        )
-        if ilvl is None:
+        # numId=0 cancels numbering; absent definitions do not consume levels.
+        if not num_id or num_id == "0":
             return
-        level = numbering.get((num_id, ilvl))
-        if not level:
+        raw_level = _w_attr(num_pr.find("w:ilvl", namespaces=NS), "val") or "0"
+        level_key = raw_level.strip().lstrip("0") or "0"
+        level = numbering.get((num_id, level_key))
+        if level is None:
+            return
+        ilvl = self._validated_numbering_level(raw_level)
+        if ilvl is None:
             return
         count = getattr(self, "_numbering_counts", {}).get((num_id, ilvl))
         if count is None:
@@ -1458,7 +1576,7 @@ class DOCXReader:
         for child in r_elem:
             if child.tag == f"{{{W_NS}}}t":
                 text_parts.append(child.text or "")
-            elif child.tag == f"{{{W_NS}}}tab":
+            elif child.tag in (f"{{{W_NS}}}tab", f"{{{W_NS}}}ptab"):
                 text_parts.append("\t")
             elif child.tag in (f"{{{W_NS}}}br", f"{{{W_NS}}}cr"):
                 text_parts.append("\n")
@@ -1523,8 +1641,8 @@ class DOCXReader:
             # 의미 필드(note_reference_*)와 렌더 필드가 어긋나지 않게 한다.
             if note_number is not None and note_type in ('footnote', 'endnote'):
                 run.note_ref = note_number
+            self._apply_run_style(run, self._inherited_run_style(r_elem, r_pr))
             if r_pr is not None:
-                self._apply_run_style(run, self._referenced_run_style(r_pr))
                 bold = r_pr.find("w:b", namespaces=NS)
                 italic = r_pr.find("w:i", namespaces=NS)
                 underline = r_pr.find("w:u", namespaces=NS)
@@ -1558,6 +1676,14 @@ class DOCXReader:
                 if preferred is not node:
                     stack.append(preferred)
                     continue
+            if (node.tag == f"{{{A_NS}}}graphicData" and node.get("uri") == DGM_NS
+                    and node.find("dgm:relIds", namespaces=NS) is None):
+                self._smartart_warning("diagramData relationship missing")
+            if node.tag == f"{{{DGM_NS}}}relIds":
+                run = TextRun()
+                run._flow_elements = self._smartart_blocks(node)
+                yield run
+                continue
             if node.tag == f"{{{W_NS}}}txbxContent":
                 paragraphs = []
                 for p_elem, paragraph_depth in self._textbox_paragraphs(node, depth, include_tables=True):

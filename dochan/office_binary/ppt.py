@@ -153,7 +153,7 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0, recovery_budget=None,
 def _supplement_legacy_text(doc, data, stream_name, max_chars, max_paragraphs, master_ids=()):
     """Keep salvage text separate from slides whose identity cannot be proved.
 
-    Use the legacy resynchronizing scan only after unresolved references remain.
+    Use the legacy scan for unresolved references or an empty damaged tree.
     CString is metadata (font names, tags, etc.), not slide display text. The
     scan has shared record/character bounds and never decodes arbitrary bytes.
     """
@@ -172,6 +172,12 @@ def _supplement_legacy_text(doc, data, stream_name, max_chars, max_paragraphs, m
     for paragraph in doc.find_all("paragraph"):
         seen.add(key(paragraph.text))
         seen.update(key(line) for line in paragraph.text.splitlines())
+        # Generated numbering is not part of the TextAtom. Strip only runs
+        # marked by this renderer, never genuine leading numbers in the text.
+        body = ''.join(run.text for run in paragraph.runs
+                       if not getattr(run, '_ppt_generated_list_prefix', False))
+        seen.add(key(body))
+        seen.update(key(line) for line in body.splitlines())
     budget = [100000, min(max_chars, 8 * 1024 * 1024)]
     lines = []
     used = 0
@@ -191,7 +197,7 @@ def _supplement_legacy_text(doc, data, stream_name, max_chars, max_paragraphs, m
     if lines:
         path = stream_name + "#legacy-recovery"
         doc.sections.append(build_structured_section(lines, "ppt", len(doc.sections), path=path))
-        warn(doc.errors, "unresolved references supplemented with legacy text; slide association unverified")
+        warn(doc.errors, "incomplete structure supplemented with legacy text; slide association unverified")
 
 
 def _heading_level_for_text_type(text_type) -> int:

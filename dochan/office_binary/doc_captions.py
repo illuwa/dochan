@@ -85,6 +85,12 @@ class DocCaptions:
                 continue
             match = _SEQ.match(field.instruction)
             if match:
+                # A hidden SEQ is a counter update, not a visible caption.
+                # Tokenize quoted arguments so a literal \\h is not a switch.
+                switches = re.findall(r'"[^"]*"|\\[A-Za-z*]+|[^\s\\]+',
+                                      field.instruction[match.end():])
+                if any(token.casefold() == r'\h' for token in switches):
+                    continue
                 name = (match.group(1) or match.group(2)).casefold()
                 if name in {'table', '표'}:
                     return 'table'

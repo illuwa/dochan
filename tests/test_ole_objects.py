@@ -255,7 +255,10 @@ def test_ppt_unsupported_equation_keeps_preview_and_surrounding_text():
         [slide_list([(2, 256, b'')]), record(1033, embedded, container=True)])
     doc = parse_ppt_document_stream(data, current_user=current)
     paragraphs = doc.find_all('paragraph')
-    assert paragraphs[0].text == 'Before' and paragraphs[2].text == 'After'
-    assert 'Equation preview' in paragraphs[1].text
+    # The preview is an Image at the shape position, not a duplicate Markdown
+    # paragraph (office-fix2 image-output regression).
+    assert [p.text for p in paragraphs] == ['Before', 'After']
+    assert [type(e).__name__ for e in doc.sections[0].elements] == ['Paragraph', 'Image', 'Paragraph']
+    assert doc.find_all('image')[0].alt_text == 'Equation preview'
     assert doc.find_all('image') and not doc.find_all('equation')
     assert doc.errors and all(e.startswith('WARN:') for e in doc.errors)

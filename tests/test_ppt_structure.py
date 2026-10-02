@@ -142,7 +142,11 @@ def test_image_pib_delayed_blip_description_asset_and_ocr(monkeypatch):
     assert image.alt_text == "Diagram"
     assert len(doc.assets) == 1
     assert doc.assets[0].source_path == image.provenance.path
-    assert "![Diagram](" in doc.find_all("paragraph")[0].text
+    # A reference embedded in TextRun duplicated Image Markdown and leaked
+    # presentation syntax into JSON/plain text (office-fix2 review item 3).
+    from dochan.output.markdown import to_markdown
+    assert to_markdown(doc).count("![Diagram](") == 1
+    assert doc.find_all("paragraph") == []
     monkeypatch.setattr("dochan.utils.ocr.ocr_image", lambda data: "diagram words" if data == png else "")
     assert image.run_ocr() == "diagram words"
     assert image.ocr_text == "diagram words"

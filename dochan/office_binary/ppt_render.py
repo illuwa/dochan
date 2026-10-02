@@ -8,7 +8,7 @@ from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
 from .officeart import Limits, parse_records, read_bstore, read_shapes, walk_records
 from .ppt_structure import resolve_presentation, warn
-from .ppt_text import TextBlock, read_hyperlinks, render_text, shape_hyperlink, text_blocks
+from .ppt_text import TextBlock, apply_auto_numbers, read_hyperlinks, render_text, shape_hyperlink, text_blocks
 from .ppt_shapes import positioned_shapes, table_from_shape
 
 MAX_SHAPES = 100000
@@ -38,9 +38,12 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
     if presentation is None:
         return None
     doc = Document(source_format="ppt", errors=errors)
-    links = read_hyperlinks(presentation.document.children, [s.slide_id for s in presentation.slides])
+    labels = {}
+    links = read_hyperlinks(presentation.document.children, [s.slide_id for s in presentation.slides], labels)
     entries = read_bstore(presentation.document.children, delayed_stream=pictures, errors=errors)
     renderer = _Renderer(doc, entries, links, stream_name)
+    renderer.slide_count = len(presentation.slides)
+    renderer.link_labels = labels
     from .ole_objects import PptObjects
     renderer.objects = PptObjects(presentation.embedded, errors, presentation.embedded_progids)
     unresolved_reference = False
@@ -86,10 +89,12 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
                 warn(errors, "notes slide reference missing")
                 unresolved_reference = True
         section.elements.extend(renderer.comments(slide, provenance))
-        section.elements.extend(images)
         doc.sections.append(section)
     sheets = presentation.slides + list(presentation.masters.values()) + list(presentation.notes.values())
-    if unresolved_reference or any(sheet.unresolved and sheet.recovery_record is None for sheet in sheets):
+    empty_text = not any(p.text.strip() for p in doc.find_all('paragraph'))
+    truncated_tree = any(error.startswith('WARN: OfficeArt truncated record at ') for error in errors)
+    if (not presentation.slides or (empty_text and truncated_tree) or unresolved_reference
+            or any(sheet.unresolved and sheet.recovery_record is None for sheet in sheets)):
         from .ppt import _supplement_legacy_text
         _supplement_legacy_text(doc, data, stream_name, renderer.remaining_text, renderer.remaining_paragraphs,
                                 master_ids=presentation.masters)
@@ -120,6 +125,8 @@ class _Renderer:
         self.font_names = {}
         self.field_values = {}
         self.objects = None
+        self.slide_count = 0
+        self.link_labels = {}
 
     def text(self, block, provenance, link=""):
         if len(block.text) > self.remaining_text or self.remaining_paragraphs <= 0:
@@ -173,7 +180,8 @@ class _Renderer:
                             paragraph_bullets=bullets, paragraph_levels=levels, records=records)
         paragraphs = render_text(block, provenance, self.links, link,
                                  max_output_chars=self.remaining_text, errors=self.doc.errors,
-                                 font_names=self.font_names, fragment_budget=self.fragment_budget)
+                                 font_names=self.font_names, fragment_budget=self.fragment_budget,
+                                 slide_index=getattr(provenance, 'slide', 0) or 0, slide_count=self.slide_count)
         if len(paragraphs) > self.remaining_paragraphs:
             warn(self.doc.errors, "document paragraph count limit exceeded")
             paragraphs = paragraphs[:self.remaining_paragraphs]
@@ -252,12 +260,38 @@ class _Renderer:
                         consumed.add(reference)
                     else:
                         warn(self.doc.errors, "OutlineTextRefAtom index out of range")
-            link = shape_hyperlink(parse_records(shape.client_data, errors=self.doc.errors), self.links)
+            client_records = parse_records(shape.client_data, errors=self.doc.errors)
+            extensions = []
+            for tag in walk_records(client_records):
+                if tag.header.rec_type != 5002:
+                    continue
+                if not any(a.header.rec_type == 4026 and bytes(a.data) == '___PPT9'.encode('utf-16le')
+                           for a in tag.children):
+                    continue
+                for binary in tag.children:
+                    if binary.header.rec_type == 5003:
+                        extensions.extend(a for a in parse_records(binary.data, errors=self.doc.errors)
+                                          if a.header.rec_type == 4012)
+            if extensions:
+                # Do not mutate cached SlideListWithText blocks shared by
+                # other placements or inherited sheets.
+                blocks = [replace(b, paragraph_numbers=[]) for b in blocks]
+                apply_auto_numbers(blocks, extensions[0].data, self.doc.errors)
+            link = shape_hyperlink(client_records, self.links,
+                                   slide_index=provenance.slide or 0, slide_count=self.slide_count)
             elements = [p for block in blocks for p in self.text(block, provenance, link)]
             if not any(block.text.strip() for block in blocks):
                 wordart = shape._text(0x00C0)
                 if wordart:
                     elements.extend(self.text(TextBlock(text=wordart), provenance, link))
+            if link and not elements:
+                label = shape.description or shape.name
+                for atom in walk_records(client_records):
+                    if atom.header.rec_type == 4083 and len(atom.data) >= 16 and atom.data[8] == 4:
+                        label = label or self.link_labels.get(struct.unpack_from('<I', atom.data, 4)[0], '')
+                        break
+                if label:
+                    elements.extend(self.text(TextBlock(text=label), provenance, link))
             # PPTX follows layout objects but does not traverse slide masters.
             # Keep the established inherited text contract, excluding recurring
             # master picture placements and their Markdown/image assets.
@@ -337,7 +371,10 @@ class _Renderer:
             warn(self.doc.errors, "picture BLIP unavailable for pib %d" % shape.pib)
         filename = "image%d.%s" % (shape.pib, fmt or "bin")
         target = "Pictures/" + filename
-        label = shape.description or shape.name or "image"
+        # PPTX's image label combines description and shape name. pibName is
+        # the saved picture description when wzDescription is absent.
+        label = ' '.join(part for part in (shape.description or shape._text(0x0105), shape.name)
+                         if part).strip() or "image"
         reference_size = len(label) + len(target) + 5
         if reference_size > self.remaining_text or self.remaining_paragraphs <= 0:
             self.remaining_text = 0
@@ -354,8 +391,8 @@ class _Renderer:
                               "pict": "image/x-pict"}.get(fmt, "application/octet-stream"),
                 metadata={"kind": "image", "label": label},
             ))
-        images.append(Image(bin_id=shape.pib, filename=filename, image_data=pixels,
-                            alt_text=shape.description, image_format=fmt,
-                            provenance=Provenance(source_format="ppt", slide=provenance.slide, path=target)))
-        return [Paragraph(runs=[TextRun(text="![%s](%s)" % (label, target), provenance=provenance)],
-                          provenance=provenance)]
+        # Emit one Image at the drawing position. The Markdown writer owns
+        # reference syntax; JSON/plain text must not contain Markdown runs.
+        return [Image(bin_id=shape.pib, filename=target, image_data=pixels,
+                      alt_text=label, image_format=fmt,
+                      provenance=Provenance(source_format="ppt", slide=provenance.slide, path=target))]

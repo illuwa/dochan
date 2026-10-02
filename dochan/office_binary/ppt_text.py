@@ -33,6 +33,7 @@ class TextBlock:
     character_fonts: list = field(default_factory=list)
     character_symbol_fonts: list = field(default_factory=list)
     paragraph_fonts: list = field(default_factory=list)
+    paragraph_numbers: list = field(default_factory=list)
 
 
 def _warn(errors, message):
@@ -191,7 +192,42 @@ def text_blocks(records, errors=None) -> List[TextBlock]:
     return blocks
 
 
-def read_hyperlinks(document_records, slide_ids=None) -> Dict[int, str]:
+def apply_auto_numbers(blocks, data, errors=None):
+    """Read StyleTextProp9Atom PF extensions in StyleTextProp run order.
+
+    TextPFException9 mask bits 23/25/24 serialize blip reference, auto-number
+    flag, then the scheme/start pair. Completed entries survive truncation.
+    Unknown trailing CF/SI properties stop parsing rather than guessing sizes.
+    """
+    cursor = _Cursor(data)
+    try:
+        for block in blocks:
+            for _start, _end, _level in block.paragraph_levels:
+                if len(block.paragraph_numbers) >= MAX_TEXT_RUNS:
+                    raise ValueError('auto-number run limit exceeded')
+                mask = cursor.read('<I')
+                if mask & ~0x03800000:
+                    raise ValueError('unsupported auto-number paragraph mask')
+                if mask & 0x00800000:
+                    cursor.skip(2)
+                enabled = cursor.read('<H') if mask & 0x02000000 else 0
+                scheme, start = cursor.read('<Hh') if mask & 0x01000000 else (3, 1)
+                block.paragraph_numbers.append((scheme, start) if enabled else None)
+                if cursor.read('<I') or cursor.read('<I'):
+                    raise ValueError('unsupported auto-number CF/SI extension')
+    except (ValueError, struct.error) as exc:
+        _warn(errors, str(exc))
+
+
+_NUMBER_SCHEMES = (
+    'alphaLcPeriod', 'alphaUcPeriod', 'arabicParenR', 'arabicPeriod',
+    'romanLcParenBoth', 'romanLcParenR', 'romanLcPeriod', 'romanUcPeriod',
+    'alphaLcParenBoth', 'alphaLcParenR', 'alphaUcParenBoth', 'alphaUcParenR',
+    'arabicParenBoth', 'arabicPlain', 'romanUcParenBoth', 'romanUcParenR',
+)
+
+
+def read_hyperlinks(document_records, slide_ids=None, labels=None) -> Dict[int, str]:
     """Decode ExHyperlinkAtom ID and CString instance 1 (the address).
 
     Native internal addresses contain ``slideID,slideIndex,slideTitle``.
@@ -207,16 +243,28 @@ def read_hyperlinks(document_records, slide_ids=None) -> Dict[int, str]:
         link_id = None
         target = ''
         location = ''
+        display_name = ''
         for atom in record.children:
             if atom.header.rec_type == 4051 and len(atom.data) >= 4:
                 link_id = struct.unpack_from('<I', atom.data)[0]
-            elif atom.header.rec_type == 4026 and atom.header.rec_instance in (1, 3):
+            elif atom.header.rec_type == 4026 and atom.header.rec_instance in (0, 1, 3):
                 value = bytes(atom.data[:65536]).decode('utf-16le', errors='replace').rstrip('\x00')
-                if atom.header.rec_instance == 1:
+                if atom.header.rec_instance == 0:
+                    display_name = value
+                elif atom.header.rec_instance == 1:
                     target = value
                 else:
                     location = value
-        if link_id is None or not (target or location):
+        if link_id is None:
+            continue
+        if labels is not None and display_name:
+            labels[link_id] = display_name
+        if not (target or location):
+            # Older producers can save only the default slide display name.
+            # Resolve a bounded, exact name, never arbitrary display text.
+            match = re.fullmatch(r'Slide ([0-9]{1,10})', display_name)
+            if match and 1 <= int(match.group(1)) <= len(slide_ids):
+                links[link_id] = '#PowerPoint Document#slide%d' % int(match.group(1))
             continue
         # A location belongs to its external document when an address exists.
         # With no address it denotes this presentation's slide or bookmark.
@@ -236,32 +284,38 @@ def read_hyperlinks(document_records, slide_ids=None) -> Dict[int, str]:
     return links
 
 
-def _interaction_target(record, hyperlinks):
+def _interaction_target(record, hyperlinks, slide_index=0, slide_count=0):
     for atom in walk_records([record]):
         if atom.header.rec_type == 4083 and len(atom.data) >= 16:
             link_id = struct.unpack_from('<I', atom.data, 4)[0]
             # action=4 is a hyperlink. Ignore sound/OLE/macro interactions.
             if atom.data[8] == 4:
                 return hyperlinks.get(link_id, '')
+            if atom.data[8] == 3:
+                # InteractiveInfoAtom jump: next, previous, first, last.
+                target = {1: slide_index + 1, 2: slide_index - 1,
+                          3: 1, 4: slide_count}.get(atom.data[10], 0)
+                if slide_index and 1 <= target <= slide_count:
+                    return '#PowerPoint Document#slide%d' % target
     return ''
 
 
-def shape_hyperlink(records, hyperlinks) -> str:
+def shape_hyperlink(records, hyperlinks, slide_index=0, slide_count=0) -> str:
     for record in records:
         if record.header.rec_type == 4082:
-            target = _interaction_target(record, hyperlinks)
+            target = _interaction_target(record, hyperlinks, slide_index, slide_count)
             if target:
                 return target
     return ''
 
 
-def _ranges(block, hyperlinks):
+def _ranges(block, hyperlinks, slide_index=0, slide_count=0):
     pending = ''
     ranges = []
     for record in block.records:
         kind = record.header.rec_type
         if kind == 4082:
-            pending = _interaction_target(record, hyperlinks)
+            pending = _interaction_target(record, hyperlinks, slide_index, slide_count)
         elif kind == 4063:
             if pending and len(record.data) >= 8:
                 start, end = struct.unpack_from('<II', record.data)
@@ -274,14 +328,14 @@ def _ranges(block, hyperlinks):
 
 def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
                 max_output_chars=MAX_OUTPUT_CHARS, errors=None, font_names=None,
-                fragment_budget=None) -> List[Paragraph]:
+                fragment_budget=None, slide_index=0, slide_count=0) -> List[Paragraph]:
     """Return PPTX-compatible paragraphs and literal ``label <target>`` links."""
     font_names = font_names or {}
     if fragment_budget is None:
         fragment_budget = [MAX_TEXT_FRAGMENTS]
     units = len(block.text.encode('utf-16le')) // 2
     styles = block.character_runs
-    links = _ranges(block, hyperlinks or {})
+    links = _ranges(block, hyperlinks or {}, slide_index, slide_count)
     # Keep only explicit style/link boundaries. Newline boundaries are streamed;
     # large blank atoms must not allocate one integer/set entry per character.
     boundaries = {0, units}
@@ -323,6 +377,8 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
     active_links = []
     remaining = max(0, min(max_output_chars, MAX_OUTPUT_CHARS))
     output_runs = 0
+    number_counts = {}
+    number_formatter = None
 
     def append_run(text, props=(False, False, False, 10.0)):
         nonlocal remaining, output_runs
@@ -415,7 +471,30 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
             if bullet and bullet_start <= start:
                 font_id = block.paragraph_fonts[bullet_index] if bullet_index < len(block.paragraph_fonts) else None
                 bullet = _symbol_text(bullet, font_names.get(font_id, ''))
+                numbering = (block.paragraph_numbers[bullet_index]
+                             if bullet_index < len(block.paragraph_numbers) else None)
+                if numbering:
+                    scheme, initial = numbering
+                    level = block.paragraph_levels[bullet_index][2]
+                    key = (level, scheme)
+                    count = number_counts.get(key, max(1, initial) - 1) + 1
+                    if scheme < len(_NUMBER_SCHEMES) and count <= 32767:
+                        # Reuse the established PPTX spelling (letters, Roman
+                        # numerals and punctuation), including its fallbacks.
+                        if number_formatter is None:
+                            from ..ooxml.pptx import PPTXReader
+                            number_formatter = PPTXReader()
+                        bullet = number_formatter._auto_number_marker(_NUMBER_SCHEMES[scheme], count)
+                        number_counts[key] = count
+                        for nested in list(number_counts):
+                            if nested[0] > level:
+                                del number_counts[nested]
+                    else:
+                        _warn(errors, 'unsupported auto-number scheme or count')
+                prefix_start = len(runs)
                 append_run(bullet + ' ')
+                for prefix_run in runs[prefix_start:]:
+                    prefix_run._ppt_generated_list_prefix = True
         # Append a link only on the final visible fragment of its range. A
         # terminal CR belongs to the link range in actual Office files.
         target_to_append = ''

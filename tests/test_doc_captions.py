@@ -262,3 +262,22 @@ def test_doc_caption_never_crosses_equation_in_adjacent_source_paragraph(above, 
     image = doc.find_all('image')[0]
     assert bool(image.caption) == (above != equation_first)
     assert to_markdown(doc).count('Figure 1') == 1
+
+
+@pytest.mark.parametrize('instruction', [r'SEQ CHAPTER \h', r'SEQ Figure \h', r'SEQ "Tableau" \h'])
+def test_doc_caption_hidden_seq_is_not_caption_evidence(instruction):
+    doc = read_records([p('Section \x13' + instruction + '\x14\x15')]+table_records())
+    assert not doc.find_all('table')[0].caption
+    assert doc.sections[0].elements[0].text == 'Section '
+
+
+def test_doc_caption_hidden_seq_does_not_mask_visible_seq():
+    text = 'Table \x13SEQ CHAPTER \\h\x14\x15\x13SEQ Table\x141\x15'
+    doc = read_records([p(text)] + table_records())
+    assert doc.find_all('table')[0].caption_text == 'Table 1'
+
+
+def test_doc_caption_hidden_seq_still_allows_caption_style_evidence():
+    doc = read_records([p('Table \x13SEQ CHAPTER \\h\x14\x15', 1)] + table_records(),
+                       [('Normal', 4095, 0), ('Caption', 0, 34)])
+    assert doc.find_all('table')[0].caption_text == 'Table '

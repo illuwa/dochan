@@ -8,7 +8,6 @@ from collections import Counter
 import json
 from pathlib import Path
 import struct
-from unittest.mock import patch
 import zipfile
 
 import olefile
@@ -84,25 +83,9 @@ def probe(corpus):
                 continue
             counts['click_documents'] += 1
             counts['click_controls'] += len(click_records)
-            inserted = []
-
-            def observed_prompt(data):
-                value = clickhere_prompt(data)
-                if value:
-                    inserted.append(value)
-                return value
-
-            with patch('dochan.hwp.section.clickhere_prompt', observed_prompt):
-                document = Dochan(path)
-            counts['positive_prompt_documents'] += bool(inserted)
-            counts['positive_prompt_controls'] += len(inserted)
-            xml_positive = None
-            if inserted and pair.is_file():
-                xml_text = Dochan(pair).to_plain_text()
-                xml_positive = sum(value in xml_text for value in inserted)
-                counts['positive_prompt_paired_documents'] += 1
-                counts['positive_prompt_gold_controls'] += xml_positive
-            if inserted or path.name.startswith(PRESS_PREFIXES):
+            document = Dochan(path)
+            if path.name.startswith(PRESS_PREFIXES) or path.name in (
+                    'field-01.hwp', 'field-01-memo.hwp', 'rhwp-field-01.hwp'):
                 stored_prompts = set()
                 for record in click_records:
                     try:
@@ -120,10 +103,9 @@ def probe(corpus):
                 prompt_rows.append(dict(file=path.name, controls=len(click_records),
                                         dirty_controls=sum(bool(struct.unpack_from('<I', r.data, 4)[0] & 0x8000)
                                                            for r in click_records if len(r.data) >= 8),
-                                        accepted_prompts=len(inserted),
                                         output_prompt_occurrences=actual_occurrences,
                                         gold_prompt_occurrences=gold_occurrences,
-                                        paired=pair.is_file(), gold_present=xml_positive,
+                                        paired=pair.is_file(),
                                         diagnostics=len(document.errors)))
         except Exception as error:
             failures.append(dict(file=path.name, error=type(error).__name__))

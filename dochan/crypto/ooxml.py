@@ -8,7 +8,6 @@ import binascii
 import hashlib
 import hmac
 import struct
-import time
 from typing import Optional
 from lxml import etree as ET
 
@@ -17,7 +16,6 @@ from ..utils.aes import _decrypt_block, _key_expansion
 # Conservative per-document limits, including automatic password attempts.
 MAX_PACKAGE_SIZE = 16 * 1024 * 1024
 MAX_PASSWORD_CANDIDATES = 2
-MAX_CRYPTO_SECONDS = 20.0
 MAX_INFO_SIZE = 64 * 1024
 MAX_SPIN_COUNT = 1000000
 _NS = "http://schemas.microsoft.com/office/2006/encryption"
@@ -28,27 +26,24 @@ class OOXMLCryptoError(ValueError):
     """Static diagnostics safe for the public reader to display."""
 
 
+class _HashBudgetExceeded(OOXMLCryptoError):
+    pass
+
+
 class _WorkBudget:
     def __init__(self):
-        self.deadline = time.monotonic() + MAX_CRYPTO_SECONDS
         self.hashes = MAX_SPIN_COUNT
         self.bytes = MAX_PACKAGE_SIZE + 16384
 
-    def check(self):
-        if time.monotonic() > self.deadline:
-            raise _error("복호화 작업 시간 상한을 초과했습니다.")
-
     def reserve_hashes(self, count):
+        if count > self.hashes:
+            raise _HashBudgetExceeded("ERR: 암호화된 문서 — 문서당 암호 반복 작업량 상한을 초과했습니다.")
         self.hashes -= count
-        if self.hashes < 0:
-            raise _error("문서당 암호 반복 작업량 상한을 초과했습니다.")
-        self.check()
 
     def reserve_bytes(self, count):
         self.bytes -= count
         if self.bytes < 0:
             raise _error("문서당 AES 작업량 상한을 초과했습니다.")
-        self.check()
 
 
 class _PasswordMismatch(ValueError):
@@ -73,8 +68,6 @@ def _aes(key, data, iv=None, *, output=None, budget=None, schedule=None):
     result = bytearray(len(data)) if own_output else output
     data = memoryview(data)
     for offset in range(0, len(data), 16):
-        if budget is not None and offset % 4096 == 0:
-            budget.check()
         block = data[offset:offset + 16]
         plain = _decrypt_block(block, schedule, rounds)
         if iv is not None:
@@ -105,8 +98,6 @@ def _password_hash(password, salt, algorithm, count, budget=None):
         budget.reserve_hashes(count)
     digest = _hash(algorithm, salt + password.encode("utf-16le"))
     for index in range(count):
-        if budget is not None and index % 1024 == 0:
-            budget.check()
         digest = _hash(algorithm, struct.pack("<I", index) + digest)
     return digest
 
@@ -257,6 +248,13 @@ def decrypt_ooxml(ole, password: Optional[str] = None) -> bytes:
                 raise _error("암호 형식 또는 길이가 잘못되었습니다.")
             try:
                 plain = decrypt(info, package, candidate, budget)
+            except _HashBudgetExceeded:
+                # Automatic guesses are optional. Exhausting their shared
+                # budget means the caller must supply the real password;
+                # the document itself may have a valid, supported spinCount.
+                if password is None:
+                    break
+                raise
             except _PasswordMismatch:
                 continue
             if not plain.startswith(b"PK\x03\x04"):

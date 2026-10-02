@@ -45,7 +45,9 @@ def test_xls_formula_attr_volatile_consumes_three_payload_bytes():
 
 
 def test_xls_formula_truncated_attr_stops_safely():
-    assert _decode_formula_token_stream(b'\x1e\x01\x00\x19\x10\x00') == '1'
+    errors = []
+    assert _decode_formula_token_stream(b'\x1e\x01\x00\x19\x10\x00', errors=errors) == ''
+    assert any('truncated attribute token' in error for error in errors)
 
 
 def test_xls_shared_formula_refn_preserves_anchor_and_follower_string_caches():

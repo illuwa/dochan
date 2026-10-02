@@ -60,13 +60,16 @@ class Dochan:
                 original(삽입 제외). 비기본 모드는 HWP 5와 HWPX를 지원하며 미확정
                 범위·서식 변경은 보존하고 errors에 부분지원 사유를 기록한다.
                 변경 추적 HWP의 preserve는 ViewText, final은 저장된 BodyText를 읽는다.
-            password: 문서 열기 암호. None이면 빈 암호 또는 형식의 기본 암호만 시도한다.
+            password: str 형식의 문서 열기 암호. None이면 빈 암호 또는 형식의 기본 암호만 시도한다.
 
         Raises:
+            TypeError: password가 str 또는 None이 아닌 경우.
             ValueError: include_assets=False인데 ocr=True이거나 입력이
                 HWPX로 식별되지 않는 경우 (다른 포맷·모호한 패키지 포함).
                 revision_mode가 잘못되었거나 비기본 모드에 유효 HWP 5/HWPX가 아닌 입력.
         """
+        if password is not None and not isinstance(password, str):
+            raise TypeError("password must be str or None")
         self.file_path = file_path
         self._zip_kind_cache = None
         # 옵션 오류는 문서 파싱 오류와 달리 호출자에게 직접 알린다.
@@ -85,7 +88,7 @@ class Dochan:
         self._revision_mode = revision_mode
         self._password = password
         try:
-            if password is not None and (not isinstance(password, (str, bytes)) or len(password) > 4096):
+            if password is not None and len(password) > 4096:
                 self.doc.errors.append("ERR: 암호화된 문서 — 암호 형식 또는 길이가 지원 범위를 벗어남")
             else:
                 self._parse()
@@ -511,6 +514,8 @@ class Dochan:
         """DOC (Word Binary/OLE) 파싱"""
         options = {} if self._password is None else {'password': self._password}
         self.doc = DOCReader(**options).read(self.file_path)
+        from .crypto.legacy import warn_irm_protection
+        warn_irm_protection(self.file_path, self.doc.errors)
 
     def _parse_ppt(self):
         """PPT (PowerPoint Binary/OLE) 파싱"""

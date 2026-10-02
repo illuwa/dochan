@@ -311,6 +311,9 @@ def read_bstore(records, delayed_stream=None, limits: Optional[Limits] = None,
             values = struct.unpack_from("<BB16sHIIIBBBB", r.data)
             (entry.bt_win32, entry.bt_macos, entry.uid, _tag, entry.size,
              entry.c_ref, entry.fo_delay, _usage, entry.cb_name, _unused2, _unused3) = values
+            if entry.c_ref == 0 or entry.bt_win32 == 0:
+                # Unused BStore slots still occupy a pib index but have no BLIP.
+                continue
             offset = 36 + entry.cb_name
             if offset > len(r.data):
                 _warn(errors, "truncated FBSE name")

@@ -955,7 +955,8 @@ def test_parse_biff_workbook_recovers_partial_formula_tokens():
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert table.rows[1][1].text == "30 (=A2)"
+    assert table.rows[1][1].text == "30"
+    assert any("B2:" in error and "expression omitted" in error for error in doc.errors)
 
 
 def test_parse_biff_workbook_recovers_partial_formula_without_disrupting_following_cells():
@@ -974,7 +975,8 @@ def test_parse_biff_workbook_recovers_partial_formula_without_disrupting_followi
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert table.rows[1][0].text == "12 (=A2)"
+    assert table.rows[1][0].text == "12"
+    assert any("A2:" in error and "expression omitted" in error for error in doc.errors)
     assert table.rows[1][1].text == "18"
 
 

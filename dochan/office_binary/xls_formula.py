@@ -19,6 +19,66 @@ MAX_ARRAY_CELLS = 65536
 MAX_FORMULA_TEXT = 65535
 
 
+class BoundedErrors(list):
+    """Bound retained diagnostics and membership work, including direct append calls.
+
+    Only retained messages enter the set: hostile unique messages cannot grow it.
+    The summary counts omitted occurrences, rather than claiming a unique count.
+    """
+
+    def __init__(self, values=(), limit=100):
+        super().__init__()
+        self.limit = limit
+        self.seen = set()
+        self.omitted = 0
+        self.has_error = False
+        self.extend(values)
+
+    def __contains__(self, value):
+        return value in self.seen or (self.omitted and value == self[-1])
+
+    def append(self, value):
+        if value in self:
+            return
+        if len(self.seen) < self.limit:
+            self.seen.add(value)
+            self.has_error = self.has_error or value.startswith('ERR:')
+            if self.omitted:
+                self.insert(len(self) - 1, value)
+            else:
+                super().append(value)
+            return
+        if self.limit and value.startswith('ERR:') and not self.has_error:
+            # The CLI derives failure from ERR messages. A preceding warning
+            # flood must not turn a fatal standalone XLS failure into success.
+            index = len(self.seen) - 1
+            self.seen.remove(self[index])
+            self[index] = value
+            self.seen.add(value)
+            self.has_error = True
+        self._omit(1)
+
+    def _omit(self, count):
+        if not count:
+            return
+        had_summary = bool(self.omitted)
+        self.omitted += count
+        summary = 'WARN: XLS %d additional diagnostics omitted' % self.omitted
+        if had_summary:
+            self[-1] = summary
+        else:
+            super().append(summary)
+
+    def extend(self, values):
+        if isinstance(values, BoundedErrors):
+            for value in values[:len(values.seen)]:
+                self.append(value)
+            self._omit(values.omitted)
+        else:
+            for value in values:
+                self.append(value)
+
+
 class FormulaDataError(ValueError):
     pass
 
@@ -163,8 +223,10 @@ class FormulaContext:
                 self.external_count += 1
                 book.ordinal = self.external_count
                 # DDE/OLE virtPath uses service + 0x03 + topic. In encoded
-                # workbook paths (leading 0x01), 0x03 is a directory separator.
-                if not path.startswith('\x01') and '\x03' in path:
+                # workbook paths, 0x03 also separates directories. DDE has no
+                # sheet list and exactly one service/topic separator.
+                if (count == 0 and path[:1] not in ('\x01', '\x02', '\x04', '\x05')
+                        and path.count('\x03') == 1):
                     book.kind = 'dde'
                     return
                 sheets = []

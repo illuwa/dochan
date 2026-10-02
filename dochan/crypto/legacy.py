@@ -14,6 +14,32 @@ MAX_STREAM = 256 * 1024 * 1024
 MAX_RECORDS = 1000000
 
 
+def warn_irm_protection(file_path, errors):
+    """Identify MS-OFFCRYPTO IRM storage without reading protected content.
+
+    A DataSpaces storage alone is not IRM: ordinary password encryption uses
+    it too. DRMContent or the DRM transform identifies rights-managed data.
+    The visible legacy Word compatibility notice remains available.
+    """
+    import olefile
+    from ..utils.bounded_io import validate_file_size
+
+    try:
+        validate_file_size(file_path)
+        ole = olefile.OleFileIO(file_path)
+        try:
+            protected = (ole.exists('\tDRMContent') or ole.exists(
+                '\x06DataSpaces/TransformInfo/\tDRMTransform/\x06Primary'))
+        finally:
+            ole.close()
+    except (OSError, ValueError):
+        return  # The document reader owns malformed-container diagnostics.
+    if protected:
+        warning = 'WARN: DRM/IRM 보호 문서 — 보호된 본문은 읽을 수 없으며 호환 안내문만 표시될 수 있습니다.'
+        if warning not in errors:
+            errors.append(warning)
+
+
 class LegacyCryptoError(ValueError):
     """A static, password-free diagnosis safe for reader error output."""
 

@@ -2,6 +2,7 @@
 import argparse
 import io
 import struct
+import time
 import zipfile
 
 import pytest
@@ -120,27 +121,24 @@ def test_api_reports_unsupported_xlsb(monkeypatch):
     assert any('XLSB' in error and '미지원' in error for error in reader.errors)
 
 
-def test_ooxml_deadline_interrupts_kdf(monkeypatch):
-    streams, _ = _agile()
-    ticks = iter([0, 0, ooxml.MAX_CRYPTO_SECONDS + 1])
-    monkeypatch.setattr(ooxml.time, 'monotonic', lambda: next(ticks))
-    with pytest.raises(ValueError, match='시간 상한'):
-        ooxml.decrypt_ooxml(streams, 'secret')
+def test_ooxml_kdf_is_independent_of_wall_clock(monkeypatch):
+    streams, expected = _agile()
+    monkeypatch.setattr(time, 'monotonic', lambda: pytest.fail('crypto must use deterministic budgets'))
+    assert ooxml.decrypt_ooxml(streams, 'secret') == expected
 
 
 def test_ooxml_hash_budget_covers_both_candidates(monkeypatch):
     streams, _ = _standard()
     monkeypatch.setattr(ooxml, 'MAX_SPIN_COUNT', 75000)
-    with pytest.raises(ValueError, match='반복 작업량 상한'):
+    with pytest.raises(ValueError, match='암호가 필요'):
         ooxml.decrypt_ooxml(streams)
 
 
-def test_ooxml_deadline_interrupts_aes(monkeypatch):
-    ticks = iter([0, 0, ooxml.MAX_CRYPTO_SECONDS + 1])
-    monkeypatch.setattr(ooxml.time, 'monotonic', lambda: next(ticks))
+def test_ooxml_aes_is_independent_of_wall_clock(monkeypatch):
+    expected = ooxml._aes(bytes(16), bytes(8192))
+    monkeypatch.setattr(time, 'monotonic', lambda: pytest.fail('crypto must use deterministic budgets'))
     budget = ooxml._WorkBudget()
-    with pytest.raises(ValueError, match='시간 상한'):
-        ooxml._aes(bytes(16), bytes(8192), budget=budget)
+    assert ooxml._aes(bytes(16), bytes(8192), budget=budget) == expected
 
 
 def test_ooxml_aes_work_budget_is_checked_before_blocks():

@@ -79,7 +79,7 @@ def test_formula_reference_union_preserves_structure():
 
 def test_formula_damaged_operator_warns():
     errors = []
-    assert _decode_formula_token_stream(integer(1) + b'\x03', errors=errors) == '1'
+    assert _decode_formula_token_stream(integer(1) + b'\x03', errors=errors) == ''
     assert errors
 
 

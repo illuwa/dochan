@@ -14,7 +14,7 @@ This module does not infer mathematics from a rendered replacement image.
 """
 
 import struct
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional, Tuple
 
 
 MAX_INPUT = 1024 * 1024
@@ -59,6 +59,7 @@ class _Node(NamedTuple):
     kind: int
     text: str
     plain: bool = False
+    scripts: Optional[Tuple[str, str]] = None
 
 
 class _Reader:
@@ -154,7 +155,10 @@ class _Reader:
                 template_options = self.byte()
                 if template_options:
                     raise MTEFError("Unsupported MTEF template options")
-                value = self.template(selector, variation, self.nodes(depth + 1))
+                children = self.nodes(depth + 1)
+                value = self.template(selector, variation, children)
+                node = _Node(kind, value, scripts=(children[0].text, children[1].text)
+                             if self.version < 5 and selector == 15 else None)
             elif kind in (10, 11, 12, 13, 14):
                 if options:
                     raise MTEFError("Invalid MTEF size options")
@@ -178,20 +182,38 @@ class _Reader:
             self.output += len(value)
             if self.output > MAX_OUTPUT:
                 raise MTEFError("MTEF output limit exceeded")
-            nodes.append(node if kind == 2 else _Node(kind, value))
+            nodes.append(node if kind in (2, 3) else _Node(kind, value))
 
     @staticmethod
     def join(nodes: List[_Node]) -> str:
         result = []
         text = []
+        scripts = [[], []]
+
+        def flush_scripts():
+            for marker, values in zip(('_', '^'), scripts):
+                if values:
+                    result.append(marker + '{' + ''.join(values) + '}')
+                    values.clear()
+
         for node in nodes:
+            # Sibling SCRIPT templates have the same parent LINE/baseline.
+            # Concatenate their slots; nested LINE scripts remain nested.
+            if node.scripts is None:
+                flush_scripts()
             if node.plain:
                 text.append(node.text)
             else:
                 if text:
                     result.append(r'\text{' + ''.join(text) + '}')
                     text = []
-                result.append(node.text)
+                if node.scripts is not None:
+                    for target, value in zip(scripts, node.scripts):
+                        if value:
+                            target.append(value)
+                else:
+                    result.append(node.text)
+        flush_scripts()
         if text:
             result.append(r'\text{' + ''.join(text) + '}')
         return ''.join(result)

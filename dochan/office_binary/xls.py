@@ -12,7 +12,7 @@ from .xls_hyperlink import parse_hlink
 from .xls_chart import parse_chart_substreams
 from .xls_drawing import XlsDrawingReader
 from .xls_ftab import FUNCTION_NAMES, FIXED_ARGUMENT_COUNTS
-from .xls_formula import FormulaContext, FormulaDataError, FormulaName, ExtraReader, warn as formula_warn
+from .xls_formula import BoundedErrors, FormulaContext, FormulaDataError, FormulaName, ExtraReader, warn as formula_warn
 from ..conversion import Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
@@ -60,7 +60,7 @@ class _SheetInfo:
     row_indices: Set[int] = field(default_factory=set)
     col_indices: Set[int] = field(default_factory=set)
     dimension: Optional[Tuple[int, int, int, int]] = None
-    errors: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=BoundedErrors)
 
 
 @dataclass
@@ -333,7 +333,7 @@ def _recover_next_record_offset(data: bytes, start: int) -> Optional[int]:
 
 def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                         embedded_chart_offset=None, chart_budget=None) -> Document:
-    doc = Document(source_format="xls")
+    doc = Document(source_format="xls", errors=BoundedErrors())
     normalized_stream = workbook_stream or "Workbook"
     sheets: List[_SheetInfo] = []
     shared_strings: List[str] = []
@@ -509,6 +509,9 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
         doc.errors.extend(sheet.errors)
     if drawing_reader is not None:
         doc.assets.extend(drawing_reader.assets)
+    # The collector is append-only parser state. Expose the ordinary mutable
+    # List[str] promised by Document, without stale dedup state after clear/pop.
+    doc.errors = list(doc.errors)
     return doc
 
 
@@ -1458,6 +1461,7 @@ def _decode_formula_tokens(
         sheet_names=sheet_names,
         defined_names=defined_names,
         errors=errors,
+        diagnostic_cell=_cell_ref(*struct.unpack_from('<HH', record_data)),
         internal_supbooks=internal_supbooks, formula_context=formula_context,
     )
 
@@ -1515,6 +1519,7 @@ def _decode_shared_formula_for_cell(
         sheet_names=sheet_names,
         defined_names=defined_names,
         errors=errors,
+        diagnostic_cell=_cell_ref(*cell),
         internal_supbooks=internal_supbooks, formula_context=formula_context,
     )
 
@@ -1532,10 +1537,11 @@ def _decode_formula_token_stream(
     internal_supbooks=None,
     formula_context=None,
     extra_data=b"",
+    diagnostic_cell="",
 ) -> str:
     def warn(message):
         if errors is not None:
-            text = "WARN: XLS formula " + message
+            text = "WARN: XLS formula " + (diagnostic_cell + ": " if diagnostic_cell else "") + message
             if text not in errors and len(errors) < 1000:
                 errors.append(text)
 
@@ -1650,8 +1656,8 @@ def _decode_formula_token_stream(
             left = stack.pop()
             stack.append(f"{left}{_formula_operator(token)}{right}")
         elif token in {0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11}:
-            warn("operator argument stack underflow; partial expression retained")
-            break
+            warn("operator argument stack underflow; expression omitted")
+            return ""
         elif token in (0x21, 0x22):
             size = 3 if token == 0x22 else 2
             if offset + size > len(tokens):
@@ -1710,16 +1716,16 @@ def _decode_formula_token_stream(
             offset += 1
         elif token == 0x19:  # MS-XLS PtgAttr: one flag byte and two data bytes
             if offset + 3 > len(tokens):
-                warn("truncated attribute token")
-                break
+                warn("truncated attribute token; expression omitted")
+                return ""
             flags = tokens[offset]
             attr_data = struct.unpack_from("<H", tokens, offset + 1)[0]
             offset += 3
             if flags & 0x04:  # PtgAttrChoose has an additional jump-offset array.
                 jump_bytes = 2 * (attr_data + 1)
                 if jump_bytes > len(tokens) - offset:
-                    warn("truncated attribute jump table")
-                    break
+                    warn("truncated attribute jump table; expression omitted")
+                    return ""
                 offset += jump_bytes
             if flags & 0x10 and stack:  # PtgAttrSum is the optimized SUM form.
                 stack[-1] = f"SUM({stack[-1]})"
@@ -1737,10 +1743,6 @@ def _decode_formula_token_stream(
         if stack and len(stack[-1]) > 65535:
             warn("rendered expression limit exceeded")
             return ""
-    if offset < len(tokens):
-        warn("truncated token stream")
-        # Preserve the established single-operand salvage contract for damaged
-        # formatting attributes; never silently report it as fully decoded.
     if len(stack) != 1:
         if stack:
             warn("unbalanced expression stack; expression omitted")

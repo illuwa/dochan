@@ -59,7 +59,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
                            current_sheet: int = 0, path: str = 'Workbook',
                            sheet_name: Optional[str] = None, errors=None,
                            budget=None, internal_supbooks=None, formula_values=None,
-                           category_start=0) -> List[object]:
+                           category_start=0, excluded_series=None) -> List[object]:
     """Read embedded charts or a chart sheet from a BIFF byte sequence.
 
     ``sheets`` holds zero-based worksheet cell mappings; ``external_sheets``
@@ -114,7 +114,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
             if not oversized:
                 elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                                 current_sheet, f'{path}#chart{chart_index}',
-                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start))
+                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start, excluded_series))
             chart_records = None
             depth = 0
             continue
@@ -125,7 +125,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
             if not oversized:
                 elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                                 current_sheet, f'{path}#chart{chart_index}',
-                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start))
+                                sheet_name, errors, budget, internal_supbooks, formula_values, category_start, excluded_series))
             chart_records = None
             continue
         if depth != 1 or oversized:
@@ -142,7 +142,7 @@ def parse_chart_substreams(data: bytes, sheets=None, external_sheets=None,
         if not oversized and depth <= MAX_DEPTH:
             elements.extend(_parse_chart(chart_records, sheets, external_sheets,
                             current_sheet, f'{path}#chart{chart_index}', sheet_name,
-                            errors, budget, internal_supbooks, formula_values, category_start))
+                            errors, budget, internal_supbooks, formula_values, category_start, excluded_series))
     return elements
 
 
@@ -249,7 +249,7 @@ def _reference_values(tokens, sheets, external_sheets, current_sheet, errors, bu
 
 
 def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_name, errors, budget,
-                 internal_supbooks=None, formula_values=None, category_start=0):
+                 internal_supbooks=None, formula_values=None, category_start=0, excluded_series=None):
     if budget[0] < 2:
         _warn(errors, 'output cell limit exceeded')
         return []
@@ -357,7 +357,7 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
     items = []
     implicit = []
     for index, item in enumerate(series):
-        if item.auxiliary:
+        if item.auxiliary or index in (excluded_series or ()):
             continue
         resolved = {}
         for role in (0, 1, 2):

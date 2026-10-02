@@ -22,6 +22,52 @@ MAX_OBJECT_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_OBJECTS = 256
 MAX_RECORDS = 200000
+MAX_OBJECT_ERRORS = 16
+
+
+class _ObjectErrors(list):
+    """Bound optional-object diagnostics before they reach the host document."""
+    def __init__(self):
+        super().__init__()
+        self.seen = set()
+        self.omitted = 0
+
+    def __contains__(self, message):
+        return message in self.seen
+
+    def append(self, message):
+        if message in self.seen:
+            return
+        if len(self) >= MAX_OBJECT_ERRORS:
+            self.omitted += 1
+            return
+        self.seen.add(message)
+        super().append(message)
+
+    def extend(self, messages):
+        # Document.errors stays a plain, publicly mutable list. Preserve the
+        # workbook's canonical final summary without exposing its collector.
+        if isinstance(messages, (list, tuple)) and messages:
+            summary = re.fullmatch(r'WARN: XLS ([0-9]{1,20}) additional diagnostics omitted', messages[-1])
+            if summary:
+                self.omitted += int(summary.group(1))
+                messages = messages[:-1]
+        for message in messages:
+            self.append(message)
+
+    def copy_to_host(self, errors):
+        seen = set(errors)
+        messages = list(self)
+        if self.omitted:
+            messages.append('WARN: embedded OLE %d additional diagnostics omitted' % self.omitted)
+        for message in messages:
+            if message.startswith('ERR:'):
+                message = 'WARN: embedded OLE ' + message[4:].lstrip()
+            elif not message.startswith('WARN:'):
+                message = 'WARN: embedded OLE ' + message
+            if message not in seen and len(errors) < 1000:
+                errors.append(message)
+                seen.add(message)
 
 
 def _warn(errors, message):
@@ -91,7 +137,7 @@ def _rec(sid, payload=b''):
     return struct.pack('<HH', sid, len(payload)) + payload
 
 
-def _graph_chart(data):
+def _graph_chart(data, excluded_series=None):
     """Normalize Graph datasheet values and BRAI row/column indices.
 
     Graph BOF has vers=0x0680, dt=0x8000. Datasheet Number/Label use
@@ -204,7 +250,14 @@ def _graph_chart(data):
             if selections and len(selections) != 2:
                 raise ValueError('incomplete MS Graph datasheet selection')
             point_stop = selections.get(0x1054 if by_rows else 0x1053)
-            for refs in series:
+            series_stop = selections.get(0x1053 if by_rows else 0x1054)
+            for index, refs in enumerate(series):
+                if series_stop is not None and refs.get(1, 0) >= series_stop:
+                    # A saved Series can remain after its datasheet axis is
+                    # deselected. Its category cache alone is not a data series.
+                    refs['auxiliary'] = True
+                    if excluded_series is not None:
+                        excluded_series.add(index)
                 if refs.get('auxiliary'):
                     continue
                 if point_stop is not None and any(
@@ -277,9 +330,14 @@ def _visible_workbook_chart(data, chart_object=False):
 
 
 def parse_embedded_chart(data, errors, graph=False, budget=None, chart_object=False):
+    host_errors = errors
+    errors = _ObjectErrors()
     try:
         if graph:
-            elements = parse_chart_substreams(_graph_chart(data), errors=errors, budget=budget, category_start=1)
+            excluded = set()
+            normalized = _graph_chart(data, excluded)
+            elements = parse_chart_substreams(normalized, errors=errors, budget=budget,
+                                              category_start=1, excluded_series=excluded)
         else:
             selected = _visible_workbook_chart(data, chart_object)
             if selected is None:
@@ -290,7 +348,7 @@ def parse_embedded_chart(data, errors, graph=False, budget=None, chart_object=Fa
                 # handling; output only the selected chart, never worksheet cells.
                 from .xls import parse_biff_workbook
                 doc = parse_biff_workbook(data, embedded_chart_offset=start, chart_budget=budget)
-                errors.extend(e for e in doc.errors if e not in errors)
+                errors.extend(doc.errors)
                 elements = [e for section in doc.sections for e in section.elements]
             else:
                 elements = parse_chart_substreams(data[start:end], errors=errors, budget=budget, category_start=1)
@@ -303,6 +361,8 @@ def parse_embedded_chart(data, errors, graph=False, budget=None, chart_object=Fa
     except (ValueError, struct.error) as exc:
         _warn(errors, str(exc))
         return []
+    finally:
+        errors.copy_to_host(host_errors)
 
 
 def _provenance(elements, provenance):
@@ -406,10 +466,13 @@ class PptObjects:
             raw = decompress_ppt_storage(record.data, record.header.rec_instance, storage_errors)
             self.storage_bytes.consume(len(raw), 'PPT embedded storage')
             with olefile.OleFileIO(io.BytesIO(raw)) as ole:
+                if not any(ole.exists(name) for name in ('Equation Native', 'Workbook', 'Book')):
+                    # Excel.Sheet.12 stores OOXML in Package. It is not a native
+                    # chart/equation input: keep its preview and do not report
+                    # recoverable framing anomalies for streams we never use.
+                    self.pool.remaining -= 1
+                    return []
                 if object_id not in self.supported:
-                    if not any(ole.exists(name) for name in ('Equation Native', 'Workbook', 'Book')):
-                        self.pool.remaining -= 1
-                        return []
                     self.supported.add(object_id)
                 for error in storage_errors:
                     _warn(self.pool.errors, error.removeprefix('WARN: embedded OLE '))

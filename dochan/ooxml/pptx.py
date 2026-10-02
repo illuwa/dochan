@@ -16,6 +16,7 @@ from .charts import (chart_elements, chart_series, text_table, xy_series_rows,
                      bubble_series_rows, mixed_series_rows, is_xy_series, chart_point_formatter, hydrate_chart_references, normalize_chart)
 from .core import core_property_elements, read_core_properties
 from .package import OOXMLPackage
+from .pptx_styles import TextStyleResolver
 
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -113,6 +114,7 @@ class PPTXReader:
             core_elements = core_property_elements(read_core_properties(package), "pptx")
             relationships = self._read_presentation_relationships(package)
             presentation = package.read_xml_part("ppt/presentation.xml")
+            self._text_styles = TextStyleResolver(package, presentation, doc.errors, self._alternate_branch)
             slide_paths = self._read_slide_paths(presentation, relationships)
             for index, slide_path in enumerate(slide_paths, start=1):
                 section = Section(
@@ -125,9 +127,8 @@ class PPTXReader:
                 if package.exists(slide_path):
                     slide_root = package.read_xml_part(slide_path)
                     slide_relationships = self._read_part_relationships(package, slide_path)
-                    layout_path = self._read_relationship_target_by_type(package, slide_path, "/slideLayout")
-                    if layout_path and package.exists(layout_path):
-                        layout_root = package.read_xml_part(layout_path)
+                    layout_path, layout_root = self._text_styles.related_part(slide_path, "slideLayout")
+                    if layout_root is not None:
                         layout_relationships = self._read_part_relationships(package, layout_path)
                         section.elements.extend(
                             self._read_slide_elements(
@@ -275,6 +276,7 @@ class PPTXReader:
     ) -> List[object]:
         positioned = []
         ordinal = [0]
+        style_context = self._text_styles.context(slide_root, slide_path)
         for tree in slide_root.findall(".//p:spTree", namespaces=NS):
             self._collect_positioned_elements(
                 package,
@@ -285,6 +287,7 @@ class PPTXReader:
                 positioned,
                 ordinal,
                 skip_placeholder_shapes=skip_placeholder_shapes,
+                style_context=style_context,
             )
         elements = [item[-1] for item in sorted(positioned, key=lambda item: item[:3])]
         return elements
@@ -304,6 +307,7 @@ class PPTXReader:
         scale_y: Fraction = Fraction(1, 1),
         skip_placeholder_shapes: bool = False,
         depth: int = 0,
+        style_context=None,
     ):
         if depth > MAX_GROUP_DEPTH:
             if not self._shape_limit_reported:
@@ -329,6 +333,7 @@ class PPTXReader:
                 heading_level = self._shape_heading_level(child)
                 added_text = False
                 bullet_counts = {}
+                style_layers = self._text_styles.shape_layers(child, style_context)
                 for p_elem in child.findall("p:txBody/a:p", namespaces=NS):
                     blocks = self._paragraph_blocks(
                         p_elem,
@@ -338,6 +343,7 @@ class PPTXReader:
                         default_hyperlink=shape_link,
                         heading_level=heading_level,
                         bullet_counts=bullet_counts,
+                        character_defaults=self._text_styles.paragraph_defaults(style_layers, p_elem),
                     )
                     for block in blocks:
                         positioned.append((absolute_y, absolute_x, ordinal, block))
@@ -415,6 +421,7 @@ class PPTXReader:
                         package, branch, slide_number, slide_path, relationships,
                         positioned, ordinal_ref, base_x, base_y, scale_x, scale_y,
                         skip_placeholder_shapes, depth + 1,
+                        style_context,
                     )
             elif child.tag == f"{{{P_NS}}}grpSp":
                 transform = self._group_transform(child)
@@ -432,6 +439,7 @@ class PPTXReader:
                     scale_y=scale_y * transform["scale_y"],
                     skip_placeholder_shapes=skip_placeholder_shapes,
                     depth=depth + 1,
+                    style_context=style_context,
                 )
 
     def _alternate_branch(self, elem):
@@ -806,6 +814,7 @@ class PPTXReader:
         default_hyperlink: str = "",
         heading_level: int = 0,
         bullet_counts: Dict[tuple, int] = None,
+        character_defaults=None,
     ) -> Paragraph:
         runs = []
         has_run_hyperlink = False
@@ -825,13 +834,21 @@ class PPTXReader:
                         run.italic = r_pr.get("i") in {"1", "true"}
                         run.underline = bool(r_pr.get("u") and r_pr.get("u") != "none")
                         run.strikeout = bool(r_pr.get("strike") and r_pr.get("strike") != "noStrike")
+                    if character_defaults is not None:
+                        self._text_styles.apply(run, r_pr, character_defaults)
                     runs.append(run)
             elif child.tag == f"{{{A_NS}}}br":
-                runs.append(TextRun(text="\n"))
+                run = TextRun(text="\n")
+                if character_defaults is not None:
+                    self._text_styles.apply(run, child.find("a:rPr", namespaces=NS), character_defaults)
+                runs.append(run)
             elif child.tag == f"{{{A_NS}}}fld":
                 text = "".join(t.text or "" for t in child.findall("a:t", namespaces=NS))
                 if text:
-                    runs.append(TextRun(text=text))
+                    run = TextRun(text=text)
+                    if character_defaults is not None:
+                        self._text_styles.apply(run, child.find("a:rPr", namespaces=NS), character_defaults)
+                    runs.append(run)
         if default_hyperlink and runs and not has_run_hyperlink:
             runs[-1].text = f"{runs[-1].text} <{default_hyperlink}>"
         bullet_prefix = self._bullet_prefix(p_elem, bullet_counts)

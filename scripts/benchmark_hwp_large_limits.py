@@ -33,15 +33,28 @@ def _compressed_bytes(size):
     return b"".join(chunks)
 
 
+def _link_section(count):
+    """한 문단의 분리된 필드마다 실제 링크 컨트롤 레코드를 조립한다."""
+    control_id = b"klh%"
+    start = struct.pack("<H", 3) + control_id + bytes(8) + struct.pack("<H", 3)
+    end = struct.pack("<H", 4) + control_id + bytes(8) + struct.pack("<H", 4)
+    text = (start + b"x\x00" + end) * count + b"\r\x00"
+    command = "http\\://h/x;1;0;0;".encode("utf-16-le")
+    control = _record(71, 1, control_id + bytes(5)
+                      + struct.pack("<H", len(command) // 2) + command + bytes(4))
+    return deflate(_record(66, 0, bytes(22)) + _record(67, 1, text) + control * count)
+
+
 def measure(case):
     from dochan.hwp.doc_info import MAX_HWP_RECORDS as DOCINFO_RECORDS
-    from dochan.hwp.section import MAX_HWP_RECORDS
+    from dochan.hwp.section import MAX_HWP_DOCUMENT_RECORDS, MAX_HWP_RECORDS
     from dochan.utils.safe_decompress import MAX_DECOMPRESSED_SIZE
 
     compressed = False
     repeats = 1
     docinfo = b""
     distribution = False
+    sections = None
     if case.startswith("corrupt_multisection_"):
         return probe(case.removeprefix("corrupt_multisection_"))
     if case == "empty_records_at_limit":
@@ -67,6 +80,16 @@ def measure(case):
     elif case == "docinfo_char_shapes_at_limit":
         data = b""
         docinfo = _record(21, 0, bytes(72)) * DOCINFO_RECORDS
+    elif case in ("links_at_limit", "links_and_docinfo_at_document_limit"):
+        # PARA_HEADER + PARA_TEXT consume two records in every section.
+        budgets = [MAX_HWP_RECORDS]
+        if case == "links_and_docinfo_at_document_limit":
+            budgets.append(MAX_HWP_DOCUMENT_RECORDS - MAX_HWP_RECORDS)
+            docinfo = _record(21, 0, bytes(72)) * DOCINFO_RECORDS
+        sections = [_link_section(budget - 2) for budget in budgets]
+        data = sections[0]
+        repeats = len(sections)
+        compressed = True
     elif case in ("repeated_checksum_failures", "distribution_repeated_checksum_failures"):
         # Eighty 4 MiB expansions exceed the 200 MiB document work budget.
         body = _record(1023, 0, bytes(4 * 1024 * 1024 - 8))
@@ -87,11 +110,15 @@ def measure(case):
     # All fixtures use compressed OLE streams, as real compressed HWP files do.
     if not compressed:
         data = deflate(data)
-    contents = streams([data] * repeats, deflate(docinfo), distribution=distribution)
+    contents = streams(sections if sections is not None else [data] * repeats,
+                       deflate(docinfo), distribution=distribution)
     reader, markdown, serialized, stats = parse_public(contents)
     stats.update(case=case, input_bytes=sum(map(len, contents.values())),
                  input_sections=repeats, retained_sections=len(reader.doc.sections),
                  char_shapes=len(reader.doc.char_shapes),
+                 link_runs=sum(bool(run.link) for item in reader.doc.sections
+                               for element in item.elements
+                               for run in getattr(element, "runs", [])),
                  elements=sum(len(item.elements) for item in reader.doc.sections),
                  errors=reader.errors, markdown=fingerprint(markdown), json=fingerprint(serialized))
     return stats
@@ -110,7 +137,8 @@ def main():
              "docinfo_and_document_records_over_limit", "cells_at_limit",
              "corrupt_multisection_invalid", "corrupt_multisection_truncated",
              "corrupt_multisection_checksum", "repeated_checksum_failures",
-             "distribution_repeated_checksum_failures"]
+             "distribution_repeated_checksum_failures", "links_at_limit",
+             "links_and_docinfo_at_document_limit"]
     with multiprocessing.get_context("spawn").Pool(1, maxtasksperchild=1) as pool:
         rows = []
         for result in pool.imap(measure, args.cases or cases):

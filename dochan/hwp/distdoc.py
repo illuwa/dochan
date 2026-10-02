@@ -6,6 +6,7 @@
 압축 후 trailer 배치 역시 명세에 없어 공개 실물의 CRC32와 길이로 검증한다.
 """
 import struct
+import zlib
 
 from dochan.constants import HWPTAG_DISTRIBUTE_DOC_DATA
 from dochan.utils.aes import aes128_ecb_decrypt
@@ -76,7 +77,27 @@ def _compressed_payload(data: bytes, *, max_size=None, decompress=False):
         if trailer not in (padding, aligned, packed):
             raise ValueError("Invalid distribution CRC32/size trailer or alignment")
 
-    output = safe_zlib_decompress(data, max_size=max_size, trailer_validator=validate)
+    try:
+        output = safe_zlib_decompress(data, max_size=max_size, trailer_validator=validate)
+    except (ValueError, zlib.error) as exc:
+        # Keep the distribution decoder's original exception contract while
+        # retaining failed inflation work for the shared document budget.
+        messages = {
+            "Invalid compressed stream: truncated data": "Truncated distribution DEFLATE stream",
+            "Invalid compressed stream: decompressor made no progress":
+                "Distribution DEFLATE made no progress",
+        }
+        if isinstance(exc, zlib.error):
+            message = "Invalid distribution DEFLATE stream"
+        elif str(exc).startswith("Decompressed size exceeds limit"):
+            message = "Distribution decompressed size exceeds limit"
+        else:
+            message = messages.get(str(exc))
+        if message is None:
+            raise
+        error = ValueError(message)
+        error.inflated = getattr(exc, "inflated", 0)
+        raise error from exc
     return output if decompress else data[:end]
 
 

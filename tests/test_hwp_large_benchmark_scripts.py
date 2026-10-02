@@ -38,3 +38,21 @@ def test_distribution_synthetic_fixture_is_actually_encrypted():
     assert body not in encoded
     decoded = decode_distribution_section(encoded, is_compressed=True)
     assert safe_zlib_decompress(decoded) == body
+
+
+def test_link_resource_cases_retain_links_and_docinfo(monkeypatch):
+    monkeypatch.setattr("dochan.hwp.section.MAX_HWP_RECORDS", 20)
+    monkeypatch.setattr("dochan.hwp.section.MAX_HWP_DOCUMENT_RECORDS", 26)
+    monkeypatch.setattr("dochan.hwp.doc_info.MAX_HWP_RECORDS", 4)
+    for case, links, shapes, sections in (
+        ("links_at_limit", 18, 0, 1),
+        ("links_and_docinfo_at_document_limit", 22, 4, 2),
+    ):
+        row = benchmark.measure(case)
+        assert row["api"] == "Dochan -> to_markdown -> to_json"
+        assert row["link_runs"] == links
+        assert row["char_shapes"] == shapes
+        assert row["retained_sections"] == sections
+        assert row["markdown"]["characters"] > 0
+        assert row["json"]["characters"] > 0
+        assert row["errors"] == []

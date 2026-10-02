@@ -160,6 +160,14 @@ class SectionParser:
                      *, reject_record_limit: bool = False,
                      distribution_decoder=None) -> Section:
         self._reset_section_limits()
+        # A prior section may have consumed the whole document budget. Do
+        # not inflate or reject ViewText again: that would trigger a futile
+        # BodyText fallback and one warning per remaining section.
+        if self._document_records >= MAX_HWP_DOCUMENT_RECORDS and stream_data:
+            self._document_limit_once(
+                "records", "ERR: HWP document record count exceeds limit: "
+                f"more than {MAX_HWP_DOCUMENT_RECORDS}")
+            return Section()
         remaining = max(0, MAX_HWP_DOCUMENT_BYTES - self._document_bytes)
         byte_limit = min(MAX_DECOMPRESSED_SIZE, remaining)
         if not remaining and stream_data:
@@ -179,8 +187,11 @@ class SectionParser:
                 stream_data = safe_zlib_decompress(stream_data, max_size=byte_limit)
         except (ValueError, zlib.error) as exc:
             self._document_bytes += min(getattr(exc, "inflated", 0), byte_limit)
-            if "Decompressed size exceeds limit" not in str(exc):
+            if "decompressed size exceeds limit" not in str(exc).lower():
                 raise
+            # Both byte caps currently equal 200 MiB, so the document cap
+            # wins ties (including a single oversized section). Keep the
+            # section branch for independently configured per-stream caps.
             if byte_limit == remaining:
                 self._document_limit_once(
                     "bytes", "ERR: HWP document size limit exhausted: "
@@ -206,6 +217,8 @@ class SectionParser:
 
     def _read_all_records(self, data: bytes, *, reject_record_limit: bool = False) -> List[RawRecord]:
         records = []
+        # parse_stream already bounds this input; retain the guard for
+        # direct record-reader callers, which bypass decompression checks.
         if len(data) > MAX_DECOMPRESSED_SIZE:
             self.errors.append("ERR: HWP section size exceeds limit")
             return records

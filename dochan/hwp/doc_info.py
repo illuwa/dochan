@@ -114,6 +114,8 @@ class DocInfoParser:
     def _read_all_records(self, data: bytes):
         """레코드 순차 읽기 (트리 구축 불필요 — DocInfo는 flat)"""
         records = []
+        # Compressed input was checked by safe_zlib_decompress. Uncompressed
+        # DocInfo and direct record-reader calls still need this guard.
         if len(data) > MAX_DECOMPRESSED_SIZE:
             self.errors.append("ERR: HWP DocInfo size exceeds limit")
             return records

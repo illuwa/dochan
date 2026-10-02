@@ -23,6 +23,7 @@ class StructureRenderer:
         self.pictures = pictures
         self.objects = objects
         self.depth = 0
+        self.captions = None
         self.section_breaks = frozenset(getattr(binary, 'section_boundaries', ()))
 
     def _chunks(self, record):
@@ -144,6 +145,13 @@ class StructureRenderer:
             return []
         self.depth += 1
         try:
+            main_start, main_end = getattr(self.binary, 'stories', {}).get('main', (-1, -1))
+            if self.depth == 1 and main_start <= start <= end <= main_end:
+                from .doc_captions import DocCaptions
+                if self.captions is None:
+                    self.captions = DocCaptions(self.binary, self.stories, self.doc.errors)
+                return self.captions.render(self.binary.paragraphs(start, end), self.paragraph,
+                    self.doc.errors, getattr(self.pictures, 'textbox_at', None))
             return assemble_blocks(self.binary.paragraphs(start, end), self.paragraph, self.doc.errors)
         finally:
             self.depth -= 1

@@ -104,6 +104,7 @@ class Document:
         if _depth > 32:
             return
         from .table import Table
+        from .image import Image
         from .header_footer import HeaderFooter, Footnote
 
         if seen is None:
@@ -125,7 +126,8 @@ class Document:
                             cell.paragraphs, cls, results, seen, allowed_types,
                             _depth + 1,
                         )
-                # 표 캡션 안의 요소도 놓치지 않는다
+            if isinstance(elem, (Table, Image)):
+                # 표와 그림 캡션으로 이동한 문단도 한 번씩 탐색한다.
                 self._find_recursive(
                     elem.caption, cls, results, seen, allowed_types, _depth + 1,
                 )

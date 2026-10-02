@@ -24,7 +24,9 @@ MAX_OUTPUT_CHARS = 8 * 1024 * 1024
 @dataclass
 class TextBlock:
     text: str = ''
-    text_type: int = 1
+    # Missing/truncated TextHeaderAtom has no evidence for body placeholder
+    # inheritance. Use Other; an explicit header still supplies its own type.
+    text_type: int = 4
     style: bytes = b''
     records: List[Record] = field(default_factory=list)
     paragraph_levels: List[Tuple[int, int, int]] = field(default_factory=list)

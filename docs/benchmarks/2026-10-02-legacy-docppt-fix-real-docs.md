@@ -193,3 +193,81 @@ ruff check dochan scripts tests
 ```
 
 3차 전체 테스트는 **3,367 passed, 24 skipped, 14 xfailed**이다. 새 테스트는 35개이며 기존 HEAD 테스트 파일·단언은 수정하지 않았다. Ruff와 `git diff --check`를 통과했다. 제품 변경은 `dochan/output/markdown.py`뿐이다. 이번 커밋 대상은 이 파일, `scripts/probe_markdown_commonmark.py`, `tests/test_markdown_r2.py`, `tests/test_markdown_commonmark_probe.py`, 이 벤치마크 문서의 총 5개이다. `.codex-work/` 결과와 원본 문서는 커밋 대상이 아니다.
+
+
+## 4차 반영: Opus P2-1·P3-1·P3-2·P3-3
+
+2026년 10월 3일 깨끗한 `1bc7aae`에서 시작했다. 해당 리비전의 리더와 작성기 전체를 기준으로 최종 리더·작성기를 종단간 비교했다. 이전 절은 각 당시 리비전의 역사적 수치이며, 이번 결과는 이 절이 최종 기록이다. README와 CHANGELOG는 수정하지 않았다. r2의 역슬래시와 여러 줄 이미지·링크 회귀도 전체 테스트에서 통과했다.
+
+네 항목의 최초 합성 테스트는 21개 실패와 7개 통과였다. 코드 스팬은 같은 길이의 백틱을 미리 색인하여 내부 줄바꿈을 보존한다. 이스케이프된 여는 백틱, 코드 안의 역슬래시와 대괄호, 불일치 길이·미종결 백틱도 검증했다. 재귀나 반복적인 접미부 검색 없이 입력 길이에 비례하여 처리한다.
+
+P3-1의 모든 경계 기호를 일괄 이스케이프하는 시도는 실물에서 기존 인라인 강조와 인접 런의 해석을 바꿨다. 이 회귀를 추가 합성 테스트 6개 실패로 확인하고 수정했다. 최종 정책은 `* la Formation,`처럼 기호 안쪽이 공백이라 강조 구분자가 될 수 없는 경계만 이스케이프하는 것이다. TextRun에는 파서가 생성한 Markdown과 인접 런까지 이어지는 구분자가 있으므로 `*title*`, `_label_`, `*reference`, `note*`, 기호만 있는 런은 보존한다. 이는 평문임이 보장된 캡션과 다른 조건이며, 표본 이름에 따른 예외는 없다.
+
+파일명과 데이터가 모두 없는 Image는 가짜 `image` 목적지를 만들지 않고 제공된 설명·OCR·캡션을 보존한다. 공용 이미지 함수에서 처리하므로 표 셀과 최상위 그림 모두 같다. 파일명이나 데이터 중 하나가 있으면 기존 참조 계약을 유지한다. TextHeaderAtom이 없거나 잘린 PPT 블록은 Body(1) 대신 Other(4)를 사용하고, 정상 헤더와 명시적 CF는 그대로 적용한다.
+
+| 칸·지적 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
+|---|---|---|---|---|---|
+| P2-1 여러 줄 코드 스팬 | 공개 결함 표본은 확인하지 못했다. | 합성 TextRun과 CommonMark HTML의 code 내용을 대조했다. | `run` 뒤의 코드 `a b`에 강조 기호가 섞이지 않아야 한다. | 여러 길이 백틱·역슬래시·중첩 링크·미종결 입력 테스트가 통과했다. | 단위 검증은 통과했고 실물 결함 재현은 미검증이다. |
+| P3-1 원문 별표와 강조 기호 결합 | POI `41246-2.ppt`이다. | 원래 기울임 TextRun 및 CommonMark 렌더 결과를 대조했다. | `* la Formation,` 등 원문 목록 3줄의 별표를 보존하고 기울임을 적용해야 한다. | 세 줄 모두 원문 별표 하나를 포함한 em 요소로 렌더된다. | 실물과 단위 테스트가 통과했다. |
+| P3-2 빈 셀 그림 참조 | 공개 `36417406_gyeoljae.hwpx`, `36395325_gyeoljae_consulting.hwpx`, `36389301_결재문서본문_직장훈련계획_덧말.hwpx`, `36398366_결재문서본문_PC 셧다운 제외 및 초과근무 인정 요청(데이터전략과).hwpx`이다. | 네 모델 모두 filename이 비고 image_data가 0바이트인 것을 확인했다. | 자산 없는 가짜 이미지 참조가 없어야 한다. | 160개 중 4개 문서의 끊긴 참조가 4→0이며 다른 그림은 보존된다. | 4/4 실물과 단위 테스트가 통과했다. |
+| P3-3 헤더 없는 PPT의 Body 상속 | 공개 PPT 221개를 비교했다. | 합성 TextBytesAtom·TextCharsAtom, 정상·잘린 헤더 및 Body/Other 마스터 바이트를 대조했다. | 헤더가 없으면 Other 서식을 적용하고 명시적 CF를 유지해야 한다. | 합성 입력은 통과했고 실물의 모델 문자 서식 변화는 0개였다. | 합성 검증은 통과했다. 영향받는 실물 표본은 미검증이다. |
+
+### 최종 공개 표본 비교
+
+Opus와 같은 공개 루트인 `hwp-public`, `lo-src`, `poi-src`, `pdfjs-src`, `tika-test-docs`, `generated`만 검색했다. 내부 문서는 검색하지 않았다. 5 MiB 이하 파일의 코퍼스 상대 경로를 SHA-1 오름차순으로 정렬하고 DOC 491개·PPT 221개 전부와 DOCX·PPTX·XLSX·HWP·HWPX·PDF 각각 160개를 선정했다. 보관된 Opus 스크립트의 PDF 170개 대신 이번 명시 지시인 160개를 적용하여 총 1,672개가 된다. 성공 문서를 채울 때까지 표본을 교체하는 방식이 아니다.
+
+| 형식 | 선정·비교 | 정상·비어 있지 않은 해당 형식 | 오류 기록 문서 | 빈 출력 | 형식 불일치 | 변경 | 본문 손실 단어 | 별표 증가 묶음 | 빈 그림 참조 전→후 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| DOCX | 160 | 157 | 0 | 3 | 0 | 0 | 0 | 0 | 0→0 |
+| PPTX | 160 | 149 | 4 | 11 | 0 | 0 | 0 | 0 | 0→0 |
+| XLSX | 160 | 149 | 11 | 8 | 1 | 0 | 0 | 0 | 0→0 |
+| HWP | 160 | 156 | 2 | 4 | 0 | 3 | 0 | 0 | 0→0 |
+| HWPX | 160 | 153 | 1 | 4 | 2 | 4 | 0 | 0 | 4→0 |
+| PDF | 160 | 108 | 2 | 52 | 0 | 0 | 0 | 0 | 0→0 |
+| DOC | 491 | 401 | 68 | 88 | 10 | 4 | 0 | 0 | 0→0 |
+| PPT | 221 | 179 | 28 | 42 | 9 | 6 | 0 | 0 | 0→0 |
+
+오류·빈 출력·형식 불일치는 겹칠 수 있으므로 더하지 않는다. 호출 예외는 양쪽 모두 0개이며, 파서 오류 기록이 늘어난 문서도 0개이다. 정상·비어 있지 않은 해당 형식은 1,452개이고, 선정 1,672개 전부가 정상이라는 주장은 하지 않는다.
+
+**렌더 본문 손실은 0단어·0문서이고, 떠도는 `*` 묶음 증가는 0개이며, 자산 없는 그림 참조는 4→0개이다.** 출력이 바뀐 것은 17개이고 나머지 1,655개는 전체 Markdown SHA-256이 같다. 본문은 markdown-it-py 3.0.0의 CommonMark에 표·취소선을 켠 HTML에서 추출하고, 이미지 alt는 본문에서 분리했다. Opus와 같이 공백 단위 단어에서 별표와 역슬래시를 제거한 빈도 차이로 손실을 센다. 원시 HTML 블록의 본문도 포함한다. 별표 증가는 빈 줄로 나눈 변경 묶음을 정렬한 뒤 각 묶음의 실제 렌더 본문 별표 수 증가로 세며, 다른 묶음의 감소로 상쇄하지 않는다. 빈 그림 참조는 빈 목적지 또는 `image` 목적지에 대응하는 이름 없는 이미지 데이터가 없는 경우이다. 외부 URL의 접근 가능성을 검사했다는 뜻은 아니다.
+
+동일 출력이며 이미지 여는 구문이 없는 경우는 동일성으로 회귀 0을 증명하고 불필요한 재렌더를 생략했다. 특히 POI `poc-shared-strings.xlsx`는 12,579,810,358바이트의 동일 Markdown을 생성했다. 전체 바이트 SHA-256과 이미지 여는 구문의 부재를 스트리밍으로 재검증했으며, 대용량 렌더링은 60초 제한 후 중단했다. 이 파일을 렌더 검증 성공으로 세지 않는다. 약 25.2GB의 양쪽 중간 파일을 삭제했고, 프로브는 이후 16 Mi 문자보다 큰 출력의 본문을 저장하지 않고 전체 해시·빈 출력 여부·이미지 여는 구문 유무만 기록한다. 해당 크기에서 출력이 달라지거나 이미지 구문이 있으면 비교를 실패로 처리한다. XLSX의 기존 출력 팽창 문제는 이번 소유 범위 밖이며 별도 조치가 필요하다.
+
+### 변경 문서와 이유
+
+| 공개 표본 경로 | 변화 이유 |
+|---|---|
+| `hwp-public/hwp/nts-260721 국세청, 기간제 근로자 4,000명 2차 채용, 체납 실태확인 실시. 국가재정은 튼튼하게, 일자리는 더 많이(최종).hwp` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `hwp-public/hwp/고용노동부_2018-07-11_7.11 사회적경제박람회 보도자료(관계부처합동).hwp` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `hwp-public/hwp/고용노동부_2016-10-18_10.18 3분기 남성 육아휴직 및 육아기 근로시간 단축 이용 실태(여성고용정책과).hwp` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `hwp-public/hwpx/36395325_gyeoljae_consulting.hwpx` | 파일명과 데이터가 없는 셀 그림 참조를 제거했다. |
+| `hwp-public/hwpx/36389301_결재문서본문_직장훈련계획_덧말.hwpx` | 파일명과 데이터가 없는 셀 그림 참조를 제거했다. |
+| `hwp-public/hwpx/36417406_gyeoljae.hwpx` | 파일명과 데이터가 없는 셀 그림 참조를 제거했다. |
+| `hwp-public/hwpx/36398366_결재문서본문_PC 셧다운 제외 및 초과근무 인정 요청(데이터전략과).hwpx` | 파일명과 데이터가 없는 셀 그림 참조를 제거했다. |
+| `poi-src/test-data/document/ob_is.doc` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/document/parentinvguid.doc` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `lo-src/sw/qa/extras/ooxmlexport/data/tdf121374_sectionHF2.doc` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/document/Bug46610_3.doc` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/slideshow/41246-2.ppt` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/slideshow/alterman_security.ppt` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6028723156746240.ppt` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/slideshow/bug58718_008558.ppt` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `lo-src/sd/qa/unit/data/ppt/tdf168786.ppt` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+| `poi-src/test-data/slideshow/bug61881.ppt` | 공백에 붙어 강조 구분자가 될 수 없는 원문 경계 기호를 이스케이프했다. |
+
+### 기존 칸 재검증과 최종 검사
+
+공개 PPT 221개 모델 스냅샷을 다시 검사했다. 직전 검증본 대비 문자 서식 변화와 본문 불일치는 0개이다. 같은 이름 PPT/PPTX 9쌍 중 비공백 정답이 있는 5쌍에서 크기 10,982/12,207자, 굵게·기울임·밑줄·위첨자·아래첨자는 각각 12,479/12,479자를 유지한다. 새 상속 변화의 외부 정답 검증을 추가한 것은 아니므로 기존 미검증 칸은 그대로다. DOC 그림 프로브도 다시 실행하여 492개 중 Word6/95 33개, 정상 직접 WMF 1파일 1개를 유지했다. `forcepoint92.doc`의 9,372바이트와 SHA-256이 원시값과 1/1 일치한다. 비교 표의 DOC 491개는 5 MiB 상한을 적용한 수이다.
+
+전체 결과는 **3,418 passed, 24 skipped, 14 xfailed**이다. 새 테스트 51개는 모두 실행됐다. 기존 HEAD 테스트 파일과 단언은 바꾸지 않았다. Ruff와 diff 공백 검사도 통과했다. 공유 제품 변경은 `dochan/output/markdown.py` 하나이며, 전용 파서 변경은 `dochan/office_binary/ppt_text.py`의 기본 텍스트 유형이다. 새 모델·새 출력 형식·런타임 의존성은 추가하지 않았다.
+
+```bash
+/usr/bin/python3 -m scripts.probe_legacy_docppt_r4 select CORPUS .codex-work/r4-samples.json
+/usr/bin/python3 -m scripts.probe_legacy_docppt_r4 snapshot CORPUS BASE_SOURCE .codex-work/r4-samples.json .codex-work/r4-before
+/usr/bin/python3 -m scripts.probe_legacy_docppt_r4 snapshot CORPUS . .codex-work/r4-samples.json .codex-work/r4-after-final
+/usr/bin/python3 -m scripts.probe_legacy_docppt_r4 compare .codex-work/r4-before .codex-work/r4-after-final .codex-work/r4-final-comparison.json
+/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
+ruff check dochan scripts tests
+```
+
+`BASE_SOURCE`는 `1bc7aae`의 dochan 소스를 풀어 둔 경로이고 `CORPUS`는 읽기 전용 공개 코퍼스 루트 인자이다. 선택 경로·입력 해시·리비전별 출력 해시와 오류 계수는 `.codex-work/r4-samples.json`, `r4-before/records.json`, `r4-after-final/records.json`에 있다. 최종 판정은 `r4-final-comparison.json`, PPT 재검증은 `r4-ppt-pairs.json`, DOC 그림 재검증은 `r4-doc-images.json`, 실패 증거는 `r4-red.txt`와 `r4-corpus-red.txt`에 있다.

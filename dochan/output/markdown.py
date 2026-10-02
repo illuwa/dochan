@@ -4,6 +4,7 @@ AI/LLM에 최적화된 Markdown 출력
 """
 
 from dataclasses import replace
+import re
 
 from ..model.document import Document, Paragraph, TextRun
 from ..model.table import Table, Cell, flatten_block_texts
@@ -271,13 +272,14 @@ def _run_to_md(run: TextRun) -> str:
 
 
 def _emphasis_lines(text: str, marker: str) -> str:
-    """일반 줄 경계에서만 강조를 닫는다. 인라인 링크 내부는 보존한다."""
+    """일반 줄 경계에서만 강조를 닫고 인라인 링크와 코드를 보존한다."""
     lines = []
     for line in _emphasis_parts(text):
         core = line.strip()
         if core:
             lead = line[:len(line) - len(line.lstrip())]
             trail = line[len(line.rstrip()):]
+            core = _escape_emphasis_edges(core)
             # An odd terminal backslash would escape the first closing star.
             # Preserve existing escape pairs and quote only the unmatched one.
             if (len(core) - len(core.rstrip('\\'))) % 2:
@@ -288,22 +290,88 @@ def _emphasis_lines(text: str, marker: str) -> str:
     return '\n'.join(lines)
 
 
+def _escape_emphasis_edges(text: str) -> str:
+    """Quote boundary symbols that whitespace makes literal, not delimiters.
+
+    Runs can contain generated Markdown, even delimiters spanning adjacent
+    runs. Preserve potentially active syntax and isolated symbol runs; unlike
+    captions these strings are not guaranteed to be plain text.
+    """
+    left = 0
+    while left < len(text) and text[left] in '*_':
+        left += 1
+    if left == len(text) or not text[left:left + 1].isspace():
+        left = 0
+    right = len(text)
+    while right > left and text[right - 1] in '*_':
+        right -= 1
+    if not right or not text[right - 1:right].isspace():
+        right = len(text)
+    return (''.join('\\' + char for char in text[:left]) + text[left:right]
+            + ''.join('\\' + char for char in text[right:]))
+
+
+def _code_span_ends(text: str):
+    """Index equal-length backtick runs in linear time, including unmatched runs.
+
+    Backslashes escape opening ticks outside code, but are literal inside it.
+    Pre-indexing the next equal run avoids rescanning malformed suffixes.
+    """
+    runs = list(re.finditer(r'`+', text))
+    following = {}
+    escaped_following = {}
+    next_run = {}
+    for run in reversed(runs):
+        size = run.end() - run.start()
+        if size in next_run:
+            following[run.start()] = next_run[size]
+        if size > 1 and size - 1 in next_run:
+            escaped_following[run.start()] = next_run[size - 1]
+        next_run[size] = run.end()
+    ends = {}
+    consumed = 0
+    for run in runs:
+        start = run.start()
+        if start < consumed:
+            continue
+        slash = start
+        while slash and text[slash - 1] == '\\':
+            slash -= 1
+        if (start - slash) % 2:
+            # Only the first tick was escaped; the rest can open a span.
+            start += 1
+            end = escaped_following.get(run.start())
+        else:
+            end = following.get(start)
+        if end is not None:
+            ends[start] = end
+            consumed = end
+    return ends
+
+
 def _emphasis_parts(text: str):
-    """Split outside generated [label](target) / ![alt](target) constructs.
+    """Split outside complete links, images and equal-length code spans.
 
     Pair delimiters once, then skip complete links. Both passes are linear,
     including malformed input; no recursive parse or repeated suffix search.
     Escaped brackets, nested labels/targets and angle targets are retained.
     This protects writer input syntax, rather than implementing CommonMark.
     """
-    if '\n' not in text or '[' not in text:
+    if '\n' not in text or ('[' not in text and '`' not in text):
         yield from text.split('\n')
         return
+    code_ends = _code_span_ends(text)
     stacks = {'[': [], '(': []}
     pairs = {}
     quote = ''
     escaped = False
+    code_end = 0
     for index, char in enumerate(text):
+        if index < code_end:
+            continue
+        if index in code_ends:
+            code_end = code_ends[index]
+            continue
         if escaped:
             escaped = False
             continue
@@ -325,6 +393,9 @@ def _emphasis_parts(text: str):
                 pairs[stacks[opening].pop()] = index
     start = index = 0
     while index < len(text):
+        if index in code_ends:
+            index = code_ends[index]
+            continue
         close = pairs.get(index)
         if (text[index] == '[' and close is not None
                 and text[close + 1:close + 2] == '(' and close + 1 in pairs):
@@ -483,7 +554,12 @@ def _image_to_md(img: Image, ctx=None) -> str:
     if any(ch in target for ch in ' ()<>'):
         target = '<' + target.replace('<', '%3C').replace('>', '%3E') + '>'
     if not img.inline_reference:
-        parts.append(f"![{alt}]({target})")
+        if img.filename or img.image_data:
+            parts.append(f"![{alt}]({target})")
+        elif img.alt_text:
+            # Keep descriptive text when there is no asset to link to.
+            plain = ' '.join(img.alt_text.split())
+            parts.append(''.join('\\' + c if c in '\\`*_[]' else c for c in plain))
 
     # OCR 텍스트가 있으면 이미지 아래에 추가
     if img.ocr_text:

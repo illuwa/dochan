@@ -343,6 +343,10 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
                 fragment_budget=None, slide_index=0, slide_count=0,
                 default_styles=None) -> List[Paragraph]:
     """Return PPTX-compatible paragraphs and literal ``label <target>`` links."""
+    # ppt_styles uses this module's binary readers; defer the import once per
+    # call rather than importing for every styled fragment in the text loop.
+    from .ppt_styles import style_for
+
     font_names = font_names or {}
     if fragment_budget is None:
         fragment_budget = [MAX_TEXT_FRAGMENTS]
@@ -475,7 +479,6 @@ def render_text(block, provenance, hyperlinks=None, default_hyperlink='',
             style_index += 1
         props = [False, False, False, 10.0, 0]
         if default_styles:
-            from .ppt_styles import style_for
             while level_index < len(block.paragraph_levels) and block.paragraph_levels[level_index][1] <= start:
                 level_index += 1
             level = block.paragraph_levels[level_index][2] if level_index < len(block.paragraph_levels) else 0

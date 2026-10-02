@@ -4,6 +4,7 @@ CP anchors come from PlcfSpa; image payloads and description properties are
 interpreted by the shared, bounded [MS-ODRAW] decoder. No stream scanning or
 signature guessing is used to associate a picture with a character.
 """
+import re
 import struct
 from dataclasses import replace
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from .officeart import (Limits, Record, RecordHeader, parse_header, parse_record
                         read_bstore, read_shapes)
 
 _MAX_PICTURES = 10000
+_LEGACY_MARKER = re.compile(r'\ue000doc-image-[0-9]+\ue001')
 _MIME = {'png': 'image/png', 'jpg': 'image/jpeg', 'bmp': 'image/bmp',
          'tiff': 'image/tiff', 'emf': 'image/x-emf', 'wmf': 'image/x-wmf',
          'pict': 'image/x-pict'}
@@ -127,7 +129,25 @@ def legacy_inline_images(word, doc):
                              blob=lambda index: b'')
     pictures = DocImages(binary, doc)
     images = {}
+    # Field instructions are hidden by the text fallback. Do not allocate
+    # image assets for those CPs; nested result fields remain hidden while
+    # any enclosing field is still in its instruction part.
+    fields = []
+    hidden = 0
+    previous = 0
     for cp, location in sorted(locations.items()):
+        for char in binary.text[previous:cp + 1]:
+            if char == '\x13':
+                fields.append(False)
+                hidden += 1
+            elif char == '\x14' and fields and not fields[-1]:
+                fields[-1] = True
+                hidden -= 1
+            elif char == '\x15' and fields:
+                hidden -= not fields.pop()
+        previous = cp + 1
+        if hidden:
+            continue
         image = pictures.image_at(cp, {'special': True, 'pic_location': location})
         if image is not None:
             images[cp] = image
@@ -165,21 +185,20 @@ def replace_legacy_image_markers(elements, markers, depth=0):
         runs = []
         for run in element.runs:
             text = run.text
-            while '\ue000' in text:
-                before, _, after = text.partition('\ue000')
-                key, separator, remaining = after.partition('\ue001')
-                marker = '\ue000' + key + '\ue001'
-                if not separator or marker not in markers:
-                    break
-                if before:
-                    runs.append(replace(run, text=before))
+            previous = 0
+            for match in _LEGACY_MARKER.finditer(text):
+                marker = match.group()
+                if marker not in markers:
+                    continue
+                if match.start() > previous:
+                    runs.append(replace(run, text=text[previous:match.start()]))
                 if runs:
                     append_paragraph(element, runs)
                     runs = []
                 result.append(markers[marker])
-                text = remaining
-            if text:
-                runs.append(replace(run, text=text))
+                previous = match.end()
+            if previous < len(text):
+                runs.append(replace(run, text=text[previous:]))
         if runs:
             append_paragraph(element, runs)
     return result
@@ -195,6 +214,11 @@ class DocImages:
     def __init__(self, binary, doc):
         self.binary = binary
         self.doc = doc
+        word = getattr(binary, 'word', b'')
+        self.legacy = (len(word) >= 12
+                       and struct.unpack_from('<H', word)[0] in (0xa5db, 0xa5dc)
+                       and struct.unpack_from('<H', word, 2)[0] in (101, 104)
+                       and not struct.unpack_from('<H', word, 10)[0] & 0x1104)
         self.limits = Limits()
         self._inline = {}
         self._assets = {}
@@ -290,6 +314,8 @@ class DocImages:
             self._warn('PICF location outside Data stream')
             return None
         size, header_size, mapping_mode = struct.unpack_from('<IHH', data, location)
+        if mapping_mode == 8 and not self.legacy:
+            return None
         minimum_header = 58 if mapping_mode == 8 else 68
         if (header_size < minimum_header or header_size > size or size > len(data) - location
                 or size > self.limits.max_record_bytes):

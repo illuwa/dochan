@@ -40,7 +40,7 @@ def word6(text=b'Before picture\r\x01\rAfter picture\r', properties=None):
 
 
 def test_legacy_picf_direct_wmf_has_valid_header_and_records():
-    binary = SimpleNamespace(data=picf(), word=b'', text='\x01', blob=lambda n: b'',
+    binary = SimpleNamespace(data=picf(), word=bytes(word6()), text='\x01', blob=lambda n: b'',
                              char_props=lambda cp: {'special': True, 'pic_location': 0})
     doc = Document()
     image = DocImages(binary, doc).image_at(0)
@@ -78,7 +78,7 @@ def test_word6_unknown_chpx_does_not_guess_picture_location():
 def test_legacy_picf_rejects_invalid_wmf_record_boundary():
     broken = bytearray(wmf())
     struct.pack_into('<I', broken, 18, 100)
-    binary = SimpleNamespace(data=picf(bytes(broken)), word=b'', text='\x01', blob=lambda n: b'',
+    binary = SimpleNamespace(data=picf(bytes(broken)), word=bytes(word6()), text='\x01', blob=lambda n: b'',
                              char_props=lambda cp: {'special': True, 'pic_location': 0})
     doc = Document()
     assert DocImages(binary, doc).image_at(0) is None
@@ -93,7 +93,7 @@ def test_word6_complex_layout_is_not_mistaken_for_contiguous_text():
 
 def test_legacy_wmf_limits_are_checked_before_export():
     from dochan.office_binary.officeart import Limits
-    binary = SimpleNamespace(data=picf(), word=b'', text='\x01', blob=lambda n: b'',
+    binary = SimpleNamespace(data=picf(), word=bytes(word6()), text='\x01', blob=lambda n: b'',
                              char_props=lambda cp: {'special': True, 'pic_location': 0})
     doc = Document()
     pictures = DocImages(binary, doc)

@@ -60,9 +60,9 @@ def merge_styles(*sources):
 
 def style_for(styles, kind, level):
     result = dict(styles.get((-1, -1), {}))
-    # Only Environment defaults apply to every text type. A master's Other
-    # text style (type 4) must not leak into a title or body placeholder.
-    result.update(styles.get((-1, level), styles.get((-1, 0), {})))
+    # TextCharacterStyleAtom provides the common character default. A
+    # TextMasterStyleAtom for Other (type 4), including one in Environment,
+    # remains type-specific rather than becoming a body/title default.
     base = BASE_TYPES.get(kind, kind)
     result.update(styles.get((base, level), styles.get((base, 0), {})))
     if base != kind:

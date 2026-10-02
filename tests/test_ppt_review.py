@@ -147,3 +147,90 @@ def test_review_saved_local_footer_field_and_literal_asterisk():
     data, cu = presentation([(2, obj)], [slide_list([(2, 256, b'')])])
     doc = parse_ppt_document_stream(data, current_user=cu)
     assert [p.text for p in doc.find_all('paragraph')] == ['saved footer literal *']
+
+
+@pytest.mark.parametrize('label_kind', ['wordart', 'hyperlink', 'object'])
+def test_review_synthetic_labels_do_not_inherit_body_styles(label_kind):
+    from dochan.office_binary.ppt_structure import resolve_presentation
+    from test_ppt_legacy_styles import master
+
+    value = 'Label\0'.encode('utf-16le')
+    prop = 0x80C0 if label_kind == 'wordart' else 0x8381
+    payload = record(0xF00A, struct.pack('<II', 1025, 0xA00))
+    payload += record(0xF00B, struct.pack('<HI', prop, len(value)) + value, instance=1)
+    if label_kind == 'hyperlink':
+        payload += record(0xF011, interaction(7))
+    elif label_kind == 'object':
+        payload += record(0xF011, record(3009, struct.pack('<I', 7)))
+    data, cu = presentation(
+        [(2, sheet(shapes=record(0xF004, payload, container=True)))],
+        [slide_list([(2, 256, b'')])])
+    resolved = resolve_presentation(data, cu, [])
+    renderer = _Renderer(Document(source_format='ppt'), [], {7: 'https://example.com'}, 'PowerPoint Document')
+
+    class EmptyObjects:
+        supported = {7}
+
+        def at(self, object_id, provenance):
+            return []
+
+    renderer.objects = EmptyObjects()
+    from dochan.office_binary.officeart import parse_records
+    from dochan.office_binary.ppt_styles import read_master_styles
+    styles = read_master_styles(parse_records(master(1, [(0, 0x20003, struct.pack('<HH', 3, 32))])))
+    paragraphs = renderer.sheet(resolved.slides[0], Provenance(source_format='ppt', slide=1), [], styles=styles)
+    assert len(paragraphs) == 1
+    run = paragraphs[0].runs[0]
+    assert run.text == ('Label <https://example.com>' if label_kind == 'hyperlink' else 'Label')
+    assert (run.bold, run.italic, run.font_size_pt) == (False, False, 10)
+
+
+@pytest.mark.parametrize('text_type', [0, 1, 4, 5, 6, 7, 8])
+def test_review_environment_other_style_is_only_for_other_text(text_type):
+    from test_ppt_legacy_styles import master
+    environment = record(1010, master(4, [(0, 0x20003, struct.pack('<HH', 3, 32))]), container=True)
+    outline = record(3999, struct.pack('<I', text_type)) + record(4008, b'Text')
+    data, cu = presentation([(2, sheet())], [environment, slide_list([(2, 256, outline)])])
+    doc = parse_ppt_document_stream(data, current_user=cu)
+    run = doc.find_all('paragraph')[0].runs[0]
+    assert (run.bold, run.italic, run.font_size_pt) == ((True, True, 32) if text_type == 4 else (False, False, 10))
+
+
+def test_review_style_cache_survives_reused_temporary_sheet_identity(monkeypatch):
+    import dochan.office_binary.ppt_render as rendering
+    from dataclasses import replace
+    from dochan.office_binary.ppt_structure import resolve_presentation
+    from test_ppt_legacy_styles import master
+
+    objects = [(i + 2, record(1006, master(1, [(0, 0x20000, struct.pack('<H', size))]), container=True))
+               for i, size in enumerate((18, 32))]
+    outline = record(3999, struct.pack('<I', 1)) + record(4008, b'Text')
+    data, cu = presentation(objects, [slide_list([(2, 256, outline), (3, 257, outline)])])
+    resolved = resolve_presentation(data, cu, [])
+    resolved.slides = [replace(s, recovery_record=s.record) for s in resolved.slides]
+    monkeypatch.setattr(rendering, 'resolve_presentation', lambda *_args: resolved)
+    # Deterministically model CPython recycling an identity after a temporary
+    # dataclasses.replace Sheet is released between slide iterations.
+    monkeypatch.setattr(rendering, 'id', lambda _sheet: 42, raising=False)
+    doc = rendering.read_structured_ppt(data, cu, b'', 'PowerPoint Document', [])
+    assert [p.runs[0].font_size_pt for p in doc.find_all('paragraph')] == [18, 32]
+
+
+def test_review_paragraph_level_boundary_splits_single_character_run():
+    from dochan.office_binary.officeart import parse_records
+    from dochan.office_binary.ppt_styles import read_master_styles
+    from dochan.office_binary.ppt_text import render_text
+    from test_ppt_legacy_styles import master
+    from test_ppt_text import cf, pf
+
+    # The PF boundary is independent of a visible paragraph delimiter and CF
+    # boundaries. UTF-16 positions also include the supplementary character.
+    b = block('A\U0001f600BC', pf(3) + pf(3, level=1) + cf(6))
+    styles = read_master_styles(parse_records(master(1, [
+        (0, 0x20001, struct.pack('<HH', 1, 18)),
+        (1, 0x20001, struct.pack('<HH', 0, 32)),
+    ])))
+    paragraphs = render_text(b, None, default_styles=styles)
+    assert len(paragraphs) == 1
+    assert [(r.text, r.bold, r.font_size_pt) for r in paragraphs[0].runs] == [
+        ('A\U0001f600', True, 18), ('BC', False, 32)]

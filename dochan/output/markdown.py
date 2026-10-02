@@ -251,11 +251,11 @@ def _run_to_md(run: TextRun) -> str:
 
     # 서식 적용
     if run.bold and run.italic:
-        core = f"***{core}***"
+        core = _emphasis_lines(core, '***')
     elif run.bold:
-        core = f"**{core}**"
+        core = _emphasis_lines(core, '**')
     elif run.italic:
-        core = f"*{core}*"
+        core = _emphasis_lines(core, '*')
 
     if run.underline:
         core = f"<u>{core}</u>"
@@ -268,6 +268,20 @@ def _run_to_md(run: TextRun) -> str:
         text = f"<sub>{text}</sub>"
 
     return text
+
+
+def _emphasis_lines(text: str, marker: str) -> str:
+    """제목·빈 줄 경계에서도 강조를 닫고, 각 줄의 공백은 마커 밖에 둔다."""
+    lines = []
+    for line in text.split('\n'):
+        core = line.strip()
+        if core:
+            lead = line[:len(line) - len(line.lstrip())]
+            trail = line[len(line.rstrip()):]
+            lines.append(f'{lead}{marker}{core}{marker}{trail}')
+        else:
+            lines.append(line)
+    return '\n'.join(lines)
 
 
 def _link_to_md(text: str, url: str) -> str:
@@ -339,6 +353,11 @@ def _cell_text(cell: Cell, ctx=None) -> str:
     """
     parts = []
     for block in cell.paragraphs:
+        if isinstance(block, Image):
+            rendered = _image_to_md(block, ctx)
+            if rendered:
+                parts.append(_escape_cell(rendered))
+            continue
         if isinstance(block, Footnote):
             # 참조 마커는 파서가 런에 심어 두었다. 여기서는 정의만 등록하거나
             # (마커가 없으면) 정의를 셀 안에 남긴다.

@@ -256,22 +256,24 @@ def parse_doc_word_stream(data: bytes, table_data: Optional[bytes] = None) -> Do
             lines = utf16_lines
         else:
             lines = utf16_lines if _line_quality(utf16_lines) >= _line_quality(latin_lines) else latin_lines
-            if lines is latin_lines:
-                from .doc_images import legacy_inline_images
-                images = legacy_inline_images(data, doc)
-                if images:
-                    first, last = struct.unpack_from('<II', data, 24)
-                    text = data[first:last].decode('cp1252', errors='replace')
-                    parts = []
-                    previous = 0
-                    for cp, image in sorted(images.items()):
-                        marker = '\ue000doc-image-%d\ue001' % cp
-                        image_markers[marker] = image
-                        parts.extend((text[previous:cp], marker))
-                        previous = cp + 1
-                    parts.append(text[previous:])
-                    text = ''.join(parts)
-                    lines = [line for line in _clean_text_lines(text) if _should_keep_line(line)]
+        # legacy_inline_images validates the Word 6/95 FIB and contiguous
+        # single-byte layout independently of the heuristic text score.
+        # Picture-only streams have no text evidence to prefer either codec.
+        from .doc_images import legacy_inline_images
+        images = legacy_inline_images(data, doc)
+        if images:
+            first, last = struct.unpack_from('<II', data, 24)
+            text = data[first:last].decode('cp1252', errors='replace')
+            parts = []
+            previous = 0
+            for cp, image in sorted(images.items()):
+                marker = '\ue000doc-image-%d\ue001' % cp
+                image_markers[marker] = image
+                parts.extend((text[previous:cp], marker))
+                previous = cp + 1
+            parts.append(text[previous:])
+            text = ''.join(parts)
+            lines = [line for line in _clean_text_lines(text) if _should_keep_line(line)]
 
     for section_index, section_lines in enumerate(_split_sections(lines)):
         section_path = f"WordDocument#section{section_index + 1}"

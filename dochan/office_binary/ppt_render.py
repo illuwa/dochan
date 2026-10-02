@@ -46,8 +46,6 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
     renderer.slide_count = len(presentation.slides)
     renderer.link_labels = labels
     environment_styles = read_master_styles(walk_records(presentation.document.children), errors)
-    environment_styles.update({(-1, level): dict(values)
-                               for (kind, level), values in list(environment_styles.items()) if kind == 4})
     style_cache = {}
 
     def defaults(sheet):
@@ -56,11 +54,16 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
         chain = []
         seen = set()
         current = sheet
-        while current is not None and id(current) not in seen and len(chain) < 32:
-            seen.add(id(current))
-            key = id(current)
+        while current is not None and len(chain) < 32:
+            current_record = current.recovery_record or current.record
+            # Stream offsets remain stable when a recovery Sheet is replaced
+            # and its temporary Python identity is later reused.
+            key = current_record.offset
+            if key in seen:
+                break
+            seen.add(key)
             if key not in style_cache:
-                style_cache[key] = read_master_styles(current.record.children, errors)
+                style_cache[key] = read_master_styles(current_record.children, errors)
             chain.append(style_cache[key])
             current = presentation.masters.get(current.master_id)
         return merge_styles(environment_styles, *reversed(chain))
@@ -306,7 +309,7 @@ class _Renderer:
             if not any(block.text.strip() for block in blocks):
                 wordart = shape._text(0x00C0)
                 if wordart:
-                    elements.extend(self.text(TextBlock(text=wordart), provenance, link))
+                    elements.extend(self.text(TextBlock(text=wordart, text_type=4), provenance, link))
             if link and not elements:
                 label = shape.description or shape.name
                 for atom in walk_records(client_records):
@@ -314,14 +317,15 @@ class _Renderer:
                         label = label or self.link_labels.get(struct.unpack_from('<I', atom.data, 4)[0], '')
                         break
                 if label:
-                    elements.extend(self.text(TextBlock(text=label), provenance, link))
+                    elements.extend(self.text(TextBlock(text=label, text_type=4), provenance, link))
             # PPTX follows layout objects but does not traverse slide masters.
             # Keep the established inherited text contract, excluding recurring
             # master picture placements and their Markdown/image assets.
             if shape.pib and not inherited:
                 elements.extend(self.image(shape, provenance, images))
             if object_id is not None and object_id in self.objects.supported and not elements:
-                elements.extend(self.text(TextBlock(text=shape.description or shape.name or '[내장 개체]'), provenance))
+                elements.extend(self.text(TextBlock(text=shape.description or shape.name or '[내장 개체]',
+                                                    text_type=4), provenance))
             return elements
 
         elements = []

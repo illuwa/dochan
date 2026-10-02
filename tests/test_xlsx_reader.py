@@ -1763,6 +1763,9 @@ def test_xlsx_cell_text_uses_single_child_scan_for_value_and_formula():
         def get(self, name, default=None):
             return self._attrs.get(name, default)
 
+        def __iter__(self):  # lxml 요소처럼 자식 순회가 가능하다(값·수식 요소에는 자식이 없다)
+            return iter(())
+
     class FakeCell:
         tag = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
 
@@ -2935,3 +2938,36 @@ def test_xlsx_chart_series_in_both_alternate_content_branches_are_read_once(tmp_
         ["Q2", "20"],
     ]
     assert document.errors == []
+
+
+def test_large_xlsx_streaming_does_not_expand_dtd_entities(tmp_path, monkeypatch):
+    # 32MiB 를 넘는 시트의 스트리밍 경로도 일반 경로와 같이 엔티티를 확장하지 않아야 한다.
+    path = tmp_path / "entity-stream.xlsx"
+    _write_xlsx(
+        path,
+        """
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+        </workbook>
+        """,
+        {
+            "xl/worksheets/sheet1.xml": """<?xml version="1.0"?>
+            <!DOCTYPE worksheet [
+              <!ENTITY inner "ENTITY_EXPANDED">
+              <!ENTITY outside SYSTEM "file:///etc/hosts">
+            ]>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetData>
+                <row r="1"><c r="A1" t="inlineStr"><is><t>safe &inner; &outside; &amp;</t></is></c></row>
+              </sheetData>
+            </worksheet>
+            """
+        },
+    )
+    monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 1)
+    document = XLSXReader().read(str(path))
+    markdown = to_markdown(document)
+    assert "ENTITY_EXPANDED" not in markdown
+    assert "localhost" not in markdown
+    assert "safe" in markdown and "&" in markdown

@@ -105,6 +105,17 @@ def _local_name(elem) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _node_text(node) -> str:
+    """요소의 글자. 스트리밍 경로에서 확장하지 않은 엔티티 참조는 빈 문자열로 두고 그 뒤 글자는 잇는다.
+
+    일반 경로는 package 가 사용자 정의 엔티티 참조를 미리 지우므로 같은 결과가 된다.
+    """
+    if node is None:
+        return ""
+    return (node.text or "") + "".join(
+        child.tail or "" for child in node if child.tag is etree.Entity)
+
+
 def _column_index(cell_ref: str) -> int:
     value = 0
     for char in cell_ref.upper():
@@ -537,6 +548,10 @@ class XLSXReader:
                 tag=(f"{{{S_NS}}}row", f"{{{STRICT_S_NS}}}row"),
                 huge_tree=True,
                 recover=True,
+                # 일반 경로(package.read_xml_part)와 같은 계약: 엔티티 확장·DTD 로드·네트워크 금지
+                resolve_entities=False,
+                load_dtd=False,
+                no_network=True,
             )
             for _, row_elem in context:
                 row_cells = {}
@@ -1467,10 +1482,10 @@ class XLSXReader:
     def _text_runs(self, elem) -> str:
         if elem is None:
             return ""
-        return "".join(t.text or "" for t in elem.findall(".//s:t", namespaces=_namespaces(elem)))
+        return "".join(_node_text(t) for t in elem.findall(".//s:t", namespaces=_namespaces(elem)))
 
     def _with_formula(self, text: str, cell_elem, shared_formulas: Dict[str, Tuple[str, str]], formula=None) -> str:
-        formula_text = formula.text if formula is not None and formula.text is not None else ""
+        formula_text = _node_text(formula)
         if not formula_text and formula is not None and formula.get("t", "") == "shared":
             shared_formula = shared_formulas.get(formula.get("si", ""), ("", ""))
             formula_text = self._translate_shared_formula(
@@ -1882,5 +1897,4 @@ class XLSXReader:
         return sections
 
     def _value_text(self, cell_elem, cell_children=None) -> str:
-        value = (cell_children or self._cell_children(cell_elem)).get("v")
-        return value.text if value is not None and value.text is not None else ""
+        return _node_text((cell_children or self._cell_children(cell_elem)).get("v"))

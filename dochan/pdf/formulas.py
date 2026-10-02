@@ -4,6 +4,7 @@ Only explicit page/MCID ownership replaces glyphs. Unanchored or unsupported
 formulae leave original text intact. No visual equation recognition is attempted.
 """
 from dataclasses import dataclass, field
+from bisect import bisect_left
 import math
 import re
 from typing import Optional
@@ -20,6 +21,7 @@ MAX_DEPTH = 64
 MAX_FORMULAS = 4096
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_TOTAL_SOURCE = 8 * 1024 * 1024
+MAX_FORMULA_GEOMETRY_CHECKS = 2000000
 MATHML_NS = "http://www.w3.org/1998/Math/MathML"
 
 
@@ -90,6 +92,8 @@ class FormulaExtractor:
         self._parent_tree = self.pdf.resolve(self._root.get("ParentTree"))
         self._loaded = False
         self._page_records = {}
+        self._parent_indexes = {}
+        self._parent_index_remaining = MAX_NODES
 
     def _warn(self, reason):
         self.pdf.warnings.append("WARN: PDF Formula " + reason)
@@ -166,10 +170,22 @@ class FormulaExtractor:
                 budget -= len(nums)
                 if budget < 0 or len(nums) % 2:
                     raise ValueError("Formula ParentTree 항목 손상/한도 초과")
-                for offset in range(0, len(nums), 2):
-                    if nums[offset] == key:
-                        parents = self.pdf.resolve(nums[offset + 1])
-                        return parents if isinstance(parents, list) else []
+                identity = id(node)
+                if identity not in self._parent_indexes:
+                    self._parent_index_remaining -= len(nums)
+                    if self._parent_index_remaining < 0:
+                        raise ValueError("Formula ParentTree 색인 한도 초과")
+                    index = {}
+                    for offset in range(0, len(nums), 2):
+                        number, parents = nums[offset], nums[offset + 1]
+                        if type(number) is not int or number in index:
+                            raise ValueError("Formula ParentTree 키 손상/중복")
+                        index[number] = parents
+                    self._parent_indexes[identity] = index
+                index = self._parent_indexes[identity]
+                if key in index:
+                    parents = self.pdf.resolve(index[key])
+                    return parents if isinstance(parents, list) else []
             kids = self.pdf.resolve(node.get("Kids"))
             if isinstance(kids, list):
                 budget -= len(kids)
@@ -260,7 +276,7 @@ class FormulaExtractor:
             found.append((kind, data))
         return sorted(found, key=lambda item: item[0] != "mathml")
 
-    def _math_tree(self, record, fragments, page):
+    def _math_tree(self, record, by_mcid, page):
         """PDF 2.0 MathML namespace StructElem nodes carry token text by MCID."""
         count = [0]
         seen = set()
@@ -275,12 +291,11 @@ class FormulaExtractor:
                     raise ValueError("MathML 페이지 불일치")
                 parts = []
                 size = 0
-                for fragment in fragments:
-                    if value in fragment.mcids:
-                        size += len(fragment.text)
-                        if size > MAX_SOURCE_BYTES:
-                            raise ValueError("MathML 토큰 크기 한도 초과")
-                        parts.append(fragment.text)
+                for fragment in by_mcid.get(value, []):
+                    size += len(fragment.text)
+                    if size > MAX_SOURCE_BYTES:
+                        raise ValueError("MathML 토큰 크기 한도 초과")
+                    parts.append(fragment.text)
                 return escape("".join(parts))
             if isinstance(value, list):
                 return "".join(serialize(v, inherited, depth + 1) for v in value)
@@ -336,7 +351,7 @@ class FormulaExtractor:
             raise ValueError("여러 MathML 루트")
         return serialize(roots[0], record.page, 0) if roots else ""
 
-    def _equation(self, record, fragments, page):
+    def _equation(self, record, by_mcid, page):
         from .mathml import mathml_to_latex
 
         for kind, data in self._associated(record.node):
@@ -350,16 +365,20 @@ class FormulaExtractor:
                                 script_format="mathml") if latex else None
             source = data.decode("utf-8-sig").strip()
             latex = _tex_without_comments(source)
-            for left, right in (("$$", "$$"), ("$", "$"), (r"\[", r"\]"), (r"\(", r"\)")):
+            for left, right, display in (("$$", "$$", True), ("$", "$", False),
+                                         (r"\[", r"\]", True), (r"\(", r"\)", False),
+                                         (r"\begin{equation*}", r"\end{equation*}", True)):
                 if latex.startswith(left) and latex.endswith(right) and len(latex) >= len(left + right):
                     latex = latex[len(left):-len(right)].strip()
+                    record.display = display
                     break
             if ("$" in latex or re.search(r"\n\s*\n", latex)
-                    or any(token in latex for token in (r"\[", r"\]", r"\(", r"\)"))):
+                    or any(token in latex for token in (r"\[", r"\]", r"\(", r"\)"))
+                    or re.search(r"\\(?:begin|end)\s*\{equation\*?\}", latex)):
                 raise ValueError("TeX 수식 구분자/빈 줄은 허용하지 않음")
             if latex:
                 return Equation(script=source, latex_override=" ".join(latex.split()), script_format="latex")
-        tree = self._math_tree(record, fragments, page)
+        tree = self._math_tree(record, by_mcid, page)
         if tree:
             encoded = tree.encode("utf-8")
             if len(encoded) > self._source_budget:
@@ -375,7 +394,13 @@ class FormulaExtractor:
         # Keeping the drawn glyphs avoids both semantic invention and Markdown escape.
         return None
 
-    def apply(self, page, content, protected_orders=()):
+    def has_formulas(self, page):
+        """Only pages with replaceable Formula owners need a table prepass."""
+        return any(not record.preserve and record.members
+                   and any(self._same_page(ref, page) for ref, _ in record.members)
+                   for record in self._for_page(page))
+
+    def apply(self, page, content, protected_orders=(), protected_mcids=()):
         events = []
         consumed = set()
         candidates = []
@@ -398,7 +423,11 @@ class FormulaExtractor:
         for fragment in content.fragments:
             for mcid in fragment.mcids:
                 by_mcid.setdefault(mcid, []).append(fragment)
+        geometry_remaining = MAX_FORMULA_GEOMETRY_CHECKS
+        geometry_warned = False
         for record, ids in candidates:
+            if ids.intersection(protected_mcids):
+                continue
             if (any(owners[mcid] > 1 for mcid in ids) or not ids.issubset(content.marked_ids)
                     or ids.intersection(content.duplicate_marked_ids)):
                 self._warn("MCID 누락/중복 — 원문 보존")
@@ -411,7 +440,7 @@ class FormulaExtractor:
                     or any(f.note_ref for f in selected.values())):
                 continue
             try:
-                equation = self._equation(record, content.fragments, page)
+                equation = self._equation(record, by_mcid, page)
             except (ValueError, TypeError, UnicodeError) as exc:
                 self._warn("의미 자료 해석 실패: " + str(exc))
                 continue
@@ -428,11 +457,36 @@ class FormulaExtractor:
             if any(not all(math.isfinite(v) for v in (f.x, f.y, f.size))
                    or abs(f.dir_y) > 1e-6 or f.dir_x <= 0 for f in selected.values()):
                 continue
-            if not record.display and any(
-                    f.order not in selected and not f.artifact and f.text.strip()
-                    and any(abs(f.y - own.y) <= max(.1, min(f.size, own.size) * .25)
-                            for own in selected.values()) for f in content.fragments):
-                continue
+            if not record.display:
+                # Merge vertical intervals once; query each other fragment in
+                # logarithmic time instead of comparing F x M fragment pairs.
+                cost = len(selected) + len(content.fragments)
+                geometry_remaining -= cost
+                if geometry_remaining < 0:
+                    if not geometry_warned:
+                        self._warn("기하 검사 한도 초과 — 원문 보존")
+                        geometry_warned = True
+                    continue
+                intervals = []
+                for low, high in sorted((f.y, f.y + max(.1, f.size)) for f in selected.values()):
+                    if intervals and low <= intervals[-1][1]:
+                        intervals[-1] = (intervals[-1][0], max(high, intervals[-1][1]))
+                    else:
+                        intervals.append((low, high))
+                starts = [low for low, _ in intervals]
+                inline = False
+                for fragment in content.fragments:
+                    if fragment.order in selected or fragment.artifact or not fragment.text.strip():
+                        continue
+                    if not all(math.isfinite(v) for v in (fragment.y, fragment.size)):
+                        inline = True  # Uncertain geometry cannot prove isolation.
+                        break
+                    index = bisect_left(starts, fragment.y + max(.1, fragment.size)) - 1
+                    if index >= 0 and intervals[index][1] > fragment.y:
+                        inline = True
+                        break
+                if inline:
+                    continue
             start = min(selected)
             consumed.update(selected)
             events.append((start, 0, equation))

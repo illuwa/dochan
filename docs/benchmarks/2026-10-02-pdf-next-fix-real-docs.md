@@ -1,6 +1,6 @@
 # PDF 리뷰 반영 실물 검증
 
-1차 검증의 기준 커밋은 `107e18d7725af8cc6680d5ba0e1ca2b931ed8163`이다. 아래의 원본 의미 정답과 1차 기록을 보존하며, 최신 결과는 마지막 **3차 리뷰 반영과 전수 회귀** 절에 기록했다. 3차 기준은 `028f807`이고 P2 5건을 수정했다. 외부 코퍼스는 읽기 전용으로 사용했으며 README는 수정하지 않았다.
+1차 검증의 기준 커밋은 `107e18d7725af8cc6680d5ba0e1ca2b931ed8163`이다. 아래의 원본 의미 정답과 1차 기록을 보존하며, 최신 결과는 마지막 **4차 리뷰 반영과 전수 회귀** 절에 기록했다. 4차 기준은 `d29b5ff`이며 Opus 지정 지적과 codex r2 회귀를 검증했다. 외부 코퍼스는 읽기 전용으로 사용했으며 README는 수정하지 않았다.
 
 ## 링크·미주(A)
 
@@ -25,7 +25,7 @@ A만 적용한 독립 체크아웃에서 전체 테스트는 3,295 passed, 24 sk
 
 6문서의 원시 Formula는 33개다. 의미 정답을 가진 display 8개, inline·코드·Alt 보존 항목 22개, 빈 구조 3개로 구분한다. display 소유 조각 90개만 치환했고 전체 비치환 조각 640개가 원문과 같다. 이 640개에는 보존 Formula 소유 조각 39개가 포함된다. 비소유 Artifact 95개도 보존했다. 기존의 26/26 주장은 inline·코드·낭독문까지 수식 성공으로 세었으므로 철회한다. 태그 없는 수식과 일부 의미 표현은 미지원이며 PDF 수식 칸은 **⬜ 유지**를 제안한다. 합·적분 첨자는 실물 양성 표본이 없으므로 단위 테스트 검증으로만 보고한다.
 
-`FormulaExtractor`는 표와 각주 소유권이 결정된 뒤 실행한다. 해당 소유 글리프는 표 셀·각주 안에 남긴다. Code·Note·Table 구조 아래 수식도 보존한다. MathML의 `display="block"` 또는 PDF Layout의 `Placement=Block`이 있거나 같은 기준선에 다른 본문이 없는 경우에만 블록 Equation을 만든다. Alt/ActualText만으로 LaTeX를 만들지 않는다. TeX 연관 자료의 내부 달러 구분자와 빈 줄은 거부하며 글리프를 보존한다. Equation의 선택적 `script_format`은 MathML에 `mathml`, TeX에 `latex`를 기록한다. 다른 형식의 기존 JSON에는 필드를 추가하지 않는다.
+`FormulaExtractor`는 표와 각주 소유권이 결정된 뒤 실행한다. 해당 소유 글리프는 표 셀·각주 안에 남긴다. Code·Note·Table 구조 아래 수식도 보존한다. MathML의 `display="block"` 또는 PDF Layout의 `Placement=Block`이 있거나 다른 본문과 수직 글꼴 범위가 겹치지 않는 경우에만 블록 Equation을 만든다. 명시적 inline 선언은 기하 추정보다 우선한다. Alt/ActualText만으로 LaTeX를 만들지 않는다. TeX 연관 자료의 내부 달러 구분자와 빈 줄은 거부하며 글리프를 보존한다. Equation의 선택적 `script_format`은 MathML에 `mathml`, TeX에 `latex`를 기록한다. 다른 형식의 기존 JSON에는 필드를 추가하지 않는다.
 
 ParentTree·StructParents가 있으면 해당 페이지에서 Formula 조상만 찾는다. ParentTree가 없으면 제한된 구조 순회를 사용하며 정수 MCID는 구조 노드 예산에 넣지 않는다. 태그 없는 표지를 먼저 순회한 경우 발견한 레코드를 다음 페이지에서도 재사용한다. 12,000개 MCID 뒤 수식과 수식 없는 문서, 12,000개 관계없는 구조 요소가 있는 ParentTree 페이지를 합성 테스트로 확인했다. 전수의 `bug1978317.pdf`에서 종전 Formula 10,000노드 경고는 사라졌다. 안전 상한은 구조 컨테이너 200,000개·깊이 64, Formula 4,096개, 원문 항목 256 KiB·문서 합계 8 MiB다. 이 값은 지원 페이지 수나 명세상 최대치를 주장하지 않는 자원 보호 한도다.
 
@@ -309,7 +309,7 @@ AF stream 29
 원시 StructElem Alt
 
 ```xml
-Alt: cube root of , x plus y end cube root 
+Alt: cube root of , x plus y end cube root
 ```
 
 ### bug2009627.pdf / Formula 56
@@ -436,4 +436,73 @@ ruff check dochan scripts tests
 /usr/bin/python3 -m scripts.probe_pdf_endnotes PDFJS_DIR > .codex-work/r3-endnotes-probe.json
 /usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/r3-links.json --timeout 180
 /usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/r3-links-tables.json --text-tables --timeout 180
+```
+
+
+## 4차 리뷰 반영과 전수 회귀
+
+기준 HEAD `d29b5ff`를 별도 스냅샷으로 보존하고 공개 983개를 기본·text_tables 두 모드에서, 내부 79쌍을 익명 수치 비교로 다시 실행했다. 앞선 실행의 JSON을 재사용하지 않았다. 두 모드 모두 예외·시간초과가 없으며 문서별 Markdown·JSON 해시와 모든 수치의 변화가 0개다. 내부도 79/79쌍의 수치가 일치하고 변경 0쌍이다. Opus P2-B1·P2-B2·P2-A1 및 마지막 설계 유지 항목을 제외한 P3를 반영했다. codex r2 테스트는 모두 유지했다.
+
+| 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
+| --- | --- | --- | --- | --- | --- |
+| PDF 수식 | 위 정답 표의 공개 6문서다. | AF MathML·namespace StructElem 및 MCID의 수작업 정답이다. | display 8개, inline·Code·Alt 22개, 빈 구조 3개를 구분한다. | display 8/8개가 일치하고 비치환 조각 640개와 Artifact 95개를 보존했다. | 검증 범위는 통과했지만 전체 지원은 ⬜를 유지한다. |
+| PDF inline 위첨자 | `bug1997343.pdf` 객체 297이다. | AF stream 56의 msup 항 3개와 본문 위치다. | inline 수식을 블록으로 바꾸지 않고 원시 MCID 글리프를 보존한다. | inline 수식 1개를 보존했고 블록 오변환은 0개다. | 실물 표본에서 통과했다. 위첨자만 태그된 경계 사례는 별도의 합성 검증이다. |
+| PDF 미주 | `freeculture.pdf`다. | Poppler 원시 단어 위치와 장별 정의·참조를 대조했다. | 정의·참조 222개와 소제목 21개를 보존한다. | 정의 본문·페이지 및 참조 대응 222/222개, 소제목 21/21개다. 참조 양 끝 좌표는 216/222개다. | 기존 공개 실물 검증을 통과했으나 하단 인용문 경계 자체의 실물 양성은 미검증이므로 ⬜를 유지한다. |
+| PDF 본문 링크 | pdf.js 공개 983개다. | 원시 주석과 독립 PDFium 글리프 중심을 기본·text_tables에서 대조했다. | 기존 연결 388개를 보존하고 경계 오류·URL 소실을 만들지 않는다. | 각 모드의 비교 가능 주석 678개 중 연결 388/388개가 일치하고 290개를 보류했다. 경계 오류·URL 소실·최종 런 불일치는 0개다. | 회귀 검증을 통과했으며 전체 지원은 ⬜를 유지한다. |
+
+| 전수 비교 항목 | `d29b5ff` | 4차 수정본 | 변화 |
+| --- | ---: | ---: | --- |
+| 공개 기본·text_tables 완료 문서 | 각각 983개다. | 각각 983개다. | 예외·시간초과 0개다. |
+| 두 모드의 Markdown·JSON 변경 문서 | 기준이다. | 각각 0·0개다. | 바뀐 문서가 없다. |
+| 기본 Markdown 문자 수 | 2,195,958 | 2,195,958 | 같다. |
+| text_tables Markdown 문자 수 | 2,212,216 | 2,212,216 | 같다. |
+| 기본·text_tables 표 수 | 250·427 | 250·427 | 같다. |
+| 각 모드의 ERR·WARN·U+FFFD | 13·324·348 | 13·324·348 | 같다. |
+| 각 모드의 미주 수 | 222 | 222 | 같다. |
+| 내부 수치가 같은 문서 쌍 | 기준이다. | 79/79 | 변경 0쌍이다. |
+
+내부 평균 머리글/바닥글 적중률 0.9913, 오탐 0, 줄 결합 정확도 0.9378(7,658건), 평균/최소 토큰 비율 0.9754/0.8410, HWPX/PDF 표 845/886개, 평균 셀 적중률 0.9116, 구조/병합 일치율 0.6485/0.9191, 중첩 일치율 0.3636이다. 내부 이름과 본문은 기록하지 않았다. 원시 집계와 비교 결과는 `.codex-work/r4-{head,final}-{default,tables,pairs}.json` 및 `r4-comparison.json`에 있다.
+
+### 수정 근거와 합성 재현
+
+선언 없는 수식은 기준선 차이 대신 `[y, y+size]` 범위 겹침을 검사한다. TeX의 `$...$`·`\(...\)`는 inline, `$$...$$`·`\[...\]`·`equation*` 환경은 display 선언이다. 외곽 구분자와 `equation*` 환경만 제거하고 원문 script는 그대로 보존한다. 남은 equation 환경은 중첩 오류를 만들지 않도록 거부한다. 선언 없는 실물 display 한 개를 inline으로 일괄 강등하지 않았다. 리뷰의 위첨자·아래첨자·각도·명시적 inline 합성 PDF 5개 모두 문단 1개·Equation 0개이며, 별도 매개변수 테스트 6개도 통과했다.
+
+수식 기하는 각 수식의 수직 구간을 정렬·병합한 뒤 이분 탐색으로 조회한다. 페이지별 후보 검사량은 `len(selected)+len(fragments)`의 합계 2,000,000을 상한으로 두며, 초과한 수식은 글리프로 남기고 페이지당 경고 한 줄을 남긴다. 이 수치는 명세 한도나 실측 임계값이 아니라 기존 링크 경로와 같은 자원 보호 예산이다. namespace MathML 직렬화는 페이지의 MCID 색인을 재사용한다. ParentTree의 Nums 배열도 방문 노드마다 한 번 색인하고, 문서 누적 색인 항목 수는 기존 MAX_NODES 200,000으로 제한한다.
+
+시간 대신 속성 접근 횟수로 이차 회귀를 검증했다. MCID 토큰 24/96개와 같은 수의 외부 본문 조각을 쓸 때 MCID 접근은 1,200/18,624회에서 48/192회로, 기하 y 접근은 1,176/18,528회에서 120/480회로 줄었다. 입력 4배 증가 시 수정본 접근도 4배다. 예산 초과 시 4개 수식 모두 글리프가 보존되고 경고가 한 번만 나오는 경우도 확인했다.
+
+| 합성 입력 | 기준 시간 | 수정 시간 | 출력 확인 |
+| --- | ---: | ---: | --- |
+| 2개 수식 × 2,000조각 | 1.36초 | 0.16초 | 수식 2개와 경고 0개다. |
+| 5개 수식 × 2,000조각 | 12.31초 | 0.40초 | 수식 5개와 경고 0개다. |
+| 10개 수식 × 2,000조각 | 55.04초 | 0.86초 | 수식 10개와 경고 0개다. |
+| 평면 ParentTree 49,999항목·5,000쪽 | 5.27초 | 1.03초 | Equation 0개와 경고 0개이며 본문이 유지된다. |
+
+시간은 같은 호스트에서 각 한 번 측정한 보조 자료이며 다른 작업과의 동시 실행 영향을 받는다. CI 단언은 시간 대신 위 접근 횟수를 사용한다. 99,000항목 입력은 기존 PDF 배열 파싱 상한에 먼저 걸려 ParentTree 속도 검증에서 제외했다.
+
+미주 하단의 작은 글꼴도 상단과 같은 이웃 연속성 검사를 거친다. 9pt의 y=82/70/58과 y=58/46/34 인용문은 세 줄 모두 포함된다. 동일 페이지에서 직전 미주와 명백히 떨어진 기존 바닥글은 유지하고, 다른 페이지의 단독 하단 줄 등 불확실한 경우는 구역 전체를 보류한다. 새 경험적 임계값을 넣지 않았다.
+
+정상 추출한 각주의 MCID를 수식 경로에 전달하여 글리프 누락 경고를 만들지 않는다. 수식 후보가 없는 페이지에서는 text_tables 소유권 사전 검출을 생략한다. 후보 탐색이 실패하면 부분적으로 발견한 수식을 변환하지 않고 본문을 보존한다. MathML의 여러 글자 mo는 함수 명령 또는 operatorname으로, postfix prime은 위첨자로, 함수 스크립트는 연산자 원자를 유지하여 출력한다. 줄바꿈 mspace는 수평 공백으로 바꾸지 않고 변환을 거부해 원문을 보존한다.
+
+Formula 4,096개 상한은 기존 정책을 유지한다. 100쪽에 50개씩 배치한 합성 5,000개 수식에서는 완료된 앞 81쪽의 4,050개를 치환하고, 한도에 걸린 페이지 전체 및 이후 수식은 글리프로 남긴다. 경고는 한 줄이다. 전체 트리를 한 번에 읽는 경로에서 같은 한도를 넘으면 전체 수식 치환을 보류할 수 있다. 따라서 4,096개까지 항상 치환한다는 보장은 없고, 한도 초과를 미지원으로 보고한다.
+
+기존 테스트의 단언은 바꾸지 않았다. `test_equation_json_identifies_source_syntax`의 TeX 입력만 `$x$`에서 `$$x$$`로 정정했다. 이 테스트의 JSON 형식 단언은 그대로이며, 기존 입력은 inline을 블록으로 강제하던 버그를 전제했다. `$x$`의 글리프 보존은 새 선언 테스트로 별도 검증한다. 전체 테스트는 **3,455 passed, 24 skipped, 14 xfailed**이며 Ruff 및 로컬 절대 경로 검사도 통과했다. 끝 공백 한 곳을 제거했다. README와 공유 모델·출력 파일은 변경하지 않았다.
+
+### 4차 재현 명령
+
+`BASELINE_REPO`는 `git archive d29b5ff`로 만든 스냅샷, `FINAL_REPO`는 최종 작업본이다. 코퍼스 경로는 인자로 주고 아래 JSON이 없는 상태에서 실행한다.
+
+```sh
+/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
+ruff check dochan scripts tests
+/usr/bin/python3 scripts/compare_pdf_fix2.py BASELINE_REPO PDFJS_DIR .codex-work/r4-head-default.json
+/usr/bin/python3 scripts/compare_pdf_fix2.py FINAL_REPO PDFJS_DIR .codex-work/r4-final-default.json
+/usr/bin/python3 scripts/compare_pdf_fix2.py BASELINE_REPO PDFJS_DIR .codex-work/r4-head-tables.json --text-tables
+/usr/bin/python3 scripts/compare_pdf_fix2.py FINAL_REPO PDFJS_DIR .codex-work/r4-final-tables.json --text-tables
+/usr/bin/python3 scripts/compare_pdf_fix2.py BASELINE_REPO PAIRS_DIR .codex-work/r4-head-pairs.json --mode pairs
+/usr/bin/python3 scripts/compare_pdf_fix2.py FINAL_REPO PAIRS_DIR .codex-work/r4-final-pairs.json --mode pairs
+/usr/bin/python3 -m scripts.probe_pdf_formulas PDFJS_DIR --output .codex-work/r4-formulas.json
+/usr/bin/python3 -m scripts.probe_pdf_endnotes PDFJS_DIR > .codex-work/r4-endnotes-probe.json
+/usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/r4-links.json --timeout 180
+/usr/bin/python3 -m scripts.probe_pdf_link_boundaries PDFJS_DIR --output .codex-work/r4-links-tables.json --text-tables --timeout 180
 ```

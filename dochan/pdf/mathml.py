@@ -51,6 +51,7 @@ _ACCENTS = {"^": "hat", "ˆ": "hat", "̂": "hat", "~": "tilde", "˜": "tilde",
             "̃": "tilde", "¯": "overline", "‾": "overline", "→": "vec",
             "˙": "dot", "̇": "dot", "¨": "ddot", "̈": "ddot"}
 _LIMIT_OPERATORS = frozenset((r"\sum", r"\prod", r"\int", r"\lim", r"\min", r"\max"))
+_FUNCTION_TEX = frozenset("\\" + name for name in _FUNCTIONS if name != "mod")
 
 
 def _join_tex(parts):
@@ -171,6 +172,43 @@ def _render(node):
     return value
 
 
+def _render_sequence(children):
+    """Render an inferred row, preserving postfix primes as raised marks.
+
+    A prime inside an explicit msup argument is already raised. A leading run
+    of primes therefore stays bare; only a run following a row atom needs its
+    own superscript. Group scripted bases to avoid a TeX double superscript.
+    """
+    parts = []
+    index = 0
+    while index < len(children):
+        child = children[index]
+        text = (child.text or "").strip()
+        if _tag(child) == "mo" and text and all(char in "′″" for char in text):
+            primes = []
+            start = index
+            while index < len(children):
+                child = children[index]
+                text = (child.text or "").strip()
+                if _tag(child) != "mo" or not text or any(char not in "′″" for char in text):
+                    break
+                if child.get("form", "postfix") != "postfix":
+                    raise ValueError("unsupported MathML prime form")
+                primes.append(_render(child))
+                index += 1
+            prime = _join_tex(primes)
+            if parts:
+                if _tag(children[start - 1]) not in ("mi", "mn", "mo"):
+                    parts[-1] = "{" + parts[-1] + "}"
+                parts.append("^{" + prime + "}")
+            else:
+                parts.append(prime)
+            continue
+        parts.append(_render(child))
+        index += 1
+    return _join_tex(parts)
+
+
 def _render_node(node):
     tag = _tag(node)
     children = list(node)
@@ -187,6 +225,12 @@ def _render_node(node):
         # MathML 3 section 3.2.2: multi-character mi defaults to normal.
         if tag == "mi" and variant is None and len(text) > 1:
             variant = "normal"
+        if tag == "mo" and len(text) > 1 and text.isalpha() and variant in (None, "normal"):
+            # MathML 3 section 3.2.5: mo is an operator even when its name
+            # contains several letters, not a product of italic identifiers.
+            if text in _FUNCTIONS and text != "mod":
+                return "\\" + text
+            return r"\operatorname{" + value + "}"
         if variant:
             if variant not in _VARIANTS:
                 raise ValueError("unsupported MathML mathvariant")
@@ -209,8 +253,12 @@ def _render_node(node):
             # mstyle sets descendant defaults, including mfrac linethickness.
             # Decline rather than silently turn a binomial into a fraction.
             raise ValueError("MathML inherited style unsupported")
-        return _join_tex(_render(child) for child in children)
+        return _render_sequence(children)
     if tag == "mspace":
+        if node.get("linebreak", "auto") not in ("auto", "nobreak"):
+            # A horizontal skip cannot represent an explicit line break.
+            # Decline so the PDF reader retains the original marked content.
+            raise ValueError("unsupported MathML space linebreak")
         width = node.get("width", "0em")
         if children or not _LENGTH.fullmatch(width):
             raise ValueError("unsupported MathML space")
@@ -228,7 +276,9 @@ def _render_node(node):
         if tag == "mroot":
             return r"\sqrt[%s]{%s}" % (args[1], args[0])
         if tag in ("msub", "msup", "msubsup"):
-            base = args[0] if _tag(children[0]) in ("mi", "mn", "mo") and len(children[0].text or "") == 1 else "{" + args[0] + "}"
+            token = _tag(children[0]) in ("mi", "mn", "mo")
+            operator = args[0] in _FUNCTION_TEX or args[0].startswith(r"\operatorname{")
+            base = args[0] if token and (len(children[0].text or "") == 1 or operator) else "{" + args[0] + "}"
             if tag == "msub":
                 return base + "_{" + args[1] + "}"
             if tag == "msup":
@@ -250,7 +300,7 @@ def _render_node(node):
             return r"\overset{%s}{%s}" % (args[1], args[0])
         return r"\overset{%s}{\underset{%s}{%s}}" % (args[2], args[1], args[0])
     if tag == "msqrt":
-        return r"\sqrt{" + _join_tex(_render(child) for child in children) + "}"
+        return r"\sqrt{" + _render_sequence(children) + "}"
     if tag == "mfenced":
         opening, closing = node.get("open", "("), node.get("close", ")")
         if opening not in ("(", "[", "{", "|", "") or closing not in (")", "]", "}", "|", ""):

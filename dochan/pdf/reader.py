@@ -199,6 +199,7 @@ class PDFReader:
                     page_content = extractor.extract_page(b"\n".join(content_parts))
                     pdf.warnings.extend(page_content.warnings)
                     attach_links(page_content.fragments, regions, pdf.warnings)
+                    note_mcids = set()
                     try:
                         notes, consumed_notes, references, next_note_number = detect_notes(
                             page_content.fragments, page_content.segments, draft.bounds,
@@ -207,6 +208,8 @@ class PDFReader:
                         for fragment in page_content.fragments:
                             fragment.note_ref = references.get(fragment.order, 0)
                         draft.note_markers = endnote_references(page_content.fragments, pdf.warnings)
+                        note_mcids = {mcid for fragment in page_content.fragments
+                                      if fragment.order in consumed_notes for mcid in fragment.mcids}
                         page_content.fragments = [fragment for fragment in page_content.fragments
                                                   if fragment.order not in consumed_notes]
                     except Exception as e:
@@ -220,7 +223,14 @@ class PDFReader:
                         pdf.warnings.append(f"WARN: {page_number}페이지 표 복원 실패: {e!r}")
                     protected_orders = set().union(*(t.fragment_orders for t in tables))
                     if formula_extractor is not None:
-                        if self.text_tables:
+                        formula_page_ready = True
+                        try:
+                            needs_formula_prepass = self.text_tables and formula_extractor.has_formulas(page)
+                        except Exception as e:
+                            pdf.warnings.append(f"WARN: PDF Formula 구조 해석 실패: {e!r}")
+                            needs_formula_prepass = False
+                            formula_page_ready = False
+                        if needs_formula_prepass:
                             try:
                                 # Decide ownership before Formula removal can
                                 # destroy the repeated rows needed for detection.
@@ -232,8 +242,9 @@ class PDFReader:
                                 pdf.warnings.append(f"WARN: {page_number}페이지 텍스트 표 소유권 판정 실패: {e!r}")
                                 protected_orders.update(f.order for f in page_content.fragments)
                         try:
-                            equations, consumed_formula = formula_extractor.apply(
-                                page, page_content, protected_orders)
+                            equations, consumed_formula = (formula_extractor.apply(
+                                page, page_content, protected_orders, note_mcids)
+                                if formula_page_ready else ([], set()))
                             formula_size_fragments = [f for f in page_content.fragments
                                                       if f.order in consumed_formula]
                             page_content.fragments = [f for f in page_content.fragments

@@ -103,7 +103,7 @@ def test_footnote_formula_preserves_note_ownership(tmp_path):
 
 def test_equation_json_identifies_source_syntax(tmp_path):
     for data, suffix, kind in ((b"<math><mi>x</mi></math>", "xml", "mathml"),
-                               (b"$x$", "tex", "latex")):
+                               (b"$$x$$", "tex", "latex")):
         doc = semantic(tmp_path, data=data, suffix=suffix)
         equations = [element for section in to_dict(doc)["sections"] for element in section["elements"]
                      if element["type"] == "equation"]

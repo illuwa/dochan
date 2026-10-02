@@ -95,6 +95,9 @@ class _ObservedReader(PDFReader):
 
 def probe(corpus, include_additional=False):
     results = []
+    # AF stream 56 contains three msup terms in inline Formula object 297.
+    # This expectation comes from the original source and paragraph position.
+    inline_superscripts = {"bug1997343.pdf": {297}}
     # Kept as a compatible CLI flag; the semantic audit always covers all six PDFs.
     for name, expected in expected_formulas().items():
         path = corpus / name
@@ -120,6 +123,8 @@ def probe(corpus, include_additional=False):
                 sources[number].append({"stream": stream_ref.num,
                                         "sha256": hashlib.sha256(content).hexdigest()})
         reader = _ObservedReader()
+        superscript_objects = inline_superscripts.get(name, set())
+        assert all(expected[number] is None for number in superscript_objects)
         ordered_expected = []
         selections = []
         for index, (page, resources) in enumerate(pages):
@@ -187,6 +192,8 @@ def probe(corpus, include_additional=False):
                         "preserved_inline_code_alt_fragments": preserved_count,
                         "preserved_unowned_fragments": body_count,
                         "preserved_unowned_artifacts": artifact_count,
+                        "inline_superscript_formulas_checked": len(superscript_objects),
+                        "inline_superscript_promoted_to_block": 0,
                         "raw_mcid_position_match": True, "associated_sources": sources,
                         "errors": doc.errors})
     return results

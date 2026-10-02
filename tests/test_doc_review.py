@@ -20,10 +20,10 @@ def native(text):
     return {'WordDocument': bytes(word), '0Table': table}
 
 
-def test_doc_review_page_break_preserves_words_and_sections():
+def test_doc_review_page_break_preserves_words_in_paragraph():
     streams = native('Alpha\x0cBeta\r')
     doc = parse_structured_doc(streams['WordDocument'], streams['0Table'])
-    assert [[p.text for p in s.elements] for s in doc.sections] == [['Alpha'], ['Beta']]
+    assert [[p.text for p in s.elements] for s in doc.sections] == [['Alpha\nBeta']]
 
 
 def test_doc_review_column_break_and_nonbreaking_hyphen():

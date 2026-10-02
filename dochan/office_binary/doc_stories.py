@@ -5,6 +5,7 @@ common CP space; PLC positions for a secondary story are relative to that story.
 Only standard-library parsing and the existing document model are used.
 """
 import bisect
+from copy import copy
 import heapq
 import re
 import struct
@@ -182,7 +183,10 @@ class Stories:
                 if separator < 0:
                     display = re.match(r'^\s*MACROBUTTON\s+\S+\s+(.*)', instruction, re.IGNORECASE | re.DOTALL)
                     if display:
-                        self._markers.setdefault(begin, []).append(TextRun(display.group(1).strip()))
+                        value = display.group(1)
+                        if hasattr(self.binary, 'display_range'):
+                            value = self.binary.display_range(begin + 1 + display.start(1), cp)
+                        self._markers.setdefault(begin, []).append(TextRun(value.strip()))
                     elif re.match(r'^\s*FORM(?:TEXT|CHECKBOX|DROPDOWN)\b', instruction, re.IGNORECASE):
                         value = self._form_value(begin, cp, instruction)
                         if value:
@@ -353,7 +357,7 @@ class Stories:
 
     def markers(self, cp):
         # Return fresh runs so a renderer may add style without mutating state.
-        return [TextRun(**vars(run)) for run in self._markers.get(cp, [])]
+        return [copy(run) for run in self._markers.get(cp, [])]
 
     def _read_bookmarks(self):
         names = self._try_strings(21)
@@ -370,7 +374,9 @@ class Stories:
                     self._warn('bookmark', 'invalid end position')
                     continue
                 if name and not name.startswith('_'):
-                    self._markers.setdefault(cp, []).append(TextRun('[bookmark: %s] ' % name))
+                    marker = TextRun('[bookmark: %s] ' % name)
+                    marker._bookmark_annotation = True
+                    self._markers.setdefault(cp, []).append(marker)
         except (ValueError, struct.error) as exc:
             self._warn('bookmarks', exc)
 

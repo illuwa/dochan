@@ -4,18 +4,21 @@ Offsets address the original streams. Text retains Word control characters and
 UTF-16 code-unit positions so all PLCs share the same coordinate system.
 """
 import bisect
+import heapq
 import re
 import struct
 from dataclasses import dataclass
 from typing import Iterator, Optional
+from .symbol_fonts import symbol_text
 
 MAX_CP = 16 * 1024 * 1024
 MAX_RECORDS = 200000
+MAX_SECTIONS = 4096
 # Limit work as well as output for overlapping fast-save piece ranges.
 MAX_FKP_INTERSECTIONS = 2000000
 MAX_PAPX_DEPTH = 32
 MAX_PAPX_BYTES = 1024 * 1024
-_PARAGRAPH_BREAK = re.compile(r'[\r\x07\x0c]')
+_PARAGRAPH_BREAK = re.compile(r'[\r\x07]')
 
 
 def _u16(data, pos):
@@ -36,6 +39,7 @@ _VALUE_SPRMS = {
     0x4600: 'istd', 0x6649: 'itap', 0x4863: 'author',
     0x4804: 'author', 0x6a03: 'pic_location', 0x4a30: 'char_style',
     0x6646: 'huge_papx', 0x646b: 'table_props',
+    0x4a4f: 'font',  # sprmCRgFtc0: ASCII character font table index.
 }
 
 
@@ -83,6 +87,8 @@ def decode_grpprl(data: bytes) -> dict:
             props[_BOOL_SPRMS[op]] = value if value in (128, 129) else bool(value)
         elif op in _VALUE_SPRMS:
             props[_VALUE_SPRMS[op]] = value
+        elif op == 0x6a09 and len(operand) == 4:
+            props['symbol'] = struct.unpack('<HH', operand)
         elif op == 0x2a3e:
             props['underline'] = value != 0
         elif op == 0x2a48:
@@ -134,6 +140,8 @@ class DocBinary:
         self.pieces = []  # type: List[Piece]
         self.stories = {}  # type: Dict[str, Tuple[int, int]]
         self.styles = {}  # type: Dict[int, dict]
+        self.font_names = {}
+        self.section_boundaries = []
         self._pairs = []
         self._pap = []
         self._chp = []
@@ -149,7 +157,9 @@ class DocBinary:
             if any(end > len(self.text) for _, end in self.stories.values()):
                 raise ValueError('story CP range extends beyond piece text')
             self._piece_starts = [piece.start for piece in self.pieces]
+            self.section_boundaries = self._read_sections()
             self._read_styles()
+            self._read_fonts()
             self._pap = self._fkps(13, True)
             self._chp = self._fkps(12, False)
             self._pap_starts = [r[0] for r in self._pap]
@@ -204,6 +214,48 @@ class DocBinary:
                     self.warnings.append(warning)
             return b''
         return self.table[offset:offset + size]
+
+    def _read_sections(self):
+        """MS-DOC PlcfSed: n+1 CPs followed by n 12-byte Sed records.
+
+        The terminal CP can include secondary stories; only interior CPs
+        partition the main story. Overflow sections are coalesced, not dropped.
+        """
+        data = self.blob(6)
+        if not data:
+            return []
+        count = (len(data) - 4) // 16
+        if len(data) < 4 or (len(data) - 4) % 16 or count < 1:
+            self.warnings.append('DOC section PLC has invalid size')
+            return []
+        start, end = self.stories['main']
+        if _u32(data, 0) != start:
+            self.warnings.append('DOC section PLC has invalid first CP')
+            return []
+        if count > MAX_SECTIONS:
+            self.warnings.append('DOC section limit exceeded; remaining sections coalesced')
+        boundaries = []
+        previous = start
+        for index in range(1, min(count, MAX_SECTIONS)):
+            cp = _u32(data, index * 4)
+            if not previous <= cp <= end:
+                self.warnings.append('DOC section PLC has invalid interior CP')
+                return []
+            if cp > previous:
+                boundaries.append(cp)
+            previous = cp
+        return boundaries
+
+    def _paragraph_ends(self, start, end):
+        # Section marks own PAPX, but an ordinary page break is inline text.
+        lo = bisect.bisect_right(self.section_boundaries, start)
+        hi = bisect.bisect_right(self.section_boundaries, end)
+        marks = (match.end() for match in _PARAGRAPH_BREAK.finditer(self.text, start, end))
+        previous = -1
+        for stop in heapq.merge(marks, self.section_boundaries[lo:hi]):
+            if stop != previous:
+                yield stop
+                previous = stop
 
     def _clx(self):
         clx = self.blob(33)
@@ -389,6 +441,48 @@ class DocBinary:
                     return sorted(records[:MAX_RECORDS], key=lambda r: r[0])
         return sorted(records, key=lambda r: r[0])
 
+    def _read_fonts(self):
+        """Read MS-DOC SttbfFfn: a count, cbExtra, and length-prefixed FFNs."""
+        data = self.blob(15)
+        if not data:
+            return
+        try:
+            if len(data) < 4:
+                raise ValueError('truncated header')
+            count, extra = struct.unpack_from('<HH', data)
+            if count > 4096:
+                raise ValueError('record limit exceeded')
+            pos = 4
+            for index in range(count):
+                if pos >= len(data):
+                    raise ValueError('truncated FFN')
+                size = data[pos] + 1
+                if size < 42 or pos + size + extra > len(data) or size % 2:
+                    raise ValueError('invalid FFN length')
+                # FFN's fixed header is 40 bytes including cbFfnM1.
+                name = data[pos + 40:pos + size].decode('utf-16le', errors='replace')
+                if '\0' not in name:
+                    raise ValueError('unterminated FFN name')
+                self.font_names[index] = name.split('\0', 1)[0]
+                pos += size + extra
+        except (ValueError, struct.error) as exc:
+            self.warnings.append('DOC font table: ' + str(exc))
+
+    def display_text(self, text, props):
+        """Map glyphs after CP-based field/story processing, without changing CPs."""
+        text = symbol_text(text, self.font_names.get(props.get('font'), ''))
+        symbol = props.get('symbol')
+        if symbol and props.get('special'):
+            font, code = symbol
+            glyph = symbol_text(chr(code), self.font_names.get(font, ''))
+            # sprmCSymbol describes Word's special U+0028 placeholder only.
+            text = text.replace('(', glyph)
+        return text
+
+    def display_range(self, start, end):
+        return ''.join(self.display_text(self.text[a:b], props)
+                       for a, b, props in self.iter_char_runs(start, end))
+
     def _read_styles(self):
         data = self.blob(1)
         if len(data) < 6:
@@ -481,8 +575,7 @@ class DocBinary:
             # Only the final paragraph mark owns PAPX. A fast-saved paragraph
             # may join pieces whose preceding physical PAPX runs disagree.
             # Cache the remaining interval for the renderer's sequential reads.
-            mark = _PARAGRAPH_BREAK.search(self.text, cp)
-            end = mark.end() if mark else len(self.text)
+            end = next(self._paragraph_ends(cp, len(self.text)), len(self.text))
             paragraph = self.paragraph_props(end - 1)
             self._char_paragraph = (cp, end, paragraph)
         style = self.styles.get(paragraph.get('istd', 0), {})
@@ -496,8 +589,7 @@ class DocBinary:
         start = max(0, start)
         end = min(end, len(self.text))
         pos = start
-        for match in _PARAGRAPH_BREAK.finditer(self.text[start:end]):
-            stop = start + match.end()
+        for stop in self._paragraph_ends(start, end):
             # The paragraph mark carries PAPX in fast-saved documents.
             props = self.paragraph_props(stop - 1)
             props['deleted_mark'] = bool(self.char_props(stop - 1).get('deleted'))
@@ -509,8 +601,8 @@ class DocBinary:
                     and not props.get('row_end') and not props.get('inner_row')
                     and not props.get('inner_cell')
                     and stop < end):
-                next_mark = _PARAGRAPH_BREAK.search(self.text, stop, end)
-                next_props = self.paragraph_props(next_mark.start() if next_mark else end - 1)
+                next_stop = next(self._paragraph_ends(stop, end), end)
+                next_props = self.paragraph_props(next_stop - 1)
                 depth = max(1, props.get('itap', 0)) if props.get('in_table') else 0
                 next_depth = (max(1, next_props.get('itap', 0))
                               if next_props.get('in_table') else 0)

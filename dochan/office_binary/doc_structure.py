@@ -23,6 +23,7 @@ class StructureRenderer:
         self.pictures = pictures
         self.objects = objects
         self.depth = 0
+        self.section_breaks = frozenset(getattr(binary, 'section_boundaries', ()))
 
     def _chunks(self, record):
         """Batch ordinary characters while preserving every CP annotation."""
@@ -48,6 +49,7 @@ class StructureRenderer:
         provenance = Provenance(source_format='doc', path='WordDocument#cp%d' % record.start)
         blocks = []
         runs = []
+        bookmarks = []
         last_signature = None
         chunks = []
 
@@ -71,8 +73,11 @@ class StructureRenderer:
             last_signature = signature
 
         def flush():
-            nonlocal runs, last_signature
+            nonlocal runs, last_signature, bookmarks
             settle()
+            # Anchors annotate the paragraph; they must never split a word.
+            runs = bookmarks + runs
+            bookmarks = []
             if runs:
                 for run in runs:
                     run.text = _unicode(run.text)
@@ -87,9 +92,13 @@ class StructureRenderer:
                 continue
             markers = self.stories.markers(cp)
             if markers:
-                settle()
-                runs.extend(markers)
-                last_signature = None
+                for marker in markers:
+                    if getattr(marker, '_bookmark_annotation', False):
+                        bookmarks.append(marker)
+                    else:
+                        settle()
+                        runs.append(marker)
+                        last_signature = None
             append(self.stories.suffix(cp), props)
             if self.stories.hidden(cp):
                 continue
@@ -115,12 +124,16 @@ class StructureRenderer:
                             flush()
                             blocks.extend(content)
                 continue
-            if char in ('\x0b', '\x0e'):
+            if char == '\x0c' and cp + 1 in self.section_breaks:
+                continue
+            if char in ('\x0b', '\x0c', '\x0e'):
                 char = '\n'
             elif char in ('\u2011', '\x1e'):
                 char = '-'
             elif char == '\u00ad' or (len(char) == 1 and ord(char) < 32 and char not in '\t\n'):
                 continue
+            if hasattr(self.binary, 'display_text'):
+                char = self.binary.display_text(char, props)
             append(char, props)
         flush()
         return blocks
@@ -150,12 +163,9 @@ def parse_structured_doc(word, table, data=b'', ole=None):
     objects = DocObjects(ole, binary, stories.fields, doc.errors) if ole is not None else None
     renderer = StructureRenderer(binary, doc, stories, DocImages(binary, doc), objects)
     start, end = binary.stories['main']
-    # Preserve the legacy output contract: explicit page/section breaks divide
-    # model Sections. A Word section break also carries the preceding PAPX.
-    # Field instructions and tracked deletions cannot introduce visible breaks.
-    boundaries = [cp + 1 for cp in range(start, end)
-                  if binary.text[cp] == '\x0c' and not stories.hidden(cp)
-                  and not binary.char_props(cp).get('deleted')]
+    # PlcfSed is the section authority. Inline page breaks remain within their
+    # field result or cell paragraph and cannot allocate model Sections.
+    boundaries = binary.section_boundaries
     for stop in boundaries + [end]:
         if start < stop or not doc.sections:
             doc.sections.append(Section(elements=renderer.render(start, stop),

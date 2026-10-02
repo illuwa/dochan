@@ -43,6 +43,7 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
     renderer = _Renderer(doc, entries, links, stream_name)
     from .ole_objects import PptObjects
     renderer.objects = PptObjects(presentation.embedded, errors, presentation.embedded_progids)
+    unresolved_reference = False
     renderer.font_names = {a.header.rec_instance: bytes(a.data[:64]).decode('utf-16le', errors='replace').split('\0')[0]
                            for a in walk_records(presentation.document.children) if a.header.rec_type == 4023}
     for index, slide in enumerate(presentation.slides, 1):
@@ -66,6 +67,7 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
             master = presentation.masters.get(master_id)
             if master is None:
                 warn(errors, "master slide reference missing")
+                unresolved_reference = True
                 break
             masters.append(master)
             master_id = master.master_id if master.flags & 1 else 0
@@ -82,9 +84,15 @@ def read_structured_ppt(data, current_user, pictures, stream_name, errors):
                 section.elements.extend(renderer.sheet(notes, np, images, notes=True))
             else:
                 warn(errors, "notes slide reference missing")
+                unresolved_reference = True
         section.elements.extend(renderer.comments(slide, provenance))
         section.elements.extend(images)
         doc.sections.append(section)
+    sheets = presentation.slides + list(presentation.masters.values()) + list(presentation.notes.values())
+    if unresolved_reference or any(sheet.unresolved and sheet.recovery_record is None for sheet in sheets):
+        from .ppt import _supplement_legacy_text
+        _supplement_legacy_text(doc, data, stream_name, renderer.remaining_text, renderer.remaining_paragraphs,
+                                master_ids=presentation.masters)
     return doc
 
 
@@ -99,6 +107,10 @@ class _Renderer:
         self.assets = set()
         self.remaining_text = MAX_TEXT_CHARS
         self.remaining_paragraphs = MAX_OUTPUT_PARAGRAPHS
+        # Each nonempty fragment consumes at least one input character. Share
+        # this processing bound across blocks rather than cutting a large atom
+        # at 100,000 boundaries (including ordinary paragraph separators).
+        self.fragment_budget = [MAX_TEXT_CHARS]
         self.cell_budget = [MAX_DOCUMENT_CELLS]
         self.shape_visit_budget = [MAX_SHAPES]
         self.drawing_record_budget = MAX_SHAPES * 16
@@ -161,7 +173,7 @@ class _Renderer:
                             paragraph_bullets=bullets, paragraph_levels=levels, records=records)
         paragraphs = render_text(block, provenance, self.links, link,
                                  max_output_chars=self.remaining_text, errors=self.doc.errors,
-                                 font_names=self.font_names)
+                                 font_names=self.font_names, fragment_budget=self.fragment_budget)
         if len(paragraphs) > self.remaining_paragraphs:
             warn(self.doc.errors, "document paragraph count limit exceeded")
             paragraphs = paragraphs[:self.remaining_paragraphs]
@@ -246,7 +258,10 @@ class _Renderer:
                 wordart = shape._text(0x00C0)
                 if wordart:
                     elements.extend(self.text(TextBlock(text=wordart), provenance, link))
-            if shape.pib:
+            # PPTX follows layout objects but does not traverse slide masters.
+            # Keep the established inherited text contract, excluding recurring
+            # master picture placements and their Markdown/image assets.
+            if shape.pib and not inherited:
                 elements.extend(self.image(shape, provenance, images))
             if object_id is not None and object_id in self.objects.supported and not elements:
                 elements.extend(self.text(TextBlock(text=shape.description or shape.name or '[내장 개체]'), provenance))

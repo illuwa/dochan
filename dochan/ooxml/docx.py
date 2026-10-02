@@ -1358,7 +1358,9 @@ class DOCXReader:
             elif child.tag == f"{{{W_NS}}}bookmarkStart":
                 bookmark_marker = self._bookmark_marker(child)
                 if bookmark_marker:
-                    runs.append(TextRun(text=bookmark_marker))
+                    marker = TextRun(text=bookmark_marker)
+                    marker._bookmark_annotation = True
+                    runs.append(marker)
             elif child.tag == f"{{{W_NS}}}commentRangeEnd":
                 comment_id = _w_attr(child, "id")
                 annotation = self._comment_annotation(comment_id)
@@ -1385,13 +1387,18 @@ class DOCXReader:
                 f"{{{W_NS}}}fldSimple",
             ):
                 runs.extend(self._parse_runs(child, depth + 1))
+        # Place visible anchors at the containing paragraph's front so an
+        # anchor inside a word (also inside w:ins/sdt) preserves that word.
+        # Resolve textbox spacing only after the text neighbours are final.
+        bookmarks = [run for run in runs if getattr(run, '_bookmark_annotation', False)]
+        runs = [run for run in runs if not getattr(run, '_bookmark_annotation', False)]
         for previous, current in zip(runs, runs[1:]):
             if (previous.text and current.text and
                     (getattr(previous, "_textbox_end", False) or
                      getattr(current, "_textbox_start", False)) and
                     not previous.text[-1].isspace() and not current.text[0].isspace()):
                 current.text = " " + current.text
-        return runs
+        return bookmarks + runs
 
     def _run_comment_reference_ids(self, r_elem) -> set:
         return {

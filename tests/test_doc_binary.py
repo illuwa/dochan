@@ -231,9 +231,10 @@ def test_nested_papx_cycle_is_reported_and_keeps_other_properties():
     assert 'table_props' not in result.paragraph_props(0)
 
 
-def test_section_mark_is_paragraph_boundary():
+def test_page_break_without_section_plc_is_inline():
     binary = make_binary('a\x0cb\r')
-    assert [p.text for p in binary.paragraphs(0, 4)] == ['a\x0c', 'b\r']
+    # A bare 0x0c is a page break. Only PlcfSed makes it a section mark.
+    assert [p.text for p in binary.paragraphs(0, 4)] == ['a\x0cb\r']
 
 
 def test_ciss_super_subscript_and_reset():

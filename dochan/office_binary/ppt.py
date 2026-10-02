@@ -89,7 +89,8 @@ def _find_next_record_offset(data: bytes, start: int) -> Optional[int]:
     return None
 
 
-def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
+def _extract_ppt_text_records(data: bytes, depth: int = 0, recovery_budget=None,
+                              recovery_master_ids=()) -> List[str]:
     if depth > 20:
         return []
 
@@ -97,6 +98,10 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
     offset = 0
     pending_text_type = None
     while offset + 8 <= len(data):
+        if recovery_budget is not None:
+            if recovery_budget[0] <= 0 or recovery_budget[1] <= 0:
+                break
+            recovery_budget[0] -= 1
         rec_options, record_type, size = struct.unpack_from("<HHI", data, offset)
         payload_start = offset + 8
         payload_end = payload_start + size
@@ -105,19 +110,37 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
             payload_end = next_offset if next_offset is not None else len(data)
         payload = data[payload_start:payload_end]
 
+        if recovery_budget is not None:
+            # MainMaster and its outline list contain editing prompts. A notes
+            # master is a NotesContainer whose NotesAtom refers to a master ID,
+            # rather than an actual slide; do not promote those prompts either.
+            master_notes = (record_type == NOTES_CONTAINER and len(payload) >= 12
+                            and struct.unpack_from("<H", payload, 2)[0] == 1009
+                            and struct.unpack_from("<I", payload, 8)[0] in recovery_master_ids)
+            if (record_type == 1016 or master_notes
+                    or (record_type == 4080 and rec_options >> 4 == 1)):
+                offset = payload_end
+                continue
+
         if record_type == TEXT_HEADER_ATOM and len(payload) >= 4:
             pending_text_type = struct.unpack_from("<I", payload, 0)[0]
-        elif record_type in (TEXT_CHARS_ATOM, CSTRING_ATOM):
+        elif record_type in (TEXT_CHARS_ATOM, CSTRING_ATOM) and (recovery_budget is None or record_type != CSTRING_ATOM):
+            if recovery_budget is not None:
+                payload = payload[:recovery_budget[1] * 2]
+                recovery_budget[1] -= len(payload) // 2
             _append_clean_lines(lines, payload.decode("utf-16-le", errors="ignore"), _heading_level_for_text_type(pending_text_type))
             pending_text_type = None
         elif record_type in (SLIDE_CONTAINER, NOTES_CONTAINER, COMMENTS_CONTAINER):
-            lines.extend(_extract_ppt_text_records(payload, depth + 1))
+            lines.extend(_extract_ppt_text_records(payload, depth + 1, recovery_budget, recovery_master_ids))
             pending_text_type = None
         elif record_type == TEXT_BYTES_ATOM:
+            if recovery_budget is not None:
+                payload = payload[:recovery_budget[1]]
+                recovery_budget[1] -= len(payload)
             _append_clean_lines(lines, payload.decode("cp1252", errors="replace"), _heading_level_for_text_type(pending_text_type))
             pending_text_type = None
         elif rec_options & 0x000F == 0x000F or _looks_like_record_stream(payload):
-            lines.extend(_extract_ppt_text_records(payload, depth + 1))
+            lines.extend(_extract_ppt_text_records(payload, depth + 1, recovery_budget, recovery_master_ids))
             pending_text_type = None
         else:
             pending_text_type = None
@@ -125,6 +148,50 @@ def _extract_ppt_text_records(data: bytes, depth: int = 0) -> List[str]:
         offset = payload_end
 
     return lines
+
+
+def _supplement_legacy_text(doc, data, stream_name, max_chars, max_paragraphs, master_ids=()):
+    """Keep salvage text separate from slides whose identity cannot be proved.
+
+    Use the legacy resynchronizing scan only after unresolved references remain.
+    CString is metadata (font names, tags, etc.), not slide display text. The
+    scan has shared record/character bounds and never decodes arbitrary bytes.
+    """
+    from .ppt_structure import warn
+
+    def key(text):
+        text = re.sub(r"^#{1,6}\s+", "", text)
+        text = re.sub(r"^[•◦▪▫●○■□☑☐➢]\s+", "", text)
+        text = re.sub(r" <[^<>\r\n]+>", "", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    if max_chars <= 0 or max_paragraphs <= 0:
+        warn(doc.errors, "legacy text recovery skipped: document output budget exceeded")
+        return
+    seen = set()
+    for paragraph in doc.find_all("paragraph"):
+        seen.add(key(paragraph.text))
+        seen.update(key(line) for line in paragraph.text.splitlines())
+    budget = [100000, min(max_chars, 8 * 1024 * 1024)]
+    lines = []
+    used = 0
+    for line in _extract_ppt_text_records(data[:64 * 1024 * 1024], recovery_budget=budget,
+                                          recovery_master_ids=master_ids):
+        normalized = key(line)
+        if not normalized or normalized in seen:
+            continue
+        if len(lines) >= max_paragraphs or used + len(line) > max_chars:
+            warn(doc.errors, "legacy text recovery output budget exceeded")
+            break
+        seen.add(normalized)
+        lines.append(line)
+        used += len(line)
+    if min(budget) <= 0 or len(data) > 64 * 1024 * 1024:
+        warn(doc.errors, "legacy text recovery scan budget exceeded")
+    if lines:
+        path = stream_name + "#legacy-recovery"
+        doc.sections.append(build_structured_section(lines, "ppt", len(doc.sections), path=path))
+        warn(doc.errors, "unresolved references supplemented with legacy text; slide association unverified")
 
 
 def _heading_level_for_text_type(text_type) -> int:

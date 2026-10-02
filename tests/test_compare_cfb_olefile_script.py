@@ -59,7 +59,8 @@ def test_parent_watchdog_classifies_worker_exit(monkeypatch):
     import os
     from scripts import compare_cfb_olefile as probe
     monkeypatch.setattr(probe, "_work", lambda task: os._exit(9))
-    results = list(probe.bounded_results([("compare", 0, "/opaque.doc", 1, 42)], 1, 1, 128))
+    # Linux 는 자식에 RLIMIT_AS 를 건다. fork 한 pytest 프로세스는 128 MiB 로는 스레드도 못 띄우므로 넉넉히 준다.
+    results = list(probe.bounded_results([("compare", 0, "/opaque.doc", 1, 42)], 1, 5, 4096))
     assert len(results) == 1
     assert results[0]["error"]["reason"] == "worker_crash"
     assert results[0]["id"] == 0

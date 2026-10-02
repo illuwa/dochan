@@ -274,7 +274,11 @@ def _child(connection, task, memory_mb, rss_value):
             peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             rss_value.value = peak if sys.platform == "darwin" else peak * 1024
             time.sleep(0.05)
-    threading.Thread(target=sample_memory, daemon=True).start()
+    try:
+        threading.Thread(target=sample_memory, daemon=True).start()
+    except RuntimeError:
+        # 주소 공간 상한 아래에서 스레드 스택을 못 잡으면 부모의 시간 감시만으로 계속한다.
+        pass
     try:
         connection.send(_work(task))
     finally:

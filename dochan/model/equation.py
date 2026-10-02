@@ -9,6 +9,8 @@ class Equation:
     script: str = ""
     # OMML 등 비-HWP 소스가 직접 변환한 LaTeX. 설정되면 script 변환 대신 사용.
     latex_override: str = ""
+    # Explicit source syntax when supplied by a reader; empty preserves legacy output.
+    script_format: str = ""
 
     @property
     def latex(self) -> str:

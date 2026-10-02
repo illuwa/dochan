@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 
-def worker(repo, path, mode):
+def worker(repo, path, mode, text_tables=False):
     sys.path.insert(0, str(repo))
     capture = io.StringIO()
     with contextlib.redirect_stdout(capture), contextlib.redirect_stderr(capture):
@@ -39,13 +39,15 @@ def worker(repo, path, mode):
             return numeric
         from dochan import Dochan
 
-        document = Dochan(str(path))
+        document = Dochan(str(path), pdf_text_tables=text_tables)
         markdown = document.to_markdown()
         plain = document.to_plain_text()
+        json_output = document.to_json()
         return {
             "markdown_length": len(markdown),
             "plain_length": len(plain),
             "markdown_sha256": hashlib.sha256(markdown.encode("utf-8", "surrogatepass")).hexdigest(),
+            "json_sha256": hashlib.sha256(json_output.encode("utf-8", "surrogatepass")).hexdigest(),
             "replacement_characters": markdown.count("\ufffd"),
             "plain_replacement_characters": plain.count("\ufffd"),
             "errors": sum(message.startswith("ERR") for message in document.errors),
@@ -64,11 +66,12 @@ def main():
     parser.add_argument("--mode", choices=("corpus", "pairs"), default="corpus")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--text-tables", action="store_true")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker:
         try:
-            row = worker(args.repo, args.corpus, args.mode)
+            row = worker(args.repo, args.corpus, args.mode, args.text_tables)
         except BaseException as exc:
             # 예외 문자열에는 비공개 파일명이나 본문이 있을 수 있다.
             row = {"exception_type": type(exc).__name__}
@@ -90,6 +93,8 @@ def main():
         command = [sys.executable, str(Path(__file__).resolve()),
                    str(args.repo.resolve()), str(path.resolve()), str(args.output.resolve()),
                    "--mode", args.mode, "--worker"]
+        if args.text_tables:
+            command.append("--text-tables")
         try:
             # nosemgrep: dangerous-subprocess-use-audit
             result = subprocess.run(command, capture_output=True, timeout=args.timeout, check=False)

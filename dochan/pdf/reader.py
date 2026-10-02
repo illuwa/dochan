@@ -13,6 +13,7 @@ from ..model.image import Image
 from .content import ContentTextExtractor, FontInfo, VerticalMetrics, assemble_lines, default_byte_decoder
 from .cmap import encoding_wmode, parse_tounicode
 from .images import extract_image_bytes
+from .formulas import FormulaExtractor
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
 from .widths import WidthMap
@@ -147,6 +148,11 @@ class PDFReader:
         if outline_section is not None:
             doc.sections.append(outline_section)
 
+        try:
+            formula_extractor = FormulaExtractor(pdf)
+        except Exception as e:
+            pdf.warnings.append(f"WARN: PDF Formula 구조 해석 실패: {e!r}")
+            formula_extractor = None
         next_note_number = 1
         comment_extractor = CommentExtractor()
         font_cache = {}
@@ -180,11 +186,16 @@ class PDFReader:
                 groups = []
                 tables = []
                 page_content = None
+                equations = []
+                formula_size_fragments = []
                 if content_parts:
                     extractor = ContentTextExtractor.from_fonts(
                         self._font_infos(pdf, resources, font_cache),
                         track_char_positions=bool(regions or comment_regions)
                     )
+                    properties = pdf.resolve(resources.get("Properties")) if isinstance(resources, dict) else None
+                    if isinstance(properties, dict):
+                        extractor.properties = {key: pdf.resolve(value) for key, value in properties.items()}
                     page_content = extractor.extract_page(b"\n".join(content_parts))
                     pdf.warnings.extend(page_content.warnings)
                     attach_links(page_content.fragments, regions, pdf.warnings)
@@ -207,7 +218,19 @@ class PDFReader:
                                               budget=table_budget)
                     except Exception as e:
                         pdf.warnings.append(f"WARN: {page_number}페이지 표 복원 실패: {e!r}")
-                    groups = self._body_groups(extractor, page_content.fragments, tables)
+                    protected_orders = set().union(*(t.fragment_orders for t in tables))
+                    if formula_extractor is not None:
+                        try:
+                            equations, consumed_formula = formula_extractor.apply(
+                                page, page_content, protected_orders)
+                            formula_size_fragments = [f for f in page_content.fragments
+                                                      if f.order in consumed_formula]
+                            page_content.fragments = [f for f in page_content.fragments
+                                                      if f.order not in consumed_formula]
+                        except Exception as e:
+                            pdf.warnings.append(f"WARN: PDF Formula 변환 실패: {e!r}")
+                    groups = self._body_groups(extractor, page_content.fragments, tables,
+                                               [event[0] for event in equations])
                     lines = [line for group in groups for line in group]
                 image_elems = self._page_images(pdf, resources, page_number)
                 has_text = bool(page_content and page_content.fragments)
@@ -219,7 +242,15 @@ class PDFReader:
                     pdf.warnings.append(
                         f"WARN: {page_number}페이지: 텍스트 없음 — 스캔 이미지로 추정 (이미지 추출 불가)"
                     )
-                median_size = _median_font_size([(ln.text, ln.size) for ln in lines])
+                size_lines = lines
+                if formula_size_fragments:
+                    # Equation replacement must not change neighbouring heading
+                    # classification by removing the smaller math font samples.
+                    size_fragments = sorted(page_content.fragments + formula_size_fragments,
+                                            key=lambda fragment: fragment.order)
+                    size_lines = [line for group in PDFReader._body_groups(
+                        extractor, size_fragments, tables) for line in group]
+                median_size = _median_font_size([(ln.text, ln.size) for ln in size_lines])
                 merged_head = None
                 if tables and page_rotation(pdf, page) != 0:
                     tail = None  # 회전된 페이지는 위·아래 판정이 무의미하다 (180° 는 위아래가 뒤집힌다)
@@ -247,7 +278,7 @@ class PDFReader:
                                      page_height=top - bottom) if reaches_bottom else None)
                 else:
                     tail = None
-                ordered = [(t.anchor_order, 0, t.table) for t in tables if t is not merged_head]
+                ordered = [(t.anchor_order, 0, t.table) for t in tables if t is not merged_head] + equations
                 draft.groups = groups
                 draft.ordered = ordered
                 draft.median_size = median_size
@@ -387,7 +418,7 @@ class PDFReader:
         draft.section.elements.extend(draft.notes)
 
     @staticmethod
-    def _body_groups(extractor, fragments, tables):
+    def _body_groups(extractor, fragments, tables, boundaries=()):
         """표를 경계로 본문 흐름을 나누고 빈 표의 앵커를 정한다."""
         groups = []
         consumed = set().union(*(t.fragment_orders for t in tables))
@@ -400,6 +431,7 @@ class PDFReader:
         events = [(f.order, 1, f) for f in fragments
                   if f.order not in consumed]
         events.extend((t.anchor_order, 0, t) for t in tables)
+        events.extend((order, 0, None) for order in boundaries)
         pending = []
         for _, kind, event in sorted(events, key=lambda e: (e[0], e[1])):
             if kind:

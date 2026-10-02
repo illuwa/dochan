@@ -80,10 +80,13 @@ def _element_to_dict(elem) -> dict:
         _add_caption(result, elem)
         return result
     elif isinstance(elem, Equation):
-        return {
+        result = {
             'type': 'equation',
             'script': elem.script,
         }
+        if elem.script_format:
+            result['script_format'] = elem.script_format
+        return result
     elif isinstance(elem, Image):
         result = {
             'type': 'image',

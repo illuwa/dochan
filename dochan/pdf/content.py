@@ -140,6 +140,8 @@ class Fragment:
     link_geometry_reliable: bool = True
     comment_spans: list = field(default_factory=list)
     comment_markers: list = field(default_factory=list)
+    mcids: tuple = ()
+    artifact: bool = False
 
 
 def writing_direction(frag: Fragment) -> str:
@@ -177,6 +179,8 @@ class PageContent:
     fragments: List[Fragment]
     segments: List[Segment]
     warnings: List[str] = field(default_factory=list)
+    marked_ids: set = field(default_factory=set)
+    duplicate_marked_ids: set = field(default_factory=set)
 
 
 def _matmul(m1, m2):
@@ -236,6 +240,10 @@ class ContentTextExtractor:
         """그래픽 상태를 유지하며 텍스트와 괘선을 함께 해석한다."""
         self._char_position_budget = 200000
         self._link_position_reliable = True
+        self._marked_stack = []
+        self._marked_overflow = 0
+        marked_ids = set()
+        duplicate_marked_ids = set()
         lexer = PDFLexer(content)
         ctm = (1, 0, 0, 1, 0, 0)
         stack = []
@@ -275,7 +283,29 @@ class ContentTextExtractor:
                 # 이 연산은 글리프 전진이 아닌 텍스트 줄 행렬에서 다시 시작한다.
                 self._link_position_reliable = True
 
-            if op == b"q":
+            if op in (b"BDC", b"BMC"):
+                props = operands[-1] if op == b"BDC" and operands else None
+                if isinstance(props, PDFName):
+                    props = getattr(self, "properties", {}).get(str(props))
+                mcid = props.get("MCID") if isinstance(props, dict) else None
+                if type(mcid) is not int or mcid < 0:
+                    mcid = None
+                if len(self._marked_stack) < 64 and not self._marked_overflow:
+                    self._marked_stack.append((mcid, bool(operands and str(operands[0]) == "Artifact")))
+                    if mcid is not None:
+                        if mcid in marked_ids:
+                            duplicate_marked_ids.add(mcid)
+                        marked_ids.add(mcid)
+                else:
+                    self._marked_overflow += 1
+                    if self._marked_overflow == 1:
+                        paths.warnings.append("WARN: PDF marked-content 깊이 한도 초과")
+            elif op == b"EMC":
+                if self._marked_overflow:
+                    self._marked_overflow -= 1
+                elif self._marked_stack:
+                    self._marked_stack.pop()
+            elif op == b"q":
                 if len(stack) < 256:
                     stack.append((ctm, font, fs, tc, tw, th, tl))
                 else:
@@ -350,7 +380,7 @@ class ContentTextExtractor:
                 (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))]
         if len(safe) != len(frags):
             paths.warnings.append("WARN: PDF 비유한 텍스트 좌표 — 해당 조각 건너뜀")
-        return PageContent(safe, paths.segments, paths.warnings)
+        return PageContent(safe, paths.segments, paths.warnings, marked_ids, duplicate_marked_ids)
 
     def _show(self, raw, tm, font, fs, tc, tw, th, frags, ctm):
         if not raw:
@@ -399,6 +429,9 @@ class ContentTextExtractor:
                 width=abs(total_adv) * scale, size=eff_size,
                 text=text, space_width=space_w,
                 bold=font.bold, italic=font.italic, order=len(frags),
+                mcids=tuple(item[0] for item in self._marked_stack if item[0] is not None)
+                    if not self._marked_overflow else (),
+                artifact=any(item[1] for item in self._marked_stack),
                 dir_x=start_tm[0], dir_y=start_tm[1],
                 up_x=start_tm[2], up_y=start_tm[3],
                 char_offsets=tuple(abs(v) * scale for v in offsets)
@@ -428,6 +461,9 @@ class ContentTextExtractor:
                 size=eff_size, text=text,
                 space_width=abs(metrics.metrics(32)[0]) / 1000.0 * fs * scale,
                 bold=font.bold, italic=font.italic, order=len(frags),
+                mcids=tuple(item[0] for item in self._marked_stack if item[0] is not None)
+                    if not self._marked_overflow else (),
+                artifact=any(item[1] for item in self._marked_stack),
                 dir_x=-start_tm[2], dir_y=-start_tm[3],
                 up_x=start_tm[0], up_y=start_tm[1],
             ))

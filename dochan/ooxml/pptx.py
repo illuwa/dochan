@@ -108,6 +108,7 @@ class PPTXReader:
         self._media_content_types = None
         self._slide_images = {}
         self._image_bytes_total = 0
+        self._last_layout_content = ("", None)
         with OOXMLPackage(file_path) as package:
             self._package = package
             self._comment_authors = self._read_comment_authors(package)
@@ -127,7 +128,7 @@ class PPTXReader:
                 if package.exists(slide_path):
                     slide_root = package.read_xml_part(slide_path)
                     slide_relationships = self._read_part_relationships(package, slide_path)
-                    layout_path, layout_root = self._text_styles.related_part(slide_path, "slideLayout")
+                    layout_path, layout_root = self._read_layout_content(package, slide_path)
                     if layout_root is not None:
                         layout_relationships = self._read_part_relationships(package, layout_path)
                         section.elements.extend(
@@ -168,6 +169,34 @@ class PPTXReader:
             doc.assets = getattr(self, "_assets", [])
             self._package = None
         return doc
+
+    def _read_layout_content(self, package, slide_path):
+        """Read visible layout content independently of optional style budgets."""
+        directory, name = posixpath.split(slide_path)
+        relpath = directory + "/_rels/" + name + ".rels"
+        try:
+            if not package.exists(relpath):
+                return "", None
+            root = package.read_xml_part(relpath)
+            for rel in root:
+                if (rel.tag != "{%s}Relationship" % REL_NS or
+                        not rel.get("Type", "").endswith("/slideLayout") or
+                        rel.get("TargetMode") == "External" or not rel.get("Target")):
+                    continue
+                target = _resolve_target(directory, rel.get("Target").replace("\\", "/"))
+                if target == self._last_layout_content[0]:
+                    return self._last_layout_content
+                if not package.exists(target):
+                    raise ValueError("missing layout")
+                layout = package.read_xml_part(target)
+                # A single-entry cache avoids retaining every content XML tree.
+                self._last_layout_content = target, layout
+                return target, layout
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError):
+            warning = "WARN: PPTX layout content could not be read"
+            if warning not in self._errors:
+                self._errors.append(warning)
+        return "", None
 
     def _read_presentation_relationships(self, package: OOXMLPackage) -> Dict[str, str]:
         if not package.exists("ppt/_rels/presentation.xml.rels"):

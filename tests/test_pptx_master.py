@@ -130,7 +130,8 @@ def test_wrong_layout_index_does_not_match_and_other_style_is_isolated(tmp_path)
                        level('i="1"'), level('u="sng"')))
     body, free = read_runs(path)
     assert not body.bold and body.italic and not body.underline
-    assert not free.bold and not free.italic and free.underline
+    # PowerPoint deck1 S3/S10: free shapes do not inherit otherStyle.
+    assert not free.bold and not free.italic and not free.underline
 
 
 def test_ancestor_paragraph_defaults_not_sample_run_properties(tmp_path):
@@ -139,7 +140,8 @@ def test_ancestor_paragraph_defaults_not_sample_run_properties(tmp_path):
                      runs='<a:r><a:rPr u="sng"/><a:t>sample</a:t></a:r><a:endParaRPr baseline="30000"/>')
     path = package(tmp_path, slide=shape(props='<a:pPr lvl="2"/>'), layout=ancestor)
     run = read_runs(path)[0]
-    assert run.bold and run.italic
+    # PowerPoint deck1 S2: ancestor sample pPr/defRPr is not inherited.
+    assert not run.bold and run.italic
     assert not run.underline and not run.superscript
 
 
@@ -204,11 +206,12 @@ def test_external_style_relationship_is_never_loaded(tmp_path):
     assert read_runs(path)[0].bold
 
 
-def test_missing_type_uses_body_and_missing_index_uses_zero(tmp_path):
+def test_missing_type_and_index_use_title_chain(tmp_path):
     path = package(tmp_path, slide=shape(ph=''), layout=shape(ph='', style=level('i="1"')),
                    tx='<p:bodyStyle>%s</p:bodyStyle>' % level('b="1"'))
     run = read_runs(path)[0]
-    assert run.bold and run.italic
+    # PowerPoint deck2 S14: <p:ph/> uses titleStyle, not bodyStyle.
+    assert not run.bold and run.italic
 
 
 def test_reader_reuse_does_not_retain_master_styles(tmp_path):
@@ -248,10 +251,368 @@ def test_notes_keep_existing_formatting_scope(tmp_path):
     assert not note.bold and note.font_size_pt == 10
 
 
-def test_master_exact_type_and_index_win_before_family(tmp_path):
+def test_body_family_uses_master_body_before_exact_type(tmp_path):
     path = package(tmp_path, slide=shape(ph='type="obj" idx="7"'),
                    master=shape(ph='type="body" idx="7"', style=level('b="1"')) +
                    shape(ph='type="obj" idx="1"', style=level('i="1"')) +
                    shape(ph='type="obj" idx="7"', style=level('u="sng"')))
     run = read_runs(path)[0]
-    assert run.underline and not run.bold and not run.italic
+    # PowerPoint deck2 S4/S5: body master supplies every body-family placeholder.
+    assert run.bold and not run.underline and not run.italic
+
+
+@pytest.mark.parametrize('budget', ['MAX_STYLE_BYTES', 'MAX_STYLE_PARTS', 'MAX_STYLE_NODES'])
+def test_layout_content_survives_zero_style_budget(tmp_path, monkeypatch, budget):
+    import dochan.ooxml.pptx_styles as styles
+    monkeypatch.setattr(styles, budget, 0)
+    doc = PPTXReader().read(str(package(tmp_path, layout=shape('static', ph=None))))
+    assert [p.text for p in doc.find_all('paragraph')] == ['static', 'sample']
+    assert any('limit exceeded' in e for e in doc.errors)
+
+
+def test_shared_layout_content_survives_1100_slides(tmp_path):
+    path = package(tmp_path, layout=shape('static', ph=None))
+    with zipfile.ZipFile(path) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    ns = 'xmlns:p="%s" xmlns:r="%s"' % (P_NS, R_NS)
+    parts['ppt/presentation.xml'] = ('<p:presentation %s><p:sldIdLst>%s</p:sldIdLst>'
+                                    '</p:presentation>') % (ns, ''.join(
+        '<p:sldId id="%d" r:id="r%d"/>' % (255 + i, i) for i in range(1, 1101)))
+    parts['ppt/_rels/presentation.xml.rels'] = '<Relationships xmlns="%s">%s</Relationships>' % (
+        REL_NS, ''.join('<Relationship Id="r%d" Type="%s/slide" Target="slides/slide%d.xml"/>' %
+                       (i, R_NS, i) for i in range(1, 1101)))
+    for i in range(2, 1101):
+        parts['ppt/slides/slide%d.xml' % i] = parts['ppt/slides/slide1.xml']
+        parts['ppt/slides/_rels/slide%d.xml.rels' % i] = parts['ppt/slides/_rels/slide1.xml.rels']
+    with zipfile.ZipFile(path, 'w') as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+    doc = PPTXReader().read(str(path))
+    assert len(doc.sections) == 1100
+    assert sum(p.text == 'static' for p in doc.find_all('paragraph')) == 1100
+    assert sum(p.text == 'sample' for p in doc.find_all('paragraph')) == 1100
+
+
+@pytest.mark.parametrize('value,expected', [('0%', (False, False)), ('-25%', (False, True)),
+                                           ('30%', (True, False)), ('+0.125%', (True, False))])
+def test_percentage_baseline_overrides_inherited_value(tmp_path, value, expected):
+    path = package(tmp_path, default=level('baseline="30000"'),
+                   slide=shape(runs='<a:r><a:rPr baseline="%s"/><a:t>x</a:t></a:r>' % value))
+    run = read_runs(path)[0]
+    assert (run.superscript, run.subscript) == expected
+
+
+@pytest.mark.parametrize('value', ['', 'typo'])
+def test_invalid_underline_does_not_enable_underline(tmp_path, value):
+    path = package(tmp_path, slide=shape(runs='<a:r><a:rPr u="%s"/><a:t>x</a:t></a:r>' % value))
+    doc = PPTXReader().read(str(path))
+    assert not doc.find_all('paragraph')[0].runs[0].underline
+    assert any('invalid character attribute u' in e for e in doc.errors)
+
+
+@pytest.mark.parametrize('slide_idx,layout_idx', [('01', '1'), ('+1', '1'), ('1', '01'),
+                                                ('4294967295', '+4294967295')])
+def test_placeholder_idx_is_unsigned_integer(tmp_path, slide_idx, layout_idx):
+    path = package(tmp_path, slide=shape(ph='type="body" idx="%s"' % slide_idx),
+                   layout=shape(ph='type="body" idx="%s"' % layout_idx, style=level('b="1" sz="3200"')))
+    run = read_runs(path)[0]
+    assert run.bold and run.font_size_pt == 32
+
+
+@pytest.mark.parametrize('value', ['-1', '4294967296', '1_0', 'NaN', ''])
+def test_invalid_placeholder_idx_never_matches(tmp_path, value):
+    path = package(tmp_path, slide=shape(ph='type="body" idx="%s"' % value),
+                   layout=shape(ph='type="body" idx="%s"' % value, style=level('b="1"')))
+    doc = PPTXReader().read(str(path))
+    assert not doc.find_all('paragraph')[0].runs[0].bold
+    assert any('invalid placeholder index' in e for e in doc.errors)
+
+
+def test_layout_style_wins_over_master_style(tmp_path):
+    run = read_runs(package(tmp_path, layout=shape(style=level('sz="4000" b="0"')),
+                            master=shape(style=level('sz="3000" b="1"'))))[0]
+    assert run.font_size_pt == 40 and not run.bold
+
+
+def test_txstyle_wins_over_presentation_default(tmp_path):
+    run = read_runs(package(tmp_path, default=level('sz="1000" b="1"'),
+                            tx='<p:bodyStyle>%s</p:bodyStyle>' % level('sz="2800" b="0"')))[0]
+    assert run.font_size_pt == 28 and not run.bold
+
+
+def test_layout_textbox_ignores_master_other_style(tmp_path):
+    # PowerPoint deck1 S3/S10 and deck2 S11/S16: otherStyle is not inherited.
+    runs = read_runs(package(tmp_path, layout=shape('static', ph=None), default=level('sz="1100"'),
+                             tx='<p:otherStyle>%s</p:otherStyle>' % level('sz="3200" b="1"')))
+    assert runs[0].text == 'static' and runs[0].font_size_pt == 11 and not runs[0].bold
+
+
+def resolver_for_test():
+    from lxml import etree
+    from dochan.ooxml.pptx_styles import TextStyleResolver
+    parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+    root = etree.fromstring(('<p:presentation xmlns:p="%s"/>' % P_NS).encode(), parser)
+    return TextStyleResolver(None, root, [], lambda node: None), parser
+
+
+def test_malformed_list_style_scan_is_cached():
+    from lxml import etree
+    resolver, parser = resolver_for_test()
+    node = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
+                            (A_NS, '<a:lvl9pPr/>' * 1000)).encode(), parser)
+
+    class CountedStyle:
+        def __init__(self):
+            self.visits = 0
+
+        def find(self, path, ns):
+            self.visits += len(node)
+            return node.find(path, ns)
+
+        def __iter__(self):
+            for child in node:
+                self.visits += 1
+                yield child
+
+        def getroottree(self):
+            return node.getroottree()
+
+    style = CountedStyle()
+    for _ in range(1000):
+        assert resolver._list_properties(style, 0) == {}
+    assert style.visits <= 3000
+
+
+def test_first_list_style_scan_has_node_budget(monkeypatch):
+    from lxml import etree
+    import dochan.ooxml.pptx_styles as styles
+    monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 20)
+    resolver, parser = resolver_for_test()
+    node = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
+                            (A_NS, '<a:lvl9pPr/>' * 100 + level('b="1"'))).encode(), parser)
+    assert resolver._list_properties(node, 0) == {}
+    assert any('limit exceeded' in e for e in resolver.errors)
+
+
+def test_node_budget_is_per_part(monkeypatch):
+    from lxml import etree
+    import dochan.ooxml.pptx_styles as styles
+    monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 5)
+    resolver, parser = resolver_for_test()
+    for _ in range(3):
+        root = etree.fromstring(('<p:sldLayout xmlns:p="%s" xmlns:a="%s"><p:cSld>'
+                                 '<p:spTree>%s</p:spTree></p:cSld></p:sldLayout>' %
+                                 (P_NS, A_NS, shape())).encode(), parser)
+        assert resolver._index(root)[0]
+    assert not resolver.errors
+
+
+def test_unsafe_layout_target_warns_and_keeps_slide(tmp_path):
+    rel = '<Relationships xmlns="%s"><Relationship Id="r1" Type="%s/slideLayout" Target="../../../etc/passwd"/></Relationships>' % (REL_NS, R_NS)
+    doc = PPTXReader().read(str(package(tmp_path, extra={'ppt/slides/_rels/slide1.xml.rels': rel})))
+    assert [p.text for p in doc.find_all('paragraph')] == ['sample']
+    assert doc.errors and all(e.startswith('WARN:') for e in doc.errors)
+
+
+# Reproduced from the orchestrator's PowerPoint(Mac) measurements, 2026-10-03.
+# Expected tuples are measured values, not resolver-generated values.
+def measured_shape(name, ph=None, paras=None, lst='', txbox=False, y=0):
+    return ('<p:sp><p:nvSpPr><p:cNvPr id="2" name="%s"/><p:cNvSpPr txBox="%s"/>'
+            '<p:nvPr>%s</p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="%d"/>'
+            '<a:ext cx="100" cy="100"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/>'
+            '<a:lstStyle>%s</a:lstStyle>%s</p:txBody></p:sp>') % (
+                name, '1' if txbox else '0', ph or '', y * 1000, lst, ''.join(paras or []))
+
+
+def measured_paragraph(text, ppr=''):
+    return '<a:p>%s<a:r><a:rPr lang="en-US"/><a:t>%s</a:t></a:r></a:p>' % (ppr, text)
+
+
+def test_powerpoint_measured_deck1(tmp_path):
+    def lvl(n, attrs):
+        return level(attrs, n - 1)
+
+    TX = ('<p:titleStyle>' + lvl(1, 'sz="4400" b="1"') + '</p:titleStyle>'
+          '<p:bodyStyle>' + lvl(1, 'sz="2800" i="1"') + lvl(2, 'sz="2400"') + lvl(3, 'sz="1500" u="sng"') + '</p:bodyStyle>'
+          '<p:otherStyle>' + lvl(1, 'sz="3200" b="1"') + '</p:otherStyle>')
+    DTS = '<a:defPPr><a:defRPr lang="en-US"/></a:defPPr>' + lvl(1, 'sz="1100"') + lvl(3, 'sz="1000"')
+
+    MASTER = [
+        measured_shape('MTitle', '<p:ph type="title"/>', [measured_paragraph('Master title')]),
+        # master body sample paragraph carries pPr/defRPr baseline only
+        measured_shape('MBody', '<p:ph type="body" idx="1"/>', [measured_paragraph('Master body', '<a:pPr><a:defRPr baseline="30000"/></a:pPr>')]),
+        measured_shape('MDate', '<p:ph type="dt" sz="half" idx="2"/>', [measured_paragraph('date')]),
+    ]
+    L1 = [
+        measured_shape('LTitle', '<p:ph type="title"/>', [measured_paragraph('Layout title')]),
+        # layout body: sample paragraph pPr/defRPr (not lstStyle)
+        measured_shape('LBody', '<p:ph idx="1"/>', [measured_paragraph('Layout body sample', '<a:pPr><a:defRPr i="0" sz="4000" u="sng"/></a:pPr>')]),
+        measured_shape('LPic', '<p:ph type="pic" idx="13"/>', [measured_paragraph('pic prompt')]),
+        measured_shape('LDate', '<p:ph type="dt" sz="half" idx="10"/>', [measured_paragraph('date')]),
+        measured_shape('LDefPPr', '<p:ph type="body" idx="14"/>', [measured_paragraph('defppr')], lst='<a:defPPr><a:defRPr sz="4400"/></a:defPPr>'),
+        measured_shape('LSub', '<p:ph type="subTitle" idx="15"/>', [measured_paragraph('sub')]),
+        measured_shape('LByType', '<p:ph type="body" idx="16"/>', [measured_paragraph('bytype')], lst=lvl(1, 'sz="2000"')),
+        measured_shape('LText', None, [measured_paragraph('LAYOUT TEXTBOX')], txbox=True, y=10),
+    ]
+    SLIDE = [
+        measured_shape('S1_title', '<p:ph type="title"/>', [measured_paragraph('S1 title')], y=0),
+        measured_shape('S2_body', '<p:ph idx="1"/>', [measured_paragraph('S2 body lvl0'), measured_paragraph('S2 body lvl2', '<a:pPr lvl="2"/>')], y=1),
+        measured_shape('S3_textbox', None, [measured_paragraph('S3 textbox plain')], txbox=True, y=2),
+        measured_shape('S4_textbox_pdef', None, [measured_paragraph('S4 textbox pPr defRPr', '<a:pPr><a:defRPr b="0" sz="2400" i="1"/></a:pPr>')], txbox=True, y=3),
+        measured_shape('S5_pic', '<p:ph type="pic" idx="13"/>', [measured_paragraph('S5 pic text')], y=4),
+        measured_shape('S6_dt', '<p:ph type="dt" sz="half" idx="10"/>', [measured_paragraph('S6 date')], y=5),
+        measured_shape('S7_defppr', '<p:ph type="body" idx="14"/>', [measured_paragraph('S7 defPPr')], y=6),
+        measured_shape('S8_sub', '<p:ph type="subTitle" idx="15"/>', [measured_paragraph('S8 subtitle')], y=7),
+        measured_shape('S9_orphan', '<p:ph type="body" idx="99"/>', [measured_paragraph('S9 orphan idx')], y=8),
+        measured_shape('S10_shape_nontx', None, [measured_paragraph('S10 rect shape no txBox')], y=9),
+    ]
+    path = package(tmp_path, slide="".join(SLIDE), layout="".join(L1),
+                   master="".join(MASTER), tx=TX, default=DTS)
+    actual = [(r.text, r.font_size_pt, r.bold, r.italic, r.underline, r.superscript, r.subscript)
+              for r in read_runs(path) if r.text != "LAYOUT TEXTBOX"]
+    assert actual == [
+        ('S1 title', 44.0, True, False, False, False, False),
+        ('S2 body lvl0', 28.0, False, True, False, False, False),
+        ('S2 body lvl2', 15.0, False, False, True, False, False),
+        ('S3 textbox plain', 11.0, False, False, False, False, False),
+        ('S4 textbox pPr defRPr', 24.0, False, True, False, False, False),
+        ('S5 pic text', 28.0, False, True, False, False, False),
+        ('S6 date', 11.0, False, False, False, False, False),
+        ('S7 defPPr', 28.0, False, True, False, False, False),
+        ('S8 subtitle', 28.0, False, True, False, False, False),
+        ('S9 orphan idx', 28.0, False, True, False, False, False),
+        ('S10 rect shape no txBox', 11.0, False, False, False, False, False),
+    ]
+
+
+def test_powerpoint_measured_deck2(tmp_path):
+    def lvl(n, attrs):
+        return level(attrs, n - 1)
+
+    TX = ('<p:titleStyle>' + lvl(1, 'sz="4400" b="1"') + '</p:titleStyle>'
+          '<p:bodyStyle>' + lvl(1, 'sz="2800" i="1"') + lvl(2, 'sz="2400"') + '</p:bodyStyle>'
+          '<p:otherStyle>' + lvl(1, 'sz="3200" b="1" u="sng"') + '</p:otherStyle>')
+    DTS = '<a:defPPr><a:defRPr sz="1300"/></a:defPPr>' + lvl(1, 'sz="1100"') + lvl(2, 'sz="1050"')
+
+    MASTER = [
+        measured_shape('MTitle', '<p:ph type="title"/>', [measured_paragraph('Master title')]),
+        measured_shape('MBody', '<p:ph type="body" idx="1"/>', [measured_paragraph('Master body')], lst=lvl(1, 'sz="3000"')),
+        measured_shape('MDate', '<p:ph type="dt" sz="half" idx="2"/>', [measured_paragraph('date')], lst=lvl(1, 'sz="900"')),
+        measured_shape('MFtr', '<p:ph type="ftr" sz="quarter" idx="3"/>', [measured_paragraph('ftr')]),
+        measured_shape('MNum', '<p:ph type="sldNum" sz="quarter" idx="4"/>', [measured_paragraph('num')]),
+    ]
+    L1 = [
+        measured_shape('LTitle', '<p:ph type="title"/>', [measured_paragraph('Layout title')], lst=lvl(1, 'sz="4000"')),
+        measured_shape('LBody', '<p:ph idx="1"/>', [measured_paragraph('Layout body')]),
+        measured_shape('LBody20', '<p:ph type="body" idx="20"/>', [measured_paragraph('b20')], lst=lvl(1, 'sz="2600"')),
+        measured_shape('LObj', '<p:ph type="obj" idx="21"/>', [measured_paragraph('obj')]),
+        measured_shape('LTbl', '<p:ph type="tbl" idx="22"/>', [measured_paragraph('tbl')]),
+        measured_shape('LChart', '<p:ph type="chart" idx="23"/>', [measured_paragraph('chart')]),
+        measured_shape('LMedia', '<p:ph type="media" idx="24"/>', [measured_paragraph('media')]),
+        measured_shape('LDate', '<p:ph type="dt" sz="half" idx="10"/>', [measured_paragraph('date')]),
+        measured_shape('LFtr', '<p:ph type="ftr" sz="quarter" idx="11"/>', [measured_paragraph('ftr')]),
+        measured_shape('LNum', '<p:ph type="sldNum" sz="quarter" idx="12"/>', [measured_paragraph('num')]),
+        measured_shape('LPic', '<p:ph type="pic" idx="13"/>', [measured_paragraph('pic')]),
+    ]
+    SLIDE = [
+        measured_shape('S1_title_layoutlst', '<p:ph type="title"/>', [measured_paragraph('S1')], y=0),
+        measured_shape('S2_body_masterlst', '<p:ph idx="1"/>', [measured_paragraph('S2'), measured_paragraph('S2 lvl2', '<a:pPr lvl="1"/>')], y=1),
+        measured_shape('S3_body_layoutlst', '<p:ph type="body" idx="20"/>', [measured_paragraph('S3')], y=2),
+        measured_shape('S4_obj', '<p:ph type="obj" idx="21"/>', [measured_paragraph('S4')], y=3),
+        measured_shape('S5_tbl', '<p:ph type="tbl" idx="22"/>', [measured_paragraph('S5')], y=4),
+        measured_shape('S6_chart', '<p:ph type="chart" idx="23"/>', [measured_paragraph('S6')], y=5),
+        measured_shape('S7_media', '<p:ph type="media" idx="24"/>', [measured_paragraph('S7')], y=6),
+        measured_shape('S8_dt', '<p:ph type="dt" sz="half" idx="10"/>', [measured_paragraph('S8')], y=7),
+        measured_shape('S9_ftr', '<p:ph type="ftr" sz="quarter" idx="11"/>', [measured_paragraph('S9')], y=8),
+        measured_shape('S10_sldNum', '<p:ph type="sldNum" sz="quarter" idx="12"/>', [measured_paragraph('S10')], y=9),
+        measured_shape('S11_textbox_lst', None, [measured_paragraph('S11')], lst=lvl(1, 'sz="1700"'), txbox=True, y=10),
+        measured_shape('S12_textbox_lvl2', None, [measured_paragraph('S12', '<a:pPr lvl="1"/>')], txbox=True, y=11),
+        measured_shape('S13_body_slidelst_bold', '<p:ph idx="1"/>', [measured_paragraph('S13')], lst=lvl(1, 'b="1"'), y=12),
+        measured_shape('S14_ph_noattr', '<p:ph/>', [measured_paragraph('S14')], y=13),
+        measured_shape('S15_pic', '<p:ph type="pic" idx="13"/>', [measured_paragraph('S15')], y=14),
+        measured_shape('S16_shape_lst', None, [measured_paragraph('S16')], lst=lvl(1, 'sz="1900"'), y=15),
+    ]
+    path = package(tmp_path, slide="".join(SLIDE), layout="".join(L1),
+                   master="".join(MASTER), tx=TX, default=DTS)
+    actual = [(r.text, r.font_size_pt, r.bold, r.italic, r.underline, r.superscript, r.subscript)
+              for r in read_runs(path) if r.text != "LAYOUT TEXTBOX"]
+    assert actual == [
+        ('S1', 40.0, True, False, False, False, False),
+        ('S2', 30.0, False, True, False, False, False),
+        ('S2 lvl2', 24.0, False, False, False, False, False),
+        ('S3', 26.0, False, True, False, False, False),
+        ('S4', 30.0, False, True, False, False, False),
+        ('S5', 30.0, False, True, False, False, False),
+        ('S6', 30.0, False, True, False, False, False),
+        ('S7', 30.0, False, True, False, False, False),
+        ('S8', 9.0, False, False, False, False, False),
+        ('S9', 11.0, False, False, False, False, False),
+        ('S10', 11.0, False, False, False, False, False),
+        ('S11', 17.0, False, False, False, False, False),
+        ('S12', 10.5, False, False, False, False, False),
+        ('S13', 30.0, True, True, False, False, False),
+        ('S14', 40.0, True, False, False, False, False),
+        ('S15', 30.0, False, True, False, False, False),
+        ('S16', 19.0, False, False, False, False, False),
+    ]
+
+
+
+def test_layout_context_keeps_master_relationship(tmp_path):
+    from dochan.ooxml.package import OOXMLPackage
+    from dochan.ooxml.pptx_styles import TextStyleResolver
+    path = package(tmp_path)
+    with OOXMLPackage(str(path)) as archive:
+        presentation = archive.read_xml_part('ppt/presentation.xml')
+        resolver = TextStyleResolver(archive, presentation, [], lambda node: None)
+        layout_path = 'ppt/slideLayouts/slideLayout1.xml'
+        layout = archive.read_xml_part(layout_path)
+        ancestor_layout, master = resolver.context(layout, layout_path)
+        assert ancestor_layout is None
+        assert master.tag == '{%s}sldMaster' % P_NS
+
+
+@pytest.mark.parametrize('kind', ['dgm', 'clipArt', 'pic', 'tbl', 'chart', 'media', 'obj', 'subTitle'])
+def test_body_family_placeholders_inherit_master_body(tmp_path, kind):
+    # PowerPoint RULES 2, deck2 S4/S5/S6/S7/S15.
+    path = package(tmp_path, slide=shape(ph='type="%s" idx="7"' % kind),
+                   master=shape(style=level('sz="3000"')),
+                   tx='<p:bodyStyle>%s</p:bodyStyle>' % level('sz="2800" i="1"'))
+    run = read_runs(path)[0]
+    assert run.font_size_pt == 30 and run.italic
+
+
+def test_all_level_styles_outrank_nearer_default_paragraph_style(tmp_path):
+    # PowerPoint RULES 6, deck1 S7 and deck2 S11/S16.
+    default_paragraph = '<a:defPPr><a:defRPr b="1" sz="4400"/></a:defPPr>'
+    path = package(tmp_path, slide=shape(style=default_paragraph),
+                   layout=shape(style=default_paragraph), master=shape(style=default_paragraph),
+                   default=level('sz="1100" b="0"'))
+    run = read_runs(path)[0]
+    assert run.font_size_pt == 11 and not run.bold
+
+
+def test_exhausted_part_does_not_disable_another_part(monkeypatch):
+    from lxml import etree
+    import dochan.ooxml.pptx_styles as styles
+    monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 20)
+    resolver, parser = resolver_for_test()
+    bad = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
+                           (A_NS, '<a:lvl9pPr/>' * 100)).encode(), parser)
+    good = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
+                            (A_NS, level('b="1"'))).encode(), parser)
+    assert resolver._list_properties(bad, 0) == {}
+    assert resolver._list_properties(good, 0) == {'b': '1'}
+
+
+def test_style_budget_is_shared_by_trees_of_same_part(monkeypatch):
+    from lxml import etree
+    import dochan.ooxml.pptx_styles as styles
+    monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 2)
+    resolver, parser = resolver_for_test()
+    for i in range(2):
+        node = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
+                                (A_NS, level('b="1"'))).encode(), parser)
+        resolver.root_paths[node] = 'ppt/slides/slide1.xml'
+        assert resolver._list_properties(node, 0) == ({'b': '1'} if i == 0 else {})
+    assert any('limit exceeded' in e for e in resolver.errors)

@@ -3,6 +3,7 @@
 실행: python -m scripts.probe_pptx_master CORPUS... --output DIR
 --snapshot NAME 으로 리더 스냅샷을 남기고 --baseline FILE 로 비교한다.
 XML 해석은 표준 라이브러리만 사용하며 PPTX 리더의 상속 함수를 호출하지 않는다.
+XML 대조는 구현 해석과의 일치이며, 표시 정답의 주 근거는 PowerPoint 실측이다.
 """
 import argparse
 from collections import Counter, defaultdict
@@ -10,7 +11,10 @@ import hashlib
 import json
 from pathlib import Path
 import posixpath
+import re
+from decimal import Decimal
 import subprocess
+import sys
 import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml (독립 정답지용, DTD·엔티티는 파싱 전에 거부)
 import zipfile
 
@@ -64,31 +68,42 @@ def placeholder(shape):
 
 
 def family(kind):
-    if kind in ("title", "ctrTitle"):
-        return "title"
-    if kind in ("body", "subTitle", "obj"):
-        return "body"
-    return kind
+    if kind in (None, "dt", "ftr", "sldNum"):
+        return kind
+    return "title" if kind in ("title", "ctrTitle") else "body"
+
+
+def ph_index(ph):
+    value = ph.get("idx", "0").strip()
+    if len(value) > 32 or not re.fullmatch(r"[+-]?[0-9]+", value):
+        return None
+    result = int(value)
+    return result if 0 <= result <= 4294967295 else None
+
+
+def ph_kind(ph):
+    return ph.get("type") or ("title" if ph_index(ph) == 0 else "body")
 
 
 def match(shape, root, master=False):
     ph = placeholder(shape)
-    if ph is None or root is None:
+    if ph is None or root is None or ph_index(ph) is None:
         return None
     candidates = [(sp, placeholder(sp)) for sp in root.findall(".//p:sp", NS)]
-    candidates = [(sp, p) for sp, p in candidates if p is not None]
-    kind, idx = ph.get("type", "body"), ph.get("idx", "0")
+    candidates = [(sp, p) for sp, p in candidates if p is not None and ph_index(p) is not None]
+    kind, idx = ph_kind(ph), ph_index(ph)
     if not master:
-        indexed = [(sp, p) for sp, p in candidates if p.get("idx", "0") == idx]
-        if indexed:
-            candidates = indexed
-        else:
-            return None
-    for condition in (lambda p: p.get("type", "body") == kind,
-                      lambda p: family(p.get("type", "body")) == family(kind)):
-        for sp, p in candidates:
-            if condition(p):
-                return sp
+        candidates = [(sp, p) for sp, p in candidates if ph_index(p) == idx]
+    target = family(kind) if master else kind
+    for condition in (lambda p: ph_kind(p) == target,
+                      lambda p: family(ph_kind(p)) == family(kind)):
+        matching = [(sp, p) for sp, p in candidates if condition(p)]
+        if matching:
+            if master:
+                same_idx = [sp for sp, p in matching if ph_index(p) == idx]
+                if same_idx:
+                    return same_idx[0]
+            return matching[0][0]
     return candidates[0][0] if candidates and not master and "type" not in ph.attrib else None
 
 
@@ -105,23 +120,6 @@ def attrs(node):
     return {key: node.get(key) for key in FIELDS if node is not None and node.get(key) is not None}
 
 
-def style_layers(style, lvl):
-    if style is None:
-        return []
-    return [style.find("a:lvl%dpPr/a:defRPr" % (lvl + 1), NS),
-            style.find("a:defPPr/a:defRPr", NS)]
-
-
-def shape_layers(shape, lvl, paragraph=None):
-    if shape is None:
-        return []
-    if paragraph is None:
-        paragraphs = shape.findall("p:txBody/a:p", NS)
-        paragraph = next((p for p in paragraphs if level(p) == lvl), None)
-    result = [paragraph.find("a:pPr/a:defRPr", NS)] if paragraph is not None else []
-    return result + style_layers(shape.find("p:txBody/a:lstStyle", NS), lvl)
-
-
 def normalized(values):
     result = {"bold": values.get("b") in ("1", "true"),
               "italic": values.get("i") in ("1", "true"),
@@ -134,10 +132,11 @@ def normalized(values):
     except ValueError:
         pass
     try:
-        baseline = int(values.get("baseline", "0"))
+        value = values.get("baseline", "0")
+        baseline = Decimal(value[:-1]) * 1000 if value.endswith("%") else Decimal(value)
         result["superscript"] = baseline > 0
         result["subscript"] = baseline < 0
-    except ValueError:
+    except ArithmeticError:
         pass
     return result
 
@@ -181,20 +180,24 @@ def raw_probe(path):
                     master_shape = match(layout_shape if layout_shape is not None else shape,
                                          master_root, master=True)
                     effective_ph = placeholder(layout_shape) if layout_shape is not None else ph
-                    kind = effective_ph.get("type", "body") if effective_ph is not None else "other"
-                    style_name = family(kind) if family(kind) in ("body", "title") else "other"
-                    tx_style = master_root.find("p:txStyles/p:%sStyle" % style_name, NS) if master_root is not None else None
+                    kind = (ph.get("type") if ph is not None else None)
+                    if not kind and effective_ph is not None:
+                        kind = ph_kind(effective_ph)
+                    style_name = family(kind)
+                    tx_style = (master_root.find("p:txStyles/p:%sStyle" % style_name, NS)
+                                if master_root is not None and style_name in ("title", "body") else None)
                     for para_no, paragraph in enumerate(shape.findall("p:txBody/a:p", NS)):
                         lvl = level(paragraph)
-                        layers = []
-                        for stage, nodes in (
-                            ("layout" if is_layout else "slide", shape_layers(shape, lvl, paragraph)),
-                            ("layout", shape_layers(layout_shape, lvl)),
-                            ("master", shape_layers(master_shape, lvl)),
-                            ("txStyles", style_layers(tx_style, lvl)),
-                            ("default", style_layers(presentation.find("p:defaultTextStyle", NS), lvl)),
-                        ):
-                            layers.extend((stage, node) for node in nodes)
+                        own_stage = "layout" if is_layout else "slide"
+                        layers = [(own_stage, paragraph.find("a:pPr/a:defRPr", NS))]
+                        styles = [(own_stage, shape.find("p:txBody/a:lstStyle", NS)),
+                                  ("layout", layout_shape.find("p:txBody/a:lstStyle", NS) if layout_shape is not None else None),
+                                  ("master", master_shape.find("p:txBody/a:lstStyle", NS) if master_shape is not None else None),
+                                  ("txStyles", tx_style),
+                                  ("default", presentation.find("p:defaultTextStyle", NS))]
+                        # All level-specific values outrank all defPPr values.
+                        for tag in ("a:lvl%dpPr/a:defRPr" % (lvl + 1), "a:defPPr/a:defRPr"):
+                            layers.extend((stage, style.find(tag, NS)) for stage, style in styles if style is not None)
                         for run_no, run in enumerate(list(paragraph)):
                             if run.tag not in ("{%s}r" % NS["a"], "{%s}fld" % NS["a"], "{%s}br" % NS["a"]):
                                 continue
@@ -241,7 +244,10 @@ def snapshot(paths):
                                path=getattr(run.provenance, "path", ""),
                                slide=getattr(run.provenance, "slide", None), heading=paragraph.heading_level)
                     runs.append(row)
-            results[str(path)] = {"markdown": digest(to_markdown(doc)), "json": digest(to_json(doc)),
+            markdown = to_markdown(doc)
+            results[str(path)] = {"markdown": digest(markdown),
+                                  "bold_heading_lines": sum(line.startswith("#") and "**" in line for line in markdown.splitlines()),
+                                  "adjacent_bold_markers": markdown.count("****"), "json": digest(to_json(doc)),
                                   "text": digest(to_plain_text(doc)), "runs": runs, "errors": doc.errors,
                                   "newline_heading_bold": sum(r["heading"] > 0 and "\n" in r["text"] and r["bold"] for r in runs),
                                   "multiline_heading_bold_runs": sum(r["heading"] > 0 and "\n" in r["text"].strip() and r["bold"] for r in runs),
@@ -267,7 +273,8 @@ def compare(before, after):
         rows.append({"file": path, "markdown_changed": old.get("markdown") != new.get("markdown"),
                      "json_changed": old.get("json") != new.get("json"),
                      "text_changed": old.get("text") != new.get("text"),
-                     "run_count_delta": len(new_runs) - len(old_runs), "changed_runs": changed_runs,
+                     "run_count_delta": len(new_runs) - len(old_runs),
+                     "run_text_changes": sum(left["text"] != right["text"] for left, right in zip(old_runs, new_runs)), "changed_runs": changed_runs,
                      "properties": dict(changes), "newline_heading_bold": new.get("newline_heading_bold", 0),
                      "multiline_heading_bold_runs": new.get("multiline_heading_bold_runs", 0),
                      "multiline_heading_bold_lines": new.get("multiline_heading_bold_lines", 0),
@@ -343,7 +350,7 @@ def legacy_pairs(roots, paths, worktree):
     for phase, directory in (("head_before_inheritance", Path(__file__).resolve().parents[1]),
                              ("legacy_branch_worktree", worktree)):
         # nosemgrep: dangerous-subprocess-use-audit
-        result = subprocess.run(["/usr/bin/python3", "-c", code], cwd=str(directory),
+        result = subprocess.run([sys.executable, "-c", code], cwd=str(directory),
                                 input=json.dumps({k: v["ppt"] for k, v in pairs.items()}),
                                 capture_output=True, text=True, check=True, timeout=120)
         for name, row in json.loads(result.stdout).items():
@@ -389,7 +396,7 @@ def main():
     parser.add_argument("--legacy-worktree", type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    paths = sorted({path for root in args.roots for path in root.rglob("*") if path.suffix.lower() == ".pptx"})
+    paths = sorted({path for root in args.roots for path in root.rglob("*") if path.suffix.lower() in {".pptx", ".pptm", ".potx", ".ppsx"}})
     current = snapshot(paths)
     (args.output / (args.snapshot + ".json")).write_text(json.dumps(current, ensure_ascii=False))
     all_records, errors = [], []

@@ -4,6 +4,8 @@ Only character attributes are cascaded. Paragraph/list content, hyperlinks,
 sample master text and endParaRPr are not copied into slide content.
 """
 import posixpath
+import re
+from decimal import Decimal, InvalidOperation
 import zipfile
 
 from lxml import etree
@@ -24,12 +26,38 @@ def _placeholder(shape):
     return shape.find('p:nvSpPr/p:nvPr/p:ph', NS)
 
 
+# PowerPoint(Mac), measured decks 1/2, 2026-10-03: only title/body use
+# txStyles. Other placeholders inherit their own master, free shapes only
+# presentation defaults. Ancestor sample paragraphs never supply defaults.
+TITLE_PLACEHOLDERS = frozenset({'title', 'ctrTitle'})
+INDEPENDENT_PLACEHOLDERS = frozenset({'dt', 'ftr', 'sldNum'})
+UNDERLINE_VALUES = frozenset({
+    'none', 'words', 'sng', 'dbl', 'heavy', 'dotted', 'dottedHeavy', 'dash',
+    'dashHeavy', 'dashLong', 'dashLongHeavy', 'dotDash', 'dotDashHeavy',
+    'dotDotDash', 'dotDotDashHeavy', 'wavy', 'wavyHeavy', 'wavyDbl',
+})
+
+
 def _family(kind):
-    if kind in {'title', 'ctrTitle'}:
-        return 'title'
-    if kind in {'body', 'subTitle', 'obj'}:
-        return 'body'
-    return kind
+    if kind is None or kind in INDEPENDENT_PLACEHOLDERS:
+        return kind
+    return 'title' if kind in TITLE_PLACEHOLDERS else 'body'
+
+
+def _baseline(value):
+    """Normalize ST_Percentage integer/percent forms to thousandths of percent."""
+    if len(value) > 64:
+        return None
+    try:
+        if re.fullmatch(r'[+-]?[0-9]+', value):
+            number = Decimal(value)
+        elif re.fullmatch(r'[+-]?[0-9]+(?:\.[0-9]+)?%', value):
+            number = Decimal(value[:-1]) * 1000
+        else:
+            return None
+        return number if -2147483648 <= number <= 2147483647 else None
+    except InvalidOperation:
+        return None
 
 
 class TextStyleResolver:
@@ -41,9 +69,11 @@ class TextStyleResolver:
         self.parts = {}
         self.related = {}
         self.indexes = {}
-        self.paragraphs = {}
+        self.list_styles = {}
+        self.shape_styles = {}
         self.bytes = 0
-        self.nodes = 0
+        self.nodes = {}
+        self.root_paths = {presentation: "ppt/presentation.xml"}
 
     def warn(self, message):
         warning = 'WARN: PPTX text style ' + message
@@ -68,6 +98,7 @@ class TextStyleResolver:
             self.bytes += size
             root = self.package.read_xml_part(path)
             self.parts[path] = root
+            self.root_paths[root] = path
             return root
         except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError):
             self.warn('part could not be read')
@@ -100,6 +131,7 @@ class TextStyleResolver:
         return result
 
     def context(self, root, path):
+        self.root_paths[root] = path
         if root.tag == '{%s}sld' % P:
             layout_path, layout = self.related_part(path, 'slideLayout')
             _, master = self.related_part(layout_path, 'slideMaster') if layout is not None else ('', None)
@@ -108,6 +140,30 @@ class TextStyleResolver:
             _, master = self.related_part(path, 'slideMaster')
             return None, master
         return None  # Notes masters, tables, chart and SmartArt text are out of scope.
+
+    def _take_node(self, node):
+        # Cache traversals and charge their work to the owning XML part, so one
+        # malformed part cannot disable otherwise valid, unrelated parts.
+        root = node.getroottree().getroot()
+        part = self.root_paths.get(root, root)
+        count = self.nodes.get(part, 0)
+        if count >= MAX_STYLE_NODES:
+            self.warn('shape traversal limit exceeded')
+            return False
+        self.nodes[part] = count + 1
+        return True
+
+    def _idx(self, ph):
+        value = ph.get('idx', '0').strip()
+        if len(value) <= 32 and re.fullmatch(r'[+-]?[0-9]+', value):
+            number = int(value)
+            if 0 <= number <= 4294967295:
+                return number
+        self.warn('invalid placeholder index')
+        return None
+
+    def _kind(self, ph):
+        return ph.get('type') or ('title' if self._idx(ph) == 0 else 'body')
 
     def _index(self, root):
         if root is None:
@@ -119,14 +175,15 @@ class TextStyleResolver:
         stack = [(tree, 0)] if tree is not None else []
         while stack:
             node, depth = stack.pop()
-            self.nodes += 1
-            if self.nodes > MAX_STYLE_NODES or depth > MAX_STYLE_DEPTH:
+            if depth > MAX_STYLE_DEPTH or not self._take_node(node):
                 self.warn('shape traversal limit exceeded')
                 break
             if node.tag == '{%s}sp' % P:
                 ph = _placeholder(node)
                 if ph is not None:
-                    idx, kind = ph.get('idx', '0'), ph.get('type', 'body')
+                    idx, kind = self._idx(ph), self._kind(ph)
+                    if idx is None:
+                        continue
                     exact, families, first = by_idx.setdefault(idx, ({}, {}, node))
                     exact.setdefault(kind, node)
                     families.setdefault(_family(kind), node)
@@ -145,9 +202,12 @@ class TextStyleResolver:
         if ph is None:
             return None
         by_idx, by_type, by_family = self._index(root)
-        kind, idx = ph.get('type', 'body'), ph.get('idx', '0')
+        kind, idx = self._kind(ph), self._idx(ph)
+        if idx is None:
+            return None
         if master:
-            candidates = by_type.get(kind) or by_family.get(_family(kind), {})
+            family = _family(kind)
+            candidates = by_type.get(family) or by_family.get(family, {})
             return candidates.get(idx, next(iter(candidates.values()), None))
         group = by_idx.get(idx)
         if group is None:
@@ -170,10 +230,11 @@ class TextStyleResolver:
         master_shape = self._match(master, parent_ph, master=True)
         kind = (ph.get('type') if ph is not None else None)
         if not kind and parent_ph is not None:
-            kind = parent_ph.get('type', 'body')
+            kind = self._kind(parent_ph)
         family = _family(kind)
-        style_name = {'title': 'titleStyle', 'body': 'bodyStyle'}.get(family, 'otherStyle')
-        tx = master.find('p:txStyles/p:' + style_name, NS) if master is not None else None
+        style_name = {'title': 'titleStyle', 'body': 'bodyStyle'}.get(family)
+        tx = (master.find('p:txStyles/p:' + style_name, NS)
+              if master is not None and style_name is not None else None)
         return tx, master_shape, layout_shape, shape
 
     def level(self, paragraph):
@@ -195,11 +256,17 @@ class TextStyleResolver:
             valid = True
             if name in {'b', 'i'}:
                 valid = value in {'0', '1', 'true', 'false'}
-            elif name in {'sz', 'baseline'}:
+            elif name == 'u':
+                valid = value in UNDERLINE_VALUES
+            elif name == 'baseline':
+                number = _baseline(value)
+                valid = number is not None
+                if valid:
+                    value = str(number)
+            elif name == 'sz':
                 try:
                     number = int(value) if len(value) <= 12 else None
-                    valid = number is not None and (100 <= number <= 400000 if name == 'sz'
-                                                    else -2147483648 <= number <= 2147483647)
+                    valid = number is not None and 100 <= number <= 400000
                 except ValueError:
                     valid = False
             if valid:
@@ -208,47 +275,49 @@ class TextStyleResolver:
                 self.warn('invalid character attribute ' + name)
         return result
 
-    def _list_properties(self, style, level):
-        result = {}
-        if style is not None:
-            for path in ('a:defPPr/a:defRPr', 'a:lvl%dpPr/a:defRPr' % (level + 1)):
-                result.update(self.properties(style.find(path, NS)))
-        return result
-
-    def _ancestor_paragraphs(self, shape):
-        if shape not in self.paragraphs:
-            levels = {}
-            body = shape.find('p:txBody', NS)
-            if body is not None:
-                for paragraph in body:
-                    self.nodes += 1
-                    if self.nodes > MAX_STYLE_NODES:
-                        self.warn('shape traversal limit exceeded')
+    def _list_properties(self, style, level, defaults=False):
+        if style is None:
+            return {}
+        if style not in self.list_styles:
+            indexed = {}
+            tags = {'{%s}defPPr' % A: -1}
+            tags.update(('{%s}lvl%dpPr' % (A, n + 1), n) for n in range(9))
+            for child in style:
+                if not self._take_node(child):
+                    break
+                key = tags.get(child.tag)
+                if key is None or key in indexed:
+                    continue
+                indexed[key] = {}
+                for prop in child:
+                    if not self._take_node(prop):
                         break
-                    if paragraph.tag == '{%s}p' % A:
-                        level = self.level(paragraph)
-                        if level not in levels:
-                            levels[level] = self.properties(paragraph.find('a:pPr/a:defRPr', NS))
-                        if len(levels) == 9:
-                            break
-            self.paragraphs[shape] = levels
-        return self.paragraphs[shape]
+                    if prop.tag == '{%s}defRPr' % A:
+                        indexed[key] = self.properties(prop)
+                        break
+            self.list_styles[style] = indexed
+        return self.list_styles[style].get(-1 if defaults else level, {})
+
+    def _shape_style(self, shape):
+        if shape is None:
+            return None
+        if shape not in self.shape_styles:
+            self.shape_styles[shape] = shape.find('p:txBody/a:lstStyle', NS)
+        return self.shape_styles[shape]
 
     def paragraph_defaults(self, layers, paragraph):
         if layers is None:
             return None
         level = self.level(paragraph)
         tx, master, layout, shape = layers
-        values = self._list_properties(self.default, level)
-        values.update(self._list_properties(tx, level))
-        for ancestor in (master, layout, shape):
-            if ancestor is None:
-                continue
-            values.update(self._list_properties(ancestor.find('p:txBody/a:lstStyle', NS), level))
-            if ancestor is shape:
-                values.update(self.properties(paragraph.find('a:pPr/a:defRPr', NS)))
-            else:
-                values.update(self._ancestor_paragraphs(ancestor).get(level, {}))
+        styles = (self.default, tx, self._shape_style(master),
+                  self._shape_style(layout), self._shape_style(shape))
+        values = {}
+        # PowerPoint deck1 S7: even a nearer defPPr loses to a farther lvlNpPr.
+        for defaults in (True, False):
+            for style in styles:
+                values.update(self._list_properties(style, level, defaults))
+        values.update(self.properties(paragraph.find('a:pPr/a:defRPr', NS)))
         return values
 
     def apply(self, run, rpr, defaults):
@@ -259,6 +328,6 @@ class TextStyleResolver:
         run.underline = values.get('u', 'none') != 'none'
         if 'sz' in values:
             run.font_size_pt = int(values['sz']) / 100
-        baseline = int(values.get('baseline', '0'))
+        baseline = Decimal(values.get('baseline', '0'))
         run.superscript = baseline > 0
         run.subscript = baseline < 0

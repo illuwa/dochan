@@ -10,7 +10,7 @@ DocInfo에는 문서 전체에서 참조하는 서식 정보가 포함됨:
 
 import struct
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
 from ..utils.safe_decompress import safe_zlib_decompress
 
@@ -21,9 +21,16 @@ from ..constants import (
 from ..model.style import FaceName, ParaShape, StyleEntry
 from .records.char_shape import CharShape
 from .records.style import parse_style_record
+from .revisions import parse_change, parse_author, HWPTAG_TRACK_CHANGE, HWPTAG_TRACK_CHANGE_AUTHOR
 
 
 MAX_HWP_RECORDS = 200_000
+
+
+@dataclass
+class HWPParaShape(ParaShape):
+    """HWP 문단 모양 속성1의 0 기반 개요 수준."""
+    heading_level: int = 0
 
 
 @dataclass
@@ -46,6 +53,8 @@ class DocInfo:
     bin_data_entries: List[BinDataEntry] = field(default_factory=list)
     section_count: int = 0
     errors: List[str] = field(default_factory=list)
+    track_changes: Dict[int, object] = field(default_factory=dict)
+    track_authors: List[object] = field(default_factory=list)
 
 
 class DocInfoParser:
@@ -59,6 +68,7 @@ class DocInfoParser:
 
         doc_info = DocInfo()
         records = self._read_all_records(stream_data)
+        change_index = 0
 
         for rec_tag, rec_data in records:
             try:
@@ -81,6 +91,13 @@ class DocInfoParser:
                     ))
                 elif rec_tag == HWPTAG_BIN_DATA:
                     self._parse_bin_data(rec_data, doc_info)
+                elif rec_tag == HWPTAG_TRACK_CHANGE:
+                    # 실패한 레코드도 번호를 차지한다. 뒤 참조를 앞당기지 않는다.
+                    change_index += 1
+                    doc_info.track_changes[change_index] = parse_change(rec_data)
+                elif rec_tag == HWPTAG_TRACK_CHANGE_AUTHOR:
+                    doc_info.track_authors.append(None)
+                    doc_info.track_authors[-1] = parse_author(rec_data)
             except Exception as e:
                 doc_info.errors.append(f"WARN: DocInfo 레코드 {rec_tag} 파싱 실패: {e}")
 
@@ -165,14 +182,16 @@ class DocInfoParser:
 
     def _parse_para_shape(self, data: bytes, doc_info: DocInfo):
         """PARA_SHAPE — 문단 모양 파싱"""
-        ps = ParaShape()
+        ps = HWPParaShape()
         if len(data) < 4:
             doc_info.para_shapes.append(ps)
             return
 
         # offset 0: UINT32 속성1
         props = struct.unpack_from("<I", data, 0)[0]
-        ps.align = props & 0x7  # bit 0-2: 정렬
+        ps.align = (props >> 2) & 0x7  # bit 2-4: 정렬 (공개 HWP/HWPX 쌍 확인)
+        ps.heading_type = (props >> 23) & 0x3
+        ps.heading_level = (props >> 25) & 0x7
 
         # offset 4: INT32 왼쪽 여백
         if len(data) >= 8:

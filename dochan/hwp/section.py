@@ -12,6 +12,7 @@ hwp/section.py — 섹션 파서 (트리 구축 + 컨트롤 식별)
 """
 
 import struct
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace as _dc_replace
 from typing import List
 
@@ -21,7 +22,7 @@ from ..constants import (
     HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT, HWPTAG_PARA_CHAR_SHAPE,
     HWPTAG_CTRL_HEADER, HWPTAG_LIST_HEADER, HWPTAG_TABLE,
     HWPTAG_EQEDIT, HWPTAG_SHAPE_COMP_PICTURE, HWPTAG_SHAPE_COMPONENT,
-    HWPTAG_CTRL_DATA,
+    HWPTAG_CTRL_DATA, MAX_OUTLINE_HEADING_LEVEL,
 )
 from ..model.document import Section, Paragraph, TextRun
 from ..model.table import Table, Cell
@@ -35,6 +36,8 @@ from .records.ctrl_header import (
 )
 from .records.para_text import parse_para_text
 from .records.para_char_shape import parse_para_char_shape
+from .forms import form_text, clickhere_prompt
+from .revisions import project_text_result
 
 
 def _apply_link_ranges(runs, ranges):
@@ -98,8 +101,12 @@ class SectionParser:
     MAX_SECTION_CELLS = MAX_HWP_SECTION_CELLS
     MAX_DOCUMENT_CELLS = MAX_HWP_DOCUMENT_CELLS
 
-    def __init__(self, doc_info=None):
+    def __init__(self, doc_info=None, *, revision_mode="preserve", project_revisions=True):
+        if revision_mode not in ("preserve", "final", "original"):
+            raise ValueError("unsupported HWP revision mode")
         self.doc_info = doc_info  # DocInfo 참조 (서식 해석용)
+        self.revision_mode = revision_mode
+        self.project_revisions = project_revisions
         self.errors = []
         self._section_cells = 0
         self._document_cells = 0
@@ -347,6 +354,7 @@ class SectionParser:
         char_shape_data = None
         ctrl_nodes = []
         bookmark_markers = []
+        range_records = []
 
         for child in para_node['children']:
             crec = child['record']
@@ -354,6 +362,8 @@ class SectionParser:
                 text_result = parse_para_text(crec.data)
             elif crec.tag_id == HWPTAG_PARA_CHAR_SHAPE:
                 char_shape_data = crec.data
+            elif crec.tag_id == 70:  # HWPTAG_PARA_RANGE_TAG (공개 명세 표 64)
+                range_records.append(crec.data)
             elif crec.tag_id == HWPTAG_CTRL_HEADER:
                 # 책갈피(bokm)는 필드가 아니라 별도 컨트롤 — 이름을 마커로 뽑고
                 # 컨트롤 목록에서는 제외한다 (뒤 루프에서 요소로 만들지 않음).
@@ -364,14 +374,27 @@ class SectionParser:
                 else:
                     ctrl_nodes.append(child)
 
+        if text_result:
+            text_result, ctrl_nodes = self._form_text_result(text_result, ctrl_nodes)
+            if self.project_revisions:
+                self._warn_revision_controls(text_result, range_records)
+                text_result = project_text_result(
+                    text_result, range_records, getattr(self.doc_info, 'track_changes', {}),
+                    self.revision_mode, self.errors,
+                )
+
         # 텍스트 문단 생성
         if text_result and text_result['text'].strip():
             para = Paragraph()
+            para_rec = para_node['record']
+            if len(para_rec.data) >= 10:
+                para.para_shape_id = struct.unpack_from("<H", para_rec.data, 8)[0]
+            if len(para_rec.data) >= 11:
+                para.style_id = para_rec.data[10]
             # CharShape 기반 TextRun 분할
             text = text_result['text']
             cs_pairs = parse_para_char_shape(char_shape_data) if char_shape_data else []
-
-            if cs_pairs:
+            if cs_pairs and self.doc_info and getattr(self.doc_info, 'char_shapes', None):
                 runs = []
                 raw_to_text = text_result['raw_to_text']
                 start = 0
@@ -411,13 +434,6 @@ class SectionParser:
             if link_ranges:
                 para.runs = _apply_link_ranges(para.runs, link_ranges)
 
-            # 스타일 정보 연결 (PARA_HEADER에서)
-            para_rec = para_node['record']
-            if len(para_rec.data) >= 10:
-                para.para_shape_id = struct.unpack_from("<H", para_rec.data, 8)[0]
-            if len(para_rec.data) >= 11:
-                para.style_id = para_rec.data[10]
-
             # 책갈피 마커는 문단 앞에 붙인다 (문서 내 앵커 — DOCX 규약과 동일)
             if bookmark_markers:
                 para.runs = bookmark_markers + para.runs
@@ -432,33 +448,149 @@ class SectionParser:
 
         # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
         for ctrl_node in ctrl_nodes:
-                failure_serial = self._table_failure_serial
-                try:
-                    ctrl_elem = self._parse_control(ctrl_node)
-                except _HWPStructureError as exc:
-                    if self._structure_depth > 1 or self._table_depth > 0:
-                        raise
+            failure_serial = self._table_failure_serial
+            starting_cells = self._section_cells
+            starting_document_cells = self._document_cells
+            try:
+                ctrl_elem = self._parse_control(ctrl_node)
+            except (_HWPStructureError, RecursionError) as exc:
+                # 실패한 컨트롤의 예약만 되돌린다. 같은 문단의 텍스트와
+                # 이미 성공한 형제 컨트롤은 그 예약과 함께 보존한다.
+                self._section_cells = starting_cells
+                self._document_cells = starting_document_cells
+                if isinstance(exc, _HWPStructureError):
                     self._append_fatal_once(exc.key, exc.message)
-                    continue
-                except RecursionError as exc:
-                    if self._structure_depth > 1 or self._table_depth > 0:
-                        raise _HWPStructureError(
-                            "structure-recursion",
-                            "ERR: HWP structure recursion limit exceeded",
-                        ) from exc
+                else:
                     self._append_fatal_once(
                         "structure-recursion",
                         "ERR: HWP structure recursion limit exceeded",
                     )
-                    continue
-                if self._table_failure_serial != failure_serial:
-                    continue
-                if isinstance(ctrl_elem, list):
-                    elements.extend(ctrl_elem)
-                elif ctrl_elem:
-                    elements.append(ctrl_elem)
+                continue
+            if self._table_failure_serial != failure_serial:
+                continue
+            if isinstance(ctrl_elem, list):
+                elements.extend(ctrl_elem)
+            elif ctrl_elem:
+                elements.append(ctrl_elem)
 
         return elements
+
+    def _warn_revision_controls(self, text_result, range_records):
+        """개체 변경은 텍스트 투영만으로 확정하지 않고 부분지원으로 알린다."""
+        if self.revision_mode == 'preserve':
+            return
+        controls = sorted((start, end) for start, end, _ in text_result.get('inline_controls', []))
+        if not controls:
+            return
+        ends = [end for _, end in controls]
+        target = 0x11 if self.revision_mode == 'final' else 0x10
+        count = 0
+        for data in range_records:
+            if len(data) % 12:
+                continue
+            for start, end, tag in struct.iter_unpack('<III', data):
+                count += 1
+                if count > 100_000:
+                    return  # project_text_result reports the range limit.
+                if tag >> 24 != target:
+                    continue
+                index = bisect_right(ends, start)
+                if index < len(controls) and controls[index][0] < end:
+                    self._append_fatal_once(
+                        'revision-control',
+                        'ERR: HWP revision partial [control]; unresolved object preserved',
+                    )
+                    return
+
+    def _form_text_result(self, text_result, ctrl_nodes):
+        """양식과 빈 누름틀 안내문을 원시 컨트롤 위치에 삽입한다."""
+        queues = {}
+        for node in ctrl_nodes:
+            cid = parse_ctrl_id(node['record'].data)
+            queues.setdefault(cid, []).append(node)
+        next_index = {}
+        insertions = []
+        consumed = set()
+        raw_map = text_result['raw_to_text']
+        for _start, end, cid in text_result.get('inline_controls', []):
+            if cid != b'mrof':
+                continue
+            index = next_index.get(cid, 0)
+            next_index[cid] = index + 1
+            nodes = queues.get(cid, [])
+            if index >= len(nodes):
+                self._append_fatal_once('form-reference', 'WARN: HWP form object reference missing')
+                continue
+            node = nodes[index]
+            value = self._form_node_text(node)
+            consumed.add(id(node))
+            if value and end < len(raw_map):
+                insertions.append((end, raw_map[end], value))
+
+        form_ends = sorted(end for end, _, value in insertions if value)
+        stack = []
+        clicks = queues.get(b'klc%', [])
+        click_index = 0
+        for raw_pos, kind, cid in text_result.get('field_raw_marks', []):
+            if raw_pos >= len(raw_map):
+                continue
+            if kind == 'start':
+                node = None
+                if cid == b'klc%':
+                    if click_index < len(clicks):
+                        node = clicks[click_index]
+                    click_index += 1
+                stack.append((raw_pos, node))
+            elif stack:
+                start, node = stack.pop()
+                # 두 경계는 컨트롤을 소비한 뒤의 WCHAR 위치다.
+                # 정확히 필드 끝(8 WCHAR)만 있어야 빈 본문이며, 양식
+                # 표시값까지 삽입된 뒤에도 비어 있어야 한다.
+                has_form_text = bisect_right(form_ends, raw_pos) > bisect_left(form_ends, start)
+                data = node['record'].data if node else b''
+                clean = len(data) >= 8 and not (struct.unpack_from('<I', data, 4)[0] & (1 << 15))
+                if (node and clean and raw_pos - start == 8
+                        and raw_map[start] == raw_map[raw_pos] and not has_form_text):
+                    try:
+                        value = clickhere_prompt(node['record'].data)
+                    except ValueError as exc:
+                        self._append_fatal_once('click-data', 'WARN: ' + str(exc))
+                        continue
+                    if value:
+                        insertions.append((start, raw_map[start], value))
+        if not insertions:
+            return text_result, [node for node in ctrl_nodes if id(node) not in consumed]
+        insertions.sort(key=lambda item: item[0])
+        prefix = [0]
+        for _, _, value in insertions:
+            prefix.append(prefix[-1] + len(value))
+        if len(text_result['text']) + prefix[-1] > 100 * 1024 * 1024:
+            self._append_fatal_once('form-size', 'WARN: HWP form output exceeds size limit')
+            return text_result, [node for node in ctrl_nodes if id(node) not in consumed]
+        parts = []
+        offset = 0
+        for _, position, value in insertions:
+            parts.extend((text_result['text'][offset:position], value))
+            offset = position
+        parts.append(text_result['text'][offset:])
+        result = dict(text_result)
+        result['text'] = ''.join(parts)
+        ends = [item[0] for item in insertions]
+        result['raw_to_text'] = [value + prefix[bisect_right(ends, index)]
+                                 for index, value in enumerate(raw_map)]
+        result['field_marks'] = [(result['raw_to_text'][pos], kind, cid)
+                                 for pos, kind, cid in text_result.get('field_raw_marks', [])
+                                 if pos < len(raw_map)]
+        return result, [node for node in ctrl_nodes if id(node) not in consumed]
+
+    def _form_node_text(self, node):
+        for child in node['children']:
+            if child['record'].tag_id == 91:  # HWPTAG_FORM_OBJECT
+                try:
+                    return form_text(child['record'].data)
+                except ValueError as exc:
+                    self._append_fatal_once('form-data', 'WARN: ' + str(exc))
+        return ''
 
     @staticmethod
     def _bookmark_name(ctrl_node) -> str:
@@ -533,6 +665,11 @@ class SectionParser:
 
     def _detect_heading_level(self, para) -> int:
         """Style/CharShape 기반 제목 레벨 감지"""
+        # 유효한 직접 문단 모양은 스타일의 개요 기본값보다 우선한다.
+        shapes = getattr(self.doc_info, 'para_shapes', [])
+        direct = 0 <= para.para_shape_id < len(shapes)
+        if direct and shapes[para.para_shape_id].heading_type == 1:
+            return self._outline_level(para.para_shape_id)
         # 1. Style 이름 기반
         if self.doc_info and hasattr(self.doc_info, 'styles') and 0 <= para.style_id < len(self.doc_info.styles):
             style = self.doc_info.styles[para.style_id]
@@ -541,12 +678,19 @@ class SectionParser:
             if '개요' in name or 'outline' in name or 'heading' in name:
                 for i in range(1, 7):
                     if str(i) in name:
-                        return i
+                        return i if i <= MAX_OUTLINE_HEADING_LEVEL else 0
                 return 1  # default heading level
+            if name.startswith(('부제목', 'subtitle')):
+                return 2
             if '제목' in name or 'title' in name:
                 return 1
-            if '부제목' in name or 'subtitle' in name:
-                return 2
+            level = self._outline_level(style.para_shape_id) if not direct else 0
+            if level:
+                return level
+
+        level = self._outline_level(para.para_shape_id)
+        if level:
+            return level
 
         # 2. Font size 기반 (CharShape 연결 후 작동)
         if para.runs:
@@ -560,10 +704,22 @@ class SectionParser:
 
         return 0
 
+    def _outline_level(self, shape_id):
+        shapes = getattr(self.doc_info, 'para_shapes', [])
+        if 0 <= shape_id < len(shapes):
+            shape = shapes[shape_id]
+            level = getattr(shape, 'heading_level', 0) + 1
+            if shape.heading_type == 1 and 1 <= level <= MAX_OUTLINE_HEADING_LEVEL:
+                return level
+        return 0
+
     def _parse_control(self, ctrl_node):
         """★ ctrlId 바이트로 컨트롤 유형 식별 (v4.1 스펙 확정)"""
         ctrl_rec = ctrl_node['record']
         ctrl_id = parse_ctrl_id(ctrl_rec.data)
+        if ctrl_id == b'mrof':
+            value = self._form_node_text(ctrl_node)
+            return Paragraph(runs=[TextRun(value)]) if value else None
         ctrl_type = identify_control(ctrl_id)
 
         if ctrl_type == 'table':

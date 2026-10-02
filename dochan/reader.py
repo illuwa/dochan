@@ -56,21 +56,22 @@ class Dochan:
             include_assets: False면 HWPX 이미지 바이너리만 로드하지 않고
                 참조·대체 텍스트·캡션은 보존한다. 기본 True는 기존 동작이다.
                 False는 확장자와 무관하게 HWPX로 식별되는 패키지만 지원한다.
-            revision_mode: preserve(기본 기존 텍스트), final(삭제 제외),
-                original(삽입 제외). 비기본 모드는 HWPX만 지원하며 미확정
+            revision_mode: preserve(기본, 삽입·삭제를 포함한 모든 텍스트 보존), final(삭제 제외),
+                original(삽입 제외). 비기본 모드는 HWP 5와 HWPX를 지원하며 미확정
                 범위·서식 변경은 보존하고 errors에 부분지원 사유를 기록한다.
+                변경 추적 HWP의 preserve는 ViewText, final은 저장된 BodyText를 읽는다.
 
         Raises:
             ValueError: include_assets=False인데 ocr=True이거나 입력이
                 HWPX로 식별되지 않는 경우 (다른 포맷·모호한 패키지 포함).
-                revision_mode가 잘못되었거나 비기본 모드에 HWPX가 아닌 입력.
+                revision_mode가 잘못되었거나 비기본 모드에 유효 HWP 5/HWPX가 아닌 입력.
         """
         self.file_path = file_path
         self._zip_kind_cache = None
         # 옵션 오류는 문서 파싱 오류와 달리 호출자에게 직접 알린다.
         validate_revision_mode(revision_mode)
-        if revision_mode != "preserve" and not self._is_plain_hwpx():
-            raise ValueError("revision_mode other than 'preserve' is supported only for HWPX packages")
+        if revision_mode != "preserve" and not self._is_plain_hwpx() and not self._is_plain_hwp():
+            raise ValueError("revision_mode other than 'preserve' is supported only for HWPX packages or valid HWP 5 documents")
         if not include_assets:
             if ocr:
                 raise ValueError("ocr=True cannot be used with include_assets=False")
@@ -211,6 +212,19 @@ class Dochan:
         except (OSError, ValueError, zipfile.BadZipFile):
             return False
 
+    def _is_plain_hwp(self):
+        """비기본 변경 추적 옵션은 실제 HWP 5 컨테이너만 허용한다."""
+        try:
+            if self._detect_ole_formats() != ["hwp"]:
+                return False
+            with olefile.OleFileIO(self.file_path) as ole:
+                data = read_ole_stream(ole, 'FileHeader', max_bytes=HWP_FILE_HEADER_SIZE,
+                                       expected_size=HWP_FILE_HEADER_SIZE)
+            header = FileHeader.parse(data)
+            return 'HWP Document File' in header.signature and header.major_version >= 5
+        except Exception:
+            return False
+
     def _parse_hwp_family(self, ext: str):
         """확장자가 .hwp/.hwpx 인 파일을 파싱.
 
@@ -323,15 +337,39 @@ class Dochan:
             self.doc.face_names = doc_info.face_names
             self.doc.bin_data_list = doc_info.bin_data_entries
             self.doc.errors.extend(doc_info.errors)
+            if self._revision_mode == 'original':
+                # HWPX와 같이 불완전한 변경 취소 투영은 성공 출력으로
+                # 게시하지 않는다. 일반 서식 파싱 경고는 그대로 둔다.
+                self.doc.errors = [
+                    error.replace('WARN:', 'ERR:', 1)
+                    if error.startswith('WARN: DocInfo 레코드 96 ') or
+                    error.startswith('WARN: DocInfo 레코드 97 ') else error
+                    for error in self.doc.errors
+                ]
 
             # 3. BodyText 섹션들
             body_storage = file_header.body_storage
+            if (file_header.is_track_change and not file_header.is_distribution
+                    and self._revision_mode != 'final'):
+                # 변경 추적 ViewText는 원본/삭제 구간을 포함한 압축 본문이며
+                # 배포용 비트가 없으면 AES 암호문으로 다루지 않는다.
+                if ole.exists('ViewText/Section0'):
+                    body_storage = 'ViewText'
+                else:
+                    severity = 'WARN' if self._revision_mode == 'preserve' else 'ERR'
+                    self.doc.errors.append(severity + ': HWP revision ViewText missing; final body preserved')
             VALID_STORAGES = {"BodyText", "ViewText"}
             if body_storage not in VALID_STORAGES:
                 self.doc.errors.append(f"ERR: 잘못된 스토리지: {body_storage}")
                 return
 
-            section_parser = SectionParser(doc_info=doc_info)
+            # HWP BodyText already stores the accepted final text. Do not
+            # project any residual range tags a second time. Distribution
+            # ViewText remains subject to the existing range projection.
+            section_parser = SectionParser(
+                doc_info=doc_info, revision_mode=self._revision_mode,
+                project_revisions=not (self._revision_mode == 'final' and body_storage == 'BodyText'),
+            )
             MAX_SECTIONS = 1000
 
             section_indices = self._hwp_section_indices(
@@ -355,7 +393,9 @@ class Dochan:
                         budget=stream_budget,
                     )
                     if file_header.is_distribution:
-                        stream_data = decode_distribution_section(stream_data)
+                        stream_data = decode_distribution_section(
+                            stream_data, is_compressed=file_header.is_compressed,
+                        )
                     section = section_parser.parse_stream(stream_data, file_header.is_compressed)
                     self.doc.sections.append(section)
                 except BoundedIOError:

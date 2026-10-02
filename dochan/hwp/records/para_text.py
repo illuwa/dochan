@@ -25,6 +25,8 @@ def parse_para_text(data: bytes) -> dict:
     text_parts = []
     ctrl_positions = []
     field_marks = []
+    field_raw_marks = []
+    inline_controls = []
     raw_to_text = [0]
     char_index = 0
     i = 0
@@ -84,12 +86,16 @@ def parse_para_text(data: bytes) -> dict:
             # 각 append 는 정확히 한 글자이므로 len(text_parts)가 곧 텍스트 오프셋.
             if char_code == 3 and i + 6 <= len(data):
                 field_marks.append((len(text_parts), 'start', bytes(data[i + 2:i + 6])))
+                field_raw_marks.append(((i + advance) // 2, 'start', bytes(data[i + 2:i + 6])))
             elif char_code == 4:
                 field_marks.append((len(text_parts), 'end', None))
+                field_raw_marks.append(((i + advance) // 2, 'end', None))
 
             # 확장 컨트롤은 위치 기록 (나중에 CTRL_HEADER와 매칭)
             if is_extended_ctrl(char_code):
                 ctrl_positions.append((char_index, char_code))
+                if i + advance <= len(data):
+                    inline_controls.append((i // 2, (i + advance) // 2, bytes(data[i + 2:i + 6])))
 
             char_index += 1
             i += advance
@@ -104,5 +110,7 @@ def parse_para_text(data: bytes) -> dict:
         'text': ''.join(text_parts),
         'ctrl_positions': ctrl_positions,
         'field_marks': field_marks,
+        'field_raw_marks': field_raw_marks,
+        'inline_controls': inline_controls,
         'raw_to_text': raw_to_text,
     }

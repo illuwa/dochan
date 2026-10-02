@@ -507,17 +507,17 @@ def test_hwp_failed_nested_table_rolls_back_budget_for_safe_sibling(monkeypatch)
     ]
 
 
-def test_hwp_discarded_cell_paragraph_releases_earlier_nested_cells(monkeypatch):
-    """문단 그룹이 구조 오류로 폐기되면 그 안에서 먼저 성공한 중첩 표의 셀 예약도 되돌린다 (codex P2)."""
+def test_hwp_failed_control_preserves_earlier_nested_cells(monkeypatch):
+    """실패한 컨트롤만 되돌리고 앞서 성공한 표의 내용과 셀 예약을 유지한다."""
     parser = SectionParser()
     monkeypatch.setattr(parser, "MAX_SECTION_CELLS", 3, raising=False)
     first_nested = _hwp_table_control_node(1, 1, [])      # 바깥 1 + 1 = 2 (성공)
-    failing_nested = _hwp_table_control_node(1, 2, [])    # 2 + 2 = 4 > 3 (실패 → 문단 그룹 폐기)
+    failing_nested = _hwp_table_control_node(1, 2, [])    # 2 + 2 = 4 > 3 (실패한 표만 폐기)
     paragraph = _hwp_paragraph_with_control(first_nested)
     paragraph["children"].append(failing_nested)
     outer = _hwp_table_control_node(1, 1, [])
     outer["children"].append(_hwp_cell_with_paragraph(paragraph))
-    sibling = _hwp_table_control_node(1, 2, [])           # 1 + 2 = 3 ≤ 3 (예약이 되돌려졌으면 성공)
+    sibling = _hwp_table_control_node(1, 1, [])           # 보존한 중첩 표까지 2 + 1 = 3
 
     section = parser._tree_to_section(
         [
@@ -527,8 +527,8 @@ def test_hwp_discarded_cell_paragraph_releases_earlier_nested_cells(monkeypatch)
     )
 
     tables = [element for element in section.elements if hasattr(element, "rows")]
-    assert [table.col_count for table in tables] == [1, 2]
-    assert tables[0].rows[0][0].paragraphs == []
+    assert [table.col_count for table in tables] == [1, 1]
+    assert [table.col_count for table in tables[0].rows[0][0].paragraphs] == [1]
     assert parser._section_cells == parser._document_cells == 3
     assert parser.errors == [
         "ERR: HWP section cell allocation exceeds limit: 2 + 2 > 3"

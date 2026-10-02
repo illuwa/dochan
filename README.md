@@ -40,7 +40,7 @@ print(doc.to_markdown())
 | **HWP + HWPX + Office + PDF** | HWP/HWPX, Office OOXML(.docx/.pptx/.xlsx), legacy Office(.doc/.ppt/.xls), PDF(.pdf)를 native parser로 파싱 |
 | **PDF 텍스트·표 추출** | CTM(그래픽 상태) 기반 좌표 레이아웃으로 문단·읽기 순서를 복원하고, 벡터 괘선으로 표(병합 셀·셀 안 중첩 표·페이지에 걸친 표 포함)를 재구성. 줄바꿈으로 갈라진 한글 어절은 문자 통계 모델로 공백을 복원. 괘선 없는 표는 `pdf_text_tables=True` 옵션(실험적)으로 텍스트 정렬 기반 추정. 반복 머리글/바닥글, 주석(코멘트), 내부·외부 링크, 세로쓰기, LZW·TIFF predictor, 표준 암호화(빈 암호·사용자 암호) 지원. 스캔 PDF 는 이미지 추출+OCR 로 처리 |
 | **legacy Office 구조 해석** | `.doc`·`.ppt`·`.xls` 를 Microsoft 공개 명세대로 해석해 서식·병합 셀·중첩 표·각주·주석·변경 추적·그림·하이퍼링크·노트·차트·수식(Equation 3.0)을 복원 |
-| **암호화 문서** | OOXML(Standard/Agile), DOC·PPT·XLS(XOR·RC4·CryptoAPI), PDF(사용자 암호), HWP 배포용 문서. 암호는 `password=` 또는 CLI 표준 입력으로만 받는다 |
+| **암호화 문서** | OOXML(Standard/Agile), DOC·XLS(XOR·RC4·CryptoAPI), PPT(RC4 CryptoAPI), PDF(사용자 암호), HWP 배포용 문서. 암호는 `password=`, CLI `--password-stdin` 또는 `DOCHAN_PASSWORD` 로만 받는다 |
 | **차트** | DOCX·PPTX·XLSX·XLS·PPT·HWPX 차트의 제목·종류·축 제목·데이터를 표로 |
 | **Markdown 출력** | 제목, 표, 서식(bold/italic), 수식까지 AI가 바로 쓸 수 있는 Markdown |
 | **표 파싱** | 셀 병합, 중첩 표, 좌표 배치 지원 |

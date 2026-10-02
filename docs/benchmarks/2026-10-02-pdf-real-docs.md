@@ -256,3 +256,5 @@ README와 공유 모델·출력·공용 API 파일은 수정하지 않았다. �
 지시에 따라 커밋하거나 푸시하지 않았다. 변경은 워크트리에 남기고 커밋 묶음을 보고서에 제안한다.
 초기 작업의 Git 권한 실패는 과거 기록이며 이번 작업에서 권한 우회나 재시도는 하지 않았다.
 최종 보고서는 `.codex-work/report.md`, 전체 변경 패치는 `.codex-work/pdf-fix-changes.patch`다.
+
+> 2026-10-03 덧붙임: 이 기록 이후 암호화 작업에서 공용 API `Dochan(..., password=...)` 와 CLI `--password-stdin`·`DOCHAN_PASSWORD` 가 PDF 사용자 암호 경로에 연결됐다. 위 5절의 "공용 API·CLI 미연결" 은 이 기록 시점의 사실이다.

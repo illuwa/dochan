@@ -76,7 +76,7 @@ def _add_hwpx_options(parser):
     parser.add_argument(
         '--revision-mode', choices=['preserve', 'final', 'original'],
         default='preserve',
-        help='HWPX 변경 추적: preserve=모두 보존(기본), final=삭제 제외, original=삽입 제외',
+        help='HWP·HWPX 변경 추적: preserve=모두 보존(기본), final=삭제 제외, original=삽입 제외',
     )
 
 
@@ -131,6 +131,8 @@ def main(argv=None):
     if any(token.startswith('-p') or
            (token.startswith('--pass') and token != '--password-stdin')
            for token in tokens):
+        if 'batch' in tokens:
+            parser.error('batch 는 암호를 받지 않습니다(문서마다 암호가 다르다). 암호 문서는 convert 로 변환하세요.')
         parser.error('암호는 --password-stdin 또는 DOCHAN_PASSWORD로 제공해야 합니다.')
     for command_parser in (parser, conv, bat, inf):
         command_parser._password_argument_present = '--password-stdin' in tokens

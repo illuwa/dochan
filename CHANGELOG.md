@@ -2,51 +2,421 @@
 
 ## [Unreleased]
 
-### 추가 (전 형식 — 이미지 파일 저장)
+## [1.7.0] - 2026-10-03
 
-- `dochan convert … --images-dir DIR` 와 `Dochan(...).save_images(DIR)`: 문서에 들어 있는 이미지 바이너리를
-  문서 순서대로 `<파일이름>-image-NNN.<확장자>` 로 저장한다. 확장자는 바이트 서명(PNG·JPEG·GIF·BMP·TIFF·
-  JP2·EMF·WMF)으로 정하고, 같은 바이트는 한 번만 저장한다. 파일 이름에는 문서 속 경로를 쓰지 않는다.
-  실물 확인: POI `VariousPictures.docx`(미디어 5개 → 5개, 형식 일치), `WithDrawing.xlsx`, pdf.js `alphatrans.pdf`
+Legacy Office 를 Microsoft 공개 명세([MS-DOC]·[MS-PPT]·[MS-XLS])의 구조로 해석해 .doc·.ppt·.xls 에서도
+서식·셀 병합·각주·주석·그림·차트·수식을 DOCX·PPTX 와 같은 형태로 내고, 암호화된 Office 문서와 사용자 암호
+PDF 를 `password` 로 열 수 있게 했다. HWP·HWPX 의 변경 추적 보기·양식·차트, DOCX 차트·캡션·읽기 순서,
+Strict OOXML, PDF 주석·내부 링크·각주·LZW 를 더했고, 1.6.0 에서 읽히지 않던 HWP 배포용 문서를 읽는다.
+모든 항목은 공개 실물 코퍼스(Apache POI·LibreOffice·Apache Tika·pdf.js·공개 HWP/HWPX)와 내부 실물 짝으로
+검증했으며, 기본 출력이 바뀌는 항목은 아래 `변경 (동작 변경)` 절에 모았다.
 
-### 수정·개선 (전 포맷 공통 계층)
+### 추가 (HWP·HWPX — 변경 추적 보기, 양식, 차트, 개요 제목)
 
-- **PDF 이미지 JSON 출력 크래시 수정**: 추출 가능한 이미지가 있는 PDF 를 `to_json()`/`-f json`/배치 JSON 으로
-  내보내면 `doc.assets` 에 `Image` 요소가 그대로 들어가 `AttributeError: 'Image' object has no attribute 'id'`
-  로 실패했다. 다른 포맷과 같은 `AssetRef`(id·source_path·filename·content_type·metadata) 로 등록한다
-  (실물 `test_pairs` 의 이미지 23개 PDF 로 재현·확인)
-- **OCR 결과 재사용**: 같은 이미지 바이트(로고·머리글·반복 도형)는 SHA-256 키 LRU(256개)로 Tesseract 재실행을
-  건너뛴다. 모든 포맷의 `--ocr` 경로에 공통 적용, 결과는 동일하며 예외는 캐시하지 않는다
+- **변경 추적 보기 선택**: `Dochan(..., revision_mode=...)` 과 `convert`·`batch` 의 `--revision-mode` 로
+  `preserve`(기본, 삽입·삭제 텍스트를 모두 보존)·`final`(삭제 제외)·`original`(삽입 제외)을 고른다.
+  HWPX 는 본문의 변경 마커를 텍스트로 투영한다. HWP 5 는 DocInfo 의 변경 정보·작성자를 읽고,
+  `preserve` 는 ViewText 를, `final` 은 저장된 BodyText 를 재투영 없이, `original` 은 ViewText 에서
+  삽입 범위를 뺀 텍스트를 읽는다. 겹치거나 해석이 확정되지 않은 범위·서식 변경은 원문을 보존하고
+  진단을 남기며, 비기본 모드에서는 그 진단이 ERR 다. HWP 5·HWPX 가 아닌 입력에 비기본 모드를 주면
+  `ValueError` 를 낸다. 변경 추적 HWP 의 ViewText 가 레코드 상한(200,000)에 걸리면 `preserve` 는 같은
+  섹션의 BodyText 로 돌아가고 WARN 을 남긴다. 텍스트 투영이며 개체 변경·서식 변경 이력까지
+  재현하지는 않는다
+- 검증: HWPX 는 공개 정답 1문서에서 세 모드 3/3 일치. HWP 는 공개 HWP 5,363개의 FileHeader 를 전수
+  확인해 찾은 변경 추적 문서 3개 중 2개에서 `final` 투영과 BodyText 가 완전히 같았고(나머지 1개는
+  두 경로가 레코드 상한에서 서로 다른 위치로 잘림), HWPX 짝이 있는 1쌍은 변경 종류 10/10·작성자
+  1/1·모드별 문단 49/49 가 같았다
+- **HWPX 이미지 바이너리 생략**: `include_assets=False`, CLI `--no-assets`. 이미지 참조·대체 텍스트·
+  캡션은 그대로 두고 바이너리만 읽지 않는다. `ocr=True` 와 함께 쓰거나 HWPX 가 아닌 입력에 쓰면
+  `ValueError`
+- **양식 개체 표시값**: HWP·HWPX 의 명령 단추 캡션, 체크박스·라디오 단추의 상태와 캡션(`[x]`/`[ ]`,
+  DOCX 와 같은 표기), 입력 상자의 저장 텍스트, 콤보 상자의 선택값을 본문 런으로 낸다. 비밀번호 입력
+  상자의 내용은 내지 않는다. 누름틀은 문서에 저장된 본문만 내고 안내문 메타데이터를 본문으로 합성하지
+  않는다(두 형식 같은 계약). 검증: 공개 HWP↔HWPX 양식 2쌍에서 양식 180/180·5/5, 문단 514/514·4/4
+  일치, HWPX 체크박스 26/26 의 상태·순서 일치. 콤보 상자의 화면 표시값은 한 쌍에서 두 형식의 저장값이
+  달라(4/5) 아직 확정하지 못했다
+- **HWPX 차트**: `hp:chart` 가 가리키는 패키지 안 `Chart/…xml` 의 저장 캐시를 읽어, 차트 위치에
+  OOXML 차트와 같은 형식(제목 문단 → `Chart type` 캡션 → 계열 표)으로 낸다. 정확한 패키지 경로만
+  따라가고, 지원하지 않는 유형·손상 XML 은 그 위치의 오류로 기록한다. 차트 XML 4 MiB, 문서당 배치
+  256개·계열 1,024개·점 200,000개 상한. 검증: 공개 4문서의 차트 참조 38개 중 지원 차트 33개를 독립
+  XML 읽기와 대조했고, 출력 형식을 OOXML 과 맞춘 뒤 공개 차트 문서 4개를 다시 확인했다(캡션은 첫 표에
+  한 번만). 재계산은 하지 않는다
+- **HWP 개요 제목**: 문단 모양의 개요 수준 1~3 을 제목으로 낸다(HWPX 와 같은 상한). 문단에 직접 지정한
+  개요가 스타일의 개요보다 우선하며 HWPX 도 같은 규칙으로 맞췄다. 개요 4~6 은 두 형식 모두 본문으로 두고,
+  표 셀 안에서는 글꼴 크기만으로 제목을 만들지 않는다. 검증: 공개 HWP↔HWPX 2쌍 21/21 문단의 제목 수준·굵게·기울임 일치
 
-### 추가 (PPTX·XLSX — 차트 종류·축 제목)
+### 수정 (HWP)
 
-- **차트 종류**: 차트 데이터 표의 위쪽 캡션으로 종류를 낸다(Markdown `*Chart type: column + line*`, JSON
-  `caption`). 세로/가로 막대는 `c:barDir` 로 가르고(`column`/`bar`), 3-D·원·도넛·원 속 원·영역·분산·거품·
-  방사·주식·표면형을 사람이 읽는 말로 적는다. 혼합 차트는 종류를 문서 순서대로 모두 적고, 모르는 종류의 태그
-  이름은 내보내지 않는다. 데이터가 있는 차트의 요소 수와 순서는 그대로다(제목 문단 → 표)
-- **축 제목**: 같은 캡션에 축 종류와 함께 잇는다(`Category axis: 분기; Value axis: 금액`). 숨긴 축
-  (`c:delete`, 값 생략 시 스키마 기본값 참)은 빼고, 캡션에 싣는 축은 8개까지다
-- **데이터 없는 차트**: 계열이 없거나 자원 한도로 표가 비면, 축 제목이 있을 때만 캡션을 일반 문단 하나로
-  낸다. 종류만 있는 빈 차트는 전처럼 아무것도 내지 않는다
-- **PPTX 분산형·거품형 데이터**: `c:xVal`/`c:yVal` 값을 읽는다(전에는 머리 행만 있는 빈 표가 나왔다)
-- PPTX·XLSX 가 함께 쓰는 `dochan/ooxml/charts.py`. 캡션도 문단이라 품질 검사의 문단 수가 캡션 달린
-  차트마다 하나 늘어난다
+- **배포용 문서**: 복호화한 섹션의 압축 스트림 뒤에 붙는 검사값(CRC32·원문 길이) trailer 를 남는
+  데이터로 거부해, 전에는 공개 배포용 문서를 읽지 못했다. 이제 trailer 의 CRC32·길이·영 패딩을
+  검증한 뒤 본문을 읽고, 검사값이 맞지 않으면 거부한다. 검증: 공개 배포용 27파일(내용 고유 20문서)의
+  65/65 섹션 검사값 일치, 27/27 파일 본문 추출, 진단 0. 암호로 보호된 HWP 는 여전히 명확한 오류로
+  거부한다
+- **셀 안 중첩 표 실패 시 보존 범위**: 중첩 표 하나가 깊이·셀 예산을 넘겨 실패해도 같은 문단의 텍스트와
+  성공한 형제 표를 살린다(실패한 컨트롤 단위로 되돌림; 1.5.1 은 그 문단 그룹 전체를 비웠다)
+- **문단 정렬 비트**: 문단 모양 속성의 정렬을 bit 2–4 로 읽는다(전에는 bit 0–2). 모델의
+  `para_shapes` 값만 바뀌며 Markdown 출력에는 영향이 없다. 공개 HWP↔HWPX 474쌍 중 모든 문단 모양이
+  일치한 쌍이 7 → 440
+- 내부 실물 HWP↔HWPX 76쌍의 토큰 유사도·표·중첩·서식 지표는 변경 전후 동일(평균 토큰 비율 0.9997,
+  중첩 표 51/51). 검증 기록: `docs/benchmarks/2026-10-02-hwp-fix-real-docs.md`,
+  `docs/benchmarks/2026-10-02-hwp-polish-real-docs.md`
 
-### 수정 (PPTX·XLSX — 차트 제목·분산형 표)
+### 추가 (DOC·PPT·XLS — 구조 해석)
 
-- 차트 제목은 `c:chart/c:title` 만 읽는다. 전에는 PPTX 가 축 제목까지 차트 제목에 이어 붙였고, XLSX 는
-  차트 제목이 없으면 축 제목을 3단계 제목으로 올렸다. 그런 차트의 축 제목은 이제 캡션으로 나간다
-- 서식 때문에 쪼개진 제목 런을 공백 없이 붙인다(전에는 `Rev enue`). 런 안의 공백은 그대로 두고, 줄바꿈
+- **공용 OfficeArt 파서**(`dochan/office_binary/officeart.py`): [MS-ODRAW] 레코드 트리, BStore(FBSE 내장·
+  지연 BLIP), EMF/WMF/PICT 압축 해제, JPEG·PNG·DIB(BMP 헤더 합성)·TIFF, 도형 트리와 속성(대체 텍스트
+  등)을 읽는다. DOC·PPT·XLS 가 그림 바이트와 대체 텍스트를 이 파서로 얻는다. 검증: POI 공개
+  DOC·PPT·XLS 9개 문서에서 BLIP 108개 복원, 독립 페이로드 일치
+- **PPT 를 [MS-PPT] 구조로 해석**: Current User → UserEdit 체인 → PersistDirectory 로 최신 지속 객체를
+  고르고 슬라이드·노트·마스터, OfficeArt 도형 트리, 텍스트 서식(StyleTextProp), placeholder·마스터
+  상속, 그룹 좌표 변환과 좌표 기준 읽기 순서, 표 격자와 가로/세로 병합, 그림과 대체 텍스트, 노트·주석
+  (PPTX 와 같은 출력), 외부·슬라이드 하이퍼링크, 슬라이드 번호 필드, WordArt, Symbol/Wingdings 글머리를
+  해석한다. 지속 구조를 시작할 수 없으면 기존 텍스트 경로를 쓰고, 일부 슬라이드 참조만 복구하지 못하면
+  기존 경로의 텍스트로 보충하고 WARN 을 남긴다. 검증: POI 공개 PPT↔PPTX 8쌍 평균 토큰 유사도
+  0.3129 → 0.6406(마스터 그림 반복 제거 전 측정), 슬라이드 82/82, 링크 URL 16/16, 노트 38/42. 칸별 실물
+  검사는 셀 병합 2/2, 서식 3/3, 그림 5/5, 대체 텍스트 2/2, 그룹 도형 8/8, 읽기 순서 4/4
+- **DOC 를 [MS-DOC] 구조로 해석**: FIB·CP 하위 문서(본문·각주·미주·주석·머리글/바닥글·텍스트박스),
+  PAPX/CHPX FKP 와 sprm(첨자 포함 글자 서식), STSH 스타일 상속, 표 TAP 의 가로/세로 병합과 itap 중첩 표,
+  필드(HYPERLINK 외부·내부, SEQ, 양식), 각주/미주, 주석과 작성자, 머리글/바닥글, 텍스트박스, 북마크,
+  인라인·떠 있는 그림과 대체 텍스트, 변경 추적(삽입 포함·삭제 제외)을 DOCX 와 같은 출력 계약으로 낸다.
+  구조를 해석할 수 없으면 경고와 함께 기존 텍스트 경로로 돌아간다. 검증: POI 160개 + LibreOffice
+  193개 전수에서 구 경로 대비 분류되지 않은 단어 손실 0·신규 ERR 0, 기능별 실물 검사 37/37, POI
+  DOC↔DOCX 13쌍 평균 토큰 유사도 0.7234 → 0.7677
+- **DOC 표/그림 캡션**: Caption 스타일(이름·지역화·내장 sti 34·상속)이나 SEQ 필드 문단을 바로 앞/뒤
+  표·그림의 `caption` 으로 결합한다(DOCX 와 같은 계약, 최상위 흐름만, 모호하면 문단 유지). 공개 DOC
+  353개에서 후보 문단 18개 중 7개(그림 5·표 2)를 결합했고 문자열·방향 7/7 일치
+- **DOC·PPT 내장 OLE 차트와 수식**: DOC ObjectPool·PPT ExOleObjStg 안의 Excel BIFF8·MS Graph 8 차트를
+  XLS 차트 해석기로 읽어 개체 위치에 OOXML 차트와 같은 형식(제목 → 캡션 → 표)으로 낸다(활성 차트
+  시트·Chart ProgID 일 때만). Equation 3.0 수식(MTEF v2/v3/v5)은 LaTeX 로 바꾼다. 변환하지 못하면
+  미리보기 그림을 그대로 둔다. 검증: PPT 차트 표 8/8·제목 3/3, 수식 변환 DOC 42/54·PPT 13/18,
+  대표 식 12/12. DOC 안의 내장 차트는 실물 표본이 없어 검증하지 못했다
+- **XLS 수식**: [MS-XLS] 공식 명세에서 생성한 Ftab(함수 이름 373개·고정 인자 수 210개,
+  `scripts/generate_xls_ftab.py`), 외부 통합문서 참조(`[n]Sheet!A1`, XLSX 와 같은 표기), NameX(외부 이름·
+  추가 기능 함수), 사용자 정의 함수, 배열 상수(`{1,2;3,4}`), 삭제 참조(`#REF!`), 내장 이름(`Print_Area`
+  등), 공유 3D 참조, 배열 수식 템플릿을 복원한다. 모르는 함수·토큰은 WARN 과 함께 캐시 값만 낸다.
+  검증: POI XLS↔XLSX 짝 1,070 수식 중 정확 일치 986, 공백 정규화 일치 1,059(98.97%). 공개 XLS 코퍼스의
+  NAME 레코드 7,791개 중 수식 생략 83개(1.06533%)
+- **XLS rich text·내부 링크·그림·차트**: SST·RSTRING 의 서식 런(워크북 100,000런·16 MiB 예산, 넘으면
+  원문과 WARN), HLINK 내부 링크(범위 링크의 표시 문구는 앵커 셀에만), OfficeArt 그림과 셀 앵커, BIFF8
+  차트 하위 스트림과 차트 시트(제목·종류·계열·범위 참조, 내부 참조 우선·외부는 캐시, 추세선 등 보조
+  계열 제외)를 읽는다. 검증: rich text 731/731 셀(xlrd 독립 정답), 내부 링크 99/99, 그림 배치 18/18,
+  차트 23파일의 참조 Y 값 2,275/2,275
+- `scripts/compare_office_pairs.py`: POI 공개 DOC·PPT·XLS ↔ OOXML 57쌍을 OOXML 출력을 정답으로 비교하는
+  짝 비교기와 변경 전 기준선(`docs/benchmarks/2026-10-02-legacy-office-baseline.md`, 평균 토큰 유사도
+  0.5402)
+- 검증 기록: `docs/benchmarks/2026-10-02-doc-fix-real-docs.md`, `docs/benchmarks/2026-10-02-doc-caption-real-docs.md`,
+  `docs/benchmarks/2026-10-02-ppt-fix-real-docs.md`, `docs/benchmarks/2026-10-02-docppt-polish-real-docs.md`,
+  `docs/benchmarks/2026-10-02-legacy-objects-fix-real-docs.md`, `docs/benchmarks/2026-10-02-legacy-ocr-real-docs.md`
+
+### 수정 (XLS)
+
+- **RK 숫자**: 압축 숫자의 상위 IEEE 워드 위치를 바로잡았다(전에는 작은 비정상 실수로 복원; POI
+  `SimpleMultiCell.xls` 의 1~15 가 이제 일치)
+- **COLINFO 끝 열 256**: "마지막 열까지" 로 해석한다. 전에는 범위 오류(ERR)로 공개 짝 6쌍이 읽히지
+  않았다. XLS↔XLSX 36쌍이 모두 읽히고 평균 토큰 유사도 0.7493(기준선은 36쌍 중 30쌍 측정, 0.5215)
+- 검증 기록: `docs/benchmarks/2026-10-02-xls-fix-real-docs.md`, `docs/benchmarks/2026-10-02-xls-ftab-real-docs.md`,
+  `docs/benchmarks/2026-10-02-xls-formula-fix-real-docs.md`
+
+### 추가 (DOCX·PPTX·XLSX)
+
+- **차트 종류·축 제목 캡션(PPTX·XLSX)**: 차트 데이터 표의 위쪽 캡션으로 종류를 낸다(Markdown
+  `*Chart type: column + line*`, JSON `caption`). 세로/가로 막대는 `c:barDir` 로 가르고(`column`/`bar`),
+  3-D·원·도넛·원 속 원·영역·분산·거품·방사·주식·표면형을 사람이 읽는 말로 적는다. 혼합 차트는 종류를
+  문서 순서대로 모두 적고, 모르는 종류의 태그 이름은 내보내지 않는다. 축 제목은 같은 캡션에 축 종류와
+  함께 잇고(`Category axis: 분기; Value axis: 금액`), 숨긴 축(`c:delete`, 값 생략 시 스키마 기본값 참)은
+  빼며 캡션에 싣는 축은 8개까지다. 계열이 없거나 자원 한도로 표가 비면 축 제목이 있을 때만 캡션을 일반
+  문단 하나로 낸다. PPTX·XLSX 가 함께 쓰는 `dochan/ooxml/charts.py`
+- **DOCX 차트**: 문서 속 차트를 앵커 위치에 같은 형식(제목 문단 → 캡션 → 표)으로 낸다(1.6.0 은 DOCX
+  차트를 출력하지 않았다). 같은 차트를 여러 번 배치하면 모델 전용 경량 복제로 처리한다(반복 차트 표본
+  읽기 5.016초 → 2.772초, 최대 RSS 388.41 MiB → 330.64 MiB)
+- **캐시 없는 차트 참조·신형 차트**: 값 캐시가 없는 계열은 `c:f` 시트 참조를 같은 통합문서(XLSX)나
+  차트의 내장 통합문서(DOCX·PPTX)에서 풀어 채운다(캐시·예산 공유, 손상 격리). chartEx(`cx`/`cx1`)
+  파트, 거품 크기, `r` 속성 없는 셀 좌표 추론을 더했다. PPTX 도 분산형·거품형의 `c:xVal`/`c:yVal` 값을
+  읽는다(전에는 머리 행만 있는 빈 표)
+- 차트 검증: POI XLSX 26파일·38파트 중 출력된 32파트에서 값 1,828/1,828·제목 16/16·캡션 32/32, POI
+  DOCX 2파일 8표에서 셀 248/248·캐시 값 155/155·제목 6/6, LibreOffice DOCX 차트 13개의 캐시 값 406개
+  누락 0. 검증 기록: `docs/benchmarks/2026-10-02-ooxml-fix-real-docs.md`
+- **DOCX 표/그림 캡션**: Caption 스타일이나 SEQ 필드 문단을 최상위 흐름에서 인접한 표·그림의
+  `caption` 으로 결합한다(앞이면 TOP, 뒤면 BOTTOM). 셀 안 캡션, 같은 문단 안 그림 캡션, 그룹·도형 내부
+  캡션은 결합하지 않고 문단으로 둔다. 검증: LibreOffice DOCX 1,366개에서 찾은 명확한 인접 캡션 7/7 결합
+- **DOCX 읽기 순서**: `w:cr` 줄바꿈 경계, 셀·텍스트박스 안 목록 번호, 텍스트박스 안 표를 표로 유지,
+  인라인·셀 수식을 앵커 위치에, 주석 범위 표지를 바로잡고, 콘텐츠 컨트롤·그룹 도형 안의 텍스트와 차트
+  순서를 보존한다. 검증: LibreOffice 의 텍스트박스·떠 있는 도형·콘텐츠 컨트롤·그룹 도형 문서 466개 중 464개가
+  정답 토큰열과 완전 정렬 일치(나머지 2개는 Strict OOXML 문서). 검증 기록:
+  `docs/benchmarks/2026-10-02-docx-order-real-docs.md`
+- **PPTX 수식**: `a14:m` 으로 감싼 OMML 수식을 `Equation`(LaTeX)으로 낸다. OMML→LaTeX 변환을
+  `dochan/ooxml/math.py` 로 옮겨 DOCX 와 함께 쓴다. 실물 검증은 1식 1/1 이고 분수·첨자 등은 단위 테스트
+- **PPTX 표 셀**: 셀의 여러 문단·런 서식·줄바꿈(`a:br`)과 자동 번호를 보존하고(`1. First 1. Second` →
+  `1. First 2. Second`), 셀 안 OMML 은 `Equation` 으로 남긴다
+- **PPTX 영상·음성**: 미디어 참조를 문단 `[라벨](ppt/media/clip.mp4)` 과 `AssetRef`(kind `video`/`audio`)로
+  낸다. 파트가 없으면 WARN. 실물 표본으로는 검증하지 못했다(단위 테스트)
+- **숨김 시트 표기(XLSX·XLS)**: 아래 동작 변경 절 참조
+- **ISO/IEC 29500 Strict OOXML 읽기**: 패키지 계층에서 Strict 네임스페이스·관계 유형을 Transitional
+  표현으로 정규화한다. 공개 Strict 12개(DOCX 6·PPTX 2·XLSX 4)가 모두 열리며, 전에 본문을 읽지 못하던
+  DOCX·PPTX 8개가 새로 읽힌다(XLSX 4개는 기존 출력 그대로). XLSX Strict ISO 날짜 셀(`t="d"`)은 기존
+  날짜 계약으로 처리하고, 잘못된 값은 `WARN: XLSX invalid ISO date: …`. Transitional 짝 XLSX 3/3 완전 일치,
+  DOCX 원시 문자열 20/20. Transitional 2,318개(DOCX 1,480·PPTX 510·XLSX 328)의 출력 지문은 전후 100%
+  동일. Strict 문서의 SmartArt 전용 본문은 복원하지 않는다. 검증 기록:
+  `docs/benchmarks/2026-10-02-ooxml-strict-real-docs.md`
+
+### 수정 (DOCX·PPTX·XLSX)
+
+- **차트 제목**: `c:chart/c:title` 만 읽는다. 전에는 PPTX 가 축 제목까지 차트 제목에 이어 붙였고, XLSX 는
+  차트 제목이 없으면 축 제목을 3단계 제목으로 올렸다. 그런 차트의 축 제목은 이제 캡션으로 나간다.
+  서식 때문에 쪼개진 제목 런을 공백 없이 붙이고(전에는 `Rev enue`), 런 안의 공백은 그대로 두며, 줄바꿈
   (`a:br`)과 문단 사이는 공백 하나로 잇는다. PPTX 도 셀에 연결된 제목(`c:strRef` 캐시)을 읽는다
-- `mc:AlternateContent` 로 감싼 차트 종류·축·제목·계열은 펼쳤을 때 차트 요소가 나오는 한 갈래만 읽는다
-  (Choice 우선). 전에는 두 갈래의 계열을 모두 읽어 같은 계열이 표에 두 번 들어갔다. 계열은 이제
+- **확장 래퍼**: `mc:AlternateContent` 로 감싼 차트 종류·축·제목·계열은 펼쳤을 때 차트 요소가 나오는 한
+  갈래만 읽는다(Choice 우선). 전에는 두 갈래의 계열을 모두 읽어 같은 계열이 표에 두 번 들어갔다. 계열은
   `c:plotArea/<차트 그룹>/c:ser` 경로로만 찾는다
-- X 값이 계열마다 다른 분산형·거품형은 `Series | X | Y` 긴 표로 낸다. 전에는 점 번호로 묶어 첫 계열의
-  X 가 다른 계열의 Y 에 붙었다(XLSX 도 같은 결함이 있었다). X 원천이 아예 없는 계열은 Office 처럼 1, 2, …
-  위치로 채우고, X 를 공유하는 계열은 전처럼 한 표에 열로 둔다
-- 검증: 단위 테스트, openpyxl 로 만든 7종 차트 통합문서의 변경 전후 비교, Opus 감수·재감수와 codex 리뷰 반영.
-  Office 로 만든 실물 차트 문서는 검증하지 못해 README 표는 바꾸지 않았다. 남은 일은
-  `docs/superpowers/plans/2026-10-02-improvement-backlog.md`
+- **분산형·거품형 표**: X 값이 계열마다 다르면 `Series | X | Y` 긴 표로 낸다. 전에는 점 번호로 묶어 첫
+  계열의 X 가 다른 계열의 Y 에 붙었다(PPTX·XLSX 공통). X 원천이 없는 계열은 Office 처럼 1, 2, … 로 채우고,
+  X 를 공유하는 계열은 전처럼 한 표에 열로 둔다
+- **DOCX 인라인 이미지**: 대체 텍스트를 참조 뒤에 한 번 더 붙이지 않고, 문서 끝에 따로 붙던 같은
+  이미지의 중복 참조를 없애 이미지가 앵커 위치에만 남는다
+
+### 추가 (PDF)
+
+- **LZW 필터·TIFF predictor**: `LZWDecode`(EarlyChange 0/1, 잘못된 코드에서는 앞부분 보존)와 TIFF
+  Predictor 2(1/2/4/8/16비트, 문서 전체가 공유하는 1,048,576샘플 연산 예산)를 복원한다. 검증: pdf.js 공개
+  코퍼스에서 LZW 를 쓰는 3파일·5스트림, 이미지 4,446바이트 2건 완전 일치, TIFF predictor 이미지
+  3,260,320바이트 일치. EarlyChange 0 과 TIFF 1/2/4/16비트는 실물 표본이 없어 단위 테스트만 했다
+- **사용자 암호**: `PDFReader(password=...)` 와 `Dochan(..., password=...)` 로 R2–R6 표준 보안 핸들러
+  (RC4·AES-128·AES-256)의 사용자 암호를 인증한다. R6 는 SASLprep, R2–R4 는 PDFDocEncoding 으로 암호를
+  다루고, V5 의 `Length` 생략과 V4 CF 길이를 허용한다. `EncryptMetadata false` 인 메타데이터 스트림은
+  복호화하지 않는다. 암호 값은 오류·경고에 쓰지 않는다. 검증: pdf.js 매니페스트의 암호 문서 7/7 개방,
+  틀린 암호 7/7 차단
+- **주석(코멘트)**: 마크업 주석 17종의 내용(`Contents`, 없으면 `RC` 리치 텍스트 — DTD·외부 엔티티 차단)과
+  작성자(`T`)를 DOCX 와 같은 `Comment` 로 낸다. Popup 은 별도 코멘트로 만들지 않는다. Markdown 은 해당
+  페이지 끝에 `[comment N]` 표지 문단을, 문서 끝에 `[^comment-N]: 내용` 정의를 내고, 작성자는 JSON 에만
+  나온다. 주석이 가리키는 글자 위치(Highlight 등의 `QuadPoints`, Text 주석의 `Rect`)가 본문 글자와 확실히
+  맞으면 `[comment N]` 참조를 그 본문 런 끝에 두고, 아니면 페이지 끝 문단으로 남긴다.
+  페이지당 256개·문서당 4,096개·텍스트 64 KiB·합계 8 MiB 상한. 검증: pdf.js 공개 59문서에서
+  158/158 일치, Popup 127개는 분리
+- **내부 링크**: `Dest`·`GoTo`·`Dests`·`Names` 트리를 페이지로 풀어 `TextRun.link="#page-N"`(Markdown
+  `[…](#page-N)`)으로 내고, 대상 페이지 첫 문단 앞에 `[bookmark: page-N]` 표지를 넣는다. 다른 파일을
+  가리키는 `GoToR` 은 풀지 않는다. 검증: 목적지를 확인할 수 있는 47/47 일치(원시 내부 링크 144개 중
+  97개는 확인 불가로 분모 제외)
+- **본문 링크 연결**: 링크 주석의 `Rect`/`QuadPoints` 와 글자 위치가 확실히 맞는 구간에만 본문 런에
+  링크를 걸고, 같은 링크가 본문에 붙으면 페이지 끝 `<url>` 문단을 생략한다. 맞지 않는 링크는 전처럼 페이지
+  끝 문단으로 남는다. 글자 위치 계산을 위해 내장되지 않은 표준 14 글꼴과 별칭(Arial·TimesNewRoman·
+  CourierNew)의 글리프 폭·인코딩을 Adobe Core 14 AFM 에서 생성한 데이터(`dochan/pdf/core14.py`)로 쓰고,
+  CID 글꼴의 `DW` 기본 폭을 적용한다(명시 `/Widths` 우선, 서브셋·내장 글꼴에는 적용하지 않음). 검증:
+  pdf.js 983개 조사, 비교 가능한 링크 주석 678개 중 독립 기준과 일치하는 본문 연결 372/372(경계 오류 0,
+  연결률 54.87%). 372건 중 256건은 한 파일에서 나왔고, 실제 글자가 있는데 연결을 보류한 링크가 267건
+  남았다
+- **각주·미주**: 하단 정의·고유 위첨자·구분선이 함께 맞는 유일한 짝만 `Footnote` 로 만들고(Markdown
+  `본문[^1]`, `[^1]: …`, 번호는 문서 전체), 정의는 본문에서 뺀다. 관찰된 줄 간격으로 이어지는 각주
+  줄은 하단 60pt 안에서도 각주로 둔다. 문서 끝의 명시적 `미주`/`Endnotes`/`Notes` 구역과 고유 위첨자가
+  맞으면 endnote 로 만들고 여러 페이지 정의를 잇는다. 검증: 내부 실물 79쌍(1,363쪽)의 각주 6/6·261/261자
+  일치, 각주가 없는 77문서에서 오탐 0. 미주는 실물에서 완전 복원에 성공한 사례가 없어(0/1) 합성 테스트만
+  통과했다
+- **WMode 1 세로 폰트**: Identity-V 와 등록된 세로 CMap 을 판별하고 `DW2`/`W2`·세로 원점·y 방향 전진으로
+  글자를 배치한다. 검증: 공개 세로 폰트 4파일 중 ToUnicode 가 있는 2파일에서 첫 런 2/2·열 10/10 일치.
+  ToUnicode 가 없으면 전처럼 경고만 남긴다
+- 내부 실물 79쌍의 레이아웃 지표는 변경 전후 동일(평균 토큰 비율 0.9754, 줄 결합 정확도 0.9378, 머리글/
+  바닥글 적중 0.9913). 검증 기록: `docs/benchmarks/2026-10-02-pdf-fix-real-docs.md`,
+  `docs/benchmarks/2026-10-02-pdf-polish-real-docs.md`, `docs/benchmarks/2026-10-02-pdf-links-real-docs.md`
+
+### 추가 (암호화 문서)
+
+- **암호 입력 API**: `Dochan(path, password=...)`(키워드 전용, `str`·`bytes`, 4,096자 이하). CLI 는
+  `convert`·`info` 의 `--password-stdin`(표준 입력 첫 줄, 줄 끝 개행만 떼고 앞뒤 공백은 보존, 터미널이면
+  화면에 보이지 않게 입력)과 환경 변수 `DOCHAN_PASSWORD`(빈 값은 암호 없음으로 처리)를 받는다. 두 가지를
+  함께 주면 `--password-stdin` 이 우선한다. 표준 입력의 빈 줄이나 `password=""` 는 '빈 암호를 명시한
+  것' 으로 다뤄 형식의 기본 암호를 시도하지 않는다. 명령줄 인자로 암호를 넘기는 옵션은 만들지 않았고,
+  `-p…`·`--pass…` 꼴 인자는 값을 출력하지 않고 거부한다. `batch` 는 문서마다 암호가 달라 암호 입력과
+  `DOCHAN_PASSWORD` 를 쓰지 않는다. 파싱이 끝나면 리더 객체에서 암호를 지우고, 진단 문구에는 암호 값을
+  넣지 않는다
+- **OOXML(DOCX·PPTX·XLSX)**: [MS-OFFCRYPTO] Standard(2.2 포함)와 Agile(spinCount, 세그먼트 AES-CBC,
+  HMAC 무결성 검사)을 복호화한다. 복호화한 패키지는 메모리에서만 기존 리더로 넘기고 디스크에 쓰지 않는다.
+  암호 패키지 16 MiB, 문서당 암호 후보 2개, KDF 반복 합계 1,000,000회, 복호화 20초 상한(협력적 시간
+  확인). 인증서 기반 키, AES-CBC 가 아닌 Agile 암호, 암호화된 XLSB 는 오류로 거부한다.
+  `EncryptionInfo` XML 은 lxml 안전 파서로 읽는다
+- **XLS**: `FILEPASS` 의 XOR(방법 1)·RC4·RC4 CryptoAPI. **DOC**: XOR(방법 2)·RC4·RC4 CryptoAPI(FIB 앞
+  68바이트 평문 유지). **PPT**: `CryptSession10Container` 의 RC4 CryptoAPI 를 지속 객체마다 적용하고
+  Pictures 스트림도 복호화한다(크기 0 FBSE 의 지연 BLIP, CMYK JPEG BLIP 포함)
+- **기본 암호**: 암호를 주지 않으면 빈 암호와 형식의 기본 암호(XLS·OOXML `VelvetSweatshop`, PPT 는
+  [MS-OFFCRYPTO] 기본 암호)만 시도한다. 암호를 명시했는데 틀리면 기본 암호로 돌아가지 않는다
+- **공용 AES 가속**: `dochan/utils/aes.py` 를 T-table 과 라운드 키 재사용으로 바꿨다(FIPS-197·SP 800-38A
+  기지 답안으로 검증). 1 MiB 복호화가 AES-128 ECB 35.483404초 → 0.555490초, AES-256 CBC 51.302556초 →
+  0.794189초. PDF·HWP 배포용 문서 복호화도 같은 구현을 쓴다
+- 검증: 공개 Apache POI 15개·LibreOffice DOCX 4개 — DOCX 6/6(본문·ZIP CRC·API JSON, Agile HMAC 포함), XLS
+  4/4(RC4·CryptoAPI·XOR·기본 암호), XLSX 2/2(기본 암호 문서 포함), PPT 5/5(그림 해시 7/7), DOC RC4·
+  CryptoAPI 2/2. 사용자 암호가 필요한 17개는 암호 없이 거부, 19개 모두 틀린 암호 거부. Apache Tika
+  암호 문서 7개(PPTX 포함)가 `tika` 로 열렸다. DOC XOR 는 공개 DOC 356개에서 양성 표본을 찾지 못해 합성
+  문서로만 검증했다. 암호로 보호된 HWP 는 여전히 지원하지 않는다(배포용 문서만). 검증 기록:
+  `docs/benchmarks/2026-10-02-crypto-real-docs.md`, `docs/benchmarks/2026-10-02-crypto-fix-real-docs.md`
+
+### 추가·수정 (공통·CLI)
+
+- **이미지 파일 저장**: `dochan convert … --images-dir DIR` 와 `Dochan(...).save_images(DIR)`: 문서에 들어
+  있는 이미지 바이너리를 문서 순서대로 `<파일이름>-image-NNN.<확장자>` 로 저장한다. 확장자는 바이트
+  서명(PNG·JPEG·GIF·BMP·TIFF·JP2·EMF·WMF)으로 정하고, 같은 바이트는 한 번만 저장한다. 파일 이름에는
+  문서 속 경로를 쓰지 않는다. 실물 확인: POI `VariousPictures.docx`(미디어 5개 → 5개, 형식 일치),
+  `WithDrawing.xlsx`, pdf.js `alphatrans.pdf`
+- **PDF 이미지 JSON 출력 크래시 수정**: 추출 가능한 이미지가 있는 PDF 를 `to_json()`/`-f json`/배치
+  JSON 으로 내보내면 `doc.assets` 에 `Image` 요소가 그대로 들어가 `AttributeError: 'Image' object has
+  no attribute 'id'` 로 실패했다. 다른 형식과 같은 `AssetRef`(id·source_path·filename·content_type·
+  metadata)로 등록한다(이미지 23개가 든 내부 실물 PDF 로 재현·확인)
+- **OCR 결과 재사용**: 같은 이미지 바이트(로고·머리글·반복 도형)는 SHA-256 과 언어를 키로 하는
+  LRU(256개)로 Tesseract 재실행을 건너뛴다. 모든 형식의 `--ocr` 경로에 공통 적용되며 결과는 같고,
+  예외는 캐시하지 않는다
+- `batch` 의 CLI 오류 출력: 실패한 파일도 파일 경로와 함께 `에러:` 로 stderr 에 적는다(성공 파일의
+  경고는 전처럼 `경고:`)
+- ZIP 패키지 종류(OOXML·HWPX) 판별을 생성자당 한 번으로 줄였다
+- `scripts/compare_hwp_pairs.py`: 유니코드 정규화·대소문자만 다른 `.hwpx` 두 개가 같은 `.hwp` 에 두 번
+  짝지어지던 문제 수정
+- 실물 프로브 스크립트(`scripts/probe_*.py`)를 형식별로 추가했다. 코퍼스 경로를 인자로 받고 표본을 저장소에
+  복사하지 않는다
+- `scripts/check_internal_leaks.py`: 저장소 밖 내부 실물 문서 폴더에서 이름 조각과 본문 문장을 뽑아 추적
+  파일·커밋 메시지에 들어갔는지 검사한다(검사 목록은 저장하지 않음). `tests/test_no_local_paths.py` 는 추적
+  파일에 로컬 절대 경로가 들어가면 실패한다. 코드 주석·테스트·이전 CHANGELOG·벤치마크 문서에 남아 있던
+  내부 문서 제목·기관명은 '내부 실물 문서' 표기로 바꿨다
+- 문서: README(구조·기능·사용법), SECURITY(암호 처리 원칙), CONTRIBUTING(지원 형식·라이선스 원칙),
+  RELEASING(uv.lock·병합 절차·누출 검사 단계)을 현행화했다
+
+### 수정 (최종 감수 반영)
+
+- **DOCX**: 번호 없는 문단(`numId="0"`)·정의 없는 수준에서 번호 수준 상한 ERR 이 나던 회귀(LibreOffice 1,506개 중 신규 ERR 0),
+  SmartArt 데이터 파트 텍스트, 위치 탭(`w:ptab`)을 탭으로, 문서 기본값·`basedOn` 체인의 글자 속성(제목 굵게)을 적용
+- **PPT**: 손상 문서에서 슬라이드가 없거나 도형이 잘려 텍스트가 비면 구 경로 텍스트로 보충(공개 손상 실물 4/4), 그림은 도형 위치에
+  `Image` 하나로(중복 Markdown 참조 제거), 대체 텍스트는 `wzDescription`·그림 이름 순으로 PPTX 와 같은 계약, 자동 번호 목록을
+  PPTX 표기로, jump·hyperlink 액션과 표시명만 있는 링크의 슬라이드 대상(LibreOffice 실물 2개)
+- **DOC**: 스마트 태그 범위 텍스트 보존 검증(실물 184/184), 숨김 스위치가 있는 SEQ 는 캡션 근거에서 제외, 문단 앞 페이지 나누기의
+  남는 줄바꿈 제거
+- **XLS·내장 개체**: 진단 줄 수 상한과 집합 기반 중복 제거(합성 RK 40,000개에서 제곱 시간 해소), 내장 개체의 ERR 는 호스트 문서에서
+  WARN 으로(미리보기 유지), 해석하지 못한 BIFF5 수식은 부분식 대신 캐시 값과 셀 위치 경고, SUPBOOK VirtualPath 로 외부 책·DDE 구분,
+  빈 FBSE 건너뜀, MS Graph 에서 선택하지 않은 계열의 빈 열 제거, IRM(DRM) 보호 DOC 경고
+- **암호화**: OOXML 복호화의 시간 상한을 없애고 바이트·해시 작업량 예산만 남겨 결과가 부하에 따라 달라지지 않게 함, 암호 진단 문구 정리
+- **PDF**: 이미지 해제가 본문 해제 예산을 잠식해 뒤쪽 페이지 본문이 사라지던 회귀(이미지는 별도 캐시·TIFF predictor 예산만 공유),
+  Identity-H 에서 ToUnicode 의 실제 공백 CID 로 단어 경계
+- **평문 출력**: 문단 안에 이미 그림 참조가 있으면 `[이미지: …]` 를 다시 내지 않는다(Markdown 과 같은 규칙)
+
+### 변경 (라이선스·서드파티)
+
+- **HWP 배포용 문서 복호화 재작성**: `dochan/hwp/distdoc.py` 를 기존 함수 본문을 보지 않고 한컴 공개
+  「한글문서파일형식 배포용 문서 revision 1.2」와 「HWP 5.0 revision 1.3」 4.2.13절로 다시 작성했다(공개
+  인터페이스 동일). 명세가 지정한 MS Visual C `rand()` 는 공개된 LCG 규칙으로 구현했다. 공개 배포용
+  27파일의 65/65 섹션 CRC·길이 일치, 실물 프로브 출력 동일
+- **PDF 표준 14 글꼴 데이터**: 글리프 폭·인코딩 표(`dochan/pdf/core14_metrics.py`)를 Adobe Core 14 AFM 과
+  Adobe Glyph List(`glyphlist.txt`·`zapfdingbats.txt`) 원본에서 `scripts/generate_pdf_core14.py` 로 직접
+  생성한다(입수 출처·SHA-256 기록, CRLF→LF 정규화). 외부 패키지를 거치지 않으며 런타임 의존성은 그대로다
+- **NOTICE**: Adobe Core 14 AFM 고지(수정 범위 영문·국문 표기), Adobe Glyph List·ITC Zapf Dingbats Glyph
+  List 의 BSD-3-Clause 고지, Microsoft Open Specifications([MS-DOC]·[MS-PPT]·[MS-XLS]·[MS-ODRAW]·
+  [MS-OFFCRYPTO]·[MS-OSHARED]) 참조와 [MS-XLS] 함수 표 재현 사실을 추가했다. Symbol·Wingdings 대응표
+  (`dochan/office_binary/symbol_fonts.py`)에는 값의 출처를 주석으로 적었다
+- **`docs/THIRD_PARTY.md` 신설**: 런타임 의존성(olefile·lxml), OCR 선택 의존성(pytesseract·Pillow), 소스에
+  든 사실 데이터(Core 14 AFM 폭, Adobe Glyph List, [MS-XLS] Ftab), 검증 전용 자료(Apache POI·Tika,
+  LibreOffice, pdf.js, xlrd 등)를 분류했다. 새 런타임 의존성은 없다
+
+### 변경 (동작 변경 — 1.6.0 과 출력이 달라지는 항목)
+
+**공통**
+
+- **차트 출력 형식**: 차트는 모든 형식에서 `### 차트 제목` 문단 → `*Chart type: …; Category axis: …*`
+  캡션 → 데이터 표 순서로 나온다. PPTX·XLSX 차트에는 캡션이 새로 붙어 품질 검사의 문단 수가 캡션 달린
+  차트마다 하나 늘고, 1.6.0 이 내지 않던 DOCX·HWPX·XLS 차트와 DOC·PPT 내장 차트도 이 형식으로 나온다.
+  XLSX 에서 차트 제목이 없을 때 축 제목이 `###` 제목으로 올라가던 출력은 캡션으로 바뀌었다
+- **Markdown 캡션 이스케이프**: 표·그림·차트 캡션 안의 `\` `` ` `` `*` `_` `~` 를 백슬래시로 이스케이프해
+  `*…*` 강조가 깨지지 않게 한다. 공용 출력기라 캡션을 내는 모든 형식에 적용되며, 공개 HWPX 1,700개 중
+  6파일·26줄이 바뀐다
+- **양식 개체**: HWP·HWPX·DOC 의 체크박스·라디오 단추가 `[x]`/`[ ]` 와 캡션으로(DOCX 와 같은 표기),
+  단추 캡션·입력 상자 텍스트·콤보/드롭다운 선택값이 본문에 새로 나온다. 비밀번호 입력 상자의 내용은 내지
+  않는다. DOC 에서 Wingdings 체크 글리프로 쓴 상자는 `☐`/`☑` 로 나온다
+- **OOXML 패키지 읽기 예외**: ZIP 파트를 풀 때 나는 zlib 오류·암호화된 멤버·미지원 압축 방식·EOF 를
+  `ValueError("package part could not be decoded: <파트>: <원인>")` 로 통일했다. `Dochan` 에서는
+  `doc.errors` 의 ERR 문구가, 리더를 직접 쓰면 예외 형식이 바뀐다
+
+**HWP·HWPX**
+
+- **변경 추적 HWP 의 기본 출력**: 1.6.0 은 변경 추적 HWP 에서 BodyText(변경을 반영한 본문)를 읽었다.
+  1.7.0 의 기본값 `revision_mode='preserve'` 는 ViewText 를 읽어 삽입·삭제 텍스트를 모두 낸다(HWPX 와 같은
+  의미). 1.6.0 과 같은 출력은 `revision_mode='final'`(CLI `--revision-mode final`)로 얻는다. 공개 HWP
+  5,363개 중 변경 추적 문서는 3개였다
+- **HWP 개요 제목**: 문단 모양에 개요 1~3 이 지정된 문단이 Markdown 제목으로 나온다(전에는 스타일 이름과
+  글꼴 크기로만 판정). HWPX 는 문단에 직접 지정한 개요(개요 없음 포함)가 스타일의 개요보다 우선하도록
+  바뀌었다. 공개 HWPX 1,699개 중 두 값이 충돌하는 문서는 3개(57문단)였고, 그중 한 문서에서 12문단의 제목
+  수준이 바뀌었다. 개요 4~6 은 두 형식 모두 본문이고, 표 셀 안 문단은 글꼴 크기만으로는 제목이 되지 않는다
+  (1.6.0 은 셀 안 큰 글자 문단도 제목으로 냈다; 공개 HWP·HWPX 7,076파일에서 셀 안 제목 약 22만 개가 본문으로,
+  문단 수·텍스트는 불변)
+- **HWP 셀 안 중첩 표 실패**: 실패한 중첩 표만 비우고 같은 문단의 텍스트와 형제 표는 남긴다(전에는 그
+  표를 품은 문단 그룹 전체를 비웠다)
+
+**DOCX·PPTX·XLSX**
+
+- **DOCX 셀 안 중첩 표 구분자**: 1.6.0 은 셀 안 중첩 표를 셀 문단으로 펼쳐 내용을 공백으로 이었다
+  (`| Outer1 | Before A B C D After |`). 이제 중첩 표를 `Table` 로 유지해 HWP·HWPX 와 같은 구분자(열 ` / `,
+  행 ` ; `)로 낸다(`| Outer1 | Before A / B ; C / D After |`). JSON 에는 셀 안 중첩 `Table` 이 들어간다
+- **숨김 시트(XLSX·XLS)**: 1.6.0 은 시트 이름이 기본 이름(`Sheet1` 등)뿐이면 시트 제목을 내지 않았고
+  숨김 여부를 표시하지 않았다. 이제 숨김 시트가 하나라도 있으면 모든 시트에 `## 시트 이름` 제목을 붙이고,
+  숨김 시트 제목 바로 아래 `*Sheet visibility: hidden*` 또는 `*Sheet visibility: veryHidden*` 문단을 둔다.
+  숨김 시트의 데이터는 전처럼 출력한다. 공개 XLS 417개 중 9파일·38줄이 바뀐다
+- **DOCX 북마크 위치**: `[bookmark: 이름]` 표지를 북마크가 걸린 출력 문단의 앞에 둔다(전에는 문단 안
+  북마크 위치)
+- **DOCX 캡션**: Caption 스타일·SEQ 문단이 인접 표·그림의 캡션으로 옮겨져 본문 문단에서 빠지고, 표·그림
+  위/아래 `*캡션*` 한 줄로 나온다
+- **PPTX 표 셀**: 셀 안 자동 번호가 이어지고(`1. First 1. Second` → `1. First 2. Second`) 여러 문단이
+  보존된다
+- **DOCX 인라인 이미지**: 대체 텍스트가 이미지 참조 뒤에 반복되지 않고(`…(word/media/a.png)logo after` →
+  `…(word/media/a.png) after`), Markdown 문서 끝에 따로 붙던 같은 이미지의 중복 참조가 없어진다. 평문 출력의
+  `[이미지: …]` 표시는 문서 끝 대신 이미지가 든 문단 바로 뒤에 나온다
+
+**DOC·PPT·XLS (구조 해석 경로)**
+
+- **PPT**: 마스터의 편집 안내 제목은 내지 않고, 일반 마스터 문구는 슬라이드마다 한 번, 바닥글은 한 번
+  낸다. PPTX 처럼 상속된 placeholder 바닥글(슬라이드별 바닥글·날짜)은 내지 않고, 마스터 그림을 슬라이드마다
+  반복하지 않는다. 노트는 해당 슬라이드에 연결되고(출처 `#notes`), 주석은 `[comment: 작성자: 본문]` 한
+  문단, 링크는 `표시문 <대상>` 으로 나온다(PPTX 와 같은 형식). 필드 자리표시 문자는 지우고 슬라이드 번호
+  필드는 실제 번호로 바꾼다. 도형은 좌표 순서로 읽으며, 서식이 같은 인접 런은 Markdown 에서 하나로 합친다.
+  제목 앞 수직 탭·공백 때문에 제목이 코드 블록으로 바뀌던 문제가 없어졌다. 일부 슬라이드 참조를 복구하지
+  못한 손상 문서의 보충 텍스트는 출처 `PowerPoint Document#legacy-recovery`(슬라이드 번호 없음)와 WARN 을
+  단다
+- **DOC**: 섹션은 섹션 표(`PlcfSed`) 경계에서만 나누고, 그 밖의 페이지 나누기는 문단 안 줄바꿈으로 둔다.
+  북마크는 `[bookmark: 이름]` 으로 해당 문단 앞에 두고 `_` 로 시작하는 관리용 북마크는 숨긴다. 변경 추적은
+  삽입을 포함하고 삭제를 뺀 결과로 나온다(DOC 에는 `revision_mode` 가 없다). 탭·연속 공백으로 정렬된 글을
+  표로 추정하던 휴리스틱 대신 실제 Word 표만 표로 내고 탭은 그대로 둔다. 필드 지시문(`EMBED`·`MACROBUTTON`·
+  `FORMDROPDOWN` 등) 대신 표시 결과를 내고, 본문 범위 밖 바이너리 잡음을 더는 출력하지 않는다. 텍스트박스
+  본문은 앵커 위치에 한 번, 머리글/바닥글은 첫 쪽·짝수·홀수 변형을 각각 별도 항목으로 낸다. 캡션 문단은
+  표·그림의 캡션으로 옮겨진다
+- **XLS 수식 표시**: 함수 이름을 [MS-XLS] 함수 표로 풀어, 외부 참조·이름·배열 상수가 든 수식도 XLSX 와 같은
+  `캐시 (=식)` 형식으로 낸다. 함수 표에도 없는 함수·토큰은 식을 빼고 캐시 값과 WARN 만 낸다(전에는
+  `0 (=F250(A2,10))` 처럼 번호와 잘못 묶인 인자를 냈다). 캐시가 빈 수식은 `(=A2)` 대신 `=A2` 로 낸다
+
+**PDF**
+
+- **열 수 없는 암호 PDF**: `Dochan(...)` 에서 암호를 주지 않았거나(`password=None`) 틀린 암호 때문에 PDF 를
+  열 수 없으면 `ERR: 암호화된 문서 — PDF 암호가 없거나 틀림 또는 미지원 암호화 방식` 을 낸다. 1.6.0 은
+  WARN 만 남기고 성공으로 처리해 `convert -o` 가 0바이트 파일을 만들고 종료 코드 0 을 돌려줬다. 이제
+  `convert` 는 종료 코드 1 로 끝나고 출력 파일을 만들지 않으며, `batch` 는 그 파일을 실패로 센다. 비표준
+  보안 핸들러·`Encrypt` 사전 누락처럼 같은 WARN 을 내던 경우도 ERR 이 된다. `PDFReader` 를 직접 쓰면 전처럼
+  WARN 만 남는다. WARN 문구는 빈 암호와 제공 암호를 구분한다
+- **본문 링크**: 본문 글자에 연결된 링크는 해당 런의 링크로 나오고, 같은 링크의 페이지 끝 `<url>` 문단은
+  생략된다. 연결하지 못한 링크는 전처럼 페이지 끝에 남는다. 내부 링크는 `[…](#page-N)` 으로, 연결하지
+  못한 내부 링크는 페이지 끝 `Page N` 문단으로 나오고, 대상 페이지 첫 문단(제목이면 제목) 앞에
+  `[bookmark: page-N]` 표지가 붙는다
+- **주석·각주**: 마크업 주석의 `[comment N]` 참조가 대상 본문 런 끝(위치를 확실히 맞출 수 없으면 페이지 끝 문단)에,
+  문서 끝에 그 정의가 새로 나온다.
+  조건을 만족하는 각주는 본문의 `[^N]` 참조와 문서 끝 정의로 나오고, 각주 정의 줄은 페이지 본문에서 빠진다
+- **ToUnicode 없는 표준 14 글꼴**: 내장되지 않은 표준 14 글꼴과 별칭(Arial·TimesNewRoman·CourierNew)에
+  ToUnicode 가 없으면 글자 코드를 cp1252 대신 글리프 이름으로 해석한다. Symbol 은 그리스 문자로,
+  ZapfDingbats 는 딩뱃 문자로, `Encoding` 이 없는 Type1 계열의 `0x27` 은 `’`(StandardEncoding quoteright)로 나온다.
+  `Encoding` 이 없는 비기호 TrueType 은 Windows 코드로 읽고, `.notdef`·표에 없는 글리프 이름은 코드 단위로 기존 바이트
+  해석으로 돌아간다
+
+### 알려진 한계
+
+- HWP: 열기 암호로 보호된 문서, 콤보 상자의 화면 표시값, 개체·서식 변경 이력
+- DOC: FBSE 없이 저장된 구 형식 그림, 연결된 텍스트박스 체인과 시각적 배치, XOR 암호 실물 검증, 내장 차트 실물 검증,
+  위쪽 캡션 실물 검증. PPT: 마스터 글자 서식 전체 상속, MS Graph 비연속 선택 차트(미리보기 유지)
+- XLS: DDE 호출, 일부 토큰(`PtgMemFunc` 등), 외부·삭제 참조 차트 계열 실물 검증, RSTRING 실물 검증. 매크로는
+  읽지 않는다
+- DOCX: 같은 문단 안 그림 캡션·그룹 도형 안 캡션.
+  PPTX: 영상·음성 참조와 복잡한 OMML 의 실물 검증
+- 차트: 분산형의 X/Y 축 구분, 막대·분산 혼합 차트의 긴 표 형식, 차트 범주의 숫자 서식 표시
+- PDF: 부모와 테두리를 공유하는 연결형 중첩 표, 페이지 경계에서 잘린 셀의 결합, 괘선 없는 1×1 글상자, 병합
+  셀 완전 일치, 미주의 실물 복원, 연결을 보류한 본문 링크(실제 글자가 있는 267건), 수식 구조, 다른 파일을
+  가리키는 링크(GoToR), 한 글자 문맥으로 정해지지 않는 줄바꿈 공백(약 6%)
+- 남은 일과 순서: `docs/superpowers/plans/2026-10-02-improvement-backlog.md`
 
 ## [1.6.0] - 2026-09-24
 

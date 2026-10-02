@@ -12,7 +12,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
     <a href="https://github.com/illuwa/dochan/stargazers"><img src="https://img.shields.io/github/stars/illuwa/dochan?style=social" alt="GitHub Stars"></a>
   </p>
-    <p align="center"><strong>Current stable version: 1.6.0</strong></p>
+    <p align="center"><strong>Current stable version: 1.7.0</strong></p>
 </p>
 
 ---
@@ -186,48 +186,57 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 |------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | 텍스트 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 표 (단순) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 표 (셀 병합) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 표 (중첩 텍스트) | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ⬜ | — | ⬜ |
-| 서식 (bold/italic) | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 표 (셀 병합) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 표 (중첩 텍스트) | ✅ | ✅ | ✅ | — | — | ✅ | — | — | ⬜ |
+| 서식 (bold/italic) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 제목 감지 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | ✅ |
-| 스타일 상속 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |
-| 수식 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | ✅ | ⬜ |
+| 스타일 상속 | — | — | ✅ | — | — | ✅ | — | — | — |
+| 수식 | ✅ | ✅ | ✅¹ | ✅¹ | ✅² | ✅ | ✅ | ✅ | ⬜ |
 | 공유 수식 | — | — | — | — | ✅ | — | — | ✅ | — |
-| 이미지 참조 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ |
-| 이미지 대체 텍스트 | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — | — |
-| 표/그림 캡션 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ⬜ | — | — |
-| 이미지 OCR | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ |
-| 머리글/바닥글 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ✅ |
-| 각주/미주 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ⬜ |
-| 주석/코멘트 | ✅ | ✅ | ⬜ | — | — | ✅ | — | ✅ | ⬜ |
-| 변경 추적 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |
-| 컨트롤/스마트 태그 텍스트 | ⬜ | ⬜ | ⬜ | — | — | ✅ | — | — | — |
-| 텍스트박스/도형 텍스트 | ✅ | ✅ | ⬜ | ⬜ | — | ✅ | ✅ | — | — |
+| 이미지 참조 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 이미지 대체 텍스트 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
+| 표/그림 캡션 | ✅ | ✅ | ✅³ | — | — | ✅³ | — | — | — |
+| 이미지 OCR | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 머리글/바닥글 | ✅ | ✅ | ✅ | — | — | ✅ | — | — | ✅ |
+| 각주/미주 | ✅ | ✅ | ✅ | — | — | ✅ | — | — | ⬜ |
+| 주석/코멘트 | ✅ | ✅ | ✅ | — | — | ✅ | — | ✅ | ✅ |
+| 변경 추적 | ⬜ | ⬜ | ✅ | — | — | ✅ | — | — | — |
+| 컨트롤/스마트 태그 텍스트 | ⬜ | ⬜ | ✅ | — | — | ✅ | — | — | — |
+| 텍스트박스/도형 텍스트 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | — |
 | 필드 결과 텍스트 | ✅ | ✅ | ✅ | ✅ | — | ✅ | — | — | — |
 | 여러 슬라이드 | — | — | — | ✅ | — | — | ✅ | — | — |
-| 레이아웃 상속 텍스트 | — | — | — | ⬜ | — | — | ✅ | — | — |
-| 발표자 노트 | — | — | — | ⬜ | — | — | ✅ | — | — |
-| 읽기 순서 | ✅ | ✅ | ⬜ | ⬜ | — | ⬜ | ✅ | — | ✅ |
-| 그룹 도형 | — | — | — | ⬜ | — | — | ✅ | — | — |
+| 레이아웃 상속 텍스트 | — | — | — | ✅ | — | — | ✅ | — | — |
+| 발표자 노트 | — | — | — | ✅ | — | — | ✅ | — | — |
+| 읽기 순서 | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | — | ✅ |
+| 그룹 도형 | — | — | — | ✅ | — | — | ✅ | — | — |
 | 페이지 번호 provenance | — | — | — | — | — | — | — | — | ✅ |
 | 현대 PDF(1.5+) xref/객체 스트림 | — | — | — | — | — | — | — | — | ✅ |
-| 표준 암호화(RC4/AES, 빈 암호) | — | — | — | — | — | — | — | — | ✅ |
-| 차트 제목/데이터 | — | — | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | — |
+| 표준 암호화(RC4/AES, 빈·사용자 암호) | — | — | — | — | — | — | — | — | ✅ |
+| 차트 제목/데이터 | — | — | ⬜ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | 여러 시트 | — | — | — | — | ✅ | — | — | ✅ | — |
 | sharedStrings | — | — | — | — | ✅ | — | — | ✅ | — |
 | Boolean/error/formula cached value | — | — | — | — | ✅ | — | — | ✅ | — |
-| rich text 문자열 | — | — | — | — | ⬜ | — | — | ✅ | — |
+| rich text 문자열 | — | — | — | — | ✅ | — | — | ✅ | — |
 | 날짜/숫자 서식 | — | — | — | — | ✅ | — | — | ✅ | — |
-| 빈 행/열 좌표 보존 | — | — | ⬜ | — | ✅ | — | — | ✅ | — |
-| 하이퍼링크 | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ⬜ |
-| 하이퍼링크 URL | ✅ | ✅ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 내부 하이퍼링크 | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ✅ | ✅ | ✅ | ⬜ |
-| 내부 북마크 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ✅ |
-| 암호화 문서 | ⬜ | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ |
+| 빈 행/열 좌표 보존 | — | — | ✅ | — | ✅ | — | — | ✅ | — |
+| 하이퍼링크 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ |
+| 하이퍼링크 URL | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 내부 하이퍼링크 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 내부 북마크 | ✅ | ✅ | ✅ | — | — | ✅ | — | — | ✅ |
+| 암호화 문서 | ✅⁴ | — | ✅⁵ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-✅ 지원 &nbsp; ⬜ 미지원 &nbsp; — 해당 없음
+✅ 지원 &nbsp; ⬜ 미지원 &nbsp; — 해당 없음 (형식에 그 구조가 없음)
 
-> Legacy Office(.doc/.ppt/.xls)는 현재 OLE/BIFF native 기반의 기초 구조 복원 단계입니다. `.doc`는 WordDocument FIB 텍스트 범위, 0Table/1Table CLX piece table, compressed piece flag, UTF-16/cp1252 compressed 본문 선택, legacy layout 문자와 soft line/page break 정규화, quoted/unquoted/internal HYPERLINK field 표시 텍스트/URL 및 일반 field 결과 텍스트, single-byte smart quote/dash 문장부호, legacy bullet/numbered/parenthesized numbered/alpha/roman outline list marker, legacy checkbox/checklist marker, underline-style heading, 한국어 제목/소제목 label, section break, 명시적 heading/list/table/key-value form 및 전각 콜론 key-value 신호, Word cell marker 및 tab/pipe-delimited/Markdown-style pipe/고정폭 공백·전각 공백 정렬 표 구조를 복원하고, `.ppt`는 slide/notes/comments container, 중첩 notes/comments container의 직전 슬라이드 연결, quoted/unquoted/internal HYPERLINK field 표시 텍스트/URL 및 일반 field 결과 텍스트, cp1252 byte text 문장부호, legacy layout 문자와 soft line/page break 정규화, legacy bullet/numbered/parenthesized numbered/alpha/roman outline list marker, legacy checkbox/checklist marker, underline-style heading, 한국어 제목/소제목 label, tab/pipe-delimited/Markdown-style pipe/고정폭 공백·전각 공백 정렬 표와 key-value form/전각 콜론 key-value 구조, 반복 텍스트 라인, TextHeaderAtom title/center-title/body 신호를 반영하며, `.xls`는 BIFF sheet/table/merged-cell/cell 타입, HEADER/FOOTER 시트 문단과 제어 코드 정규화, cp1252 compressed 문자열 문장부호, BIFF2/3/4 LABEL 셀, BIFF INTEGER 정수 셀, legacy NUMBER 숫자 셀, legacy BOOLERR boolean/error 셀, legacy BLANK 빈 좌표, rich-text/SST CONTINUE shared string, RSTRING rich-text label 셀, 문자열 중간에서 끊긴 SST CONTINUE, HLINK URL, NOTE 코멘트 작성자, DIMENSION used-range, ROW/COLINFO 행·열 범위, BLANK/MULBLANK 빈 좌표, RK/MULRK 압축 숫자, FORMAT/XF 기반 날짜·퍼센트·통화 서식, 이름 정의 대상 문단, RPN 수식·범위·절대/혼합/다른 시트 참조/이름 정의 참조 flag·operand class variant·문자열/boolean/error literal·단항/퍼센트/괄호·지수·IF/AND/OR/NOT/COUNT/ROUND/TRUE/FALSE/가변/다중 인자 고정 함수·비교·문자열 결합 토큰, FORMULA cached boolean/표준 error/blank 결과, SHRFMLA 공유 수식 템플릿/상대 참조 보정과 STRING/legacy STRING/legacy byte STRING 후속 레코드 기반 문자열 수식 결과를 복원합니다.
+✅ 는 단위 테스트와 실물 문서 검증을 모두 통과한 칸에만 붙인다. 칸마다 검증 표본·수치·남은 한계는
+[`docs/SUPPORT_NOTES.md`](docs/SUPPORT_NOTES.md) 와 `docs/benchmarks/` 에 있다. 주요 범위 제한:
+
+1. DOC·PPT 수식은 내장 Equation 3.0(MathType MTEF v2/v3/v5) 개체를 LaTeX 로 바꾼다. 공개 실물 변환율은 DOC 42/54, PPT 13/18 이고 변환하지 못한 식은 미리보기 그림으로 남는다.
+2. XLS 수식은 BIFF8 기준이다. 같은 문서의 XLSX 와 비교한 1,070 수식 중 1,059개(98.97%)가 일치하며, DDE·OLE 링크와 해석하지 못한 BIFF5 식은 수식 대신 캐시 값만 낸다.
+3. 캡션은 Caption 스타일·SEQ 필드 문단이 최상위 흐름에서 표·그림 바로 앞/뒤에 있을 때만 결합한다. DOC 의 위쪽 캡션은 합성 문서로만 검증했다.
+4. HWP 는 배포용 문서를 복호화한다. 열기 암호로 보호된 HWP 는 명확한 오류로 거부한다.
+5. DOC 의 XOR 난독화는 공개 실물 표본이 없어 합성 문서로만 검증했다(RC4·RC4 CryptoAPI 는 실물 검증).
+
+> Legacy Office(.doc/.ppt/.xls)도 외부 변환 엔진 없이 native 로 읽습니다. `.doc` 와 `.ppt` 는 Microsoft 공개 명세 [MS-DOC]·[MS-PPT] 에 따라 문서 구조(글자 서식과 스타일, 셀 병합·중첩 표, 각주·주석·머리글/바닥글, 텍스트박스, 슬라이드·노트·마스터 상속, 도형 트리와 읽기 순서 등)를 해석해 DOCX·PPTX 와 같은 형태로 내고, 구조를 해석할 수 없는 문서는 이전의 텍스트 추출 경로로 처리합니다. `.xls` 는 BIFF8 해석을 넓혀 [MS-XLS] 함수 표에 기반한 수식 문자열, rich text, 내부 링크, 그림, 차트를 읽습니다. 세 형식 모두 공용 OfficeArt 파서로 그림과 대체 텍스트를 꺼내고, `.doc`·`.ppt` 에 내장된 OLE 차트(Excel·MS Graph)는 OOXML 차트와 같은 표로, Equation 3.0 수식은 LaTeX 로 바꿉니다. 암호화된 문서는 `.doc`·`.xls` 의 XOR·RC4·RC4 CryptoAPI 와 `.ppt` 의 RC4 CryptoAPI 를 `password=` 로 열 수 있으며, 항목별 지원 범위와 검증 한계는 위 표와 각주에 적었습니다.
 
 ## Architecture
 

@@ -272,6 +272,9 @@ class DOCReader:
     format_name = "doc"
     extensions = (".doc",)
 
+    def __init__(self, password=None):
+        self._password = password
+
     def _table_stream_names(self, ole, word_data: bytes) -> List[str]:
         preferred = "0Table"
         if len(word_data) > 0x0B:
@@ -330,19 +333,34 @@ class DOCReader:
             except Exception as exc:
                 doc.errors.append(f"ERR: DOC WordDocument stream read 실패: {exc}")
                 return doc
+            decrypted_tables = {}
+            decrypt_data = None
             if self._is_encrypted_fib(word_data):
-                # 암호문을 본문 텍스트라고 내보내면 안 된다.
-                doc.errors.append("ERR: DOC 암호로 보호된 문서입니다 (FIB fEncrypted)")
-                return doc
+                try:
+                    from ..crypto.legacy import LegacyCryptoError, decrypt_doc_streams
+                    names = self._table_stream_names(ole, word_data)
+                    if not names:
+                        raise LegacyCryptoError("암호화 테이블 스트림이 없습니다")
+                    encrypted_table = read_ole_stream(
+                        ole, names[0], max_bytes=MAX_OLE_STREAM_SIZE, budget=stream_budget)
+                    word_data, decrypted_tables[names[0]], decrypt_data = decrypt_doc_streams(
+                        word_data, encrypted_table, self._password)
+                except Exception as exc:
+                    if self._password is not None and isinstance(exc, LegacyCryptoError):
+                        doc.errors.append("ERR: 암호화된 문서 DOC: " + str(exc))
+                    else:
+                        doc.errors.append("ERR: DOC 암호로 보호된 문서입니다 (FIB fEncrypted)")
+                    return doc
             best_document = None
             best_score = None
             def load_data_stream():
                 if ole.exists("Data"):
                     try:
-                        return read_ole_stream(
+                        data = read_ole_stream(
                             ole, "Data", max_bytes=MAX_OLE_STREAM_SIZE,
                             budget=stream_budget,
                         )
+                        return decrypt_data(data) if decrypt_data else data
                     except Exception as exc:
                         doc.errors.append(f"WARN: DOC Data stream unavailable: {exc}")
                 return b""
@@ -361,13 +379,17 @@ class DOCReader:
                 return (element_count, 1 if piece_lines else 0, line_quality)
 
             for table_name in self._table_stream_names(ole, word_data):
+                if decrypted_tables and table_name not in decrypted_tables:
+                    continue
                 try:
-                    candidate = read_ole_stream(
-                        ole,
-                        table_name,
-                        max_bytes=MAX_OLE_STREAM_SIZE,
-                        budget=stream_budget,
-                    )
+                    candidate = decrypted_tables.get(table_name)
+                    if candidate is None:
+                        candidate = read_ole_stream(
+                            ole,
+                            table_name,
+                            max_bytes=MAX_OLE_STREAM_SIZE,
+                            budget=stream_budget,
+                        )
                 except BoundedIOError as exc:
                     fatal_doc = Document(source_format="doc")
                     fatal_doc.errors.append(

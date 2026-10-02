@@ -300,6 +300,9 @@ class PPTReader:
     format_name = "ppt"
     extensions = (".ppt",)
 
+    def __init__(self, password=None):
+        self.password = password
+
     def read(self, file_path: str) -> Document:
         doc = Document(source_format="ppt")
         try:
@@ -355,8 +358,17 @@ class PPTReader:
                                     )
                                 except Exception as exc:
                                     doc.errors.append("WARN: PPT %s stream unavailable: %s" % (name, exc))
+                    from ..crypto.ppt import decrypt_presentation
+                    try:
+                        ppt_data, pictures = decrypt_presentation(
+                            ppt_data, auxiliary.get("Current User", b""),
+                            auxiliary.get("Pictures", b""), self.password,
+                        )
+                    except ValueError as exc:
+                        doc.errors.append("ERR: %s" % exc)
+                        return doc
                     candidate = parse_ppt_document_stream(
-                        ppt_data, stream_name, auxiliary.get("Current User", b""), auxiliary.get("Pictures", b""),
+                        ppt_data, stream_name, auxiliary.get("Current User", b""), pictures,
                     )
                 except Exception as exc:
                     doc.errors.append(f"ERR: PPT {stream_name} stream 파싱 실패: {exc}")

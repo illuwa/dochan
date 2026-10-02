@@ -47,7 +47,7 @@ class Dochan:
     """HWP/HWPX 통합 리더"""
 
     def __init__(self, file_path: str, ocr: bool = False, pdf_text_tables: bool = False, *,
-                 include_assets: bool = True, revision_mode: str = "preserve"):
+                 include_assets: bool = True, revision_mode: str = "preserve", password=None):
         """
         Args:
             file_path: HWP/HWPX 파일 경로
@@ -60,6 +60,7 @@ class Dochan:
                 original(삽입 제외). 비기본 모드는 HWP 5와 HWPX를 지원하며 미확정
                 범위·서식 변경은 보존하고 errors에 부분지원 사유를 기록한다.
                 변경 추적 HWP의 preserve는 ViewText, final은 저장된 BodyText를 읽는다.
+            password: 문서 열기 암호. None이면 빈 암호 또는 형식의 기본 암호만 시도한다.
 
         Raises:
             ValueError: include_assets=False인데 ocr=True이거나 입력이
@@ -82,7 +83,15 @@ class Dochan:
         self._pdf_text_tables = pdf_text_tables
         self._include_assets = include_assets
         self._revision_mode = revision_mode
-        self._parse()
+        self._password = password
+        try:
+            if password is not None and (not isinstance(password, (str, bytes)) or len(password) > 4096):
+                self.doc.errors.append("ERR: 암호화된 문서 — 암호 형식 또는 길이가 지원 범위를 벗어남")
+            else:
+                self._parse()
+        finally:
+            # 파싱이 끝난 리더 객체에 암호를 보관하지 않는다.
+            self._password = None
         if ocr:
             self._run_ocr()
 
@@ -125,6 +134,8 @@ class Dochan:
                 self._parse_ppt()
             elif formats == ["xls"]:
                 self._parse_xls()
+            elif formats == ["encrypted_ooxml"]:
+                self._parse_encrypted_ooxml()
             else:
                 self.doc.errors.append("ERR: 지원하지 않는 OLE 스트림 구조")
             return
@@ -271,6 +282,10 @@ class Dochan:
         validate_file_size(self.file_path, MAX_OLE_DOCUMENT_SIZE)
         ole = olefile.OleFileIO(self.file_path)
         try:
+            # 암호 패키지에는 구버전 Office용 WordDocument 안내 스트림도
+            # 함께 들어간다. 복호화한 패키지의 내용으로 실제 형식을 판별한다.
+            if ole.exists("EncryptionInfo") or ole.exists("EncryptedPackage"):
+                return ["encrypted_ooxml"]
             formats = []
             if ole.exists("FileHeader") and ole.exists("DocInfo"):
                 formats.append("hwp")
@@ -489,15 +504,46 @@ class Dochan:
 
     def _parse_xls(self):
         """XLS (BIFF/OLE) 파싱"""
-        self.doc = XLSReader().read(self.file_path)
+        options = {} if self._password is None else {'password': self._password}
+        self.doc = XLSReader(**options).read(self.file_path)
 
     def _parse_doc(self):
         """DOC (Word Binary/OLE) 파싱"""
-        self.doc = DOCReader().read(self.file_path)
+        options = {} if self._password is None else {'password': self._password}
+        self.doc = DOCReader(**options).read(self.file_path)
 
     def _parse_ppt(self):
         """PPT (PowerPoint Binary/OLE) 파싱"""
-        self.doc = PPTReader().read(self.file_path)
+        options = {} if self._password is None else {'password': self._password}
+        self.doc = PPTReader(**options).read(self.file_path)
+
+    def _parse_encrypted_ooxml(self):
+        """복호화한 ZIP을 디스크에 쓰지 않고 기존 OOXML 리더에 전달한다."""
+        from io import BytesIO
+        from .crypto.ooxml import decrypt_ooxml
+
+        try:
+            with olefile.OleFileIO(self.file_path) as ole:
+                package_data = decrypt_ooxml(ole, self._password)
+            with BytesIO(package_data) as package:
+                kind = detect_ooxml_format(package)
+                readers = {'docx': DOCXReader, 'pptx': PPTXReader, 'xlsx': XLSXReader}
+                if kind not in readers:
+                    import zipfile
+                    with zipfile.ZipFile(package) as archive:
+                        unsupported_xlsb = 'xl/workbook.bin' in archive.namelist()
+                    reason = ("XLSB 형식은 미지원입니다." if unsupported_xlsb else
+                              "복호화한 OOXML 패키지 형식이 잘못됨")
+                    self.doc.errors.append("ERR: 암호화된 문서 — " + reason)
+                    return
+                package.seek(0)
+                self.doc = readers[kind]().read(package)
+        except Exception as exc:
+            # Only native crypto diagnostics contain exclusively static text.
+            from .crypto.ooxml import OOXMLCryptoError
+            message = str(exc) if isinstance(exc, OOXMLCryptoError) else (
+                "ERR: 암호화된 문서 — 암호가 없거나 틀림, 손상 또는 미지원 암호화 방식")
+            self.doc.errors.append(message)
 
     def _parse_docx(self):
         """DOCX (Office Open XML) 파싱"""
@@ -513,7 +559,11 @@ class Dochan:
 
     def _parse_pdf(self):
         """PDF (네이티브 파서) 파싱"""
-        self.doc = PDFReader(text_tables=self._pdf_text_tables).read(self.file_path)
+        options = {} if self._password is None else {'password': self._password}
+        self.doc = PDFReader(text_tables=self._pdf_text_tables, **options).read(self.file_path)
+        if any(error.startswith(('WARN: 암호화된 PDF', 'WARN: 암호화 처리 실패'))
+               for error in self.doc.errors):
+            self.doc.errors.append("ERR: 암호화된 문서 — PDF 암호가 없거나 틀림 또는 미지원 암호화 방식")
 
     def _parse_pdf_family(self):
         """확장자가 .pdf 인 파일 파싱.

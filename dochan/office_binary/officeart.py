@@ -318,8 +318,10 @@ def read_bstore(records, delayed_stream=None, limits: Optional[Limits] = None,
             entry.name = bytes(r.data[36:offset])
             source = r.data
             if len(source) == offset:
-                if delayed_stream is None or entry.fo_delay == 0xFFFFFFFF or not entry.size:
+                if delayed_stream is None or entry.fo_delay == 0xFFFFFFFF:
                     continue
+                # Some PowerPoint writers leave the FBSE size hint at zero.
+                # The referenced BLIP header supplies the bounded record length.
                 source = delayed_stream
                 offset = entry.fo_delay
             header = parse_header(source, offset)

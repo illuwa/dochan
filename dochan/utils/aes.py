@@ -1,9 +1,10 @@
-"""utils/aes.py — 순정 AES-128 ECB 복호화 (FIPS-197)
+"""FIPS-197 순정 AES 블록 연산과 HWP/PDF/Office용 ECB·CBC.
 
-배포용(distribution-copy) HWP 문서의 ViewText 섹션 복호화 전용.
-외부 암호화 라이브러리 의존성을 늘리지 않기 위해 AES-128 단일 모드만
-FIPS-197 명세 그대로 구현한다 (일반 목적 암호화 라이브러리가 아님).
+SubBytes·ShiftRows·MixColumns를 32비트 표로 합쳐 문서 크기에 비례하는
+GF(2^8) 곱셈 반복을 없앤다. 일반 목적 암호화 라이브러리는 아니며,
+표 참조 기반 구현이므로 상수 시간 실행을 보장하지 않는다.
 """
+import struct
 from typing import List
 
 
@@ -47,9 +48,9 @@ _RCON = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36]
 
 
 def _key_expansion(key: bytes) -> List[List[int]]:
-    """128/256비트 키 → 라운드 키 워드 목록.
+    """128/192/256비트 키 → 라운드 키 워드 목록.
 
-    Nk=4(AES-128,Nr=10) 또는 Nk=8(AES-256,Nr=14). AES-256 은
+    Nk=4/6/8(AES-128/192/256), Nr=10/12/14이다. AES-256 은
     Nk>6 전용의 추가 SubWord 단계(i % nk == 4)를 포함한다 (FIPS-197 §5.2).
     """
     nk = len(key) // 4
@@ -64,7 +65,7 @@ def _key_expansion(key: bytes) -> List[List[int]]:
         elif nk > 6 and i % nk == 4:
             temp = [SBOX[b] for b in temp]
         w.append([w[i - nk][j] ^ temp[j] for j in range(4)])
-    return w
+    return _RoundKeys(w)
 
 
 def _gmul(a: int, b: int) -> int:
@@ -80,79 +81,100 @@ def _gmul(a: int, b: int) -> int:
     return p
 
 
+def _make_tables(inverse: bool):
+    """FIPS-197 §5.1.3/5.3.3 행렬을 한 열에 적용한 32비트 값."""
+    sbox = INV_SBOX if inverse else SBOX
+    factors = (14, 9, 13, 11) if inverse else (2, 1, 1, 3)
+    first = tuple(
+        (_gmul(value, factors[0]) << 24)
+        | (_gmul(value, factors[1]) << 16)
+        | (_gmul(value, factors[2]) << 8)
+        | _gmul(value, factors[3])
+        for value in sbox
+    )
+    return (first,) + tuple(
+        tuple(((word >> shift) | (word << (32 - shift))) & 0xFFFFFFFF
+              for word in first)
+        for shift in (8, 16, 24)
+    )
+
+
+_ENC_TABLES = _make_tables(False)
+_DEC_TABLES = _make_tables(True)
+_BLOCK = struct.Struct(">4I")
+
+
+class _RoundKeys(list):
+    """기존 워드 목록 계약을 유지하고 블록마다 재사용할 키를 보관한다."""
+
+    def __init__(self, words):
+        super().__init__(words)
+        self.encrypt = tuple(int.from_bytes(bytes(word), "big") for word in words)
+        # Equivalent Inverse Cipher (FIPS-197 §5.3.5): 중간 라운드 키에만
+        # InvMixColumns를 적용한다. D-table의 InvSubBytes는 SBOX로 상쇄한다.
+        d0, d1, d2, d3 = _DEC_TABLES
+        self.decrypt = tuple(
+            self.encrypt[i] if i < 4 or i >= len(words) - 4 else
+            d0[SBOX[word[0]]] ^ d1[SBOX[word[1]]]
+            ^ d2[SBOX[word[2]]] ^ d3[SBOX[word[3]]]
+            for i, word in enumerate(words)
+        )
+
+
 def _add_round_key(state: List[List[int]], round_keys: List[List[int]], round_idx: int) -> None:
+    """기존 행렬 기반 픽스처 생성기의 키 적용 계약을 유지한다."""
     for c in range(4):
         word = round_keys[round_idx * 4 + c]
         for r in range(4):
             state[r][c] ^= word[r]
 
 
-def _inv_sub_bytes(state: List[List[int]]) -> None:
-    for r in range(4):
-        for c in range(4):
-            state[r][c] = INV_SBOX[state[r][c]]
-
-
-def _inv_shift_rows(state: List[List[int]]) -> None:
-    for r in range(1, 4):
-        state[r] = state[r][-r:] + state[r][:-r]
-
-
-def _inv_mix_columns(state: List[List[int]]) -> None:
-    for c in range(4):
-        a = [state[r][c] for r in range(4)]
-        state[0][c] = _gmul(a[0], 0x0E) ^ _gmul(a[1], 0x0B) ^ _gmul(a[2], 0x0D) ^ _gmul(a[3], 0x09)
-        state[1][c] = _gmul(a[0], 0x09) ^ _gmul(a[1], 0x0E) ^ _gmul(a[2], 0x0B) ^ _gmul(a[3], 0x0D)
-        state[2][c] = _gmul(a[0], 0x0D) ^ _gmul(a[1], 0x09) ^ _gmul(a[2], 0x0E) ^ _gmul(a[3], 0x0B)
-        state[3][c] = _gmul(a[0], 0x0B) ^ _gmul(a[1], 0x0D) ^ _gmul(a[2], 0x09) ^ _gmul(a[3], 0x0E)
-
-
 def _decrypt_block(block: bytes, round_keys: List[List[int]], nr: int = 10) -> bytes:
-    state = [[block[r + 4 * c] for c in range(4)] for r in range(4)]
-    _add_round_key(state, round_keys, nr)
+    keys = round_keys if isinstance(round_keys, _RoundKeys) else _RoundKeys(round_keys)
+    rk = keys.decrypt
+    d0, d1, d2, d3 = _DEC_TABLES
+    s0, s1, s2, s3 = _BLOCK.unpack(block)
+    offset = nr * 4
+    s0, s1, s2, s3 = s0 ^ rk[offset], s1 ^ rk[offset + 1], s2 ^ rk[offset + 2], s3 ^ rk[offset + 3]
     for round_idx in range(nr - 1, 0, -1):
-        _inv_shift_rows(state)
-        _inv_sub_bytes(state)
-        _add_round_key(state, round_keys, round_idx)
-        _inv_mix_columns(state)
-    _inv_shift_rows(state)
-    _inv_sub_bytes(state)
-    _add_round_key(state, round_keys, 0)
-    return bytes(state[r][c] for c in range(4) for r in range(4))
-
-
-def _sub_bytes(state: List[List[int]]) -> None:
-    for r in range(4):
-        for c in range(4):
-            state[r][c] = SBOX[state[r][c]]
-
-
-def _shift_rows(state: List[List[int]]) -> None:
-    for r in range(1, 4):
-        state[r] = state[r][r:] + state[r][:r]
-
-
-def _mix_columns(state: List[List[int]]) -> None:
-    for c in range(4):
-        a = [state[r][c] for r in range(4)]
-        state[0][c] = _gmul(a[0], 2) ^ _gmul(a[1], 3) ^ a[2] ^ a[3]
-        state[1][c] = a[0] ^ _gmul(a[1], 2) ^ _gmul(a[2], 3) ^ a[3]
-        state[2][c] = a[0] ^ a[1] ^ _gmul(a[2], 2) ^ _gmul(a[3], 3)
-        state[3][c] = _gmul(a[0], 3) ^ a[1] ^ a[2] ^ _gmul(a[3], 2)
+        offset = round_idx * 4
+        s0, s1, s2, s3 = (
+            d0[s0 >> 24] ^ d1[(s3 >> 16) & 255] ^ d2[(s2 >> 8) & 255] ^ d3[s1 & 255] ^ rk[offset],
+            d0[s1 >> 24] ^ d1[(s0 >> 16) & 255] ^ d2[(s3 >> 8) & 255] ^ d3[s2 & 255] ^ rk[offset + 1],
+            d0[s2 >> 24] ^ d1[(s1 >> 16) & 255] ^ d2[(s0 >> 8) & 255] ^ d3[s3 & 255] ^ rk[offset + 2],
+            d0[s3 >> 24] ^ d1[(s2 >> 16) & 255] ^ d2[(s1 >> 8) & 255] ^ d3[s0 & 255] ^ rk[offset + 3],
+        )
+    inv = INV_SBOX
+    return _BLOCK.pack(
+        ((inv[s0 >> 24] << 24) | (inv[(s3 >> 16) & 255] << 16) | (inv[(s2 >> 8) & 255] << 8) | inv[s1 & 255]) ^ rk[0],
+        ((inv[s1 >> 24] << 24) | (inv[(s0 >> 16) & 255] << 16) | (inv[(s3 >> 8) & 255] << 8) | inv[s2 & 255]) ^ rk[1],
+        ((inv[s2 >> 24] << 24) | (inv[(s1 >> 16) & 255] << 16) | (inv[(s0 >> 8) & 255] << 8) | inv[s3 & 255]) ^ rk[2],
+        ((inv[s3 >> 24] << 24) | (inv[(s2 >> 16) & 255] << 16) | (inv[(s1 >> 8) & 255] << 8) | inv[s0 & 255]) ^ rk[3],
+    )
 
 
 def _encrypt_block(block: bytes, round_keys: List[List[int]], nr: int) -> bytes:
-    state = [[block[r + 4 * c] for c in range(4)] for r in range(4)]
-    _add_round_key(state, round_keys, 0)
+    keys = round_keys if isinstance(round_keys, _RoundKeys) else _RoundKeys(round_keys)
+    rk = keys.encrypt
+    e0, e1, e2, e3 = _ENC_TABLES
+    s0, s1, s2, s3 = _BLOCK.unpack(block)
+    s0, s1, s2, s3 = s0 ^ rk[0], s1 ^ rk[1], s2 ^ rk[2], s3 ^ rk[3]
     for round_idx in range(1, nr):
-        _sub_bytes(state)
-        _shift_rows(state)
-        _mix_columns(state)
-        _add_round_key(state, round_keys, round_idx)
-    _sub_bytes(state)
-    _shift_rows(state)
-    _add_round_key(state, round_keys, nr)
-    return bytes(state[r][c] for c in range(4) for r in range(4))
+        offset = round_idx * 4
+        s0, s1, s2, s3 = (
+            e0[s0 >> 24] ^ e1[(s1 >> 16) & 255] ^ e2[(s2 >> 8) & 255] ^ e3[s3 & 255] ^ rk[offset],
+            e0[s1 >> 24] ^ e1[(s2 >> 16) & 255] ^ e2[(s3 >> 8) & 255] ^ e3[s0 & 255] ^ rk[offset + 1],
+            e0[s2 >> 24] ^ e1[(s3 >> 16) & 255] ^ e2[(s0 >> 8) & 255] ^ e3[s1 & 255] ^ rk[offset + 2],
+            e0[s3 >> 24] ^ e1[(s0 >> 16) & 255] ^ e2[(s1 >> 8) & 255] ^ e3[s2 & 255] ^ rk[offset + 3],
+        )
+    sub = SBOX
+    offset = nr * 4
+    return _BLOCK.pack(
+        ((sub[s0 >> 24] << 24) | (sub[(s1 >> 16) & 255] << 16) | (sub[(s2 >> 8) & 255] << 8) | sub[s3 & 255]) ^ rk[offset],
+        ((sub[s1 >> 24] << 24) | (sub[(s2 >> 16) & 255] << 16) | (sub[(s3 >> 8) & 255] << 8) | sub[s0 & 255]) ^ rk[offset + 1],
+        ((sub[s2 >> 24] << 24) | (sub[(s3 >> 16) & 255] << 16) | (sub[(s0 >> 8) & 255] << 8) | sub[s1 & 255]) ^ rk[offset + 2],
+        ((sub[s3 >> 24] << 24) | (sub[(s0 >> 16) & 255] << 16) | (sub[(s1 >> 8) & 255] << 8) | sub[s2 & 255]) ^ rk[offset + 3],
+    )
 
 
 def aes128_ecb_decrypt(key: bytes, data: bytes) -> bytes:
@@ -163,10 +185,10 @@ def aes128_ecb_decrypt(key: bytes, data: bytes) -> bytes:
         raise ValueError(f"ECB 입력은 16바이트 배수여야 함 (got {len(data)})")
 
     round_keys = _key_expansion(key)
-    return b"".join(
-        _decrypt_block(data[i:i + 16], round_keys)
-        for i in range(0, len(data), 16)
-    )
+    out = bytearray(len(data))
+    for i in range(0, len(data), 16):
+        out[i:i + 16] = _decrypt_block(data[i:i + 16], round_keys)
+    return bytes(out)
 
 
 def aes_cbc_decrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:

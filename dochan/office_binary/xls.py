@@ -1924,6 +1924,9 @@ class XLSReader:
     format_name = "xls"
     extensions = (".xls",)
 
+    def __init__(self, password=None):
+        self._password = password
+
     def read(self, file_path: str) -> Document:
         doc = Document(source_format="xls")
         try:
@@ -1959,10 +1962,17 @@ class XLSReader:
                         budget=stream_budget,
                     )
                     if has_filepass_record(workbook_data):
-                        doc.errors.append(
-                            f"ERR: XLS {stream_name} 은 암호로 보호되어 있습니다 (FILEPASS)"
-                        )
-                        continue
+                        try:
+                            from ..crypto.legacy import LegacyCryptoError, decrypt_xls_workbook
+                            workbook_data = decrypt_xls_workbook(workbook_data, self._password)
+                        except Exception as exc:
+                            if self._password is not None and isinstance(exc, LegacyCryptoError):
+                                doc.errors.append("ERR: 암호화된 문서 XLS: " + str(exc))
+                            else:
+                                doc.errors.append(
+                                    f"ERR: XLS {stream_name} 은 암호로 보호되어 있습니다 (FILEPASS)"
+                                )
+                            continue
                     candidate = parse_biff_workbook(workbook_data, workbook_stream=stream_name)
                     score = _score_biff_document(candidate)
                     if best_document is None or score > best_score:

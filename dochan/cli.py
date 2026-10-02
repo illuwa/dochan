@@ -13,6 +13,49 @@
 import argparse
 import sys
 import os
+import re
+import getpass
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse embeds positional values in quotes, even when an unknown
+        # option precedes the subcommand. Never echo those values.
+        if getattr(self, '_password_argument_present', False) or '--pass' in message:
+            message = '암호는 --password-stdin 또는 DOCHAN_PASSWORD로 제공해야 합니다.'
+        elif message.startswith('unrecognized arguments:'):
+            options = re.findall(r'(?<!\S)--?[A-Za-z][A-Za-z-]*', message)
+            message = 'unrecognized arguments: ' + (' '.join(options) or '[입력값 생략]')
+        else:
+            message = re.sub(r"'[^']*'|\"[^\"]*\"", '[입력값 생략]', message)
+        super().error(message)
+
+
+def _add_password_option(parser):
+    parser.add_argument('--password-stdin', action='store_true',
+                        help='표준 입력 첫 줄을 암호로 사용 (DOCHAN_PASSWORD 환경 변수보다 우선)')
+
+
+def _password_options(args):
+    password = os.environ.get('DOCHAN_PASSWORD') or None
+    if getattr(args, 'password_stdin', False):
+        try:
+            if sys.stdin.isatty():
+                password = getpass.getpass('문서 암호: ')
+                if len(password) > 4096:
+                    raise ValueError('암호 길이가 지원 범위를 벗어남')
+                return {'password': password}
+            line = sys.stdin.readline(4099)
+        except Exception:
+            raise ValueError('암호 표준 입력을 읽을 수 없음') from None
+        if not line:
+            raise ValueError('암호 표준 입력이 비어 있음')
+        password = line[:-1] if line.endswith('\n') else line
+        if password.endswith('\r'):
+            password = password[:-1]
+    if password is not None and len(password) > 4096:
+        raise ValueError('암호 길이가 지원 범위를 벗어남')
+    return {} if password is None else {'password': password}
 
 
 def _positive_int(value):
@@ -48,14 +91,14 @@ def _hwpx_options(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog='dochan',
         description='dochan — 독한 native 문서 파서, AI/LLM 최적 Markdown 변환',
     )
     subparsers = parser.add_subparsers(dest='command', help='명령')
 
     # convert
-    conv = subparsers.add_parser('convert', help='문서 → Markdown/JSON/Text 변환')
+    conv = subparsers.add_parser('convert', help='문서 → Markdown/JSON/Text 변환', allow_abbrev=False)
     conv.add_argument('file', help='문서 파일 경로')
     conv.add_argument('-o', '--output', default=None, help='출력 파일 경로 (기본: stdout)')
     conv.add_argument('-f', '--format', choices=['markdown', 'json', 'text'],
@@ -65,9 +108,11 @@ def main(argv=None):
     conv.add_argument('--images-dir', default=None,
                       help='문서 속 이미지 바이너리를 이 디렉터리에 <파일이름>-image-NNN.<확장자> 로 저장')
     _add_hwpx_options(conv)
+    _add_password_option(conv)
 
     # batch
-    bat = subparsers.add_parser('batch', help='디렉토리 일괄 변환')
+    bat = subparsers.add_parser('batch', help='디렉토리 일괄 변환', allow_abbrev=False,
+                               description='문서마다 암호가 다르므로 batch는 암호 입력과 DOCHAN_PASSWORD를 지원하지 않습니다.')
     bat.add_argument('input_dir', help='입력 디렉토리')
     bat.add_argument('output_dir', help='출력 디렉토리')
     bat.add_argument('-f', '--format', choices=['markdown', 'json', 'text'],
@@ -76,10 +121,20 @@ def main(argv=None):
     _add_hwpx_options(bat)
 
     # info
-    inf = subparsers.add_parser('info', help='문서 메타데이터 출력')
+    inf = subparsers.add_parser('info', help='문서 메타데이터 출력', allow_abbrev=False)
     inf.add_argument('file', help='문서 파일 경로')
+    _add_password_option(inf)
 
-    args = parser.parse_args(argv)
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    # Reject inline password switches before argparse interprets their values as
+    # subcommands; even quotes/newlines in a secret must never reach diagnostics.
+    if any(token.startswith('-p') or
+           (token.startswith('--pass') and token != '--password-stdin')
+           for token in tokens):
+        parser.error('암호는 --password-stdin 또는 DOCHAN_PASSWORD로 제공해야 합니다.')
+    for command_parser in (parser, conv, bat, inf):
+        command_parser._password_argument_present = '--password-stdin' in tokens
+    args = parser.parse_args(tokens)
 
     if not args.command:
         parser.print_help()
@@ -104,6 +159,7 @@ def _cmd_convert(args):
 
     try:
         options = _hwpx_options(args)
+        options.update(_password_options(args))
         if args.pdf_text_tables:
             options['pdf_text_tables'] = True
         doc = Dochan(args.file, ocr=args.ocr, **options)
@@ -190,12 +246,16 @@ def _cmd_info(args):
         print(f"에러: 파일을 찾을 수 없습니다: {args.file}", file=sys.stderr)
         return 1
 
-    doc = Dochan(args.file)
+    try:
+        doc = Dochan(args.file, **_password_options(args))
+    except Exception as exc:
+        print(f"에러: 문서 정보 확인 실패: {exc}", file=sys.stderr)
+        return 1
     info = doc.metadata
     info['file'] = args.file
     extension_format = os.path.splitext(args.file)[1].lower().lstrip('.')
     supported_formats = {
-        'hwp', 'hwpx', 'doc', 'ppt', 'xls', 'docx', 'pptx', 'xlsx',
+        'hwp', 'hwpx', 'doc', 'ppt', 'xls', 'docx', 'pptx', 'xlsx', 'pdf',
     }
     info['format'] = info.get('source_format') or (
         extension_format if extension_format in supported_formats else 'unknown'

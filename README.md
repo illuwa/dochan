@@ -314,11 +314,13 @@ dochan/
 
 dochan은 신뢰할 수 없는 문서도 안전하게 처리합니다:
 
-- **Zip Bomb 방어**: raw zlib 출력 200MB, OOXML/HWPX XML part 32MB, 일반 part 100MB, archive 합계 512MB 상한
+- **Zip Bomb 방어**: raw zlib 출력 200MB(HWP 본문은 문서당 누적 200MB, 손상 스트림은 실제 해제한 양만 차감), OOXML/HWPX XML part 32MB, 일반 part 100MB, archive 합계 512MB 상한
 - **XXE 차단**: XML 외부 엔티티 해석 비활성화
 - **Path Traversal 방지**: 배치 처리 시 경로 탈출 차단
-- **메모리 제한**: HWP·HWPX·DOCX·XLSX·XLS·PDF 문서당 표 셀 20만 개, HWP·DOCX 일반 구조 깊이 64, HWP·DOCX 표 깊이 32, PPTX 그룹 깊이 64 상한. PDF 는 페이지 콘텐츠 합계 64MB, 괘선 2만 개, 괘선 교차 검사 200만 회, 스트림 해제 200MB 추가 상한
+- **메모리 제한**: HWP 레코드 섹션당 100만·문서당 130만·DocInfo 20만 개(넘으면 그때까지 읽은 본문을 보존하고 오류를 남김), HWP·HWPX·DOCX·XLSX·XLS·PDF 문서당 표 셀 20만 개, HWP·DOCX 일반 구조 깊이 64, HWP·DOCX 표 깊이 32, PPTX 그룹 깊이 64 상한. PDF 는 페이지 콘텐츠 합계 64MB, 괘선 2만 개, 괘선 교차 검사 200만 회, 스트림 해제 200MB 추가 상한
 - **입력 검증**: FileHeader/스트림명/OOXML 패키지명/바이너리 바운드 체크
+
+이 상한들은 입력량과 구조 수를 묶을 뿐 메모리 사용량의 상한은 아닙니다. 신뢰할 수 없는 문서는 프로세스 메모리 제한(컨테이너·ulimit 등) 아래에서 처리하기를 권장합니다.
 
 ## Contributing
 

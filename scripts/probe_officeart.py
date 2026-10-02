@@ -12,7 +12,6 @@ from collections import Counter
 from pathlib import Path
 
 import olefile
-from PIL import Image as PILImage
 
 from dochan.office_binary.officeart import (
     Limits, Record, RecordHeader, decode_blip, parse_header, parse_records,
@@ -85,9 +84,22 @@ def _image_info(image, offset=None, header=None):
         info.update({"type": "0x%x" % header.rec_type, "instance": "0x%x" % header.rec_instance,
                      "record_length": header.rec_len})
     if fmt in ("jpg", "png", "bmp", "tiff"):
-        with PILImage.open(io.BytesIO(data)) as decoded:
-            info["pixel_size"] = list(decoded.size)
+        try:
+            from PIL import Image as PILImage  # 실물 프로브에서만 쓴다(CI 에는 Pillow 가 없다)
+        except ImportError:
+            PILImage = None
+        if PILImage is not None:
+            with PILImage.open(io.BytesIO(data)) as decoded:
+                info["pixel_size"] = list(decoded.size)
     return info
+
+
+def _image_errors():
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        return ()
+    return (PILImage.DecompressionBombError,)
 
 
 def _flatten_shapes(shapes):
@@ -159,7 +171,7 @@ def main(argv=None):
             path = args.corpus / group / name
             try:
                 rows[group + "/" + name] = probe_file(path)
-            except (OSError, ValueError, TypeError, struct.error, PILImage.DecompressionBombError) as exc:
+            except (OSError, ValueError, TypeError, struct.error) + _image_errors() as exc:
                 rows[group + "/" + name] = {"error": str(exc)}
     # Independent picture fixtures named by HSLF TestPictures expectations.
     ppt = rows.get("slideshow/pictures.ppt", {})

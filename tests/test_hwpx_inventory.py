@@ -168,7 +168,9 @@ def test_zip64_directory_limit_uses_64_bit_declarations(tmp_path, monkeypatch):
     end = struct.pack("<4sHHHHIIH", b"PK\x05\x06", 0, 0, 0, 0, 0, 0, 0)
     (tmp_path / "oversize-zip64.hwpx").write_bytes(end64 + locator + end)
     monkeypatch.setattr(zipfile, "ZipFile", lambda *a, **k: pytest.fail("budget must precede ZipFile"))
-    assert inventory.build_inventory(tmp_path)["files"][0]["errors"] == ["zip_metadata_limit"]
+    # 지키려는 성질은 "ZipFile 이 거대한 중앙 디렉터리를 할당하기 전에 거부된다" 이다. 최신 패치 버전의 zipfile 은
+    # 범위를 벗어난 zip64 끝 레코드를 _EndRecData 에서 바로 손상으로 거부하므로(3.9.6 은 통과) 두 분류를 모두 받는다.
+    assert inventory.build_inventory(tmp_path)["files"][0]["errors"] in (["zip_metadata_limit"], ["invalid_zip"])
 
 
 def test_inconsistent_entry_count_is_reported(tmp_path):

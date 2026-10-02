@@ -3,15 +3,26 @@ utils/ocr.py — Tesseract OCR 연동
 이미지 바이너리 → 텍스트 추출 (한국어+영어)
 """
 
+import hashlib
 import io
 import logging
 import sys
+from collections import OrderedDict
 
 logger = logging.getLogger('dochan')
 
 # OCR 사용 가능 여부
 _ocr_available = None
 MIN_OCR_PYTHON = (3, 10)
+
+# 같은 이미지(로고·머리글·반복 도형)는 문서/배치 안에서 여러 번 나온다.
+# 바이트 해시로 결과를 재사용해 Tesseract 실행을 줄인다 (결과 동일, 크기 상한 LRU).
+_OCR_CACHE_MAX = 256
+_ocr_cache: "OrderedDict[tuple, str]" = OrderedDict()
+
+
+def clear_ocr_cache() -> None:
+    _ocr_cache.clear()
 
 
 def _python_supports_ocr() -> bool:
@@ -51,6 +62,12 @@ def ocr_image(image_data: bytes, lang: str = 'kor+eng') -> str:
     if not is_ocr_available():
         return ""
 
+    key = (hashlib.sha256(image_data).digest(), lang)
+    cached = _ocr_cache.get(key)
+    if cached is not None:
+        _ocr_cache.move_to_end(key)
+        return cached
+
     try:
         import pytesseract
         from PIL import Image
@@ -79,7 +96,12 @@ def ocr_image(image_data: bytes, lang: str = 'kor+eng') -> str:
             meaningful = re.findall(r'[가-힣a-zA-Z0-9]', line)
             if len(meaningful) >= 2:
                 cleaned.append(line)
-        return '\n'.join(cleaned)
+        result = '\n'.join(cleaned)
+        # 실패(예외)는 캐시하지 않는다 — 일시 오류가 영구 빈 결과가 되지 않도록
+        _ocr_cache[key] = result
+        if len(_ocr_cache) > _OCR_CACHE_MAX:
+            _ocr_cache.popitem(last=False)
+        return result
 
     except Exception as e:
         logger.debug(f"OCR 실패: {e}")

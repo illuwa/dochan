@@ -261,7 +261,8 @@ def test_finalize_failure_keeps_registered_image_and_link(tmp_path, monkeypatch)
     content = b"BT /F1 10 Tf 72 720 Td (Body) Tj ET"
     doc = PDFReader().read(_write(tmp_path, "finalize.pdf", _build_pdf(_minimal_objects(content))))
     assert doc.sections[0].elements == [link, image]
-    assert doc.assets == [image]
+    # 자산 목록에는 JSON 직렬화 계약대로 Image 대신 AssetRef 가 남는다
+    assert [(a.id, a.content_type) for a in doc.assets] == [("pdf-image-1", "image/png")]
     assert "WARN: 1페이지 파싱 실패: RuntimeError('merge failed')" in doc.errors
 
 
@@ -765,3 +766,30 @@ def test_rotated_180_page_never_merges(tmp_path):
         _ruled(80, 140, ("E", "F"), ("G", "H")),
     ], page_extra="/Rotate 180")
     assert len(doc.find_all("table")) == 2
+
+
+def test_pdf_image_assets_serialize_to_json(tmp_path):
+    """PDF 이미지가 doc.assets 에 들어가도 JSON 출력이 깨지지 않아야 한다."""
+    import json
+
+    from dochan import Dochan
+
+    image = b"\xff\xd8\xff\xe0fakejpeg"
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 5 0 R >> >> "
+           "/Contents 6 0 R >>",
+        5: b"<< /Length %d /Subtype /Image /Filter /DCTDecode >>\nstream\n%s\nendstream"
+           % (len(image), image),
+        6: b"<< /Length 10 >>\nstream\nq /Im1 Do Q\nendstream",
+    }
+    path = _write(tmp_path, "img.pdf", _build_pdf(objects))
+
+    doc = Dochan(path)
+    data = json.loads(doc.to_json())
+
+    assert len(data["assets"]) == 1
+    asset = data["assets"][0]
+    assert asset["id"] and asset["content_type"] == "image/jpeg"
+    assert asset["metadata"]["page"] == 1

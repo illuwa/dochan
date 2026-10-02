@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
-from ..conversion import Provenance
+from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
 from .content import ContentTextExtractor, FontInfo, assemble_lines, default_byte_decoder
@@ -78,6 +78,25 @@ def _pdf_text_string(value) -> str:
     if value[:2] == b"\xfe\xff":
         return value[2:].decode("utf-16-be", errors="replace")
     return default_byte_decoder(value)
+
+
+_IMAGE_CONTENT_TYPES = {
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "jp2": "image/jp2", "tif": "image/tiff", "tiff": "image/tiff",
+}
+
+
+def _image_asset(img: Image, page_number: int, index: int) -> AssetRef:
+    """Image 요소를 다른 포맷과 같은 AssetRef 로 등록한다 (JSON 직렬화 계약)."""
+    ext = img.image_format or "bin"
+    name = getattr(img.provenance, "path", "") or f"image{index}"
+    return AssetRef(
+        id=f"pdf-image-{index}",
+        source_path=f"page{page_number}/{name}",
+        filename=f"page{page_number}-{name}.{ext}",
+        content_type=_IMAGE_CONTENT_TYPES.get(ext, "application/octet-stream"),
+        metadata={"kind": "image", "page": page_number, "source_format": "pdf"},
+    )
 
 
 class PDFReader:
@@ -199,7 +218,7 @@ class PDFReader:
                 draft.images = image_elems
                 for img in image_elems:
                     if img.image_data:
-                        doc.assets.append(img)
+                        doc.assets.append(_image_asset(img, page_number, len(doc.assets) + 1))
             except Exception as e:
                 tail = None
                 draft.groups = []

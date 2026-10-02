@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 수정·개선 (전 포맷 공통 계층)
+
+- **PDF 이미지 JSON 출력 크래시 수정**: 추출 가능한 이미지가 있는 PDF 를 `to_json()`/`-f json`/배치 JSON 으로
+  내보내면 `doc.assets` 에 `Image` 요소가 그대로 들어가 `AttributeError: 'Image' object has no attribute 'id'`
+  로 실패했다. 다른 포맷과 같은 `AssetRef`(id·source_path·filename·content_type·metadata) 로 등록한다
+  (실물 `test_pairs` 의 이미지 23개 PDF 로 재현·확인)
+- **OCR 결과 재사용**: 같은 이미지 바이트(로고·머리글·반복 도형)는 SHA-256 키 LRU(256개)로 Tesseract 재실행을
+  건너뛴다. 모든 포맷의 `--ocr` 경로에 공통 적용, 결과는 동일하며 예외는 캐시하지 않는다
+
 ### 추가 (PPTX·XLSX — 차트 종류·축 제목)
 
 - **차트 종류**: 차트 데이터 표의 위쪽 캡션으로 종류를 낸다(Markdown `*Chart type: column + line*`, JSON

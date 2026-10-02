@@ -33,7 +33,7 @@ class TextBlock:
         return Paragraph(
             runs=[TextRun(text=r[0], bold=r[1], italic=r[2],
                           link=r[3] if len(r) > 3 else "",
-                          note_ref=r[4] if len(r) > 4 else 0,
+                          note_ref=r[4] if len(r) > 4 and (len(r) < 6 or r[5] != "comment") else 0,
                           note_reference_type=(r[5] if len(r) > 5 else "footnote") if len(r) > 4 and r[4] else "",
                           note_reference_number=r[4] if len(r) > 4 and r[4] else None,
                           provenance=provenance) for r in self.runs], provenance=provenance,

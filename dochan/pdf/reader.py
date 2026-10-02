@@ -26,7 +26,7 @@ from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, 
                          repeated_header_rows)
 from .notes import detect_notes, detect_endnotes, endnote_references
 from .running import detect_running
-from .annotations import CommentExtractor, DestinationResolver, attach_links, link_regions, text_string
+from .annotations import CommentExtractor, DestinationResolver, attach_comments, attach_links, link_regions, text_string
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -169,6 +169,12 @@ class PDFReader:
                 except Exception as e:
                     pdf.warnings.append(f"WARN: PDF 링크 주석 해석 실패: {e!r}")
                     regions = []
+                try:
+                    draft.comments = comment_extractor.extract(pdf, page, page_number)
+                except Exception as e:
+                    pdf.warnings.append(f"WARN: {page_number}페이지 주석 추출 실패: {e!r}")
+                    comment_extractor.regions = []
+                comment_regions = comment_extractor.regions
                 content_parts = self._page_content_parts(pdf, page)
                 lines = []
                 groups = []
@@ -177,7 +183,7 @@ class PDFReader:
                 if content_parts:
                     extractor = ContentTextExtractor.from_fonts(
                         self._font_infos(pdf, resources, font_cache),
-                        track_char_positions=bool(regions)
+                        track_char_positions=bool(regions or comment_regions)
                     )
                     page_content = extractor.extract_page(b"\n".join(content_parts))
                     pdf.warnings.extend(page_content.warnings)
@@ -194,6 +200,7 @@ class PDFReader:
                                                   if fragment.order not in consumed_notes]
                     except Exception as e:
                         pdf.warnings.append(f"WARN: {page_number}페이지 각주 복원 실패: {e!r}")
+                    attach_comments(page_content.fragments, comment_regions, pdf.warnings)
                     try:
                         tables = build_tables(page_content.segments, page_content.fragments,
                                               page_number=page_number, warnings=pdf.warnings,
@@ -246,10 +253,6 @@ class PDFReader:
                 draft.median_size = median_size
                 draft.links = self._link_paragraphs(pdf, page, page_number)
                 draft.images = image_elems
-                try:
-                    draft.comments = comment_extractor.extract(pdf, page, page_number)
-                except Exception as e:
-                    pdf.warnings.append(f"WARN: {page_number}페이지 주석 추출 실패: {e!r}")
                 for img in image_elems:
                     if img.image_data:
                         doc.assets.append(_image_asset(img, page_number, len(doc.assets) + 1))
@@ -373,7 +376,14 @@ class PDFReader:
         draft.section.elements.extend(paragraph for paragraph in draft.links
                                       if paragraph.runs[0].link not in surviving)
         draft.section.elements.extend(draft.images)
-        draft.section.elements.extend(draft.comments)
+        anchored = {run.note_reference_number
+                    for paragraph in Document(sections=[Section(
+                        elements=draft.section.elements + draft.notes)]).find_all("paragraph")
+                    for run in paragraph.runs if run.note_reference_type == "comment"}
+        draft.section.elements.extend(element for element in draft.comments
+                                      if not (isinstance(element, Paragraph)
+                                              and element.runs
+                                              and element.runs[0].note_reference_number in anchored))
         draft.section.elements.extend(draft.notes)
 
     @staticmethod
@@ -572,10 +582,19 @@ class PDFReader:
                 "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
                 "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"}
             reliable = reliable and (str(encoding) in ("WinAnsiEncoding", "MacRomanEncoding")
-                                     or encoding is None and standard_font)
+                                     or encoding is None and standard_font and subtype != "TrueType")
+        space_code = 32
+        if subtype == "Type0" and str(encoding) == "Identity-H" and isinstance(has_unicode_map, dict):
+            # CID 32 is not necessarily a space. Use a uniquely identified,
+            # explicitly measured U+0020, not the width of an unrelated glyph.
+            spaces = [key[1] for key, value in has_unicode_map.items()
+                      if value == " " and isinstance(key, tuple) and len(key) == 2
+                      and key[0] == code_bytes and widths.explicit(key[1])]
+            if len(spaces) == 1:
+                space_code = spaces[0]
         return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes,
                         bold=bold, italic=italic, wmode=wmode, vertical_metrics=vertical_metrics,
-                        link_metrics_reliable=reliable)
+                        link_metrics_reliable=reliable, space_code=space_code)
 
     def _cid_descendant(self, pdf: PDFFile, font: dict):
         descendants = pdf.resolve(font.get("DescendantFonts"))
@@ -622,6 +641,11 @@ class PDFReader:
         if isinstance(descriptor, dict) and any(key in descriptor for key in
                                                ("FontFile", "FontFile2", "FontFile3")):
             return None, None
+        flags = pdf.resolve(descriptor.get("Flags")) if isinstance(descriptor, dict) else 0
+        if (str(font.get("Subtype")) == "TrueType" and isinstance(flags, int) and flags & 4
+                and canonical_font(base) not in ("Symbol", "ZapfDingbats")):
+            # A symbolic TrueType cmap cannot be inferred from an Arial alias.
+            return None, None
         encoding = pdf.resolve(font.get("Encoding"))
         if isinstance(encoding, dict):
             encoding = {key: pdf.resolve(value) for key, value in encoding.items()}
@@ -630,7 +654,8 @@ class PDFReader:
                     pdf.warnings.append("WARN: PDF 글꼴 Differences 한도(4096) 초과 — 인코딩 보류")
                     return None, None
                 encoding["Differences"] = [pdf.resolve(value) for value in encoding["Differences"][:4096]]
-        return canonical_font(base), glyph_names(base, encoding)
+        return canonical_font(base), glyph_names(base, encoding,
+                                                  truetype=str(font.get("Subtype")) == "TrueType")
 
     def _cid_widths(self, pdf: PDFFile, font: dict) -> WidthMap:
         descendants = pdf.resolve(font.get("DescendantFonts"))
@@ -671,15 +696,17 @@ class PDFReader:
                 cmap = parse_tounicode(cmap_data, pdf.warnings)
                 if cmap.mapping:
                     return cmap.decode
-        _base, names = self._core14_encoding(pdf, font)
-        if names is not None:
-            return Core14Decoder(names).decode
         # ToUnicode 없는 CID 폰트를 cp1252 로 해석하면 NUL 등 제어문자가
         # 본문으로 새어 나간다 — 경고를 남기고 해당 텍스트는 버린다 (감수 M4)
         encoding = pdf.resolve(font.get("Encoding"))
         if isinstance(encoding, dict):
             encoding = pdf.resolve(encoding.get("BaseEncoding"))
         encoding_name = str(encoding) if isinstance(encoding, PDFName) else ""
+        _base, names = self._core14_encoding(pdf, font)
+        if names is not None:
+            macroman = encoding_name == "MacRomanEncoding"
+            fallback = (lambda raw: raw.decode("mac_roman", errors="replace")) if macroman else default_byte_decoder
+            return Core14Decoder(names, fallback, preserve_undefined=macroman).decode
         if str(font.get("Subtype", "")) == "Type0" or encoding_name.startswith("Identity-"):
             pdf.warnings.append(
                 f"WARN: 폰트 {name}: ToUnicode 없는 CID 폰트 — 해당 텍스트를 추출할 수 없음"
@@ -704,7 +731,7 @@ class PDFReader:
             if not isinstance(xobj, PDFStream) \
                     or str(xobj.dictionary.get("Subtype", "")) != "Image":
                 continue
-            data, ext = extract_image_bytes(xobj, pdf.warnings, pdf.decode_stream_bytes)
+            data, ext = extract_image_bytes(xobj, pdf.warnings, pdf.decode_image_bytes)
             if not data:
                 continue
             images.append(Image(

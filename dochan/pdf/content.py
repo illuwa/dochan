@@ -115,6 +115,7 @@ class FontInfo:
     wmode: int = 0
     vertical_metrics: Optional[VerticalMetrics] = None
     link_metrics_reliable: bool = True
+    space_code: int = 32  # ToUnicode may assign a CID other than 32 to U+0020.
 
 
 @dataclass
@@ -137,6 +138,8 @@ class Fragment:
     link_spans: list = field(default_factory=list)
     note_ref: int = 0
     link_geometry_reliable: bool = True
+    comment_spans: list = field(default_factory=list)
+    comment_markers: list = field(default_factory=list)
 
 
 def writing_direction(frag: Fragment) -> str:
@@ -386,7 +389,7 @@ class ContentTextExtractor:
                     offsets.append(total_adv + disp * (index + 1) / len(piece))
             total_adv += disp
         scale = (start_tm[0] ** 2 + start_tm[1] ** 2) ** 0.5 or 1.0
-        space_w = font.widths.advance(32) / 1000.0 * fs * th * scale
+        space_w = font.widths.advance(font.space_code) / 1000.0 * fs * th * scale
         if space_w <= 0:
             space_w = 0.25 * fs * scale
         eff_size = fs * ((abs(start_tm[0] * start_tm[3] - start_tm[1] * start_tm[2])) ** 0.5 or 1.0)
@@ -560,6 +563,23 @@ class _Line:
                 fragment_runs.append((f.text[at:], f.bold, f.italic))
             else:
                 fragment_runs.append((f.text, f.bold, f.italic))
+            if f.comment_markers:
+                marked_runs = []
+                offset = 0
+                markers = sorted(f.comment_markers)
+                for run in fragment_runs:
+                    end = offset + len(run[0])
+                    at = offset
+                    while markers and markers[0][0] <= end:
+                        position, number = markers.pop(0)
+                        if position > at:
+                            marked_runs.append((run[0][at - offset:position - offset],) + run[1:])
+                        marked_runs.append(("[comment %d]" % number, False, False, "", number, "comment"))
+                        at = position
+                    if at < end:
+                        marked_runs.append((run[0][at - offset:],) + run[1:])
+                    offset = end
+                fragment_runs = marked_runs
             fragment_runs = [run for run in fragment_runs if run[0]]
             for run in fragment_runs:
                 if len(run) > 4:

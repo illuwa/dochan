@@ -4,6 +4,7 @@ xref 스트림(PDF 1.5+)과 객체 스트림은 이번 마일스톤에서 지원
 발견하면 경고를 남기고 `N G obj` 패턴 스캔으로 대체 복구를 시도한다.
 """
 import re
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 from .crypto import StandardSecurityHandler, UnsupportedEncryption
@@ -20,6 +21,9 @@ _SCAN_ROOT_LIMIT = 10_000
 # 문서 단위 누적 해제 예산 — 스트림 1개당 한도만으로는 같은 폭탄 스트림을
 # 반복 참조하는 40KB PDF 가 수 GB 를 강제할 수 있다 (감수 2차 C2)
 MAX_TOTAL_DECODED = 200 * 1024 * 1024
+# Image samples must not consume the body budget or accumulate in its cache.
+MAX_IMAGE_DECODED_CACHE = 50 * 1024 * 1024
+MAX_IMAGE_CACHE_ENTRIES = 128
 
 _OBJ_RE = re.compile(rb"(?<!\d)(\d{1,10})\s+(\d{1,5})\s+obj\b")
 _ENCRYPT_RE = re.compile(rb"/Encrypt\s+\d+\s+\d+\s+R")
@@ -39,6 +43,8 @@ class PDFFile:
         self._cache: Dict[int, Any] = {}
         self._rescanned = False
         self._decoded_cache: Dict[int, Tuple[PDFStream, bytes]] = {}
+        self._image_decoded_cache = OrderedDict()
+        self._image_cached_bytes = 0
         self._decode_budget = MAX_TOTAL_DECODED
         self._predictor_budget = PredictorBudget()
         # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
@@ -429,6 +435,28 @@ class PDFFile:
         result = (pairs, data, first)
         self._objstm_cache[objstm_num] = result
         return result
+
+    def decode_image_bytes(self, stream: PDFStream) -> bytes:
+        """이미지는 본문과 predictor 작업 예산만 공유하고 별도 제한 캐시를 쓴다."""
+        key = id(stream)
+        cached = self._image_decoded_cache.get(key)
+        if cached is not None:
+            if cached[0] is stream:
+                self._image_decoded_cache.move_to_end(key)
+                return cached[1]
+            self._image_cached_bytes -= len(self._image_decoded_cache.pop(key)[1])
+        out = decode_stream(stream.dictionary, stream.raw, self.warnings,
+                            self._predictor_budget)
+        # Keep repeated small images cheap without retaining every page's pixels.
+        if out and len(out) <= MAX_IMAGE_DECODED_CACHE:
+            while self._image_decoded_cache and (
+                    self._image_cached_bytes + len(out) > MAX_IMAGE_DECODED_CACHE or
+                    len(self._image_decoded_cache) >= MAX_IMAGE_CACHE_ENTRIES):
+                _, (_, evicted) = self._image_decoded_cache.popitem(last=False)
+                self._image_cached_bytes -= len(evicted)
+            self._image_decoded_cache[key] = (stream, out)
+            self._image_cached_bytes += len(out)
+        return out
 
     def decode_stream_bytes(self, stream: PDFStream) -> bytes:
         """스트림을 해제하되 문서 단위 누적 예산과 결과 캐시를 적용한다.

@@ -1,7 +1,7 @@
 """PDF 주석과 목적지의 제한된 네이티브 해석."""
 import math
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from lxml import etree
 
 from ..conversion import Provenance
@@ -95,9 +95,11 @@ class CommentExtractor:
         self.total_text = 0
         self.exhausted = False
         self.seen = set()
+        self.regions = []
 
     def extract(self, pdf, page, page_number):
         result = []
+        self.regions = []
         if self.exhausted:
             return result
         for ref in page_annotations(pdf, page):
@@ -129,6 +131,7 @@ class CommentExtractor:
                 break
             self.total_text += len(contents) + len(author)
             self.number += 1
+            self.regions.append(comment_region(pdf, annot, self.number))
             provenance = Provenance(source_format="pdf", page=page_number, path="annots")
             marker = TextRun(text="[comment %d]" % self.number,
                              note_reference_type="comment", note_reference_number=self.number,
@@ -287,6 +290,52 @@ def link_regions(pdf, page, destinations):
                 polygons.append(rect)
         regions.append(LinkRegion(target, polygons))
     return regions
+
+
+
+def comment_region(pdf, annot, number):
+    """ISO 32000-1 §12.5.6.4/10: markup quads and text-note rectangles."""
+    polygons = []
+    subtype = str(annot.get("Subtype"))
+    if subtype in ("Highlight", "Underline", "StrikeOut", "Squiggly"):
+        quads = pdf.resolve(annot.get("QuadPoints"))
+        # The broad Rect includes neighboring lines: invalid/missing quads must
+        # defer instead of anchoring against the entire annotation appearance.
+        if isinstance(quads, list) and len(quads) % 8 == 0 and len(quads) <= 8 * 256:
+            for pos in range(0, len(quads), 8):
+                polygon = _polygon(quads[pos:pos + 8])
+                if not polygon:
+                    return LinkRegion(str(number), [])
+                polygons.append(polygon)
+    elif subtype == "Text":
+        polygon = _polygon(pdf.resolve(annot.get("Rect")))
+        if polygon:
+            polygons.append(polygon)
+    return LinkRegion(str(number), polygons)
+
+
+def attach_comments(fragments, regions, warnings):
+    """Select safely with link geometry, then place one reference per comment.
+
+    Keep source text/widths unchanged so table and paragraph detection still use
+    the original page. The final layout inserts markers between text runs.
+    """
+    if not regions:
+        return
+    copies = [replace(frag, link_spans=[]) for frag in fragments]
+    geometry_warnings = []
+    attach_links(copies, regions, geometry_warnings)
+    warnings.extend(w.replace("링크", "주석") for w in geometry_warnings)
+    endings = {}
+    for original, selected in zip(fragments, copies):
+        original.comment_spans = list(selected.link_spans)
+        for first, last, target in selected.link_spans:
+            last = first + len(original.text[first:last].rstrip())
+            candidate = (original.order, last)
+            if target not in endings or candidate > endings[target][0]:
+                endings[target] = (candidate, original)
+    for target, ((_order, last), frag) in endings.items():
+        frag.comment_markers.append((last, int(target)))
 
 
 def attach_links(fragments, regions, warnings):

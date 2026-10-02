@@ -94,8 +94,8 @@ def _paragraph(line, page_number, strip_marker=False):
         if text:
             runs.append(TextRun(text=text, bold=bold, italic=italic,
                                 link=run[3] if len(run) > 3 else "",
-                                note_ref=run[4] if len(run) > 4 else 0,
-                                note_reference_type="footnote" if len(run) > 4 and run[4] else "",
+                                note_ref=run[4] if len(run) > 4 and (len(run) < 6 or run[5] != "comment") else 0,
+                                note_reference_type=(run[5] if len(run) > 5 else "footnote") if len(run) > 4 and run[4] else "",
                                 note_reference_number=run[4] if len(run) > 4 and run[4] else None,
                                 provenance=provenance))
     return Paragraph(runs=runs, provenance=provenance)

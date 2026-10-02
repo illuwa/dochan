@@ -154,3 +154,59 @@ def test_pdf_macroman_currency_and_undefined_codes_differ_from_python_codec():
     for code in (173, 176, 178, 179, 182, 183, 184, 185, 186, 195, 197, 198, 215, 240):
         assert not info.widths.explicit(code)
         assert info.decode(bytes([code])) == "\ufffd"
+
+
+@pytest.mark.parametrize("encoding", [None, {"Differences": [65, PDFName("W")]}])
+def test_truetype_without_base_encoding_uses_windows_codes(encoding):
+    info = font_info("Arial", encoding, Subtype=PDFName("TrueType"))
+    assert info.decode(b"\x93Quoted\x94 caf\xe9 \x96 it's \x80") == "“Quoted” café – it's €"
+    assert info.widths.advance(233) == 556
+
+
+def test_notdef_and_unknown_glyph_fall_back_per_code():
+    info = font_info("Helvetica", {"BaseEncoding": PDFName("WinAnsiEncoding"),
+                                 "Differences": [32, PDFName(".notdef"),
+                                                 128, PDFName("unknownGlyph"),
+                                                 129, PDFName("afii10017"),
+                                                 160, PDFName("nbspace")]})
+    assert info.decode(b"Words that should \x80\x81\xa0") == "Words that should €\x81\xa0"
+    assert not info.link_metrics_reliable
+
+
+@pytest.mark.parametrize("glyph,expected", [
+    ("uni20AC", "€"), ("u1F600", "😀"), ("u01F600", "😀"),
+    ("uni00410042", "AB"), ("uni0041.alt", "A"), ("A_uni20AC", "A€"),
+    ("uniD800", "A"), ("u110000", "A"), ("uni20ac", "A"),
+    ("uni004Z", "A"), ("uDFFF", "A"), ("u123", "A"),
+])
+def test_adobe_glyph_name_rules_and_invalid_name_fallback(glyph, expected):
+    info = font_info("Helvetica", {"Differences": [65, PDFName(glyph)]})
+    assert info.decode(b"A") == expected
+    assert not info.widths.explicit(65)
+
+
+def test_unknown_macroman_difference_uses_macroman_byte_fallback():
+    info = font_info("Helvetica", {"BaseEncoding": PDFName("MacRomanEncoding"),
+                                  "Differences": [142, PDFName("unknownGlyph")]})
+    assert info.decode(b"\x8e") == "é"
+
+
+
+def test_cid_spacing_uses_tounicode_space_instead_of_code_32():
+    from dochan.pdf.objects import PDFStream
+    from dochan.pdf.content import assemble_lines
+    info = font_info("Subset", PDFName("Identity-H"), Subtype=PDFName("Type0"),
+                     DescendantFonts=[{"DW": 500, "W": [3, [250], 32, [570], 65, [722]]}],
+                     ToUnicode=PDFStream({}, b"2 beginbfchar <0003> <0020> <0041> <0041> endbfchar"))
+    fonts = {"T": font_info("Times-Bold"), "C": info}
+    fragments = ContentTextExtractor.from_fonts(fonts).extract_fragments(
+        b"BT /T 13 Tf 10 20 Td (T) Tj /C 13 Tf 10.861 0 Td <0041> Tj ET")
+    assert fragments[1].space_width == pytest.approx(3.25)
+    assert assemble_lines(fragments)[0].text == "T A"
+
+
+def test_symbolic_truetype_alias_does_not_claim_windows_geometry():
+    info = font_info("Arial", Subtype=PDFName("TrueType"), FontDescriptor={"Flags": 4})
+    assert info.decode(b"\x93Quoted\x94") == "“Quoted”"
+    assert not info.widths.explicit(65)
+    assert not info.link_metrics_reliable

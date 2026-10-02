@@ -1,8 +1,7 @@
-"""네이티브 PDF 리더 — 단순 디지털 PDF 의 페이지 텍스트 추출.
+"""네이티브 PDF 리더 — 스트림·암호·텍스트·표·주석의 공통 모델 변환.
 
-Phase 1 범위: 고전 xref 테이블, Flate/ASCIIHex/ASCII85 필터,
-텍스트 연산자, ToUnicode CMap. 암호화·xref 스트림·객체 스트림·
-스캔 전용 페이지는 명확한 경고로 보고한다.
+CTM과 글리프 폭으로 본문과 링크를 배치하며, 검증한 기하 조건으로 각주를
+분리한다. 지원하지 않는 요소와 손상 입력은 doc.errors 경고로 보고한다.
 """
 import os
 from dataclasses import dataclass, field
@@ -11,8 +10,8 @@ from typing import Callable, Dict, Optional
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
-from .content import ContentTextExtractor, FontInfo, assemble_lines, default_byte_decoder
-from .cmap import parse_tounicode
+from .content import ContentTextExtractor, FontInfo, VerticalMetrics, assemble_lines, default_byte_decoder
+from .cmap import encoding_wmode, parse_tounicode
 from .images import extract_image_bytes
 from .objects import PDFName, PDFRef, PDFStream
 from .structure import PDFFile
@@ -23,7 +22,9 @@ from .layout import merge_lines
 from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
                          continues, merge_continued, page_bounds, page_rotation,
                          repeated_header_rows)
+from .notes import detect_notes
 from .running import detect_running
+from .annotations import CommentExtractor, DestinationResolver, attach_links, link_regions, text_string
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -47,6 +48,8 @@ class _PageDraft:
     rotation: int = 0
     links: list = field(default_factory=list)
     images: list = field(default_factory=list)
+    comments: list = field(default_factory=list)
+    notes: list = field(default_factory=list)
 
 
 def _drop_decoder(raw: bytes) -> str:
@@ -73,11 +76,7 @@ def _heading_level_for_size(text: str, size: float, median: float) -> int:
 
 def _pdf_text_string(value) -> str:
     """PDF 텍스트 문자열 디코드 — UTF-16BE BOM 또는 PDFDocEncoding(≈cp1252)."""
-    if not isinstance(value, bytes):
-        return ""
-    if value[:2] == b"\xfe\xff":
-        return value[2:].decode("utf-16-be", errors="replace")
-    return default_byte_decoder(value)
+    return text_string(value)
 
 
 _IMAGE_CONTENT_TYPES = {
@@ -103,7 +102,8 @@ class PDFReader:
     format_name = "pdf"
     extensions = (".pdf",)
 
-    def __init__(self, text_tables: bool = False):
+    def __init__(self, text_tables: bool = False, password=""):
+        self.password = password
         self.text_tables = text_tables
 
     def read(self, file_path: str) -> Document:
@@ -125,7 +125,7 @@ class PDFReader:
         # 파서 내부의 어떤 예외도 크래시 대신 doc.errors 로 강등한다 —
         # 손상/악성 PDF 는 정상 흐름이지 예외 상황이 아니다 (감수 M2)
         try:
-            pdf = PDFFile(data)
+            pdf = PDFFile(data, password=self.password)
             if pdf.encrypted and not pdf.decrypt_ok:
                 doc.errors.extend(pdf.warnings)
                 return doc
@@ -134,10 +134,18 @@ class PDFReader:
             doc.errors.append(f"ERR: PDF 구조 파싱 실패: {e!r}")
             return doc
 
+        try:
+            destinations = DestinationResolver(pdf, pages)
+        except Exception as e:
+            pdf.warnings.append(f"WARN: PDF 목적지 해석 실패: {e!r}")
+            destinations = DestinationResolver(pdf, pages, load_names=False)
+        pdf._destination_resolver = destinations
         outline_section = self._outline_section(pdf, pages)
         if outline_section is not None:
             doc.sections.append(outline_section)
 
+        next_note_number = 1
+        comment_extractor = CommentExtractor()
         font_cache = {}
         table_budget = TableBudget()
         tail = None
@@ -153,6 +161,11 @@ class PDFReader:
             try:
                 draft.bounds = page_bounds(pdf, page)
                 draft.rotation = page_rotation(pdf, page)
+                try:
+                    regions = link_regions(pdf, page, destinations)
+                except Exception as e:
+                    pdf.warnings.append(f"WARN: PDF 링크 주석 해석 실패: {e!r}")
+                    regions = []
                 content_parts = self._page_content_parts(pdf, page)
                 lines = []
                 groups = []
@@ -160,10 +173,23 @@ class PDFReader:
                 page_content = None
                 if content_parts:
                     extractor = ContentTextExtractor.from_fonts(
-                        self._font_infos(pdf, resources, font_cache)
+                        self._font_infos(pdf, resources, font_cache),
+                        track_char_positions=bool(regions)
                     )
                     page_content = extractor.extract_page(b"\n".join(content_parts))
                     pdf.warnings.extend(page_content.warnings)
+                    attach_links(page_content.fragments, regions, pdf.warnings)
+                    try:
+                        notes, consumed_notes, references, next_note_number = detect_notes(
+                            page_content.fragments, page_content.segments, draft.bounds,
+                            page_number, next_note_number, pdf.warnings)
+                        draft.notes = notes
+                        for fragment in page_content.fragments:
+                            fragment.note_ref = references.get(fragment.order, 0)
+                        page_content.fragments = [fragment for fragment in page_content.fragments
+                                                  if fragment.order not in consumed_notes]
+                    except Exception as e:
+                        pdf.warnings.append(f"WARN: {page_number}페이지 각주 복원 실패: {e!r}")
                     try:
                         tables = build_tables(page_content.segments, page_content.fragments,
                                               page_number=page_number, warnings=pdf.warnings,
@@ -216,6 +242,10 @@ class PDFReader:
                 draft.median_size = median_size
                 draft.links = self._link_paragraphs(pdf, page, page_number)
                 draft.images = image_elems
+                try:
+                    draft.comments = comment_extractor.extract(pdf, page, page_number)
+                except Exception as e:
+                    pdf.warnings.append(f"WARN: {page_number}페이지 주석 추출 실패: {e!r}")
                 for img in image_elems:
                     if img.image_data:
                         doc.assets.append(_image_asset(img, page_number, len(doc.assets) + 1))
@@ -263,6 +293,17 @@ class PDFReader:
                 self._safe_finalize_draft(draft, removed, pdf.warnings)
                 doc.sections.append(draft.section)
 
+        for section in doc.sections:
+            number = getattr(section.provenance, "page", None)
+            if number in destinations.targets:
+                provenance = Provenance(source_format="pdf", page=number, path="destination")
+                marker = TextRun(text="[bookmark: page-%d] " % number, provenance=provenance)
+                first = section.elements[0] if section.elements else None
+                if isinstance(first, Paragraph):
+                    first.runs.insert(0, marker)
+                else:
+                    section.elements.insert(0, Paragraph(runs=[marker], provenance=provenance))
+
         # 같은 경고가 페이지 수만큼 중복 누적되지 않게 순서 보존 dedup
         seen = set()
         for warning in pdf.warnings:
@@ -278,7 +319,7 @@ class PDFReader:
             warnings.append(f"WARN: {draft.page_number}페이지 파싱 실패: {e!r}")
             elements = draft.section.elements
             present = {id(element) for element in elements}
-            for element in draft.links + draft.images:
+            for element in draft.links + draft.images + draft.comments + draft.notes:
                 if id(element) not in present:
                     elements.append(element)
                     present.add(id(element))
@@ -316,8 +357,16 @@ class PDFReader:
                     ordered.append((block.order, 1, paragraph))
         draft.section.elements.extend(item for _, _, item in sorted(
             ordered, key=lambda event: (event[0], event[1])))
-        draft.section.elements.extend(draft.links)
+        # 세 출력 모두 link를 보존하는 최종 최상위 문단만 중복 억제 근거다.
+        # 표·각주·반복 머리글은 plain text에서 URL을 버리므로 fallback을 남긴다.
+        surviving = {run.link for element in draft.section.elements
+                     if isinstance(element, Paragraph) for run in element.runs
+                     if run.link and run.text.strip() and not run.note_ref}
+        draft.section.elements.extend(paragraph for paragraph in draft.links
+                                      if paragraph.runs[0].link not in surviving)
         draft.section.elements.extend(draft.images)
+        draft.section.elements.extend(draft.comments)
+        draft.section.elements.extend(draft.notes)
 
     @staticmethod
     def _body_groups(extractor, fragments, tables):
@@ -411,22 +460,20 @@ class PDFReader:
             return []
         paragraphs = []
         seen = set()
+        destinations = getattr(pdf, "_destination_resolver", None) or DestinationResolver(pdf, pdf.pages())
         for annot_ref in annots[:MAX_CONTENT_PARTS]:
             annot = pdf.resolve(annot_ref)
             if not isinstance(annot, dict) or str(annot.get("Subtype", "")) != "Link":
                 continue
-            action = pdf.resolve(annot.get("A"))
-            uri = None
-            if isinstance(action, dict) and str(action.get("S", "")) == "URI":
-                uri = pdf.resolve(action.get("URI"))
-            url = _pdf_text_string(uri).strip() if isinstance(uri, bytes) else ""
+            url = destinations.annotation_target(annot)
             if not url or url in seen:
                 continue
             seen.add(url)
             provenance = Provenance(source_format="pdf", page=page_number, path="annots")
             paragraphs.append(
                 Paragraph(
-                    runs=[TextRun(text=f"<{url}>", link=url, provenance=provenance)],
+                    runs=[TextRun(text=("Page " + url[6:] if url.startswith("#page-") else f"<{url}>"),
+                                  link=url, provenance=provenance)],
                     provenance=provenance,
                 )
             )
@@ -493,8 +540,33 @@ class PDFReader:
             widths = self._simple_widths(pdf, font)
             descriptor_font = font
         bold, italic = self._font_style_flags(pdf, font, descriptor_font)
+        wmode, vertical_metrics = 0, None
+        if subtype == "Type0":
+            encoding = pdf.resolve(font.get("Encoding"))
+            if isinstance(encoding, PDFStream):
+                wmode = encoding_wmode(data=pdf.decode_stream_bytes(encoding),
+                                       dictionary_mode=pdf.resolve(encoding.dictionary.get("WMode")))
+            else:
+                wmode = encoding_wmode(str(encoding or ""))
+            if wmode == 1:
+                vertical_metrics = VerticalMetrics(pdf.resolve(descriptor_font.get("W2")),
+                                                   pdf.resolve(descriptor_font.get("DW2")), widths)
+                pdf.warnings.extend(vertical_metrics.warnings)
+        reliable = (subtype in ("Type1", "TrueType", "MMType1") or
+                    subtype == "Type0" and str(pdf.resolve(font.get("Encoding"))) == "Identity-H")
+        encoding = pdf.resolve(font.get("Encoding"))
+        has_unicode_map = getattr(getattr(decoder, "__self__", None), "mapping", None)
+        if not has_unicode_map:
+            base_font = str(pdf.resolve(font.get("BaseFont")) or "")
+            standard_font = base_font in {
+                "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
+                "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
+                "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"}
+            reliable = reliable and (str(encoding) in ("WinAnsiEncoding", "MacRomanEncoding")
+                                     or encoding is None and standard_font)
         return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes,
-                        bold=bold, italic=italic)
+                        bold=bold, italic=italic, wmode=wmode, vertical_metrics=vertical_metrics,
+                        link_metrics_reliable=reliable)
 
     def _cid_descendant(self, pdf: PDFFile, font: dict):
         descendants = pdf.resolve(font.get("DescendantFonts"))

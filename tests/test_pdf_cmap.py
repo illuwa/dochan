@@ -95,3 +95,16 @@ def test_longest_code_length_matched_first():
     cmap = parse_tounicode(data)
     assert cmap.decode(b"\x81\x40") == "한"
     assert cmap.decode(b"\x81") == "X"
+
+
+def test_encoding_wmode_named_and_embedded_cmaps():
+    from dochan.pdf.cmap import encoding_wmode
+    assert encoding_wmode("Identity-V") == 1
+    assert encoding_wmode("UniJIS-UTF16-V") == 1
+    assert encoding_wmode("Identity-H") == 0
+    assert encoding_wmode(data=b"/WMode 1 def") == 1
+    assert encoding_wmode(data=b"/Identity-V usecmap") == 1
+    assert encoding_wmode(data=b"/Identity-V usecmap /WMode 0 def") == 0
+    assert encoding_wmode(data=b"% /WMode 1 def\n/WMode 0 def") == 0
+    assert encoding_wmode(dictionary_mode=1) == 1
+    assert encoding_wmode("Custom-V") == 0

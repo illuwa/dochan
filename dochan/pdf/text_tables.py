@@ -111,12 +111,26 @@ def _table(lines, rows, columns, tolerance, page_number):
     table_rows = []
     for row, (line, cells) in enumerate(zip(lines, rows)):
         out = []
+        runs_by_column = [[] for _ in columns]
+        ends = [None for _ in columns]
+        spaces = [0.0 for _ in columns]
+        for segment in line.segments:
+            col = max(0, min(bisect_right(columns, segment.x0 + tolerance) - 1, len(columns) - 1))
+            runs = runs_by_column[col]
+            space = max(segment.space_width, 0.0) or _space_width(line)
+            if (runs and ends[col] is not None and segment.x0 - ends[col] > 0.5 * max(space, spaces[col])
+                    and not runs[-1][0].endswith(" ") and not segment.text.startswith(" ")):
+                previous_link = runs[-1][3] if len(runs[-1]) > 3 else ""
+                next_link = segment.runs[0][3] if segment.runs and len(segment.runs[0]) > 3 else ""
+                runs.append((" ", False, False, previous_link if previous_link == next_link else ""))
+            runs.extend(segment.runs or [(segment.text, False, False)])
+            ends[col], spaces[col] = segment.x1, space
         for col, value in enumerate(_cell_texts(cells, columns, tolerance)):
             cell = Cell(row=row, col=col, provenance=provenance)
             if value:
                 cell_line = copy(line)
                 cell_line.text = value
-                cell_line.runs = [(value, False, False)]
+                cell_line.runs = runs_by_column[col]
                 cell.paragraphs = [block.paragraph(page_number) for block in merge_lines([cell_line])]
             out.append(cell)
         table_rows.append(out)

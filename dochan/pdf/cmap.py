@@ -18,6 +18,36 @@ _MAX_RANGE = 65536
 MAX_MAPPING_ENTRIES = 100_000
 
 
+def encoding_wmode(name: str = "", data: bytes = b"", dictionary_mode=None) -> int:
+    """인코딩 CMap의 쓰기 모드. ISO 32000-1 §9.7.5 및 표 118.
+
+    ToUnicode가 아닌 Encoding에 적용한다. 등록된 세로 CMap 이름과
+    embedded CMap의 WMode/usecmap만 사용하여 임의 이름을 추측하지 않는다.
+    """
+    if dictionary_mode in (0, 1):
+        return int(dictionary_mode)
+    # 주석의 /WMode를 실제 선언으로 오인하지 않는다.
+    source = re.sub(rb"%[^\r\n]*", b"", data[:16 * 1024 * 1024])
+    modes = re.findall(rb"/WMode\s+([01])\s+def\b", source)
+    if modes:
+        return int(modes[-1])
+    parents = re.findall(rb"/([A-Za-z0-9-]+)\s+usecmap\b", source)
+    if parents:
+        name = parents[-1].decode("ascii")
+    if name == "Identity-V":
+        return 1
+    # ISO 32000-1 표 118에 있는 Adobe CJK 인코딩 계열.
+    if name.endswith("-V") and (name.startswith(("UniJIS-", "UniKS-", "UniGB-", "UniCNS-"))
+                               or name in {"90ms-RKSJ-V", "90msp-RKSJ-V", "90pv-RKSJ-V",
+                                           "Add-RKSJ-V", "EUC-V", "Ext-RKSJ-V", "GB-EUC-V",
+                                           "GBK-EUC-V", "GBKp-EUC-V", "GBK2K-V", "B5pc-V",
+                                           "HKscs-B5-V", "ETen-B5-V", "ETenms-B5-V",
+                                           "CNS-EUC-V", "KSC-EUC-V", "KSCms-UHC-V",
+                                           "KSCms-UHC-HW-V", "KSCpc-EUC-V"}):
+        return 1
+    return 0
+
+
 class ToUnicodeCMap:
     def __init__(self):
         # (코드 바이트 길이, 코드값) → 유니코드 문자열

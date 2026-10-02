@@ -17,6 +17,10 @@ class WidthMap:
     def advance(self, code: int) -> float:
         return self._widths.get(code, self._default)
 
+    def explicit(self, code: int) -> bool:
+        """기하 연결에서 추정 기본 폭과 문서가 선언한 폭을 구분한다."""
+        return code in self._widths
+
     @classmethod
     def simple(cls, first_char: int, widths: List, default: float = 500.0) -> "WidthMap":
         table: Dict[int, float] = {}

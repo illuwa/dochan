@@ -31,8 +31,12 @@ class TextBlock:
     def paragraph(self, page_number: Optional[int] = None) -> Paragraph:
         provenance = Provenance(source_format='pdf', page=page_number)
         return Paragraph(
-            runs=[TextRun(text=t, bold=b, italic=i, provenance=provenance)
-                  for t, b, i in self.runs], provenance=provenance,
+            runs=[TextRun(text=r[0], bold=r[1], italic=r[2],
+                          link=r[3] if len(r) > 3 else "",
+                          note_ref=r[4] if len(r) > 4 else 0,
+                          note_reference_type="footnote" if len(r) > 4 and r[4] else "",
+                          note_reference_number=r[4] if len(r) > 4 and r[4] else None,
+                          provenance=provenance) for r in self.runs], provenance=provenance,
         )
 
 
@@ -40,15 +44,15 @@ def _trim_runs(runs):
     """줄 가장자리 공백만 제거하며 내부 서식과 공백은 보존한다."""
     runs = list(runs)
     while runs:
-        text, bold, italic = runs[0]
+        text = runs[0][0]
         if text.lstrip():
-            runs[0] = (text.lstrip(), bold, italic)
+            runs[0] = (text.lstrip(),) + runs[0][1:]
             break
         runs.pop(0)
     while runs:
-        text, bold, italic = runs[-1]
+        text = runs[-1][0]
         if text.rstrip():
-            runs[-1] = (text.rstrip(), bold, italic)
+            runs[-1] = (text.rstrip(),) + runs[-1][1:]
             break
         runs.pop()
     return runs

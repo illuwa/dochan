@@ -107,7 +107,9 @@ def verify_features(docs):
           lambda d: any(p.text == 'Figure 1  Spacewalk' for p in d.find_all('paragraph')))
     check('FloatingPictures.doc', '혼합 요소 읽기 순서', 'CP4625 설명, CP4653 그림, CP4655 캡션',
           ['This picture has a caption:', 'Image', 'Figure 1  Spacewalk'],
-          lambda d: [getattr(e, 'text', type(e).__name__) for e in d.sections[0].elements[83:86]])
+          lambda d: [getattr(e, 'text', type(e).__name__)
+                     for e in d.sections[0].elements[83:85]]
+          + [d.sections[0].elements[84].caption_text])
     check('Bug51890.doc', '깊이 1→3 중첩 표', 'PAPX CP1551-1631 깊이와 셀 경계',
           [8, 1, 1, 2, [[1, 1], [1, 1]]],
           lambda d: [d.find_all('table')[0].row_count, d.find_all('table')[0].col_count,

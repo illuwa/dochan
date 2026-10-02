@@ -122,3 +122,149 @@ def test_multiple_endnote_references_in_one_body_line_are_preserved():
     assert detect_endnotes(drafts, {}, 1) == 3
     refs = [run[4] for line in drafts[0].groups[0] for run in line.runs if len(run) > 4]
     assert refs == [1, 2]
+
+
+def chapter_pages():
+    return [draft(1, [fragment("Contents", 40, 700, 16, 0),
+                       fragment("Alpha 1", 40, 650, 10, 1),
+                       fragment("Beta 2", 40, 630, 10, 2),
+                       fragment("Notes 3", 40, 610, 10, 3),
+                       fragment("Index 4", 40, 590, 10, 4)]),
+            draft(2, [fragment("Alpha", 40, 700, 16, 0),
+                       fragment("Body", 40, 500, 12, 1),
+                       fragment("1", 64, 504, 8, 2)]),
+            draft(3, [fragment("Beta", 40, 700, 16, 0),
+                       fragment("More", 40, 500, 12, 1),
+                       fragment("1", 64, 504, 8, 2)]),
+            draft(4, [fragment("Notes", 40, 700, 16, 0),
+                       fragment("Notes introduction.", 40, 650, 10, 1),
+                       fragment("ALPHA", 40, 620, 10, 2),
+                       fragment("1. First chapter definition", 50, 600, 10, 3),
+                       fragment("BETA", 40, 560, 10, 4),
+                       fragment("1. Second chapter definition", 50, 540, 10, 5)]),
+            draft(5, [fragment("Index", 40, 700, 16, 0),
+                       fragment("Unrelated index", 40, 650, 10, 1)])]
+
+
+def test_chapter_endnotes_restart_and_stop_at_contents_heading():
+    drafts = chapter_pages()
+    drops = {}
+    assert detect_endnotes(drafts, drops, 7) == 9
+    assert [n.text for d in drafts for n in d.notes] == [
+        "First chapter definition", "Second chapter definition"]
+    assert 5 not in drops
+    assert all(id(line) not in drops.get(4, set()) for line in drafts[3].groups[0]
+               if line.text == "Notes introduction.")
+    refs = [r[4] for d in drafts for g in d.groups for line in g for r in line.runs if len(r) > 4]
+    assert refs == [7, 8]
+
+
+def test_chapter_endnotes_reject_missing_toc_and_ambiguous_reference():
+    for change in ("toc", "reference", "sequence"):
+        drafts = chapter_pages()
+        if change == "toc":
+            drafts[0].groups = []
+        elif change == "reference":
+            drafts[1].note_markers *= 2
+        else:
+            for line in drafts[3].groups[0]:
+                if line.text.startswith("1. Second"):
+                    line.text = "2. Second chapter definition"
+        assert detect_endnotes(drafts, {}, 1) == 1
+        assert not any(d.notes for d in drafts)
+
+
+def test_endnote_superscript_fits_inside_host_em_box():
+    assert endnote_references([fragment("Body", 40, 500, 12, 0),
+                               fragment("1", 64, 504, 8, 1)]) == [(1, "1")]
+    assert endnote_references([fragment("Body", 40, 500, 12, 0),
+                               fragment("1", 64, 505, 8, 1)]) == []
+
+
+def test_endnote_reference_accepts_kerned_host_fragments_on_one_baseline():
+    assert endnote_references([fragment("Body", 40, 500, 12, 0),
+                               fragment(".", 63, 500, 12, 1),
+                               fragment("1", 69, 504, 8, 2)]) == [(2, "1")]
+    assert endnote_references([fragment("Body", 40, 500, 12, 0),
+                               fragment("Other", 40, 501, 12, 1),
+                               fragment("1", 69, 504, 8, 2)]) == []
+
+
+def test_chapter_endnotes_fragment_budget_rejects_without_mutation(monkeypatch):
+    import dochan.pdf.notes as notes
+    drafts = chapter_pages()
+    monkeypatch.setattr(notes, "MAX_NOTE_GEOMETRY_CHECKS", 1)
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 1
+    assert drops == {}
+    assert not any(d.notes for d in drafts)
+
+
+def test_chapter_endnotes_preserve_margin_artifacts_and_cross_page_definition():
+    drafts = chapter_pages()
+    drafts[3].groups[0].append(assemble_lines([fragment("Proof line", 10, 530, 12, 10)])[0])
+    continuation = draft(5, [fragment("Continued second definition", 50, 700, 10, 0),
+                             fragment("Printed folio", 50, 20, 8, 1)])
+    drafts[-1].page_number = 6
+    drafts.insert(-1, continuation)
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 3
+    assert drafts[3].notes[-1].text == "Second chapter definition\nContinued second definition"
+    assert len(drops[5]) == 1
+    assert all(id(line) not in drops[4] for line in drafts[3].groups[0] if line.text == "Proof line")
+
+
+def test_endnote_character_budget_warns_and_preserves_body(monkeypatch):
+    import dochan.pdf.notes as notes
+    drafts = chapter_pages()
+    monkeypatch.setattr(notes, "MAX_ENDNOTE_CHARACTERS", 10, raising=False)
+    warnings, drops = [], {}
+    assert detect_endnotes(drafts, drops, 1, warnings) == 1
+    assert warnings and drops == {}
+    assert not any(d.notes for d in drafts)
+
+
+def test_chapter_toc_whitespace_is_linear():
+    import time
+    drafts = chapter_pages()
+    drafts[0].groups[0].insert(1, assemble_lines([
+        fragment("A" + " " * 16000 + "B", 40, 670, 10, 20)])[0])
+    started = time.monotonic()
+    assert detect_endnotes(drafts, {}, 1) == 3
+    assert time.monotonic() - started < .5
+
+
+def test_chapter_endnotes_include_smaller_continuation_in_body_column():
+    drafts = chapter_pages()
+    drafts[-1].page_number = 6
+    drafts.insert(-1, draft(5, [fragment("Quoted continuation", 50, 700, 9, 0)]))
+    assert detect_endnotes(drafts, {}, 1) == 3
+    assert drafts[3].notes[-1].text.endswith("\nQuoted continuation")
+
+
+def test_endnote_superscript_preserves_legacy_rise_range():
+    drafts = pages()
+    drafts[0] = draft(1, [fragment("Body", 40, 500, 12, 0),
+                          fragment("1)", 64, 503.5, 9, 1)])
+    assert detect_endnotes(drafts, {}, 1) == 2
+    assert len(drafts[1].notes) == 1
+
+
+def test_chapter_endnotes_preserve_chapter_subheadings():
+    drafts = chapter_pages()
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 3
+    headings = [line for line in drafts[3].groups[0] if line.text in ("ALPHA", "BETA")]
+    assert len(headings) == 2
+    assert all(id(line) not in drops.get(4, set()) for line in headings)
+
+
+def test_chapter_endnotes_preserve_folios_and_outside_column_proof_marks():
+    drafts = chapter_pages()
+    margin = assemble_lines([fragment("Proof", 500, 520, 12, 20)])[0]
+    folio = assemble_lines([fragment("4 NOTES", 50, 90, 8, 21)])[0]
+    drafts[3].groups[0].extend([margin, folio])
+    drops = {}
+    assert detect_endnotes(drafts, drops, 1) == 3
+    assert id(margin) not in drops[4]
+    assert id(folio) not in drops[4]

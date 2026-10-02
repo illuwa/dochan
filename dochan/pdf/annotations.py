@@ -360,7 +360,32 @@ def _attach_unique_links(fragments, regions, warnings):
     spans = []
     matched = set()
     blocked = set()
-    blocked_targets = set()
+    ambiguous = set()
+    # Atomicity belongs to an annotation, not to its URL. The same destination
+    # can occur in separate, independently measurable areas of a page. Regions
+    # sharing a selected glyph remain one conservative ambiguity component.
+    parents = list(range(len(regions)))
+    ranks = [0] * len(regions)
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def join(indices):
+        if indices:
+            first = root(indices[0])
+            for index in indices[1:]:
+                other = root(index)
+                if first == other:
+                    continue
+                if ranks[first] < ranks[other]:
+                    first, other = other, first
+                parents[other] = first
+                if ranks[first] == ranks[other]:
+                    ranks[first] += 1
+
     bounds = []
     for index, region in enumerate(regions):
         points = [point for polygon in region.polygons for point in polygon]
@@ -433,15 +458,17 @@ def _attach_unique_links(fragments, regions, warnings):
                                            frag.y + uy * d + vy * frag.size * 0.5)
                                  for d in (first + inset, last - inset)]
                         if any(edge != middle for edge in edges):
-                            blocked_targets.add(region.target)
+                            ambiguous.add(region_index)
                     if middle:
                         hits.append(region_index)
                         break
             unique = {regions[i].target for i in hits}
             if len(unique) > 1 and not char.isspace():
-                blocked_targets.update(unique)
+                ambiguous.update(hits)
             target = next(iter(unique)) if len(unique) == 1 else ""
-            targets.append(target)
+            if not char.isspace():
+                join(hits)
+            targets.append((target, tuple(hits)))
             if target and not char.isspace():
                 matched.update(hits)
         start = 0
@@ -449,13 +476,19 @@ def _attach_unique_links(fragments, regions, warnings):
             end = start + 1
             while end < len(targets) and targets[end] == targets[start]:
                 end += 1
-            if targets[start] and frag.text[start:end].strip():
-                spans.append((frag, start, end, targets[start]))
+            target, indices = targets[start]
+            if target and frag.text[start:end].strip():
+                spans.append((frag, start, end, target, indices))
             start = end
     # 한도 초과는 부분 연결을 남기지 않는다.
-    for frag, start, end, target in spans:
-        if target not in blocked_targets:
-            frag.link_spans.append((start, end, target))
+    blocked_roots = {root(index) for index in blocked | ambiguous}
+    for frag, start, end, target, indices in spans:
+        if not any(root(index) in blocked_roots for index in indices):
+            if frag.link_spans and frag.link_spans[-1][1:] == (start, target):
+                first, _last, _target = frag.link_spans[-1]
+                frag.link_spans[-1] = (first, end, target)
+            else:
+                frag.link_spans.append((start, end, target))
     for index in matched:
-        if regions[index].target not in blocked_targets:
+        if root(index) not in blocked_roots:
             regions[index].matched = True

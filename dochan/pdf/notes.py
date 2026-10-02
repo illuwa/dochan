@@ -218,6 +218,7 @@ _ENDNOTE_HEADING = re.compile(r"^(?:미\s*주|end\s*notes|notes)$", re.IGNORECAS
 _ENDNOTE_DEFINITION = re.compile(r"^\s*(\d{1,3})[.)]\s+\S")
 _ENDNOTE_MARKER = re.compile(r"^\s*(\d{1,3})[.)]?\s*$")
 MAX_ENDNOTE_LINES = 200000
+MAX_ENDNOTE_CHARACTERS = 4 * 1024 * 1024
 
 
 def endnote_references(fragments, warnings=None):
@@ -241,13 +242,15 @@ def endnote_references(fragments, warnings=None):
     budget = [MAX_NOTE_GEOMETRY_CHECKS]
     result = []
     for marker, match in markers:
-        nearby = hosts[bisect_left(ys, marker.y - max_size * .3):bisect_right(ys, marker.y)]
+        nearby = hosts[bisect_left(ys, marker.y - max_size):bisect_right(ys, marker.y)]
         if not _spend(budget, len(nearby), warnings):
             return []
         valid = [h for h in nearby if marker.size <= h.size * .8
-                 and .15 * h.size <= marker.y - h.y <= .3 * h.size
+                 and .15 * h.size <= marker.y - h.y <= max(.30 * h.size, h.size - marker.size) + 1e-6
                  and -.1 * h.size <= marker.x - h.x - h.width <= .5 * h.size]
-        if len(valid) == 1:
+        # 커닝으로 나뉜 마지막 글자와 문장부호는 같은 기준선의 한 호스트다.
+        if (valid and max(h.y for h in valid) - min(h.y for h in valid) <= .1
+                and max(h.size for h in valid) - min(h.size for h in valid) <= .1):
             result.append((marker.order, match.group(1)))
     return result
 
@@ -296,10 +299,17 @@ def detect_endnotes(drafts, dropped, first_number=1, warnings=None):
         return first_number
     entries = [(d, line) for d in drafts for g in d.groups for line in g
                if id(line) not in dropped.get(d.page_number, set())]
+    if sum(len(line.text) for _d, line in entries) > MAX_ENDNOTE_CHARACTERS:
+        if warnings is not None:
+            warnings.append("WARN: PDF 미주 문자 수 한도 초과 — 미주 구역 복원 생략")
+        return first_number
     headings = [i for i, (_d, line) in enumerate(entries)
                 if _ENDNOTE_HEADING.fullmatch(line.text.strip())]
     if len(headings) != 1:
         return first_number
+    chapter_number = _detect_chapter_endnotes(drafts, entries, headings[0], dropped, first_number, warnings)
+    if chapter_number != first_number:
+        return chapter_number
     begin = headings[0]
     section = entries[begin + 1:]
     if not section:
@@ -381,4 +391,160 @@ def detect_endnotes(drafts, dropped, first_number=1, warnings=None):
         lines[0][0].notes.append(note)
         for d, line in lines:
             dropped.setdefault(d.page_number, set()).add(id(line))
+    return first_number + len(planned)
+
+
+def _heading_key(text):
+    """목차·본문·미주 제목의 대소문자와 조판 공백만 정규화한다."""
+    return "".join(c for c in text.casefold() if not c.isspace())
+
+
+def _detect_chapter_endnotes(drafts, entries, begin, dropped, first_number, warnings):
+    """목차와 본문 제목으로 독립 확인된 장마다 번호를 재시작한다.
+
+    단순 끝 구역과 별개로, 목차의 Notes 다음 제목이 실제 구역 끝을
+    증명하고 모든 장의 연속 정의와 위첨자가 일대일인 경우만 이동한다.
+    다른 크기 문단도 본문 열에 있으면 포함하며 지면 여백은 보존한다.
+    """
+    heading_draft, heading = entries[begin]
+    # Contents와 Notes 사이의 목차에서 페이지 번호가 붙은 제목만 채택한다.
+    contents = [i for i, (_d, line) in enumerate(entries[:begin])
+                if _heading_key(line.text) in ("contents", "tableofcontents", "목차")]
+    if len(contents) != 1:
+        return first_number
+    toc = []
+    for _d, line in entries[contents[0] + 1:begin]:
+        parts = line.text.rsplit(None, 1)
+        if len(parts) == 2 and re.fullmatch(r"[0-9]+|[ivxlcdm]+", parts[1], re.I):
+            toc.append((_heading_key(parts[0]), line))
+    notes_key = _heading_key(heading.text)
+    positions = [i for i, (key, _line) in enumerate(toc) if key == notes_key]
+    if len(positions) != 1 or positions[0] + 1 >= len(toc):
+        return first_number
+    toc = toc[:positions[0] + 2]
+    stop_key = toc[-1][0]
+    stops = [i for i in range(begin + 1, len(entries))
+             if _heading_key(entries[i][1].text) == stop_key
+             and abs(entries[i][1].size - heading.size) <= .1]
+    if len(stops) != 1:
+        return first_number
+    end = stops[0]
+    section = entries[begin + 1:end]
+    section_pages = {d.page_number for d, _line in section}
+    if any(d.ordered or d.rotation for d in drafts if d.page_number in section_pages):
+        return first_number
+    toc_keys = {key for key, _line in toc[:-2]}
+    # 실물에서 미주 소제목과 본문 장 제목은 같은 문자열이며 크기가 다르다.
+    chapter_lines = [(i, d, line, _heading_key(line.text))
+                     for i, (d, line) in enumerate(section)
+                     if _heading_key(line.text) in toc_keys]
+    if len(chapter_lines) < 2:
+        return first_number
+    keys = [item[3] for item in chapter_lines]
+    if len(set(keys)) != len(keys):
+        return first_number
+    if len(keys) > MAX_NOTE_MARKERS:
+        return first_number
+    candidates = {}
+    for i, (d, line) in enumerate(entries[:begin]):
+        candidates.setdefault(_heading_key(line.text), []).append((i, d, line))
+    body_headings = {}
+    for key, (_start, _d, chapter, _key) in zip(keys, chapter_lines):
+        found = [item for item in candidates.get(key, []) if item[2].size > chapter.size]
+        if len(found) != 1:
+            return first_number
+        body_headings[key] = found[0]
+    if [body_headings[k][0] for k in keys] != sorted(body_headings[k][0] for k in keys):
+        return first_number
+    marker_count = sum(len(getattr(d, "note_markers", [])) for d in drafts)
+    if marker_count > MAX_NOTE_MARKERS:
+        return first_number
+    if not _spend([MAX_NOTE_GEOMETRY_CHECKS],
+                  sum(len(line.fragment_orders) for _d, line in entries[:begin]), warnings):
+        return first_number
+    source_lines = {(d.page_number, order): (i, line)
+                    for i, (d, line) in enumerate(entries[:begin])
+                    for order in line.fragment_orders}
+    refs = []
+    for d in drafts:
+        for order, label in getattr(d, "note_markers", []):
+            source = source_lines.get((d.page_number, order))
+            if source:
+                refs.append((source[0], source[1], order, label))
+    planned, updates = [], {}
+    for chapter_index, (start, _d, chapter, key) in enumerate(chapter_lines):
+        stop = chapter_lines[chapter_index + 1][0] if chapter_index + 1 < len(chapter_lines) else len(section)
+        body_start = body_headings[key][0]
+        body_stop = (body_headings[keys[chapter_index + 1]][0]
+                     if chapter_index + 1 < len(keys) else begin)
+        references = {}
+        for i, line, order, label in refs:
+            if body_start < i < body_stop:
+                references.setdefault(label, []).append((line, order))
+        definitions = []
+        body_bottoms = {}
+        body_right = max((line.right for _d, line in section
+                          if abs(line.size - chapter.size) <= .1), default=chapter.right)
+        for d, line in section[start + 1:stop]:
+            if abs(line.size - chapter.size) <= .1:
+                body_bottoms[d.page_number] = min(body_bottoms.get(d.page_number, line.y), line.y)
+        for d, line in section[start + 1:stop]:
+            if (not all(math.isfinite(v) for v in (line.size, line.y, line.left, line.right))
+                    or line.direction != "ltr"):
+                return first_number
+            if (abs(line.size - chapter.size) > .1
+                    and (line.right < chapter.left
+                         or line.left < chapter.left - GEOMETRY_TOLERANCE
+                         or line.left > body_right + GEOMETRY_TOLERANCE
+                         or line.y <= d.bounds[0] + HEADER_FOOTER_ZONE
+                         or line.y >= d.bounds[1] - HEADER_FOOTER_ZONE
+                         or (_heading_key(re.sub(r"\d+", "", line.text)) in ("", notes_key)
+                             and line.y < body_bottoms.get(d.page_number, d.bounds[0])))):
+                continue
+            match = _ENDNOTE_DEFINITION.match(line.text)
+            if match:
+                label = match.group(1)
+                if int(label) != len(definitions) + 1 or len(references.get(label, [])) != 1:
+                    return first_number
+                definitions.append((label, [(d, line)]))
+            else:
+                if not definitions:
+                    return first_number
+                previous_draft, previous = definitions[-1][1][-1]
+                # 이어지는 문단의 들여쓰기는 허용하되 원래 정의의 수평 범위를 벗어나지 않는다.
+                first = definitions[-1][1][0][1]
+                if (line.left < chapter.left - GEOMETRY_TOLERANCE
+                        or line.left > first.right
+                        or (d is previous_draft and not 0 < previous.y - line.y <= line.size * 2)):
+                    return first_number
+                definitions[-1][1].append((d, line))
+        if not definitions or set(references) != {label for label, _lines in definitions}:
+            return first_number
+        for label, lines in definitions:
+            number = first_number + len(planned)
+            source, order = references[label][0]
+            runs = _endnote_reference_runs(source, order, number, updates.get(id(source)))
+            if runs is None:
+                return first_number
+            updates[id(source)] = runs
+            paragraphs = []
+            for offset, (d, line) in enumerate(lines):
+                paragraph = _paragraph(line, d.page_number)
+                if offset == 0:
+                    prefix = re.match(r"^\s*\d{1,3}[.)]\s*", paragraph.text).end()
+                    for run in paragraph.runs:
+                        removed = min(prefix, len(run.text))
+                        run.text = run.text[removed:]
+                        prefix -= removed
+                    paragraph.runs = [run for run in paragraph.runs if run.text]
+                paragraphs.append(paragraph)
+            planned.append((source, lines, Footnote(type="endnote", paragraphs=paragraphs, number=number)))
+            if len(planned) > MAX_NOTE_MARKERS:
+                return first_number
+    for source, lines, note in planned:
+        source.runs = updates[id(source)]
+        lines[0][0].notes.append(note)
+        for d, line in lines:
+            dropped.setdefault(d.page_number, set()).add(id(line))
+    # 도입문이 있는 Notes 제목은 도입문과 함께 본문에 남긴다.
     return first_number + len(planned)

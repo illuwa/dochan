@@ -173,6 +173,8 @@ def main():
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--files", nargs="*")
     parser.add_argument("--text-tables", action="store_true")
+    parser.add_argument("--timeout", type=int, default=15,
+                        help="문서당 검증 제한 시간(초). 기본값은 15다.")
     args = parser.parse_args()
     def timeout(_signum, _frame):
         raise ProbeDeadline("document deadline")
@@ -181,7 +183,7 @@ def main():
     paths = [args.corpus / name for name in args.files] if args.files else sorted(args.corpus.glob("*.pdf"))
     for path in paths:
         try:
-            signal.alarm(15)
+            signal.alarm(max(1, args.timeout))
             results[path.name] = verify(path, text_tables=args.text_tables)
         except (Exception, ProbeDeadline) as exc:
             results[path.name] = {"error": type(exc).__name__}

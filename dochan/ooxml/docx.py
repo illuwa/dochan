@@ -228,6 +228,7 @@ class DOCXReader:
         self._note_reference_order = []
         self._comment_reference_numbers = {}
         self._comment_reference_order = []
+        self._annotated_comments = set()
         self._image_asset_ids = set()
         self._image_asset_count = 0
         self._image_asset_limit_reported = False
@@ -256,6 +257,7 @@ class DOCXReader:
                 self._chart_parts = self._read_chart_parts(package)
                 self._run_styles = self._read_run_styles(package)
                 numbering = self._read_numbering(package)
+                self._numbering = numbering
                 self._notes = {
                     "footnote": self._read_notes(package, "word/footnotes.xml", "footnote"),
                     "endnote": self._read_notes(package, "word/endnotes.xml", "endnote"),
@@ -340,13 +342,16 @@ class DOCXReader:
                     child,
                     paragraph_index_ref[0],
                     structure_depth=depth,
+                    numbering=numbering,
                 )
-                self._apply_numbering(para, child, numbering)
                 paragraph_index_ref[0] += 1
                 elements.extend(self._paragraph_flow(para))
-                elements.extend(self._equations_in(child))
             elif child.tag in (f"{{{M_NS}}}oMathPara", f"{{{M_NS}}}oMath"):
                 elements.extend(self._equations_in(child, include_self=True))
+            elif child.tag == f"{{{W_NS}}}commentRangeEnd":
+                annotation = self._comment_annotation(_w_attr(child, "id"))
+                if annotation:
+                    elements.append(Paragraph(runs=[TextRun(text=annotation)]))
             elif child.tag == f"{{{W_NS}}}altChunk":
                 alt_chunk_elements = self._parse_alt_chunk(child, paragraph_index_ref[0])
                 paragraph_index_ref[0] += len(alt_chunk_elements)
@@ -550,6 +555,7 @@ class DOCXReader:
         paragraph_index: int,
         path: str = "word/document.xml",
         structure_depth: int = 0,
+        numbering=None,
     ) -> Paragraph:
         para = Paragraph(
             provenance=Provenance(
@@ -562,7 +568,10 @@ class DOCXReader:
         para._source_element = p_elem
         para.heading_level = self._heading_level(p_elem)
         para._caption_kind = self._caption_kind(p_elem)
-        para.runs = self._parse_runs(p_elem, structure_depth)
+        # 부모 목록 표지는 자식 텍스트박스가 카운터를 소비하기 전에 예약한다.
+        if numbering is not None:
+            self._apply_numbering(para, p_elem, numbering)
+        para.runs.extend(self._parse_runs(p_elem, structure_depth))
         for run in para.runs:
             if run.provenance is None:
                 run.provenance = para.provenance
@@ -593,6 +602,8 @@ class DOCXReader:
                     paragraph_index += 1
                 elif isinstance(block, Table) and block.rows:
                     note.paragraphs.append(block)
+                elif isinstance(block, (Equation, Image)):
+                    note.paragraphs.append(block)
             note.paragraph_ids = note_para_ids
             notes[note_id] = note
         if note_type == "comment":
@@ -619,7 +630,7 @@ class DOCXReader:
                     structure_depth=depth,
                 )
                 para._source_element = child
-                blocks.append(para)
+                blocks.extend(self._paragraph_flow(para))
                 paragraph_ref[0] += 1
             elif child.tag == f"{{{W_NS}}}tbl":
                 blocks.append(
@@ -731,8 +742,7 @@ class DOCXReader:
                     structure_depth=depth,
                 )
                 paragraph_index_ref[0] += 1
-                if para.text.strip():
-                    paragraphs.append(para)
+                paragraphs.extend(self._paragraph_flow(para))
             elif child.tag in (
                 f"{{{W_NS}}}sdt",
                 f"{{{W_NS}}}sdtContent",
@@ -1340,17 +1350,11 @@ class DOCXReader:
         if not self._structure_depth_allowed(depth):
             return []
         runs = []
-        annotated_comments = set()
         for child in p_elem:
             if child.tag == f"{{{W_NS}}}r":
-                comment_reference_ids = self._run_comment_reference_ids(child)
-                if comment_reference_ids and comment_reference_ids.issubset(annotated_comments):
-                    continue
                 runs.extend(self._parse_run(child, depth))
             elif child.tag == f"{{{W_NS}}}hyperlink":
-                hyperlink_runs = []
-                for r_elem in child.findall("w:r", namespaces=NS):
-                    hyperlink_runs.extend(self._parse_run(r_elem, depth))
+                hyperlink_runs = self._parse_runs(child, depth + 1)
                 target = self._hyperlink_target(child)
                 if target and hyperlink_runs:
                     hyperlink_runs[-1].text = f"{hyperlink_runs[-1].text} <{target}>"
@@ -1365,7 +1369,6 @@ class DOCXReader:
                 comment_id = _w_attr(child, "id")
                 annotation = self._comment_annotation(comment_id)
                 if annotation:
-                    annotated_comments.add(comment_id)
                     if runs:
                         runs[-1].text = f"{runs[-1].text} {annotation}"
                     else:
@@ -1380,6 +1383,14 @@ class DOCXReader:
                 continue
             elif child.tag == f"{{{W_NS}}}del":
                 continue
+            elif child.tag in (f"{{{M_NS}}}oMath", f"{{{M_NS}}}oMathPara"):
+                run = TextRun()
+                run._flow_elements = self._equations_in(child, include_self=True)
+                runs.append(run)
+            elif child.tag == f"{{{MC_NS}}}AlternateContent":
+                preferred = self._alternate_content_preferred_child(child)
+                if preferred is not child:
+                    runs.extend(self._parse_runs(preferred, depth + 1))
             elif child.tag in (
                 f"{{{W_NS}}}sdt",
                 f"{{{W_NS}}}sdtContent",
@@ -1449,7 +1460,7 @@ class DOCXReader:
                 text_parts.append(child.text or "")
             elif child.tag == f"{{{W_NS}}}tab":
                 text_parts.append("\t")
-            elif child.tag == f"{{{W_NS}}}br":
+            elif child.tag in (f"{{{W_NS}}}br", f"{{{W_NS}}}cr"):
                 text_parts.append("\n")
             elif child.tag == f"{{{W_NS}}}fldChar":
                 checkbox_marker = self._form_checkbox_marker(child)
@@ -1470,6 +1481,8 @@ class DOCXReader:
                     flush_text()
                     segments.append((f"[{number}]", "endnote", number))
             elif child.tag == f"{{{W_NS}}}commentReference":
+                if _w_attr(child, "id") in getattr(self, "_annotated_comments", set()):
+                    continue
                 number = self._register_comment_reference(_w_attr(child, "id"))
                 if number is not None:
                     flush_text()
@@ -1547,8 +1560,16 @@ class DOCXReader:
                     continue
             if node.tag == f"{{{W_NS}}}txbxContent":
                 paragraphs = []
-                for p_elem, paragraph_depth in self._textbox_paragraphs(node, depth):
-                    runs = self._parse_runs(p_elem, paragraph_depth)
+                for p_elem, paragraph_depth in self._textbox_paragraphs(node, depth, include_tables=True):
+                    if p_elem.tag == f"{{{W_NS}}}tbl":
+                        run = TextRun()
+                        run._flow_elements = [self._parse_table(p_elem, 0, structure_depth=paragraph_depth)]
+                        paragraphs.append([run])
+                        continue
+                    para = Paragraph()
+                    self._apply_numbering(para, p_elem, getattr(self, "_numbering", {}))
+                    para.runs.extend(self._parse_runs(p_elem, paragraph_depth))
+                    runs = para.runs
                     if runs:
                         paragraphs.append(runs)
                 if paragraphs:
@@ -1563,6 +1584,13 @@ class DOCXReader:
                         yield TextRun(text="\n")
                 if paragraphs:
                     yield boundary
+                continue
+            if node.tag in {f"{{{W_NS}}}del", f"{{{W_NS}}}moveFrom"}:
+                continue
+            if node.tag in {f"{{{M_NS}}}oMath", f"{{{M_NS}}}oMathPara"}:
+                run = TextRun()
+                run._flow_elements = self._equations_in(node, include_self=True)
+                yield run
                 continue
             if isinstance(node.tag, str) and etree.QName(node).localname == "chart":
                 blocks = self._chart_blocks_in(node)
@@ -1617,7 +1645,7 @@ class DOCXReader:
                 texts.append(f"{text}\n" if anchored else text)
         return texts
 
-    def _textbox_paragraphs(self, container, depth):
+    def _textbox_paragraphs(self, container, depth, include_tables=False):
         if not self._structure_depth_allowed(depth):
             return
         wrappers = {f"{{{W_NS}}}{name}" for name in
@@ -1625,11 +1653,13 @@ class DOCXReader:
         for child in container:
             if child.tag == f"{{{W_NS}}}p":
                 yield child, depth
+            elif include_tables and child.tag == f"{{{W_NS}}}tbl":
+                yield child, depth
             elif child.tag in wrappers:
-                yield from self._textbox_paragraphs(child, depth + 1)
+                yield from self._textbox_paragraphs(child, depth + 1, include_tables)
             elif child.tag == f"{{{MC_NS}}}AlternateContent":
                 yield from self._textbox_paragraphs(
-                    self._alternate_content_preferred_child(child), depth + 1)
+                    self._alternate_content_preferred_child(child), depth + 1, include_tables)
 
     def _outermost_textbox_contents(self, elem) -> List[object]:
         textboxes = []
@@ -1672,11 +1702,23 @@ class DOCXReader:
         return getattr(self, "_run_styles", {}).get(style_id, _RunStyle())
 
     def _equations_in(self, elem, include_self: bool = False) -> List[Equation]:
-        """요소 안의 m:oMath 를 Equation(LaTeX) 목록으로 변환."""
-        if include_self and elem.tag == f"{{{M_NS}}}oMath":
-            omaths = [elem]
-        else:
-            omaths = elem.findall(".//m:oMath", namespaces=NS)
+        """활성 수식 갈래만 제한된 깊이로 읽는다. 문단 뒤 재검색하지 않는다."""
+        omaths = []
+        stack = [(elem, 0)] if include_self else [(c, 0) for c in reversed(list(elem))]
+        while stack:
+            node, depth = stack.pop()
+            if not self._structure_depth_allowed(depth):
+                continue
+            if node.tag in {f"{{{W_NS}}}del", f"{{{W_NS}}}moveFrom"}:
+                continue
+            if node.tag == f"{{{M_NS}}}oMath":
+                omaths.append(node)
+            elif node.tag == f"{{{MC_NS}}}AlternateContent":
+                preferred = self._alternate_content_preferred_child(node)
+                if preferred is not node:
+                    stack.append((preferred, depth + 1))
+            else:
+                stack.extend((c, depth + 1) for c in reversed(list(node)))
         equations = []
         for omath in omaths:
             latex = _omml_to_latex(omath).strip()
@@ -1919,6 +1961,7 @@ class DOCXReader:
         marker = self._comment_marker(comment_id)
         if not marker:
             return ""
+        self._annotated_comments.add(comment_id)
         comment = getattr(self, "_comments", {}).get(comment_id)
         comment_text = self._comment_primary_text(comment)
         if not comment_text:
@@ -2094,9 +2137,16 @@ class DOCXReader:
                     child,
                     paragraph_index,
                     structure_depth=structure_depth,
+                    numbering=getattr(self, "_numbering", {}),
                 )
                 paragraph_index += 1
                 paragraphs.extend(self._paragraph_flow(para))
+            elif child.tag in (f"{{{M_NS}}}oMath", f"{{{M_NS}}}oMathPara"):
+                paragraphs.extend(self._equations_in(child, include_self=True))
+            elif child.tag == f"{{{W_NS}}}commentRangeEnd":
+                annotation = self._comment_annotation(_w_attr(child, "id"))
+                if annotation:
+                    paragraphs.append(Paragraph(runs=[TextRun(text=annotation)]))
             elif child.tag == f"{{{W_NS}}}tbl":
                 if table_depth >= MAX_NESTED_TABLE_DEPTH:
                     paragraphs.append(Paragraph(runs=[TextRun(text="[nested table omitted: depth limit exceeded]")]))

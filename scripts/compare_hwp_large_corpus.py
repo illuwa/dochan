@@ -60,6 +60,12 @@ def _private_pairs(directory):
     return summary
 
 
+def _synthetic_corrupt_sections():
+    from scripts.probe_hwp_corrupt_sections import probe
+
+    return [probe(damage) for damage in ("invalid", "truncated", "checksum")]
+
+
 def snapshot(args):
     root = Path(args.corpus).resolve()
     files = sorted(str(path.relative_to(root)) for directory in ("hwp", "hwpx")
@@ -83,6 +89,7 @@ def snapshot(args):
                                       "seconds": round(time.monotonic() - start, 1)}),
                           flush=True)
         pairs = pool.apply(_private_pairs, (args.pairs,)) if args.pairs else None
+        synthetic = pool.apply(_synthetic_corrupt_sections)
     summary = {"source_root": str(Path(args.source_root).resolve()),
                "revision": args.revision, "counts": counts,
                "standard_counts": {ext: sum(name.startswith(ext + "/")
@@ -93,7 +100,8 @@ def snapshot(args):
                                               and name.endswith("." + ext)
                                               for ext in ("hwp", "hwpx"))
                                   for name in files),
-               "seconds": round(time.monotonic() - start, 3), "private_pairs": pairs}
+               "seconds": round(time.monotonic() - start, 3), "private_pairs": pairs,
+               "synthetic_corrupt_sections": synthetic}
     output.with_suffix(".summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False), flush=True)
@@ -118,6 +126,20 @@ def compare(args):
             identical[Path(name).suffix[1:].lower()] += 1
     result = {"before_count": len(before), "after_count": len(after),
               "identical": identical, "changed_count": len(changes), "changes": changes}
+    synthetic = []
+    summaries = [Path(name).with_suffix(".summary.json") for name in (args.before, args.after)]
+    if all(path.exists() for path in summaries):
+        old_cases, new_cases = [
+            {row["case"]: row for row in json.loads(path.read_text(encoding="utf-8")).get(
+                "synthetic_corrupt_sections", [])} for path in summaries
+        ]
+        for case in sorted(set(old_cases) | set(new_cases)):
+            old, new = old_cases.get(case, {}), new_cases.get(case, {})
+            synthetic.append({"case": case, "before": old, "after": new,
+                              "outputs_identical": all(old.get(key) == new.get(key)
+                                                       for key in ("markdown", "json")),
+                              "valid_sections_preserved": new.get("valid_texts_match", False)})
+    result["synthetic_corrupt_sections"] = synthetic
     Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n",
                                  encoding="utf-8")
     print(json.dumps({key: value for key, value in result.items() if key != "changes"}))

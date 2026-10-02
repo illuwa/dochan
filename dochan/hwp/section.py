@@ -44,35 +44,57 @@ from .revisions import project_text_result
 def _apply_link_ranges(runs, ranges):
     """텍스트 오프셋 범위 [(start, end, url)] 를 런 목록에 적용한다.
 
-    범위 경계에 걸친 런은 최대 3조각으로 나누고 가운데 조각에만 링크를 건다.
-    런 서식(굵게 등)은 dataclasses.replace 로 그대로 복제된다.
+    정렬한 경계를 한 번 순회하며 마지막 범위가 우선하는 링크를 적용한다.
+    기존 런과 모든 범위 경계를 보존하므로 서식과 JSON의 런 분할도 유지한다.
+    런 수 R, 범위 수 L에 대해 O(R + L log L) 작업으로 끝난다.
     """
-    for start, end, url in ranges:
-        new_runs = []
-        pos = 0
-        for run in runs:
-            run_len = len(run.text)
-            run_start, run_end = pos, pos + run_len
-            pos = run_end
-            if run_len == 0 or run_end <= start or run_start >= end:
-                new_runs.append(run)
-                continue
-            cut_a = max(start - run_start, 0)
-            cut_b = min(end - run_start, run_len)
-            if cut_a > 0:
-                new_runs.append(_dc_replace(run, text=run.text[:cut_a]))
-            new_runs.append(_dc_replace(run, text=run.text[cut_a:cut_b], link=url))
-            if cut_b < run_len:
-                new_runs.append(_dc_replace(run, text=run.text[cut_b:]))
-        runs = new_runs
-    return runs
+    from heapq import heappop, heappush
+
+    events = []
+    for index, (start, end, url) in enumerate(ranges):
+        # _hyperlink_ranges emits only nonempty forward intervals.
+        if end <= start:
+            continue
+        events.append((start, (-index, end, url)))
+        events.append((end, None))
+    if not events:
+        return runs
+    events.sort(key=lambda event: event[0])
+    active = []
+    event_index = 0
+    pos = 0
+    result = []
+    for run in runs:
+        run_start = pos
+        run_end = pos + len(run.text)
+        if run_end == pos:
+            result.append(run)
+            continue
+        while pos < run_end:
+            while event_index < len(events) and events[event_index][0] <= pos:
+                entry = events[event_index][1]
+                if entry is not None:
+                    heappush(active, entry)
+                event_index += 1
+            while active and active[0][1] <= pos:
+                heappop(active)
+            stop = min(run_end, events[event_index][0]) if event_index < len(events) else run_end
+            if not active and pos == run_start and stop == run_end:
+                result.append(run)
+            else:
+                result.append(_dc_replace(
+                    run, text=run.text[pos - run_start:stop - run_start],
+                    link=active[0][2] if active else run.link,
+                ))
+            pos = stop
+    return result
 
 
 # Public corpus maximum: 638,984 records in one section. A byte-only
 # bound would admit 52,428,800 empty records in 200 MiB and amplify them
 # into Python tree nodes. Keep an independent object/work bound as well.
 MAX_HWP_RECORDS = 1_000_000
-MAX_HWP_DOCUMENT_RECORDS = 2_000_000
+MAX_HWP_DOCUMENT_RECORDS = 1_300_000
 MAX_HWP_DOCUMENT_BYTES = MAX_DECOMPRESSED_SIZE
 MAX_HWP_STRUCTURE_DEPTH = 64
 MAX_HWP_TABLE_DEPTH = 32
@@ -126,30 +148,53 @@ class SectionParser:
         self._table_depth = 0
         self._in_table_cell = False
         self._fatal_error_keys = set()
+        self._document_error_keys = set()
         self._table_failure_serial = 0
 
+    def _document_limit_once(self, key, message):
+        if key not in self._document_error_keys:
+            self._document_error_keys.add(key)
+            self.errors.append(message)
+
     def parse_stream(self, stream_data: bytes, is_compressed: bool,
-                     *, reject_record_limit: bool = False) -> Section:
+                     *, reject_record_limit: bool = False,
+                     distribution_decoder=None) -> Section:
         self._reset_section_limits()
-        byte_limit = min(MAX_DECOMPRESSED_SIZE,
-                         MAX_HWP_DOCUMENT_BYTES - self._document_bytes)
-        if is_compressed:
-            try:
+        remaining = max(0, MAX_HWP_DOCUMENT_BYTES - self._document_bytes)
+        byte_limit = min(MAX_DECOMPRESSED_SIZE, remaining)
+        if not remaining and stream_data:
+            self._document_limit_once(
+                "bytes", "ERR: HWP document size limit exhausted: "
+                f"{MAX_HWP_DOCUMENT_BYTES} bytes")
+            return Section()
+        try:
+            if distribution_decoder is not None:
+                # Validate CRC/alignment and inflate exactly once, under the
+                # same budget as ordinary BodyText (including failed work).
+                stream_data = distribution_decoder(
+                    stream_data, is_compressed=is_compressed,
+                    max_size=byte_limit, decompress=True,
+                )
+            elif is_compressed:
                 stream_data = safe_zlib_decompress(stream_data, max_size=byte_limit)
-            except (ValueError, zlib.error) as exc:
-                # Failed inflation may already have consumed the whole budget
-                # (truncation, bad checksum, invalid deflate). Never let the
-                # next section repeat that work for free.
-                self._document_bytes += byte_limit
-                if "Decompressed size exceeds limit" not in str(exc):
-                    raise
-                self.errors.append(f"ERR: HWP section/document size limit: {exc}")
-                return Section()
+        except (ValueError, zlib.error) as exc:
+            self._document_bytes += min(getattr(exc, "inflated", 0), byte_limit)
+            if "Decompressed size exceeds limit" not in str(exc):
+                raise
+            if byte_limit == remaining:
+                self._document_limit_once(
+                    "bytes", "ERR: HWP document size limit exhausted: "
+                    f"{MAX_HWP_DOCUMENT_BYTES} bytes")
+            else:
+                self.errors.append(f"ERR: HWP section size limit: {exc}")
+            return Section()
         if len(stream_data) > byte_limit:
-            self.errors.append(
-                "ERR: HWP section/document size exceeds limit: "
-                f"{len(stream_data)} > {byte_limit} bytes"
-            )
+            message = ("ERR: HWP section/document size exceeds limit: "
+                       f"{len(stream_data)} > {byte_limit} bytes")
+            if byte_limit == remaining:
+                self._document_limit_once("bytes", message)
+            else:
+                self.errors.append(message)
             return Section()
         self._document_bytes += len(stream_data)
 
@@ -167,10 +212,11 @@ class SectionParser:
         i = 0
         while i < len(data) - 3:
             if self._document_records >= MAX_HWP_DOCUMENT_RECORDS:
-                self.errors.append(
-                    "ERR: HWP document record count exceeds limit: "
-                    f"more than {MAX_HWP_DOCUMENT_RECORDS}"
-                )
+                message = ("ERR: HWP document record count exceeds limit: "
+                           f"more than {MAX_HWP_DOCUMENT_RECORDS}")
+                if reject_record_limit:
+                    raise HWPRecordLimitError(message)
+                self._document_limit_once("records", message)
                 break
             if len(records) >= MAX_HWP_RECORDS:
                 message = (

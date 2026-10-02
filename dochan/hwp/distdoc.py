@@ -6,12 +6,11 @@
 압축 후 trailer 배치 역시 명세에 없어 공개 실물의 CRC32와 길이로 검증한다.
 """
 import struct
-import zlib
 
 from dochan.constants import HWPTAG_DISTRIBUTE_DOC_DATA
 from dochan.utils.aes import aes128_ecb_decrypt
 from dochan.utils.bounded_io import MAX_OLE_STREAM_SIZE
-from dochan.utils.safe_decompress import MAX_DECOMPRESSED_SIZE
+from dochan.utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
 
 
 def _read_record_header(data: bytes):
@@ -60,45 +59,29 @@ def _descramble(seed_block: bytearray):
         seed_block[index] ^= value
 
 
-def _compressed_payload(data: bytes):
-    """출력 크기를 제한하며 EOF, CRC32, 길이와 AES 정렬 바이트를 검사한다."""
-    inflater = zlib.decompressobj(-15)
-    position = total = checksum = 0
-    pending = b""
-    while not inflater.eof:
-        if not pending and position < len(data):
-            pending = data[position:position + 65536]
-            position += len(pending)
-        source = pending
-        try:
-            output = inflater.decompress(source, min(65536, MAX_DECOMPRESSED_SIZE - total + 1))
-        except zlib.error as exc:
-            raise ValueError("Invalid distribution DEFLATE stream") from exc
-        total += len(output)
-        if total > MAX_DECOMPRESSED_SIZE:
-            raise ValueError("Distribution decompressed size exceeds limit")
-        checksum = zlib.crc32(output, checksum)
-        pending = inflater.unconsumed_tail
-        if not inflater.eof and not output:
-            if not source and position == len(data):
-                raise ValueError("Truncated distribution DEFLATE stream")
-            if pending and len(pending) == len(source):
-                raise ValueError("Distribution DEFLATE made no progress")
+def _compressed_payload(data: bytes, *, max_size=None, decompress=False):
+    """검증과 본문 해제를 한 번에 수행하며 기존 압축 바이트 반환도 지원한다."""
+    if max_size is None:
+        max_size = MAX_DECOMPRESSED_SIZE
+    end = 0
 
-    end = position - len(inflater.unused_data)
-    trailer = data[end:]
-    padding = bytes(-end % 16)
-    # 공개 실물에는 검사값 두 개가 각각 16바이트에 정렬된 경우와
-    # CRC32/ISIZE 8바이트 뒤에 AES 정렬 바이트가 붙은 경우가 있다.
-    check = struct.pack("<II", checksum & 0xFFFFFFFF, total)
-    aligned = padding + check[:4] + bytes(12) + check[4:] + bytes(12)
-    packed = check + bytes(-(end + 8) % 16)
-    if trailer not in (padding, aligned, packed):
-        raise ValueError("Invalid distribution CRC32/size trailer or alignment")
-    return data[:end]
+    def validate(trailer, checksum, total):
+        nonlocal end
+        end = len(data) - len(trailer)
+        padding = bytes(-end % 16)
+        # 공개 실물의 AES 정렬 CRC32/ISIZE 두 배치를 그대로 검증한다.
+        check = struct.pack("<II", checksum & 0xFFFFFFFF, total)
+        aligned = padding + check[:4] + bytes(12) + check[4:] + bytes(12)
+        packed = check + bytes(-(end + 8) % 16)
+        if trailer not in (padding, aligned, packed):
+            raise ValueError("Invalid distribution CRC32/size trailer or alignment")
+
+    output = safe_zlib_decompress(data, max_size=max_size, trailer_validator=validate)
+    return output if decompress else data[:end]
 
 
-def decode_distribution_section(raw_stream: bytes, *, is_compressed: bool = False):
+def decode_distribution_section(raw_stream: bytes, *, is_compressed: bool = False,
+                                max_size=None, decompress: bool = False):
     """AES 복호화 결과를 반환하며 압축된 경우 검증된 DEFLATE 부분만 반환한다."""
     if len(raw_stream) > MAX_OLE_STREAM_SIZE:
         raise ValueError("Distribution stream size exceeds limit")
@@ -110,4 +93,6 @@ def decode_distribution_section(raw_stream: bytes, *, is_compressed: bool = Fals
     offset = 4 + (key_data[0] & 15)  # 2.3절 1항: XOR 전에 seed로 구한다
     _descramble(key_data)
     plaintext = aes128_ecb_decrypt(bytes(key_data[offset:offset + 16]), ciphertext)
-    return _compressed_payload(plaintext) if is_compressed else plaintext
+    if is_compressed:
+        return _compressed_payload(plaintext, max_size=max_size, decompress=decompress)
+    return plaintext

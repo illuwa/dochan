@@ -410,10 +410,6 @@ class Dochan:
                         max_bytes=MAX_OLE_STREAM_SIZE,
                         budget=stream_budget,
                     )
-                    if file_header.is_distribution:
-                        stream_data = decode_distribution_section(
-                            stream_data, is_compressed=file_header.is_compressed,
-                        )
                     fallback_name = f"BodyText/Section{section_idx}"
                     allow_body_fallback = (
                         self._revision_mode == 'preserve'
@@ -426,13 +422,15 @@ class Dochan:
                         section = section_parser.parse_stream(
                             stream_data, file_header.is_compressed,
                             reject_record_limit=allow_body_fallback,
+                            distribution_decoder=(decode_distribution_section
+                                                  if file_header.is_distribution else None),
                         )
                     except HWPRecordLimitError:
                         # Reject ViewText before model/cell budgets are consumed.
                         # BodyText retains the same byte and record limits.
                         self.doc.errors.append(
                             f"WARN: HWP revision ViewText/Section{section_idx} record limit; "
-                            f"{fallback_name} preserved instead; deleted revision text unavailable"
+                            f"{fallback_name} fallback attempted; deleted revision text unavailable"
                         )
                         stream_data = read_ole_stream(
                             ole, fallback_name, max_bytes=MAX_OLE_STREAM_SIZE,

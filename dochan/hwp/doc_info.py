@@ -24,8 +24,8 @@ from .records.style import parse_style_record
 from .revisions import parse_change, parse_author, HWPTAG_TRACK_CHANGE, HWPTAG_TRACK_CHANGE_AUTHOR
 
 
-# Match the section object ceiling, independently of the 200 MiB byte cap.
-MAX_HWP_RECORDS = 1_000_000
+# Public corpus maximum is 5,361; retain the original independent cap.
+MAX_HWP_RECORDS = 200_000
 
 
 @dataclass

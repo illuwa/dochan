@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from dochan import cfb
+from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
 from .xls_hyperlink import parse_hlink
@@ -2090,17 +2091,20 @@ class XLSReader:
                     fatal_doc.errors.append(
                         f"ERR: XLS stream validation failed: {exc}"
                     )
-                    return fatal_doc
+                    doc = fatal_doc
+                    return doc
                 except Exception as exc:
                     doc.errors.append(f"ERR: XLS {stream_name} stream 처리 실패: {exc}")
                     continue
             if best_document is not None:
                 if doc.errors:
                     best_document.errors.extend(doc.errors)
-                return best_document
+                doc = best_document
+                return doc
             return doc
         except Exception as exc:
             doc.errors.append(f"ERR: XLS 파싱 중 오류: {exc}")
             return doc
         finally:
+            append_recovery_warnings(ole, doc.errors)
             ole.close()

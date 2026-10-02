@@ -1,9 +1,9 @@
 # CFB 잔여 차이의 파일별 판정
 
-이 문서는 [전체 실물 검증](2026-10-03-native-cfb-real-docs.md)의 상세 증거이다. 각 표본은 공개 코퍼스 상대 경로로만 기록했다.
+이 문서는 [전체 실물 검증](2026-10-03-native-cfb-real-docs.md)의 상세 증거이다. 각 표본은 공개 코퍼스 상대 경로로만 기록했다. 아래 변환 수치는 별도 정정한 Byte Order 행을 제외하면 리뷰 전 실행의 기록이며, 최종 전체 출력 비교와 변경 파일 목록은 [native-cfb2-fix 검증](2026-10-02-native-cfb2-fix-real-docs.md)을 따른다.
 
 
-## 앞선 정확한 변환 차이 56개 중 잔여 11개
+## 리뷰 전 실행에서 앞선 변환 차이 56개 중 잔여 11개
 
 앞선 보고서의 파일명과 파일 크기를 현재 공개 코퍼스의 유일한 파일에 매핑해 56개를 다시 비교했다. 45개는 Markdown·JSON·errors가 모두 같아졌고 11개만 남았다. 아래 ID는 이전 변환 실행의 ID이다. 현재 확대 코퍼스의 23개 잔여 표와 표본 선택이 다르므로 두 수를 합치지 않는다.
 
@@ -26,9 +26,9 @@
 이전 컨테이너 차이의 추적 결과는 reference_only 50개가 동일37개·차이9개·reference_only4개로, 스트림 차이10개가 동일7개·차이3개로 바뀌었다. 이전 양쪽 거부3개는 양쪽 거부2개·native 접두부 복구1개가 되었다. 순수 상한 제외 스트림의 바이트 동등성은 여전히 미검증이며42개 전체 컨테이너 표에 따로 표시했다.
 
 
-## 최종 변환 잔여 차이 23개 판정
+## 리뷰 전 형식별 최대 300개 표본의 변환 차이 23개 판정
 
-이 표는 `cfb-convert-final.json`의 SHA-256 차이 23개를 원시 바이트 감사 및 두 백엔드의 실제 API 출력으로 재검증한 결과이다. 14개는 `metadata.errors`를 제거한 전체 JSON까지 동일하다. 나머지 9개 중 4개는 빈 본문에서 source_format만 다르며, 실제 Markdown이 달라진 것은 5개이다. 정확성 판정은 CFB 헤더·할당·디렉터리 계약과 관찰 가능한 출력에 한정한다. 동등한 진단 문구 차이는 정확성 우월성으로 포장하지 않는다. 본문 내용은 기록하지 않았다.
+이 표는 전체 코퍼스가 아닌 1,113개 추출 표본에 한정한 `cfb-convert-final.json`의 SHA-256 차이 23개를 원시 바이트 감사 및 두 백엔드의 실제 API 출력으로 재검증한 결과이다. 14개는 `metadata.errors`를 제거한 전체 JSON까지 동일하다. 나머지 9개 중 4개는 빈 본문에서 source_format만 다르며, 실제 Markdown이 달라진 것은 5개이다. 정확성 판정은 CFB 헤더·할당·디렉터리 계약과 관찰 가능한 출력에 한정한다. 동등한 진단 문구 차이는 정확성 우월성으로 포장하지 않는다. 본문 내용은 기록하지 않았다.
 
 재현은 `python -m scripts.probe_cfb_residuals --corpus corpus --compare .codex-work/cfb-compare-final.json --convert .codex-work/cfb-convert-final.json --output .codex-work/cfb-residual-evidence.json --per-format 300`으로 실행한다. 공개 코퍼스가 다른 위치라면 `--corpus` 인자만 바꾼다. 원시 수치는 `scripts/audit_cfb_defects.py`와 `cfb-audit-final.json`을 근거로 한다.
 
@@ -40,16 +40,16 @@
 | 84 | `corpus/lo-src/sw/qa/core/data/ww6/pass/hang-1.doc` | markdown, json, errors | MD 1715→0자; 오류 제외 JSON 다름; 오류 0→1개 | entry:2의 MiniFAT sid=17를 35개 방문 후 재방문함; entry:2 체인은 선언 61개/관찰 35개임. | 참조는 순환 MiniFAT를 따라 1,715자를 내고 경고가 없었다. native는 중복 섹터를 본문으로 재사용하지 않으므로 CFB 할당 계약상 거부가 정확하다. |
 | 93 | `corpus/lo-src/sw/qa/core/data/ww6/pass/ofz41398-1.doc` | json, errors | MD 0→0자; 오류 제외 JSON 동일; 오류 1→1개 | byte_order=65406, 명세값=65534; cutoff=2101248, 명세값=4096; 디렉터리 포인터 33554432, 관찰 엔트리 수=4; root의 sid=6가 6개 섹터/128개 FAT워드 범위 밖임(접두부 3개). | 양쪽 모두 컨테이너를 거부하여 본문은 비어 있다. 원시는 고정 헤더값 위반을 보이고 native는 이를 직접 보고한다. 오류 제외 JSON까지 동일하므로 실패 진단 위치·문구 차이이며 본문 우월성은 주장하지 않는다. |
 | 157 | `corpus/lo-src/sw/qa/core/data/ww8/pass/hang-2.doc` | json, errors | MD 0→0자; 오류 제외 JSON 다름; 오류 1→1개 | 디렉터리 엔트리 4의 type=7; entry:3의 sid=58915가 109개 섹터/128개 FAT워드 범위 밖임(접두부 32개); entry:3 체인은 선언 41개/관찰 32개임. | type=7인 비루트 객체를 스트림으로 취급하지 않는다. 양쪽 본문은 비었으며 차이는 DOC 식별 여부와 오류 문구이다. 손상 객체를 제외하는 계약은 타당하나 본문 정확도 우월성의 비교 대상은 없다. |
-| 162 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18534-1.doc` | markdown, json, errors | MD 6590→0자; 오류 제외 JSON 다름; 오류 0→1개 | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=5; directory의 sid=96가 96개 섹터/128개 FAT워드 범위 밖임(접두부 2개); root 체인은 선언 12개/관찰 0개임. | Byte Order는 0xFF20으로 0xFFFE가 아니다. 참조의 6,590자 결과는 고정 헤더값을 위반한 해석이다. native의 헤더 거부는 명세상 정확하다. |
+| 162 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18534-1.doc` | json, errors | 리뷰 반영 후 MD 6590→6590자이며 기존 오류 0개는 같고 복구 WARN 4개가 추가됐다. | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=5; directory의 sid=96가 96개 섹터/128개 FAT워드 범위 밖임(접두부 2개); root 체인은 선언 12개/관찰 0개임. | 기존 거부 정당화는 틀렸다. Byte Order는 주소 산식이 아닌 고정 표식이다. 기본 모드는 little-endian 해석을 유지하며 메타데이터 편차만 기록하고, 실제 절단·디렉터리 손상만 WARN으로 전달한다. |
 | 174 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz53457-1.doc` | json, errors | MD 0→0자; 오류 제외 JSON 다름; 오류 1→1개 | entry:1와 FAT가 regular sid=6를 공유함; 엔트리 1의 이름 끝 UTF-16 단위=54533(0이어야 함); 디렉터리 포인터 4278255615, 관찰 엔트리 수=4; directory의 sid=46가 34개 섹터/4352개 FAT워드 범위 밖임(접두부 1개). | 비종료 이름과 범위 밖 디렉터리 가지를 정상 WordDocument로 식별하지 않는다. 양쪽 본문은 비었으며 source_format 존재 여부와 진단이 다르다. 손상 식별 계약을 검증했으며 본문 우월성은 주장하지 않는다. |
 | 212 | `corpus/lo-src/sw/qa/core/data/ww6/pass/ofz-trailingpara.doc` | json, errors | MD 0→0자; 오류 제외 JSON 동일; 오류 1→1개 | byte_order=65312, 명세값=65534; cutoff=538976288, 명세값=4096; 디렉터리 포인터 2, 관찰 엔트리 수=2; directory의 sid=70가 68개 섹터/8704개 FAT워드 범위 밖임(접두부 1개). | 양쪽 모두 컨테이너를 거부하여 본문은 비어 있다. 원시는 고정 헤더값 위반을 보이고 native는 이를 직접 보고한다. 오류 제외 JSON까지 동일하므로 실패 진단 위치·문구 차이이며 본문 우월성은 주장하지 않는다. |
 | 214 | `corpus/lo-src/sw/qa/core/data/ww8/pass/crash-2.doc` | json, errors | MD 0→0자; 오류 제외 JSON 동일; 오류 2→1개 | entry:3의 MiniFAT sid=16를 14개 방문 후 재방문함; entry:5와 entry:3가 mini sid=16를 공유함; entry:3 체인은 선언 41개/관찰 14개임. | 참조는 순환 스트림을 처리한 뒤 빈 텍스트 경고를 낸다. native는 실제 MiniFAT 순환·교차 할당을 직접 보고한다. 본문과 오류 제외 JSON이 같고 진단의 원인 정확성이 개선됐다. |
 | 236 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz7322-1.doc` | json, errors | MD 0→0자; 오류 제외 JSON 동일; 오류 1→1개 | byte_order=65312, 명세값=65534; cutoff=538972192, 명세값=4096; 디렉터리 포인터 198070015, 관찰 엔트리 수=7; directory의 sid=96가 96개 섹터/12288개 FAT워드 범위 밖임(접두부 2개). | 양쪽 모두 컨테이너를 거부하여 본문은 비어 있다. 원시는 고정 헤더값 위반을 보이고 native는 이를 직접 보고한다. 오류 제외 JSON까지 동일하므로 실패 진단 위치·문구 차이이며 본문 우월성은 주장하지 않는다. |
 | 272 | `corpus/lo-src/sw/qa/core/data/ww6/fail/ofz45140-1.doc` | json, errors | MD 0→0자; 오류 제외 JSON 동일; 오류 1→1개 | byte_order=65406, 명세값=65534; cutoff=2101248, 명세값=4096; 디렉터리 포인터 33554432, 관찰 엔트리 수=4; root의 sid=16252935가 7개 섹터/128개 FAT워드 범위 밖임(접두부 4개). | 양쪽 모두 컨테이너를 거부하여 본문은 비어 있다. 원시는 고정 헤더값 위반을 보이고 native는 이를 직접 보고한다. 오류 제외 JSON까지 동일하므로 실패 진단 위치·문구 차이이며 본문 우월성은 주장하지 않는다. |
-| 273 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18554-1.doc` | json, errors | MD 0→0자; 오류 제외 JSON 다름; 오류 1→1개 | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=4; directory의 sid=4294967295가 45개 섹터/128개 FAT워드 범위 밖임(접두부 1개); root 체인은 선언 4개/관찰 3개임. | Byte Order 규정 위반을 입구에서 거부한다. 참조도 짧은 테이블 때문에 빈 결과이다. 빈 본문은 같고 source_format 및 실패 원인만 다르다. |
+| 273 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18554-1.doc` | json, errors | 리뷰 반영 후 MD 0→0자이며 기존 오류 1개는 같고 복구 WARN 4개가 추가됐다. | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=4; directory의 sid=4294967295가 45개 섹터/128개 FAT워드 범위 밖임(접두부 1개); root 체인은 선언 4개/관찰 3개임. | 기존 거부 정당화는 틀렸다. Byte Order는 주소 산식이 아닌 고정 표식이다. 기본 모드는 little-endian 해석을 유지하며 메타데이터 편차만 기록하고, 실제 절단·디렉터리 손상만 WARN으로 전달한다. |
 | 291 | `corpus/lo-src/sw/qa/core/data/ww6/pass/crash-4.doc` | markdown, json, errors | MD 1516→0자; 오류 제외 JSON 다름; 오류 0→1개 | entry:2의 MiniFAT sid=31를 52개 방문 후 재방문함; entry:2 체인은 선언 61개/관찰 52개임. | 참조는 순환 MiniFAT를 따라 1,516자를 내고 경고가 없었다. native는 같은 섹터를 반복 본문으로 사용하는 것을 거부하므로 할당 계약상 정확하다. |
 | 292 | `corpus/lo-src/sw/qa/core/data/ww6/pass/ofz42330-1.doc` | json, errors | MD 0→0자; 오류 제외 JSON 동일; 오류 1→1개 | byte_order=65406, 명세값=65534; cutoff=2101248, 명세값=4096; 디렉터리 포인터 33554432, 관찰 엔트리 수=4; root의 sid=6가 6개 섹터/128개 FAT워드 범위 밖임(접두부 3개). | 양쪽 모두 컨테이너를 거부하여 본문은 비어 있다. 원시는 고정 헤더값 위반을 보이고 native는 이를 직접 보고한다. 오류 제외 JSON까지 동일하므로 실패 진단 위치·문구 차이이며 본문 우월성은 주장하지 않는다. |
-| 299 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz19065.doc` | json, errors | MD 0→0자; 오류 제외 JSON 다름; 오류 1→1개 | byte_order=65312, 명세값=65534; cutoff=16, 명세값=4096; 디렉터리 포인터 6, 관찰 엔트리 수=4; root의 sid=72가 71개 섹터/128개 FAT워드 범위 밖임(접두부 0개). | 잘못된 Byte Order를 거부한다. 참조도 테이블 선언/실독 길이 불일치로 실패한다. 본문은 비었고 source_format 및 진단만 다르며 본문 우월성은 주장하지 않는다. |
+| 299 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz19065.doc` | json, errors | MD 0→0자; 오류 제외 JSON 다름; 오류 1→1개 | byte_order=65312, 명세값=65534; cutoff=16, 명세값=4096; 디렉터리 포인터 6, 관찰 엔트리 수=4; root의 sid=72가 71개 섹터/128개 FAT워드 범위 밖임(접두부 0개). | 주소 분기에 쓰는 Mini Stream Cutoff가 16이므로 거부한다. Byte Order 표식 자체는 거부 근거가 아니다. 참조도 테이블 선언/실독 길이 불일치로 실패한다. 본문은 비었고 source_format 및 진단만 다르며 본문 우월성은 주장하지 않는다. |
 | 600 | `corpus/lo-src/sd/qa/unit/data/ppt/pass/ofz21531-1.ppt` | json, errors | MD 165→165자; 오류 제외 JSON 동일; 오류 1→2개 | entry:1의 MiniFAT sid=48를 50개 방문 후 재방문함; entry:5의 sid=4278976510가 68개 섹터/128개 FAT워드 범위 밖임(접두부 1개); entry:1 체인은 선언 56개/관찰 50개임. | 본문·오류 제외 JSON은 같다. Pictures의 MiniFAT가 sid48로 되돌아가므로 native가 추가한 Pictures 경고는 실제 순환을 정확히 알린다. |
 | 661 | `corpus/lo-src/sd/qa/unit/data/ppt/pass/hang-18.ppt` | markdown, json, errors | MD 14→0자; 오류 제외 JSON 다름; 오류 1→1개 | 디렉터리 엔트리 0의 type=248. | 루트 엔트리 type=248은 Root Storage(5)가 아니다. 참조의 14자 추출보다 native의 컨테이너 거부가 고정 객체형 계약에 맞다. |
 | 662 | `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-4983252485210112.ppt` | json, errors | MD 19→19자; 오류 제외 JSON 동일; 오류 1→1개 | 엔트리 3의 이름 끝 UTF-16 단위=116(0이어야 함); 엔트리 3의 mini sid=19가 루트 체인 밖임; root의 sid=21가 17개 섹터/128개 FAT워드 범위 밖임(접두부 2개); root 체인은 선언 32772개/관찰 2개임. | Current User의 시작 mini sid27은 루트 논리 오프셋 1,728이다. 실제 루트 체인은 sid13·14의 1,024바이트뿐이다. 참조의 64바이트보다 native의 빈 물리 접두부와 74/0 길이 진단이 실제 할당에 맞는다. 본문·오류 제외 JSON은 같다. |
@@ -63,7 +63,7 @@
 별도로 XLS 7개는 1,536 MiB RSS 상한에서 중단되어 변환 동등성 미검증이다. 이를 통과나 본문 정확성 개선으로 계산하지 않는다.
 
 
-## 최종 컨테이너 비동일·검증제외 42개 판정
+## 리뷰 전 컨테이너 잔여 42개와 Byte Order 3개 재검증
 
 전체 6,761개 중 완전 동일 6,719개를 제외한 42개를 개별 기록했다. 양쪽 거부 13개는 정확성 회귀가 아니라 같은 손상 입력의 거부이며, 순수 stream_limit 2개는 비교 도구가 양쪽 바이트 읽기를 생략했으므로 미검증으로 분리한다. 표의 공통 스트림 일치는 경로·선언 길이·실독 길이·SHA-256이 모두 같은 경우만 센다.
 
@@ -88,9 +88,9 @@
 | 5760 | `corpus/lo-src/sw/qa/core/data/ww8/pass/crash-2.doc` | different / stream_read_error | 스트림 6→6개; 정상 바이트 일치 4개; 읽기오류 0→2개 | entry:3의 MiniFAT sid=16를 14개 방문 후 재방문함; entry:5와 entry:3가 mini sid=16를 공유함; entry:3 체인은 선언 41개/관찰 14개임. | 실제 순환 또는 실사용 섹터 중복을 정상 스트림으로 반환하지 않는다. CFB 객체/할당 계약의 근거이며 손상 문서 전체 내용 정답을 입증한 것은 아니다. |
 | 5769 | `corpus/lo-src/sw/qa/core/data/ww8/pass/hang-2.doc` | different / stream_list | 스트림 5→3개; 정상 바이트 일치 3개; 읽기오류 0→0개 | 디렉터리 엔트리 4의 type=7; entry:3의 sid=58915가 109개 섹터/128개 FAT워드 범위 밖임(접두부 32개); entry:3 체인은 선언 41개/관찰 32개임. | 명세로 해석할 수 없는 이름/형식의 객체를 목록에서 제외했으며 다른 공통 스트림의 바이트를 보존했다. CFB 객체/할당 계약의 근거이며 손상 문서 전체 내용 정답을 입증한 것은 아니다. |
 | 5770 | `corpus/lo-src/sw/qa/core/data/ww8/pass/hang-3.doc` | different / stream_read_error | 스트림 6→6개; 정상 바이트 일치 5개; 읽기오류 0→1개 | entry:5와 entry:3가 mini sid=64를 공유함; entry:3의 sid=16318296가 109개 섹터/128개 FAT워드 범위 밖임(접두부 41개); entry:5 체인은 선언 57개/관찰 39개임. | 실제 순환 또는 실사용 섹터 중복을 정상 스트림으로 반환하지 않는다. CFB 객체/할당 계약의 근거이며 손상 문서 전체 내용 정답을 입증한 것은 아니다. |
-| 5777 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18414-1.doc` | reference_only | 열기 성공→거부 | byte_order=65312, 명세값=65534; root의 sid=117가 116개 섹터/128개 FAT워드 범위 밖임(접두부 0개); root 체인은 선언 2개/관찰 0개임. | 주소 체계에 영향을 주는 고정 헤더값 위반을 정상값으로 임의 보정하지 않는다. native의 헤더 거부가 명세 계약에 맞는다. |
-| 5778 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18534-1.doc` | reference_only | 열기 성공→거부 | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=5; directory의 sid=96가 96개 섹터/128개 FAT워드 범위 밖임(접두부 2개); root 체인은 선언 12개/관찰 0개임. | 주소 체계에 영향을 주는 고정 헤더값 위반을 정상값으로 임의 보정하지 않는다. native의 헤더 거부가 명세 계약에 맞는다. |
-| 5779 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18554-1.doc` | reference_only | 열기 성공→거부 | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=4; directory의 sid=4294967295가 45개 섹터/128개 FAT워드 범위 밖임(접두부 1개); root 체인은 선언 4개/관찰 3개임. | 주소 체계에 영향을 주는 고정 헤더값 위반을 정상값으로 임의 보정하지 않는다. native의 헤더 거부가 명세 계약에 맞는다. |
+| 5777 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18414-1.doc` | equal (리뷰 반영 후) | 양쪽 열림이며 8개 스트림의 크기와 해시가 모두 같다. | byte_order=65312, 명세값=65534; root의 sid=117가 116개 섹터/128개 FAT워드 범위 밖임(접두부 0개); root 체인은 선언 2개/관찰 0개임. | Byte Order를 주소 체계로 본 이전 판정을 철회한다. 표식 편차는 기본 모드 메타데이터 진단이며 엄격 모드에서만 거부한다. 별도 할당·절단 손상은 복구 경고로 남긴다. |
+| 5778 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18534-1.doc` | equal (리뷰 반영 후) | 양쪽 열림이며 1개 스트림의 크기와 해시가 모두 같다. | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=5; directory의 sid=96가 96개 섹터/128개 FAT워드 범위 밖임(접두부 2개); root 체인은 선언 12개/관찰 0개임. | Byte Order를 주소 체계로 본 이전 판정을 철회한다. 표식 편차는 기본 모드 메타데이터 진단이며 엄격 모드에서만 거부한다. 별도 할당·절단 손상은 복구 경고로 남긴다. |
+| 5779 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz18554-1.doc` | equal (리뷰 반영 후) | 양쪽 열림이며 3개 스트림의 크기와 해시가 모두 같다. | byte_order=65312, 명세값=65534; 디렉터리 포인터 6, 관찰 엔트리 수=4; directory의 sid=4294967295가 45개 섹터/128개 FAT워드 범위 밖임(접두부 1개); root 체인은 선언 4개/관찰 3개임. | Byte Order를 주소 체계로 본 이전 판정을 철회한다. 표식 편차는 기본 모드 메타데이터 진단이며 엄격 모드에서만 거부한다. 별도 할당·절단 손상은 복구 경고로 남긴다. |
 | 5780 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz19065.doc` | reference_only | 열기 성공→거부 | byte_order=65312, 명세값=65534; cutoff=16, 명세값=4096; 디렉터리 포인터 6, 관찰 엔트리 수=4; root의 sid=72가 71개 섹터/128개 FAT워드 범위 밖임(접두부 0개). | 주소 체계에 영향을 주는 고정 헤더값 위반을 정상값으로 임의 보정하지 않는다. native의 헤더 거부가 명세 계약에 맞는다. |
 | 5783 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz46457-1.doc` | different / stream_list, stream_read_error | 스트림 3→2개; 정상 바이트 일치 1개; 읽기오류 0→1개 | entry:2의 MiniFAT sid=0를 1개 방문 후 재방문함; entry:1와 FAT가 regular sid=6를 공유함; 엔트리 1의 이름 끝 UTF-16 단위=54533(0이어야 함); 디렉터리 포인터 4278255615, 관찰 엔트리 수=4. | 명세로 해석할 수 없는 이름/형식의 객체를 목록에서 제외했으며 다른 공통 스트림의 바이트를 보존했다; 실제 순환 또는 실사용 섹터 중복을 정상 스트림으로 반환하지 않는다. CFB 객체/할당 계약의 근거이며 손상 문서 전체 내용 정답을 입증한 것은 아니다. |
 | 5785 | `corpus/lo-src/sw/qa/core/data/ww8/pass/ofz53457-1.doc` | different / stream_list | 스트림 3→2개; 정상 바이트 일치 2개; 읽기오류 0→0개 | entry:1와 FAT가 regular sid=6를 공유함; 엔트리 1의 이름 끝 UTF-16 단위=54533(0이어야 함); 디렉터리 포인터 4278255615, 관찰 엔트리 수=4; directory의 sid=46가 34개 섹터/4352개 FAT워드 범위 밖임(접두부 1개). | 명세로 해석할 수 없는 이름/형식의 객체를 목록에서 제외했으며 다른 공통 스트림의 바이트를 보존했다. CFB 객체/할당 계약의 근거이며 손상 문서 전체 내용 정답을 입증한 것은 아니다. |

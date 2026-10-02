@@ -13,6 +13,7 @@ import zlib
 from dataclasses import replace
 
 from dochan import cfb
+from ..cfb import append_recovery_warnings
 
 from ..model.equation import Equation
 from ..utils.bounded_io import ByteBudget, read_ole_stream
@@ -98,8 +99,12 @@ def decompress_ppt_storage(data, instance, errors=None):
         # Some producers omit the zlib checksum or append a padding byte.
         # Accept only an exactly sized compound file that its reader can open.
         try:
-            with cfb.OleFileIO(io.BytesIO(result), raise_defects=cfb.DEFECT_INCORRECT):
-                pass
+            with cfb.OleFileIO(io.BytesIO(result), strict_recovery=True) as ole:
+                # Opening indexes every lazy chain and verifies its full extent.
+                # Payload bytes need not be allocated again for validation.
+                for stream_name in ole.listdir():
+                    with ole.openstream(stream_name):
+                        pass
         except Exception as exc:
             raise ValueError('incomplete compression without valid compound storage') from exc
         if errors is not None:
@@ -466,19 +471,22 @@ class PptObjects:
             raw = decompress_ppt_storage(record.data, record.header.rec_instance, storage_errors)
             self.storage_bytes.consume(len(raw), 'PPT embedded storage')
             with cfb.OleFileIO(io.BytesIO(raw)) as ole:
-                if not any(ole.exists(name) for name in ('Equation Native', 'Workbook', 'Book')):
-                    # Excel.Sheet.12 stores OOXML in Package. It is not a native
-                    # chart/equation input: keep its preview and do not report
-                    # recoverable framing anomalies for streams we never use.
-                    self.pool.remaining -= 1
-                    return []
-                if object_id not in self.supported:
-                    self.supported.add(object_id)
-                for error in storage_errors:
-                    _warn(self.pool.errors, error.removeprefix('WARN: embedded OLE '))
-                if provenance is not None:
-                    provenance = replace(provenance, path=(provenance.path or '') + '#ole%d' % object_id)
-                return self.pool.read(ole, [], provenance)
+                try:
+                    if not any(ole.exists(name) for name in ('Equation Native', 'Workbook', 'Book')):
+                        # Excel.Sheet.12 stores OOXML in Package. It is not a native
+                        # chart/equation input: keep its preview and do not report
+                        # recoverable framing anomalies for streams we never use.
+                        self.pool.remaining -= 1
+                        return []
+                    if object_id not in self.supported:
+                        self.supported.add(object_id)
+                    for error in storage_errors:
+                        _warn(self.pool.errors, error.removeprefix('WARN: embedded OLE '))
+                    if provenance is not None:
+                        provenance = replace(provenance, path=(provenance.path or '') + '#ole%d' % object_id)
+                    return self.pool.read(ole, [], provenance)
+                finally:
+                    append_recovery_warnings(ole, self.pool.errors)
         except Exception as exc:
             self.pool.remaining -= 1
             if object_id in self.supported:

@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import List, Optional
 
 from dochan import cfb
+from ..cfb import append_recovery_warnings
 
 from ..model.document import Document
 from ..utils.bounded_io import (
@@ -415,7 +416,8 @@ class PPTReader:
                     fatal_doc.errors.append(
                         f"ERR: PPT stream validation failed: {exc}"
                     )
-                    return fatal_doc
+                    doc = fatal_doc
+                    return doc
                 except Exception as exc:
                     doc.errors.append(f"ERR: PPT {stream_name} stream read 실패: {exc}")
                     continue
@@ -455,7 +457,8 @@ class PPTReader:
             if best_document is not None:
                 if doc.errors:
                     best_document.errors.extend(doc.errors)
-                return best_document
+                doc = best_document
+                return doc
 
             if not doc.errors:
                 doc.errors.append("ERR: PPT 파서를 사용할 수 있는 유효한 스트림이 없습니다")
@@ -465,4 +468,5 @@ class PPTReader:
             doc.errors.append(f"ERR: PPT 파싱 중 오류: {exc}")
             return doc
         finally:
+            append_recovery_warnings(ole, doc.errors)
             ole.close()

@@ -36,6 +36,40 @@ MAX_DIRECTORY_ENTRIES = 131072
 MAX_STORAGE_DEPTH = 128
 MAX_PATH_COMPONENTS = 1024 * 1024
 MAX_CHAIN_STEPS = 4 * 1024 * 1024
+MAX_RECOVERY_WARNINGS = 16
+# Metadata-only deviations remain available to strict callers, but do not
+# imply lost content. These fixed categories do affect addresses or payloads.
+_RECOVERY_CATEGORIES = frozenset((
+    'truncated allocation table sector', 'inaccessible FAT suffix omitted',
+    'stream size exceeds available sectors',
+    'truncated chain points outside allocation table',
+    'truncated chain does not match declared size', 'truncated stream payload',
+    'inaccessible directory branch omitted', 'invalid directory entry omitted',
+    'duplicate directory name omitted', 'stream read failed',
+))
+_WARNING_PREFIX = 'WARN: OLE/CFB 컨테이너 손상 복구: '
+
+
+def append_recovery_warnings(ole, errors, path=''):
+    """Forward content-loss diagnostics once per category, across all readers.
+
+    The optional path describes a container or stream, not a filesystem path.
+    Reference backends and older test doubles have no recovery diagnostics.
+    """
+    issues = getattr(ole, 'recovery_issues', ())
+    if not isinstance(issues, (list, tuple)):
+        return
+    seen = {message[len(_WARNING_PREFIX):].split(' (', 1)[0]
+            for message in errors if message.startswith(_WARNING_PREFIX)}
+    for category, stream_path in issues[:MAX_RECOVERY_WARNINGS]:
+        if len(seen) >= MAX_RECOVERY_WARNINGS:
+            break
+        if category not in _RECOVERY_CATEGORIES or category in seen:
+            continue
+        location = stream_path or path or '/'
+        location = ''.join(ch if ch.isprintable() else '?' for ch in str(location)[:256])
+        errors.append(_WARNING_PREFIX + category + ' (' + location + ')')
+        seen.add(category)
 
 
 class CFBError(OSError):
@@ -161,7 +195,7 @@ class OleFileIO:
     Live cycles, ambiguous allocations and resource limits remain CFBErrors.
     """
 
-    def __init__(self, filename, raise_defects=40):
+    def __init__(self, filename, raise_defects=40, strict_recovery=False):
         self._closed = False
         self._owned = False
         self._lock = threading.RLock()
@@ -169,7 +203,10 @@ class OleFileIO:
         self._sizes = {}
         self._chain_steps = 0
         self._raise_defects = raise_defects
+        self._strict_recovery = strict_recovery
         self.parsing_issues = []
+        self.recovery_issues = []
+        self._issue_path = ''
         self._fp = None
         try:
             if isinstance(filename, (bytes, bytearray, memoryview)):
@@ -196,11 +233,20 @@ class OleFileIO:
             raise ValueError('I/O operation on closed compound file')
 
     def _metadata_defect(self, message):
-        """Record bounded, non-addressing metadata deviations in legacy files."""
-        if self._raise_defects <= DEFECT_INCORRECT:
+        """Separate metadata deviations from recovery that may omit content."""
+        category = message.removeprefix('CFB ')
+        recovery = category in _RECOVERY_CATEGORIES
+        if self._raise_defects <= DEFECT_INCORRECT or (self._strict_recovery and recovery):
             raise CFBError(message)
         if message not in self.parsing_issues:
             self.parsing_issues.append(message)
+        if recovery:
+            self._record_recovery(category)
+
+    def _record_recovery(self, category):
+        if (len(self.recovery_issues) < MAX_RECOVERY_WARNINGS
+                and not any(item[0] == category for item in self.recovery_issues)):
+            self.recovery_issues.append((category, self._issue_path))
 
     def _read_at(self, offset, size):
         self._check_open()
@@ -268,14 +314,14 @@ class OleFileIO:
                         and owners[sid] not in (-1, owner)):
                     self._metadata_defect('CFB unused stream tail aliases another allocation')
                     break
-                if owner < 0 or count is None or len(result) < count:
+                if (owner < 0 and owner != -5) or count is None or len(result) < count:
                     self._claim(sid, owner, mini)
                     claimed.append(sid)
                 visited.add(sid)
                 result.append(sid)
                 sid = table[sid]
             if count is not None and len(result) != count:
-                if owner >= 0 and len(result) > count:
+                if (owner >= 0 or owner == -5) and len(result) > count:
                     # Validate spare links without claiming them as payload;
                     # expose only the declared logical stream extent.
                     self._metadata_defect('CFB stream has excess allocated sectors')
@@ -289,7 +335,9 @@ class OleFileIO:
             for sid in claimed:
                 owners[sid] = -1
             raise
-        return result
+        # Extra MiniFAT links are checked, but never become allocator words
+        # or steal ownership from streams beyond the header's declared count.
+        return result[:count] if owner == -5 and count is not None else result
 
     def _extent(self, chain, size, mini=False):
         """Size of the contiguous, physically present prefix of a stream."""
@@ -317,8 +365,10 @@ class OleFileIO:
         byte_order, shift, mini_shift = struct.unpack_from('<3H', header, 28)
         if self.major_version not in (3, 4) or shift != {3: 9, 4: 12}.get(self.major_version):
             raise CFBError('CFB invalid version or sector size')
-        if byte_order != 0xfffe or mini_shift != 6 or _u32(header, 56) != 4096:
-            raise CFBError('CFB invalid byte order, mini sector size, or cutoff')
+        if byte_order != 0xfffe:
+            self._metadata_defect('CFB invalid byte order marker')
+        if mini_shift != 6 or _u32(header, 56) != 4096:
+            raise CFBError('CFB invalid mini sector size or cutoff')
         self.sectorsize = 1 << shift
         # A last sector can have its unused padding omitted by older writers.
         # Keep that sector addressable, but _read_at still requires every byte
@@ -367,7 +417,9 @@ class OleFileIO:
             words = self._table_sector(sid)
             if len(words) != self.sectorsize // 4 and sid != fat_ids[-1]:
                 raise CFBError('CFB missing interior FAT words')
-            self._fat.extend(words)
+            # FAT slack cannot address any physical sector. Still visit and
+            # reserve every declared FAT sector, without retaining slack words.
+            self._fat.extend(words[:max(0, self._sector_count - len(self._fat))])
         for ids, marker in ((fat_ids, FATSECT), (dif_ids, DIFSECT)):
             for sid in ids:
                 if sid >= len(self._fat) or self._fat[sid] != marker:
@@ -400,6 +452,15 @@ class OleFileIO:
             if len(words) != self.sectorsize // 4 and sid != mini_fat_chain[-1]:
                 raise CFBError('CFB missing interior MiniFAT words')
             self._minifat.extend(words)
+        self._root_chain = None
+        if self.root.size <= MAX_STREAM_SIZE:
+            self._load_mini_stream()
+
+    def _load_mini_stream(self):
+        if self._root_chain is not None:
+            return
+        # A corrupt, unused root size must not prevent regular stream reads.
+        # Enforce the same budget before the first actual mini-stream access.
         self._check_size(self.root.size)
         self._root_chain = self._chain(self.root.start, self._fat, 0,
                                        count=(self.root.size + self.sectorsize - 1) // self.sectorsize) if self.root.size else array('I')
@@ -491,11 +552,12 @@ class OleFileIO:
             # Index each local name once. Re-encoding every ancestor for every
             # leaf would multiply memory use by attacker-controlled depth.
             key = (parent_id, _name_key(ent.name))
+            pending.extend(((ent.right, parent, parent_id), (ent.left, parent, parent_id)))
             if key in self._lookup:
-                raise CFBError('CFB duplicate directory name')
+                self._metadata_defect('CFB duplicate directory name omitted')
+                continue
             self._paths[path] = index
             self._lookup[key] = index
-            pending.extend(((ent.right, parent, parent_id), (ent.left, parent, parent_id)))
             if ent.kind == STGTY_STORAGE:
                 pending.append((ent.child, path, index))
             elif ent.child != NOSTREAM:
@@ -552,12 +614,26 @@ class OleFileIO:
         return ent.size
 
     def openstream(self, path):
+        # Probing an absent optional stream is not evidence of lost content.
         index = self._find(path)
+        previous_path = self._issue_path
+        self._issue_path = path if isinstance(path, str) else '/'.join(path)
+        try:
+            return self._openstream(index)
+        except CFBError:
+            self._record_recovery('stream read failed')
+            raise
+        finally:
+            self._issue_path = previous_path
+
+    def _openstream(self, index):
         ent = self._entries[index]
         if ent.kind != STGTY_STREAM:
             raise OSError('this file is not a stream')
         self._check_size(ent.size)
         mini = ent.size < 4096
+        if mini and ent.size:
+            self._load_mini_stream()
         if index not in self._chains:
             sector = 64 if mini else self.sectorsize
             chain = self._chain(ent.start, self._minifat if mini else self._fat,

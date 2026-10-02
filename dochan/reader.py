@@ -10,6 +10,7 @@ import os
 import re
 
 from dochan import cfb
+from .cfb import append_recovery_warnings
 
 from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
 from .hwp.distdoc import decode_distribution_section
@@ -300,6 +301,9 @@ class Dochan:
                 formats.append("xls")
             return formats
         finally:
+            # Option validation calls detection before the Document exists.
+            if hasattr(self, "doc"):
+                append_recovery_warnings(ole, self.doc.errors)
             ole.close()
 
     def _parse_hwp(self):
@@ -461,6 +465,7 @@ class Dochan:
             self.doc = Document(source_format="hwp")
             self.doc.errors.append(f"ERR: HWP stream validation failed: {e}")
         finally:
+            append_recovery_warnings(ole, self.doc.errors)
             ole.close()
 
     @staticmethod
@@ -525,6 +530,7 @@ class Dochan:
         from io import BytesIO
         from .crypto.ooxml import decrypt_ooxml
 
+        ole = None
         try:
             with cfb.OleFileIO(self.file_path) as ole:
                 package_data = decrypt_ooxml(ole, self._password)
@@ -547,6 +553,9 @@ class Dochan:
             message = str(exc) if isinstance(exc, OOXMLCryptoError) else (
                 "ERR: 암호화된 문서 — 암호가 없거나 틀림, 손상 또는 미지원 암호화 방식")
             self.doc.errors.append(message)
+        finally:
+            if ole is not None:
+                append_recovery_warnings(ole, self.doc.errors)
 
     def _parse_docx(self):
         """DOCX (Office Open XML) 파싱"""

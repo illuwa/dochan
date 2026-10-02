@@ -119,7 +119,22 @@ def test_comparison_backend_switches_legacy_irm_reader():
     from dochan.crypto import legacy
     from scripts import compare_cfb_olefile as probe
 
-    reference = pytest.importorskip("olefile")
+    reference = pytest.importorskip("olefile", exc_type=ImportError)
     with probe._backend(reference):
         assert legacy.cfb is reference
     assert legacy.cfb is cfb
+
+
+def test_reference_backend_translates_recovery_validation_keyword():
+    import pytest
+    from dochan.office_binary import ole_objects
+    from scripts import compare_cfb_olefile as probe
+    from test_cfb import compound
+
+    reference = pytest.importorskip('olefile', exc_type=ImportError)
+    original = reference.OleFileIO
+    raw, _ = compound()
+    with probe._backend(reference):
+        with ole_objects.cfb.OleFileIO(raw, strict_recovery=True) as ole:
+            assert ole.exists('Regular')
+    assert reference.OleFileIO is original

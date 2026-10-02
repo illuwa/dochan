@@ -165,6 +165,16 @@ def _backend(module):
     for name in ("dochan.reader", "dochan.hwp.bin_data", "dochan.office_binary.doc", "dochan.office_binary.ppt", "dochan.office_binary.xls", "dochan.office_binary.ole_objects", "dochan.crypto.legacy", "dochan.crypto.ooxml", "dochan.crypto.ppt"):
         importlib.import_module(name)
     patches = []
+    reference_reader = reference.OleFileIO
+
+    def reference_recovery_reader(*args, strict_recovery=False, **kwargs):
+        # The independent reference has no separate recovery policy. Preserve
+        # its former embedded-validation threshold for differential runs.
+        if strict_recovery:
+            kwargs['raise_defects'] = reference.DEFECT_INCORRECT
+        return reference_reader(*args, **kwargs)
+
+    reader = reference_recovery_reader if module is reference else module.OleFileIO
     for name, consumer in list(sys.modules.items()):
         if not name.startswith("dochan.") or consumer is native:
             continue
@@ -174,7 +184,10 @@ def _backend(module):
                 setattr(consumer, key, module)
             elif value is native.OleFileIO or value is reference.OleFileIO:
                 patches.append((consumer, key, value))
-                setattr(consumer, key, module.OleFileIO)
+                setattr(consumer, key, reader)
+    if module is reference:
+        patches.append((reference, 'OleFileIO', reference_reader))
+        reference.OleFileIO = reader
     try:
         yield
     finally:

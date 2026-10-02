@@ -4,6 +4,7 @@ import struct
 from typing import List, Optional
 
 from dochan import cfb
+from ..cfb import append_recovery_warnings
 
 from ..model.document import Document
 from ..utils.bounded_io import (
@@ -395,7 +396,8 @@ class DOCReader:
                     fatal_doc.errors.append(
                         f"ERR: DOC stream validation failed: {exc}"
                     )
-                    return fatal_doc
+                    doc = fatal_doc
+                    return doc
                 except Exception as exc:
                     doc.errors.append(f"ERR: DOC {table_name} stream read 실패: {exc}")
                     continue
@@ -411,7 +413,8 @@ class DOCReader:
                         structured = parse_structured_doc(word_data, candidate, load_data_stream, **object_options)
                         if structured is not None:
                             structured.errors.extend(doc.errors)
-                            return structured
+                            doc = structured
+                            return doc
                         doc.errors.append("WARN: DOC structure unavailable; text fallback")
                     except Exception as exc:
                         doc.errors.append(f"WARN: DOC structure parsing failed; text fallback: {exc}")
@@ -434,16 +437,19 @@ class DOCReader:
                     return doc
                 if doc.errors:
                     fallback_document.errors.extend(doc.errors)
-                return fallback_document
+                doc = fallback_document
+                return doc
             if doc.errors:
                 best_document.errors.extend(doc.errors)
             if not any(section.elements for section in best_document.sections):
                 # 빈 결과가 왜 나왔는지 알 수 있어야 한다. 조용히 빈 문서를 돌려주면
                 # 파일이 비어 있는 것인지 파서가 못 읽은 것인지 구분할 수 없다.
                 best_document.errors.append("WARN: DOC 본문 텍스트가 비어 있습니다")
-            return best_document
+            doc = best_document
+            return doc
         except Exception as exc:
             doc.errors.append(f"ERR: DOC 파싱 중 오류: {exc}")
             return doc
         finally:
+            append_recovery_warnings(ole, doc.errors)
             ole.close()

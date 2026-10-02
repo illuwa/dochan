@@ -12,7 +12,7 @@ from pathlib import Path
 import struct
 import zlib
 
-import olefile
+from dochan import cfb
 
 from dochan.office_binary.ole_objects import parse_embedded_chart
 
@@ -39,7 +39,7 @@ def ppt_atoms(data, start=0, end=None, depth=0):
 
 
 def graph_objects(path):
-    with olefile.OleFileIO(str(path)) as outer:
+    with cfb.OleFileIO(str(path)) as outer:
         data = outer.openstream('PowerPoint Document').read()
     for offset, kind, instance, payload in ppt_atoms(data):
         if kind != 0x1011:
@@ -56,7 +56,7 @@ def graph_objects(path):
             raw = payload
         else:
             continue
-        with olefile.OleFileIO(io.BytesIO(raw)) as inner:
+        with cfb.OleFileIO(io.BytesIO(raw)) as inner:
             if not inner.exists('\x01CompObj'):
                 continue
             comp = inner.openstream('\x01CompObj').read()

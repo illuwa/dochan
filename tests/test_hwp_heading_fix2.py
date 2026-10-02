@@ -113,7 +113,7 @@ def test_preserve_fallback_shares_cumulative_stream_budget(monkeypatch, tmp_path
 
     streams = BudgetOle(None).streams
     limit = sum(len(value) for value in streams.values()) + slack
-    monkeypatch.setattr('dochan.reader.olefile.OleFileIO', BudgetOle)
+    monkeypatch.setattr('dochan.reader.cfb.OleFileIO', BudgetOle)
     monkeypatch.setattr('dochan.reader.MAX_OLE_DOCUMENT_SIZE', limit)
     monkeypatch.setattr('dochan.hwp.section.MAX_HWP_RECORDS', 3)
     path = tmp_path / 'budget.hwp'

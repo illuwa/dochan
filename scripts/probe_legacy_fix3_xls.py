@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 import time
 
-import olefile
+from dochan import cfb
 
 from dochan.office_binary.xls import _iter_records, parse_biff_workbook
 
@@ -13,7 +13,7 @@ from dochan.office_binary.xls import _iter_records, parse_biff_workbook
 def probe(corpus):
     results = {'public': [], 'synthetic_rk': []}
     for name in ('testEXCEL_5.xls', 'testEXCEL_95.xls'):
-        with olefile.OleFileIO(str(corpus / name)) as ole:
+        with cfb.OleFileIO(str(corpus / name)) as ole:
             stream = 'Workbook' if ole.exists('Workbook') else 'Book'
             data = ole.openstream(stream).read()
         doc = parse_biff_workbook(data, stream)

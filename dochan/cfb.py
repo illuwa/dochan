@@ -35,6 +35,7 @@ MAX_SECTORS = 1024 * 1024
 MAX_DIRECTORY_ENTRIES = 131072
 MAX_STORAGE_DEPTH = 128
 MAX_PATH_COMPONENTS = 1024 * 1024
+MAX_CHAIN_STEPS = 4 * 1024 * 1024
 
 
 class CFBError(OSError):
@@ -156,7 +157,8 @@ class OleFileIO:
 
     File paths and byte buffers opened here are closed here. Supplied file-like
     objects remain open. ``raise_defects`` is retained for call compatibility;
-    corruption affecting traversal/allocation is always a CFBError.
+    unambiguous prefixes survive local truncation in the default mode.
+    Live cycles, ambiguous allocations and resource limits remain CFBErrors.
     """
 
     def __init__(self, filename, raise_defects=40):
@@ -164,6 +166,8 @@ class OleFileIO:
         self._owned = False
         self._lock = threading.RLock()
         self._chains = {}
+        self._sizes = {}
+        self._chain_steps = 0
         self._raise_defects = raise_defects
         self.parsing_issues = []
         self._fp = None
@@ -214,6 +218,16 @@ class OleFileIO:
             raise CFBError('CFB sector outside file')
         return self._read_at((sid + 1) * self.sectorsize, self.sectorsize)
 
+    def _table_sector(self, sid):
+        """Read only present allocation words; never invent missing links."""
+        if not 0 <= sid < self._sector_count:
+            raise CFBError('CFB sector outside file')
+        offset = (sid + 1) * self.sectorsize
+        available = min(self.sectorsize, self._file_size - offset)
+        if available < self.sectorsize:
+            self._metadata_defect('CFB truncated allocation table sector')
+        return _words(self._read_at(offset, available - available % 4))
+
     def _claim(self, sid, owner, mini=False):
         owners = self._mini_owners if mini else self._owners
         if not 0 <= sid < len(owners):
@@ -226,26 +240,74 @@ class OleFileIO:
         result = array('I')
         sid = start
         bound = len(self._mini_owners) if mini else self._sector_count
+        recover = owner >= 0 or owner in (-4, -5)
         if count is not None and count > bound:
-            raise CFBError('CFB stream size exceeds available sectors')
+            if not recover:
+                raise CFBError('CFB stream size exceeds available sectors')
+            self._metadata_defect('CFB stream size exceeds available sectors')
         if limit is None:
             limit = bound
-        while sid != ENDOFCHAIN:
-            if len(result) >= limit:
-                raise CFBError('CFB chain length limit or cycle')
-            if not 0 <= sid < min(bound, len(table)):
-                raise CFBError('CFB chain sector outside allocation table')
-            self._claim(sid, owner, mini)
-            result.append(sid)
-            sid = table[sid]
-        if count is not None and len(result) != count:
-            if owner == 0 and len(result) > count:
-                # Root mini streams in public legacy files can retain spare
-                # sectors. Walk/claim the entire chain, expose only root.size.
-                self._metadata_defect('CFB root mini stream has excess allocated sectors')
-            else:
-                raise CFBError('CFB chain length does not match declared size')
+        owners = self._mini_owners if mini else self._owners
+        visited = set()
+        claimed = []
+        try:
+            while sid != ENDOFCHAIN:
+                self._chain_steps += 1
+                if self._chain_steps > MAX_CHAIN_STEPS:
+                    raise CFBError('CFB cumulative chain work limit exceeded')
+                if sid in visited:
+                    raise CFBError('CFB duplicate sector allocation or cyclic chain')
+                if not 0 <= sid < min(bound, len(table)):
+                    if not recover or (not result and owner < 0 and owner != -5):
+                        raise CFBError('CFB chain sector outside allocation table')
+                    self._metadata_defect('CFB truncated chain points outside allocation table')
+                    break
+                if len(result) >= limit:
+                    raise CFBError('CFB chain length limit or cycle')
+                if (recover and count is not None and len(result) >= count
+                        and owners[sid] not in (-1, owner)):
+                    self._metadata_defect('CFB unused stream tail aliases another allocation')
+                    break
+                if owner < 0 or count is None or len(result) < count:
+                    self._claim(sid, owner, mini)
+                    claimed.append(sid)
+                visited.add(sid)
+                result.append(sid)
+                sid = table[sid]
+            if count is not None and len(result) != count:
+                if owner >= 0 and len(result) > count:
+                    # Validate spare links without claiming them as payload;
+                    # expose only the declared logical stream extent.
+                    self._metadata_defect('CFB stream has excess allocated sectors')
+                else:
+                    if not recover:
+                        raise CFBError('CFB chain length does not match declared size')
+                    self._metadata_defect('CFB truncated chain does not match declared size')
+        except Exception:
+            # A failed optional stream must not poison ownership for subsequent
+            # reads. Only claims from this attempt are rolled back.
+            for sid in claimed:
+                owners[sid] = -1
+            raise
         return result
+
+    def _extent(self, chain, size, mini=False):
+        """Size of the contiguous, physically present prefix of a stream."""
+        unit = 64 if mini else self.sectorsize
+        available = 0
+        for sid in chain:
+            if available >= size:
+                break
+            if mini:
+                take = min(unit, self._root_size - sid * unit)
+            else:
+                take = min(unit, self._file_size - (sid + 1) * unit)
+            available += max(0, take)
+            if take < unit:
+                break
+        if available < size:
+            self._metadata_defect('CFB truncated stream payload')
+        return min(size, available)
 
     def _parse(self):
         header = self._read_at(0, 512)
@@ -267,18 +329,22 @@ class OleFileIO:
         self._owners = array('i', [-1]) * self._sector_count
         dir_count, fat_count, first_dir = struct.unpack_from('<3I', header, 40)
         first_mini, mini_count, first_dif, dif_count = struct.unpack_from('<4I', header, 60)
-        if not 1 <= fat_count <= self._sector_count or max(mini_count, dif_count) > self._sector_count:
+        if not 1 <= fat_count <= self._sector_count or dif_count > self._sector_count:
             raise CFBError('CFB allocation table count limit')
-        fat_ids = [sid for sid in struct.unpack_from('<109I', header, 76) if sid != FREESECT]
+        slots = list(struct.unpack_from('<109I', header, 76))
+        fat_ids = slots[:min(fat_count, 109)]
+        if any(sid != FREESECT for sid in slots[len(fat_ids):]):
+            self._metadata_defect('CFB unused DIFAT slots are not free')
         dif_ids = []
         sid = first_dif
         for _ in range(dif_count):
             self._claim(sid, -2)
             dif_ids.append(sid)
             words = _words(self._sector(sid))
-            fat_ids.extend(value for value in words[:-1] if value != FREESECT)
-            if len(fat_ids) > fat_count:
-                raise CFBError('CFB excess DIFAT FAT entries')
+            take = min(fat_count - len(fat_ids), len(words) - 1)
+            fat_ids.extend(words[:take])
+            if any(value != FREESECT for value in words[take:-1]):
+                self._metadata_defect('CFB unused DIFAT slots are not free')
             sid = words[-1]
         if dif_count and sid != ENDOFCHAIN:
             if sid == FREESECT:
@@ -290,9 +356,18 @@ class OleFileIO:
         if len(fat_ids) != fat_count:
             raise CFBError('CFB DIFAT FAT count mismatch')
         self._fat = array('I')
-        for sid in fat_ids:
+        for index, sid in enumerate(fat_ids):
+            if not 0 <= sid < self._sector_count:
+                if not index:
+                    raise CFBError('CFB first FAT sector outside file')
+                self._metadata_defect('CFB inaccessible FAT suffix omitted')
+                fat_ids = fat_ids[:index]
+                break
             self._claim(sid, -3)
-            self._fat.extend(_words(self._sector(sid)))
+            words = self._table_sector(sid)
+            if len(words) != self.sectorsize // 4 and sid != fat_ids[-1]:
+                raise CFBError('CFB missing interior FAT words')
+            self._fat.extend(words)
         for ids, marker in ((fat_ids, FATSECT), (dif_ids, DIFSECT)):
             for sid in ids:
                 if sid >= len(self._fat) or self._fat[sid] != marker:
@@ -321,22 +396,45 @@ class OleFileIO:
         mini_fat_chain = self._chain(first_mini, self._fat, -5, count=mini_count) if mini_count else array('I')
         self._minifat = array('I')
         for sid in mini_fat_chain:
-            self._minifat.extend(_words(self._sector(sid)))
+            words = self._table_sector(sid)
+            if len(words) != self.sectorsize // 4 and sid != mini_fat_chain[-1]:
+                raise CFBError('CFB missing interior MiniFAT words')
+            self._minifat.extend(words)
         self._check_size(self.root.size)
         self._root_chain = self._chain(self.root.start, self._fat, 0,
                                        count=(self.root.size + self.sectorsize - 1) // self.sectorsize) if self.root.size else array('I')
-        self._mini_owners = array('i', [-1]) * ((self.root.size + 63) // 64)
+        self._root_size = self._extent(self._root_chain, self.root.size)
+        self._mini_owners = array('i', [-1]) * ((self._root_size + 63) // 64)
 
-    def _entry(self, index):
+    def _entry_bytes(self, index):
         if not 0 <= index < self._entry_count:
             raise CFBError('CFB directory entry outside directory stream')
+        sector, offset = divmod(index * 128, self.sectorsize)
+        return self._read_at((self._directory[sector] + 1) * self.sectorsize + offset, 128)
+
+    def _entry(self, index):
         if index in self._entries:
             return self._entries[index]
-        sector, offset = divmod(index * 128, self.sectorsize)
-        data = self._read_at((self._directory[sector] + 1) * self.sectorsize + offset, 128)
+        data = self._entry_bytes(index)
         length, kind, color, left, right, child = struct.unpack_from('<HBBIII', data, 64)
-        if kind not in (1, 2, 5) or color not in (0, 1):
-            raise CFBError('CFB invalid live directory entry type or color')
+        if kind not in (1, 2, 5):
+            raise CFBError('CFB invalid live directory entry type')
+        if color not in (0, 1):
+            self._metadata_defect('CFB invalid directory tree color')
+        try:
+            name = self._directory_name(data, length, index)
+        except CFBError:
+            if index != 0:
+                raise
+            self._metadata_defect('CFB nonessential root label is invalid')
+            name = ''
+        start = _u32(data, 116)
+        size = _u32(data, 120) if self.major_version == 3 else struct.unpack_from('<Q', data, 120)[0]
+        result = _Entry(name, kind, left, right, child, start, size)
+        self._entries[index] = result
+        return result
+
+    def _directory_name(self, data, length, index):
         if length < 2 or length > 64 or length % 2:
             raise CFBError('CFB invalid directory name length or terminator')
         if data[length - 2:length] != b'\0\0':
@@ -351,11 +449,7 @@ class OleFileIO:
             raise CFBError('CFB invalid UTF-16 directory name') from exc
         if (not name and index != 0) or '\0' in name:
             raise CFBError('CFB empty or embedded-NUL directory name')
-        start = _u32(data, 116)
-        size = _u32(data, 120) if self.major_version == 3 else struct.unpack_from('<Q', data, 120)[0]
-        result = _Entry(name, kind, left, right, child, start, size)
-        self._entries[index] = result
-        return result
+        return name
 
     def _index_directory(self):
         # Walk both sibling links rather than relying on writer balancing or
@@ -370,7 +464,22 @@ class OleFileIO:
             if index in visited:
                 raise CFBError('CFB cyclic or duplicate directory entry')
             visited.add(index)
-            ent = self._entry(index)
+            try:
+                data = self._entry_bytes(index)
+            except CFBError:
+                self._metadata_defect('CFB inaccessible directory branch omitted')
+                continue
+            try:
+                ent = self._entry(index)
+            except CFBError:
+                self._metadata_defect('CFB invalid directory entry omitted')
+                # A live but unnameable object cannot be assigned an invented
+                # path. Its sibling links remain at known offsets; its children
+                # stay orphaned. Unallocated slots have no meaningful links.
+                if data[66] in (STGTY_STORAGE, STGTY_STREAM):
+                    left, right = struct.unpack_from('<II', data, 68)
+                    pending.extend(((right, parent, parent_id), (left, parent, parent_id)))
+                continue
             if ent.kind == STGTY_ROOT:
                 raise CFBError('CFB duplicate root entry')
             path = parent + (ent.name,)
@@ -390,7 +499,7 @@ class OleFileIO:
             if ent.kind == STGTY_STORAGE:
                 pending.append((ent.child, path, index))
             elif ent.child != NOSTREAM:
-                raise CFBError('CFB stream directory entry has children')
+                self._metadata_defect('CFB stream directory entry has unused children')
 
     @staticmethod
     def _check_size(size):
@@ -400,7 +509,7 @@ class OleFileIO:
     def _mini_offset(self, sid):
         position = sid * 64
         sector, within = divmod(position, self.sectorsize)
-        if position + 64 > self.root.size or sector >= len(self._root_chain):
+        if position >= self._root_size or sector >= len(self._root_chain):
             raise CFBError('CFB mini sector outside root stream')
         return (self._root_chain[sector] + 1) * self.sectorsize + within
 
@@ -439,14 +548,14 @@ class OleFileIO:
     def get_size(self, path):
         ent = self._entries[self._find(path)]
         if ent.kind != STGTY_STREAM:
-            raise CFBError('object is not an OLE stream')
+            raise OSError('this file is not a stream')
         return ent.size
 
     def openstream(self, path):
         index = self._find(path)
         ent = self._entries[index]
         if ent.kind != STGTY_STREAM:
-            raise CFBError('object is not an OLE stream')
+            raise OSError('this file is not a stream')
         self._check_size(ent.size)
         mini = ent.size < 4096
         if index not in self._chains:
@@ -454,8 +563,16 @@ class OleFileIO:
             chain = self._chain(ent.start, self._minifat if mini else self._fat,
                                 index, count=(ent.size + sector - 1) // sector,
                                 mini=mini) if ent.size else array('I')
-            self._chains[index] = chain
-        return _Stream(self, self._chains[index], ent.size, mini)
+            try:
+                size = self._extent(chain, ent.size, mini)
+            except Exception:
+                owners = self._mini_owners if mini else self._owners
+                for sid in chain:
+                    if owners[sid] == index:
+                        owners[sid] = -1
+                raise
+            self._chains[index], self._sizes[index] = chain, size
+        return _Stream(self, self._chains[index], self._sizes[index], mini)
 
     def close(self):
         if not self._closed:

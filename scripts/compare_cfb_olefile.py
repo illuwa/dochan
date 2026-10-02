@@ -304,6 +304,14 @@ def bounded_results(tasks, jobs, timeout, memory_mb):
                     result = {"status": "unexpected", "error": {"type": "TimeoutError", "reason": "timeout"}}
                 elif not process.is_alive():
                     result = {"status": "unexpected", "error": {"type": "WorkerExit", "reason": "worker_crash"}}
+                    # The child may send and exit between the initial poll and
+                    # is_alive(). Drain its final buffered result before
+                    # classifying an exit without a result as a crash.
+                    if connection.poll():
+                        try:
+                            result = connection.recv()
+                        except EOFError:
+                            pass
                 if result is None:
                     continue
                 process.join(timeout=1)

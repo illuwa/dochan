@@ -75,7 +75,7 @@ def test_doc_irm_warning_preserves_compatibility_document(monkeypatch, stream, p
         def read(self, path):
             return expected
 
-    monkeypatch.setattr(reader_module.olefile, 'OleFileIO', Container)
+    monkeypatch.setattr(reader_module.cfb, 'OleFileIO', Container)
     monkeypatch.setattr(reader_module, 'DOCReader', DOCReader)
     reader = object.__new__(Dochan)
     reader.file_path = 'synthetic.doc'
@@ -94,7 +94,7 @@ def test_irm_detection_keeps_container_size_limit(monkeypatch):
     from dochan.utils.bounded_io import MAX_OLE_DOCUMENT_SIZE
 
     monkeypatch.setattr('os.path.getsize', lambda _: MAX_OLE_DOCUMENT_SIZE + 1)
-    monkeypatch.setattr('olefile.OleFileIO', lambda _: pytest.fail('oversized container opened'))
+    monkeypatch.setattr('dochan.cfb.OleFileIO', lambda _: pytest.fail('oversized container opened'))
     errors = []
     warn_irm_protection('synthetic.doc', errors)
     assert errors == []

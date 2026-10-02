@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import struct
 
+from .. import cfb
 from ..pdf.crypto import rc4
 
 
@@ -21,12 +22,11 @@ def warn_irm_protection(file_path, errors):
     it too. DRMContent or the DRM transform identifies rights-managed data.
     The visible legacy Word compatibility notice remains available.
     """
-    import olefile
     from ..utils.bounded_io import validate_file_size
 
     try:
         validate_file_size(file_path)
-        ole = olefile.OleFileIO(file_path)
+        ole = cfb.OleFileIO(file_path)
         try:
             protected = (ole.exists('\tDRMContent') or ole.exists(
                 '\x06DataSpaces/TransformInfo/\tDRMTransform/\x06Primary'))

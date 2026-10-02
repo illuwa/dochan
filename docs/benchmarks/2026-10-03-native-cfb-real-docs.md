@@ -1,129 +1,131 @@
 # 자체 CFB 리더 실물 검증
 
-2026년 10월 3일 `illuwa/w-native-cfb`에서 `olefile` 런타임 의존성을 `dochan/cfb.py`로 교체했다. 구현 근거는 Microsoft 공개 [MS-CFB] 명세와 공개 코퍼스의 바이트 관찰이다. olefile과 다른 프로젝트의 구현 코드는 열거나 번역하지 않았다. olefile은 비교 프로그램 안에서만 선택적으로 가져와 읽기 결과를 정답으로 사용했다.
+2026년 10월 3일 `illuwa/w-native-cfb2`에서 자체 CFB 리더의 남은 호출부와 손상 입력 처리를 마무리했다. 구현 근거는 Microsoft [MS-CFB] 명세와 공개 파일의 바이트 관찰이다. 다른 프로젝트의 구현 코드는 읽거나 옮기지 않았고 `olefile`은 실행 결과를 대조하는 선택적 로컬 정답지로만 사용했다. README와 uv.lock은 수정하지 않았다.
 
-전체 코퍼스 100% 일치라는 인수 기준은 **미달**이다. 6,388개 중 6,325개는 저장소·스트림 목록, 선언 크기, 읽은 크기와 SHA-256이 모두 일치했다. 50개는 olefile만 열었으며, 10개는 열렸지만 일부 스트림 검증이 끝나지 않았고, 3개는 양쪽 모두 거부했다. 어느 쪽도 읽기에 실패하지 않은 공통 스트림의 바이트 해시 차이는 없었다. CFB v4 실물은 한 개도 없으므로 v4 실물 검증은 미검증이다. README는 수정하지 않았다.
+## 판정 기준과 범위
 
-## 명세와 구현 범위
+이 작업은 README의 새로운 표시 요소를 추가하는 작업이 아니라 기존 HWP·DOC·PPT·XLS와 암호 패키지의 공통 컨테이너를 교체하는 작업이다. 단위 테스트와 실물 검증을 구분한다. 손상 컨테이너까지 모두 같은 결과라는 주장은 하지 않으며, 아래의 잔여 차이는 개별 원시 바이트 근거로 판정한다. CFB v4 실물은 없어 미검증이다.
 
-헤더는 [MS-CFB §2.2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/05060311-bfce-4b12-874d-71fd4ce63aea)를 따른다. 버전 3/4, 섹터 512/4,096바이트, 미니 섹터 64바이트와 4,096바이트 경계를 구현했다. 할당은 [§2.3 FAT](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/30e1013a-a0ff-4404-9ccf-d75d835ff404), [§2.4 MiniFAT](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/c5d235f7-b73c-4ec5-bf8d-5c08306cd023), [§2.5 DIFAT](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/0afa4e43-b18f-432a-9917-4f276eca7a73)를 근거로 작성했다.
+[MS-CFB §2.2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/05060311-bfce-4b12-874d-71fd4ce63aea)의 헤더, §2.3 FAT, §2.4 MiniFAT, §2.5 DIFAT, §2.6 디렉터리와 스트림 크기를 주소 해석의 근거로 삼았다. 이번 실행에서는 네트워크를 사용하지 않았다. 명세 위반을 수용하는 복구 동작을 명세가 허용한 정상 파일이라고 표현하지 않는다.
 
-디렉터리는 [§2.6.1](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/60fe8611-66c3-496b-b70d-a504c94c9ace)의 128바이트 엔트리, UTF-16 이름, 유형, 형제·자식 포인터와 크기를 읽는다. v3 크기의 상위 32비트는 명세 권고대로 무시한다. [§2.6.4](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/d30e462c-5f8a-435b-9c4c-cc0b9ea89956)의 이름 비교 원칙에 따라 UTF-16 단위의 비확장 대문자 키를 만든다. 형제 트리는 양쪽 링크를 반복문으로 순회하므로 생산자의 트리 균형이나 정렬 순서에 의존하지 않는다. 순환, 중복 엔트리와 동일 저장소 내 이름 충돌은 거부한다. 완전한 red-black 균형·적합성 검사기나 쓰기 API는 아니다.
+기본 모드에서는 해석 가능한 물리 바이트만 회수한다. 선언 FAT 개수 뒤의 슬롯은 할당 주소로 해석하지 않는다. 없어진 FAT 접미부는 기존 워드 위치를 보존한 채 제외하고, 미니 할당표의 마지막 부분 섹터에서는 실제로 있는 완전한 워드만 읽는다. 색상, 스트림의 미사용 자식 포인터와 루트 라벨은 주소를 바꾸지 않는다. 잘못된 디렉터리 분기는 제외하고 이름이나 부모 경로를 만들어 붙이지 않는다. 도달하지 않는 고아 엔트리는 노출하지 않는다.
 
-메타데이터를 색인한 뒤 스트림 체인은 `openstream()`에서, 페이로드는 `read()`에서 읽는다. 루트 미니 스트림 전체를 메모리에 복사하지 않는다. 순환·중복 할당·잘린 체인·범위 초과는 `CFBError(OSError)`로 알리고 기존 문서 리더의 `doc.errors` 처리 경로를 유지한다. 읽지 않은 사용자 스트림까지 미리 검사한다고 주장하지 않는다. 모든 스트림을 열어 검사하는 비교 프로그램은 해당 검증을 끝까지 수행한다. 이 선택은 [§4.1의 지연 검증 설명](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/3c5249cc-1dc2-46f0-8faf-06c6a36f0085)과 부합한다.
+짧은 체인과 잘린 마지막 섹터는 연속으로 확인된 접두부만 반환한다. 첫 섹터가 없으면 빈 접두부이다. `get_size()`는 선언 크기를 그대로 반환하므로 기존 `read_ole_stream()`이 실제 크기와 다름을 검출하고 기존 리더의 `doc.errors` 경로로 전달한다. 실제로 없는 데이터를 0으로 채우지 않는다. 복구 원인은 `parsing_issues`에 중복 없이 남으며 `raise_defects=DEFECT_INCORRECT`는 같은 편차를 거부한다.
 
-CFB 자체 상한은 파일 512 MiB, 스트림 256 MiB, 일반 섹터 1,048,576개, 디렉터리 엔트리 131,072개, 저장소 깊이 128, 누적 경로 구성요소 1,048,576개이다. 정규화 이름은 `(부모 엔트리 ID, 이름 키)`로 한 번씩만 저장한다. 기존 문서 리더의 파일 200 MiB·스트림 100 MiB 상한은 그대로 적용된다. 이 수치는 형식 최대치나 실측 최대치가 아니라 악성 입력의 자원 사용을 제한하는 구현 정책이다.
+실제 데이터의 순환·교차 할당, 해석할 수 없는 헤더와 루트 유형은 계속 거부한다. 선언 범위 이후의 꼬리는 다른 스트림의 실제 소유권을 빼앗지 않는다. 실패한 체인 탐색이 남긴 소유권은 되돌린다. 실제 페이로드가 교차 할당된 파일은 먼저 연 스트림 뒤의 충돌을 거부하므로 모든 손상 파일에 읽기 순서 독립성을 보장하지 않는다.
 
-## 기존 호출 계약
+파일 512 MiB, 스트림 256 MiB, 일반 섹터 1,048,576개, 디렉터리 엔트리 131,072개, 깊이 128, 경로 구성요소 합계 1,048,576개 상한을 유지했다. 반복 시도와 미사용 꼬리 탐색도 컨테이너당 누적 4,194,304단계로 제한했다. 이 수치는 명세 최대치나 코퍼스에서 실측한 최댓값이 아니라 구현의 자원 정책이다.
 
-| API | 실제 사용과 유지한 의미 |
-| --- | --- |
-| `OleFileIO` | 경로 문자열, `Path`, 바이트와 `BytesIO`를 읽는다. 호출자가 준 파일 객체는 닫지 않는다. |
-| 컨텍스트 관리자와 `close()` | 직접 연 파일의 수명을 관리한다. |
-| `listdir(streams=True, storages=False)` | 기본 스트림 목록과 선택적 저장소 목록을 이름 구성요소 리스트로 반환한다. |
-| `exists`, `get_size`, `get_type` | 슬래시 문자열과 이름 리스트 경로를 받는다. 저장소·스트림 존재를 구별하며 선언 크기를 제공한다. |
-| `openstream` | `read(size)`, `read()`, `seek`, `tell`, `readinto`, `close`와 컨텍스트 관리자를 제공한다. |
-| `isOleFile` | 매직 바이트만 판별한다. 외부 파일 객체의 위치를 복원한다. 구조 유효성 검사는 아니다. |
-| 상수·예외 | `STGTY_STREAM`, `STGTY_STORAGE`, `DEFECT_INCORRECT`, `OleFileError`를 제공한다. |
+## 현재 전체 코퍼스
 
-런타임 호출부는 `reader.py`, `hwp/bin_data.py`, `office_binary/{doc,ppt,xls,ole_objects}.py`이다. `crypto/ooxml.py` 등 암호 모듈은 전달받은 컨테이너의 `get_size`·`openstream`만 사용하므로 수정할 필요가 없었다. `utils/bounded_io.py`는 설명 문자열만 바뀌었다. 기존 프로브 20개도 자체 모듈로 전환했다. `hwpx_inventory.py`는 직접 파일로 실행할 때 설치된 구버전 패키지를 가져오던 문제를 저장소 루트 경로 설정으로 수정했다.
-
-## 실물 코퍼스와 전체 결과
-
-확장자로 제한하지 않고 지정한 여섯 루트의 모든 파일에서 매직을 확인했다. 내부 `test_pairs`와 `local-samples`는 사용하지 않았으며 코퍼스 파일을 복사하지 않았다. 아래 개수는 중복 경로를 제거한 파일 개수이며, 내용이 같은 별도 파일은 별도 표본으로 센다. 모든 CFB 표본의 헤더는 v3/512바이트였다.
+내부 `test_pairs`와 `local-samples`는 사용하지 않았으며 원본 문서를 복사하지 않았다. 확장자와 관계없이 매직을 확인했고, 같은 내용의 별도 경로는 별도 표본으로 계산했다. 6,761개 모두 v3/512바이트 헤더였다.
 
 | 코퍼스 루트 | CFB 표본 수 |
 | --- | ---: |
-| 공개 `hwp-public/hwp` | 5,389 |
-| POI `test-data/document` | 162 |
-| POI `test-data/slideshow` | 145 |
-| POI `test-data/spreadsheet` | 420 |
-| LibreOffice `lo-src` | 262 |
-| Tika `tika-test-docs` | 10 |
-| 합계 | 6,388 |
+| `corpus/hwp-public/hwp` | 5,389 |
+| `corpus/poi-src/test-data/document` | 162 |
+| `corpus/poi-src/test-data/slideshow` | 145 |
+| `corpus/poi-src/test-data/spreadsheet` | 420 |
+| `corpus/lo-src` | 635 |
+| `corpus/tika-test-docs` | 10 |
+| 합계 | 6,761 |
 
-공개 HWP 루트의 5,389개 중 5,364개는 `.hwp`, 25개는 확장자만 `.hwpx`인 CFB였다. 이 루트와 Tika 10개는 모두 완전 일치했다.
+이전 실행 이후 LibreOffice 표본이 262개에서 635개로 늘었다. 현재 코퍼스로 수정 전 HEAD를 재검증한 기준선은 완전 일치 6,657개, 자체 리더만 거부 73개, 양쪽에서 열리지만 검증 차이가 있는 파일 17개, 양쪽 거부 14개였다. 이전 보고서의 50개·10개·56개는 별도로 원래 파일을 매핑해 재검증했다.
 
-| 판정 | 파일 수 | 의미 |
+| 현재 최종 판정 | 파일 수 | 판정의 의미 |
 | --- | ---: | --- |
-| 완전 일치 | 6,325 | 저장소·스트림 목록, 선언 크기, 실제 크기와 SHA-256이 전부 일치했다. |
-| olefile만 열림 | 50 | 자체 리더가 구조 손상 또는 상한 초과를 거부했다. |
-| 양쪽 열림, 스트림 검증 차이 | 10 | 8개 파일의 10개 스트림은 자체 리더가 거부했고, 2개 파일의 2개 스트림은 검증기 크기 상한을 넘었다. |
-| 양쪽 모두 거부 | 3 | 양쪽이 컨테이너를 열지 못했다. |
-| 자체 리더만 열림 | 0 | 반대 방향 차이는 없었다. |
+| 완전 일치 | 6,719 | 저장소·스트림 목록, 선언 크기, 실제 읽은 크기와 SHA-256이 같았다. |
+| 양쪽 열림, 검증 차이 | 20 | 실제 교차 할당·순환, 해석 불가능한 이름 제외, 검증 크기 상한 등을 아래 표에서 구별한다. |
+| olefile만 열림 | 8 | 잘못된 헤더 상수 6개, 잘못된 루트 유형 1개, 디렉터리 순환 1개이다. |
+| 양쪽 거부 | 13 | 해석 불가능한 헤더를 양쪽이 거부했다. 오류 문구 동일성을 성공으로 세지 않는다. |
+| 자체 리더만 열림 | 1 | 손상된 미사용 영역과 분리하여 실제 존재하는 스트림 접두부를 회수했다. |
 
-양쪽이 열린 파일에 나열된 74,968개 스트림 중 74,956개가 크기와 SHA-256까지 일치했다. 나머지 12개를 성공 분모에 숨기지 않았다. 실제 바이트 불일치, 스트림 목록 불일치와 저장소 목록 불일치는 모두 0건이었다.
+양쪽이 열린 파일의 기준 스트림 77,269개 중 77,240개가 크기와 해시까지 검증됐다. 나머지 29개를 통과로 계산하지 않았다. 바이트 차이는 손상 PPT 3개의 Current User 스트림에 남았다. 실제 루트 체인은 1,024바이트인데 미니 스트림 시작은 루트 오프셋 1,728이므로, 참조가 내는 64바이트 대신 자체 리더가 빈 물리 접두부를 반환하는 것이 주소 근거에 맞다. 나머지 공통 스트림의 읽힌 바이트 차이는 없다. 공개 HWP 루트의 5,389개와 Tika 10개는 모두 완전 일치했다. DIFAT 사용을 선언한 헤더는 132개이며 정상 공개 HWP 121개는 완전히 일치했다. 나머지는 손상 헤더의 비정상 개수까지 포함한다.
 
-| 칸 또는 기능 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
+## 이전 작업의 정확한 문제 표본 재검증
+
+이전 워크트리의 `cfb-discrepancy-classification.json`과 `cfb-conversion-classification.json`을 읽기 전용으로 확인했다. 이전 63개 파일 모두 현재 공개 코퍼스에서 파일명과 파일 크기로 유일하게 대응했고, 현재 SHA-256도 기록했다. 증가한 코퍼스의 새 표본 추첨 결과를 이전 56개 결과와 혼동하지 않았다.
+
+| 이전 판정 | 이전 표본 | 현재 완전 일치 | 현재 양쪽 열림·차이 | 현재 자체 리더 거부 | 현재 양쪽 거부 | 현재 자체 리더만 열림 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| olefile만 열림 | 50 | 37 | 9 | 4 | 0 | 0 |
+| 스트림 검증 차이 | 10 | 7 | 3 | 0 | 0 | 0 |
+| 양쪽 거부 | 3 | 0 | 0 | 0 | 2 | 1 |
+| 합계 | 63 | 44 | 12 | 4 | 2 | 1 |
+
+이전 50개 열기 차이는 FAT/DIFAT 35개, 디렉터리 8개, 범위 밖 참조 4개, 헤더 2개, 개수 상한 1개였다. 현재는 이 중 46개를 열며, 남은 4개는 헤더 상수 2개·루트 유형 1개·디렉터리 순환 1개이다. 이전 스트림 차이 10개 중 7개가 완전히 일치하게 됐고, 3개는 실제 미니 스트림 순환 1개와 거대 선언 크기로 인한 검증 상한 2개이다.
+
+이전 변환 차이 56개를 같은 파일에서 다시 실행한 결과 **45개는 세 출력이 일치하고 11개는 차이가 남았다.** 나머지 11개 중 Markdown 차이는 3개, JSON·진단만 다른 것은 8개이다. Markdown 차이 3개는 루트 유형이 248인 `hang-18.ppt`, 미니 스트림 경계가 318,771,200인 POI `clusterfuzz-testcase-minimized-POIHSLFFuzzer-6614960949821440.ppt`, 디렉터리 순환이 있는 POI `clusterfuzz-testcase-minimized-POIHSSFFuzzer-5816431116615680.xls`이다. 정상 상수를 임의로 대입하거나 순환 경로를 임의로 선택해 텍스트를 만드는 대신 오류를 반환하는 경계가 더 정확하다. 이것을 원래 손상 전 문서의 본문 정답을 복원했다는 주장으로 확대하지 않는다.
+
+`cfb-previous-recheck.json`은 이전 ID·현재 ID·공개 상대 경로·크기·SHA-256·이전 오류·현재 출력 해시·원시 바이트 감사 근거를 포함한다. [파일별 판정 문서](2026-10-03-native-cfb-residuals.md)에 11개 모두의 판정을 남긴다.
+
+## 기능별 실물 판정
+
+| 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
 | --- | --- | --- | --- | --- | --- |
-| v3 헤더·일반 스트림·미니 스트림·저장소 경로 | POI `SampleDoc.doc` | MS-CFB 필드 및 olefile 목록·SHA-256 비교이다. | 스트림 8개, 저장소 2개와 모든 바이트가 같아야 한다. | 스트림 8개, 저장소 2개가 일치했고, 미니 3개·일반 5개를 읽었다. | 통과이다. |
-| XLS 일반 스트림 | POI `Simple.xls` | olefile 목록·SHA-256 비교이다. | 스트림 3개가 같아야 한다. | 3개 모두 일치했다. | 통과이다. |
-| 헤더 밖 DIFAT와 여러 DIFAT 섹터 | 공개 HWP 집계 121개 | 원시 헤더의 DIFAT 개수와 olefile 스트림 비교이다. | 연결된 DIFAT를 통해 모든 스트림을 같은 바이트로 읽어야 한다. | 121개 모두 일치했다. 전체 DIFAT 사용 표본 122개 중 나머지 1개는 손상 입력이었다. | 해당 121개 범위에서 통과이다. |
-| 잘못된 FAT 표식의 안전한 수용 | POI `pictures.ppt` | 실제 DIFAT 주소·FAT 표식과 olefile 해시이다. | 실제 FAT 섹터를 예약하고 스트림 5개를 같게 읽어야 한다. | 5개 모두 일치했다. 표식 편차를 기록했다. | 통과이다. |
-| 비정상 루트 이름의 안전한 수용 | POI `numbers.ppt` | 루트 이름 길이 2바이트의 원시 관찰과 olefile 해시이다. | 이름 검색에 쓰지 않는 루트 라벨 때문에 본문을 버리지 않아야 한다. | 스트림 4개가 일치했다. | 통과이다. |
-| 루트 미니 스트림의 여분 할당 | POI `Bug60942.doc` | 선언량 2섹터·실제 체인 3섹터 관찰과 olefile 해시이다. | 전체 체인을 검증하되 선언된 범위만 노출해야 한다. | 스트림 3개가 일치했다. | 통과이다. |
-| 쓰이지 않는 MiniFAT 개수 | POI `46904.xls` | 시작 `ENDOFCHAIN`, 개수 1, 루트 크기 0, 일반 `Book` 스트림의 바이트이다. | 사용하지 않는 할당기의 오래된 개수 때문에 일반 스트림을 버리지 않아야 한다. | 스트림 1개가 일치했다. | 통과이다. |
-| 마지막 섹터 패딩 생략 | POI `47251.xls`, Tika `protect.xlsx`, `protectedFile.xlsx` | 파일 길이와 선언 데이터의 실제 바이트, olefile 해시이다. | 선언 데이터가 완전하면 읽고, 없는 바이트를 채워 만들지 않아야 한다. | 해당 표본들이 완전 일치했다. 잘린 데이터의 합성 테스트는 계속 거부했다. | 통과이다. |
-| v4/4,096바이트 섹터 | 해당 실물 표본이 없다. | 합성 v4 테스트만 있다. | 실물에서 같은 스트림을 읽어야 한다. | 실물 0개이다. | 미검증이며 ⬜ 유지가 맞다. |
+| 일반·미니 스트림과 저장소 경로 | POI `SampleDoc.doc`, `Simple.xls` 및 공개 HWP 5,389개이다. | olefile 목록·크기·SHA-256과 원시 할당 주소이다. | 실제 스트림이 동일해야 한다. | 전체 표본이 완전 일치했다. | 해당 범위에서 통과이다. |
+| 미사용 DIFAT 슬롯 | LibreOffice `hang-5.ppt`, `hang-11.ppt`, `crash-2.ppt`이다. | 선언 FAT 개수 뒤의 손상 슬롯과 실제 참조하는 FAT의 바이트이다. | 미사용 주소를 따라가지 않고 유효한 스트림을 읽어야 한다. | PPT 실물 프로브 10개 전부 통과했다. | 통과이다. |
+| 선언량 이후의 꼬리 교차 참조 | POI `45290.xls`이다. | Workbook은 43섹터를 선언하지만 44번째 링크는 디렉터리 섹터 44이다. | 선언된 22,016바이트만 읽고 디렉터리를 데이터로 노출하지 않아야 한다. | 스트림 전체 비교가 일치했다. | 통과이다. |
+| 잘린 접두부 | POI `clusterfuzz-testcase-minimized-POIFuzzer-5429732352851968.ppt`, `crash-9bf3cd4bd6f50a8a9339d363c2c7af14b536865c.xlsx`이다. | 선언 8,872바이트와 실제 4,452바이트의 원시 범위 및 olefile 해시이다. | 없는 바이트를 보충하지 않아야 한다. | 읽은 길이와 해시가 일치했다. | 통과이다. |
+| 미사용 MiniFAT 개수 | POI `clusterfuzz-testcase-minimized-POIHSSFFuzzer-6537773940867072.xls`이다. | 루트 크기 0, 시작 ENDOFCHAIN, 미사용 개수 808,150,272이다. | 선언 개수만큼 메모리를 할당하지 않아야 한다. | 실제 일반 스트림 접두부가 일치했다. | 통과이다. |
+| 부분 FAT·디렉터리와 고아 엔트리 | 공개 손상 표본 63개 및 확대 기준선 104개이다. | 파일별 원시 슬롯·주소·길이를 감사 JSON에 기록했다. | 해석 가능한 부분만 노출하고 주소를 추정하지 않아야 한다. | 파일별 판정을 아래 표에 기록했다. | 개별 판정 범위에 한정한다. |
+| v4와 4,096바이트 섹터 | 실물 표본이 없다. | 합성 v4 테스트만 있다. | 실물에서 검증해야 한다. | 실물 0개이다. | 미검증이며 ⬜ 유지이다. |
 
-## 불일치 원인과 수용 정책
+## 전체 변환과 퍼즈
 
-olefile만 열었던 50개는 FAT/DIFAT 개수 또는 배치 문제 35개, 디렉터리 문제 8개, 범위 밖 참조 4개, 헤더 문제 2개, 할당 수 상한 1개였다. 모두 열렸지만 자체 리더가 읽기를 거부한 10개 스트림은 범위 밖 참조 6개, 순환·중복 할당 2개, 선언량 대비 물리 섹터 부족 2개였다. 거대 선언 크기로 검증기가 읽기를 생략한 2개 스트림은 어느 쪽의 바이트도 검증했다고 판정하지 않았다. 양쪽 모두 거부한 3개는 헤더 2개와 FAT/DIFAT 1개였다.
+같은 `Dochan` 코드에서 컨테이너 백엔드만 바꾸고 Markdown, JSON, errors 문자열의 해시를 비교했다. 시드 20261003과 형식별 최대 300개를 사용했다.
 
-대표적인 공개 손상 표본은 LibreOffice `crash-1.ppt`, `hang-10.ppt`, POI `clusterfuzz-testcase-minimized-POIHWPFFuzzer-5195207308541952.doc`, `45290.xls`, `61300.xls`이다. 63개 예외 표본의 파일명·헤더 수치·선언량·실제 읽기량·고정 원인 분류는 `.codex-work/cfb-discrepancy-classification.json`에 모두 기록했다. 손상 입력을 기준 구현과 같이 부분 읽기하거나 순환을 무시하여 100% 수치를 만드는 변경은 하지 않았다.
-
-기본 읽기 모드에서는 주소 해석에 영향을 주지 않는 다섯 편차를 `parsing_issues`에 중복 없이 기록하고 허용한다. 루트 이름 종료 문자, FAT/DIFAT 표식, 최종 DIFAT의 `FREESECT`, 루트 미니 스트림 여분 섹터, 실제 미니 스트림이 전혀 없는 파일의 부재 MiniFAT 개수가 그 대상이다. `raise_defects=DEFECT_INCORRECT`를 준 포함 객체 검사는 이 편차도 거부한다. 일반 스트림의 짧은 체인이나 순환, 실제 데이터 부족과 중복 할당은 기본 모드에서도 거부한다. 마지막 섹터의 패딩 생략은 실제 요청 바이트가 파일에 존재하는지로 판단한다.
-
-## 변환 출력 비교
-
-같은 `Dochan` 코드에서 컨테이너 모듈만 교체하여 `to_markdown()`, `to_json()`, `errors`의 정확한 문자열 해시를 비교했다. 난수 시드 `20261003`으로 형식별 최대 300개를 선택했고, PPT는 실제 보유한 210개를 모두 사용했다. 손상 표본을 사전에 빼지 않았다.
-
-| 형식 | 표본 | 세 출력 완전 일치 | 차이 | 자원 상한으로 미검증 |
+| 형식 | 표본 | 완전 일치 | 차이 | 자원 상한으로 미검증 |
 | --- | ---: | ---: | ---: | ---: |
 | HWP | 300 | 300 | 0 | 0 |
-| DOC | 300 | 293 | 7 | 0 |
-| PPT | 210 | 173 | 37 | 0 |
-| XLS | 300 | 285 | 12 | 3 |
-| 합계 | 1,110 | 1,051 | 56 | 3 |
+| DOC | 300 | 284 | 16 | 0 |
+| PPT | 213 | 206 | 7 | 0 |
+| XLS | 300 | 293 | 0 | 7 |
+| 합계 | 1,113 | 1,083 | 23 | 7 |
 
-56개 차이는 컨테이너 자체 거부 48개, 스트림 손상 5개, 양쪽 컨테이너 거부 3개에 대응한다. 거부 이유가 다르면 기존 오류 문자열도 달라지므로 오류만 다른 경우 역시 불일치로 계산했다. 컨테이너의 모든 스트림 바이트가 동일하게 검증된 문서에서 출력이 달라진 사례는 0개였다.
+XLS 7개는 별도 프로세스에서 reference와 native를 각각 실행한 14회 모두 1,536 MiB RSS 감시 상한을 넘었다. 이를 CFB 교체의 회귀라고 볼 근거는 없지만 변환 일치 통과로 세지 않았다. `cfb-heavy-recheck.json`에 공개 상대 경로와 각 백엔드의 시간·RSS를 남겼다.
 
-XLS 표본 ID 811·856·943은 1.5 GiB 감시 상한에 걸렸다. 별도 프로세스에서 olefile만 사용한 변환과 자체 CFB만 사용한 변환을 각각 재실행했으며, 여섯 번 모두 상한을 넘었다. 따라서 기존 하위 XLS 변환의 자원 문제이며 이 작업의 CFB 회귀라고 보지 않는다. 그렇더라도 세 표본은 변환 일치 검증에 실패한 채 남는다. 상세 증거는 `.codex-work/cfb-heavy-conversions.json`과 `cfb-conversion-classification.json`이다.
+공개 CFB를 바이트 반전·자르기·구간 덮어쓰기·꼬리 추가로 5,000회 변형했다. 4,709개 컨테이너를 열었고 291개를 예상된 오류로 거부했다. 열린 컨테이너의 개별 손상 스트림도 검사했으며 예상 밖 예외·무한 실행에 따른 시간 초과·프로세스 비정상 종료·메모리 감시 상한 초과는 각각 0회였다. 최대 자식 RSS는 42.80 MiB, 최장 입력 처리 시간은 0.0278초였다. 이는 해당 표본과 시드의 관찰 결과이며 모든 악성 입력에 대한 증명은 아니다.
 
-## 손상 입력과 단위 테스트
+## 테스트와 의존성
 
-시드 `20261003`으로 공개 코퍼스에서 8 MiB 이하의 CFB를 골라 바이트 반전, 자르기, 구간 덮어쓰기와 꼬리 추가를 총 5,000회 실행했다. 3,546회는 읽혔고 1,454회는 예상된 입력 오류로 거부됐다. 예상 밖 예외, 시간 초과, 프로세스 비정상 종료와 메모리 상한 초과는 각각 0회였다. 자식 프로세스 최대 RSS는 45.0 MiB, 가장 오래 걸린 사례는 0.0218초였다. 이는 해당 시드와 표본에 대한 실측이며 모든 악성 입력에 대한 증명은 아니다.
+초기 7개 실패는 기존 monkeypatch 대상 6개와 로컬 절대 경로 검사 1개였다. monkeypatch를 새 모듈로 옮긴 뒤 드러난 실제 IRM 경고 누락도 런타임 호출부 전환으로 고쳤다. 새 복구 동작마다 합성 바이트의 실패 테스트를 먼저 확인했다. 기존 함수 42개의 `assert` 문 81개는 AST 대조에서 바뀌지 않았다.
 
-검증기는 문서마다 별도 프로세스를 사용하며, 부모의 시간 제한과 자식 RSS 최고치 50ms 표본을 보고 종료한다. 이 macOS 샌드박스는 `RLIMIT_DATA/AS` 설정을 거부하므로 OS가 강제한 절대 메모리 상한이라고 표현하지 않는다. 부모 감시가 별도로 동작했고, 비정상 종료 분류는 단위 테스트로 확인했다.
+기존 CFB 테스트 다섯 곳의 실행 조건은 새로 요청된 복구 정책에 맞춰 바꿨다. `test_invalid_headers_and_directory_graph`, `test_invalid_allocation_chains`, `test_truncated_sector_is_clear_error`, `test_partial_last_sector_with_complete_declared_payload`는 엄격 모드에서 기존 거부 단언을 유지한다. `test_unused_absent_minifat_count_does_not_hide_regular_stream`도 실제 필요한 MiniFAT 부재의 엄격 거부를 유지한다. 기본 모드의 부분 회수와 실제 순환·교차 할당 거부는 별도 테스트로 검증한다. 기존 기본 모드의 무조건 거부를 그대로 유지했다고 주장하지 않는다.
 
-`tests/test_cfb.py`의 합성 바이트 테스트 44개와 비교 프로그램 테스트 6개가 통과했다. 일반·미니 스트림, v3/v4, 두 개 이상의 DIFAT 섹터, v3 상위 크기 비트, 경로·파일 수명·지연 읽기, 체인 순환·중복·범위·부족, 디렉터리 순환, 자원 예산과 관찰된 호환 편차를 포함한다. 기존 수정 테스트 15개 파일의 단언 657개는 HEAD와 AST가 동일했다. olefile import를 강제 차단한 별도 프로세스에서도 5,632바이트 합성 DOC가 Markdown·JSON으로 변환됐으며 `errors=[]`였다.
+`crypto/legacy.py`와 남은 프로브 네 개를 자체 모듈로 전환했다. `pyproject.toml`에서 olefile 제거는 이전 HEAD에 이미 반영되어 있었다. 런타임·일반 테스트는 olefile을 요구하지 않으며, 비교 테스트는 `pytest.importorskip`을 사용한다. AGENTS, THIRD_PARTY와 Phase 5 문장을 현 상태로 수정했다. 검증기의 자식 종료와 파이프 결과 도착 사이 경쟁 조건은 결정적 재현 테스트로 고쳤다.
 
-전체 검증 명령은 다음과 같다.
+전체 테스트는 **3,370 passed, 24 skipped, 14 xfailed**이며 28.17초였다. `sitecustomize.py`에서 `sys.modules['olefile'] = None`을 설정해 모든 자식 프로세스의 import까지 차단한 실행은 **3,369 passed, 25 skipped, 14 xfailed**이며 28.49초였다. 추가 skip 하나는 선택적 비교 테스트이다. stdin으로 pytest를 실행한 첫 격리 시도는 macOS spawn이 `<stdin>`을 다시 열 수 없어 실패했으며, 실제 `python -m pytest`와 자식에게 상속되는 import 차단으로 재검증했다. Ruff 전체 검사, 변경 Python 16개 파일의 3.9 구문 검사와 공백 검사도 통과했다.
 
-```sh
-/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
-```
+비스트림 객체를 `get_size` 또는 `openstream`으로 요청한 오류는 관찰한 기존 API와 같은 `OSError('this file is not a stream')`로 유지했다. 이 차이를 정확성 개선이라고 주장하지 않고 실제 문자열 차이를 제거했다. 비교 도구는 남은 차이를 보고하므로 비교 명령 자체는 종료 코드 1을 반환하며, 이를 무조건 성공한 명령으로 보고하지 않는다.
 
-결과는 **3,147 passed, 24 skipped, 14 xfailed**이며 실행 시간은 37.49초였다. 새 코드와 직접 실행 경로 수정 파일의 Ruff 검사, Python 3.9 구문 검사와 `git diff --check`도 통과했다.
+현재 23개 변환 차이, 이전 표본 11개 변환 차이와 컨테이너 42개의 개별 수치는 [잔여 차이 판정 문서](2026-10-03-native-cfb-residuals.md)에 모두 기록했다. 동등한 손상 거부의 진단 문구 차이는 본문 정확성 우월성으로 포장하지 않는다. 모든 오류 문자열까지 완전히 같거나 모든 차이에서 본문 정확성 우월성이 입증됐다는 엄격한 전체 판정은 내리지 않는다.
 
-## 재실행과 증거 파일
+## 재실행
 
-아래 명령의 경로는 읽기 전용 입력이다. 비교 스크립트의 `--mode`를 `convert` 또는 `fuzz`로 바꾸어 같은 루트·시드로 실행할 수 있다. 변환은 `--per-format 300`, 퍼즈는 `--iterations 5000`을 준다. olefile이 없는 환경에서는 비교·변환 모드를 명시적으로 건너뛰고 이유를 JSON에 기록한다. 퍼즈와 일반 런타임은 olefile을 요구하지 않는다.
+코퍼스 경로는 읽기 전용 입력이다. `--mode convert --per-format 300` 또는 `--mode fuzz --iterations 5000`으로 같은 루트에서 변환·퍼즈를 실행한다.
 
 ```sh
 /usr/bin/python3 -m scripts.compare_cfb_olefile \
-  /Users/illuwa/dev/personal/dochan/corpus/hwp-public/hwp \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/document \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/slideshow \
-  /Users/illuwa/dev/personal/dochan/corpus/poi-src/test-data/spreadsheet \
-  /Users/illuwa/dev/personal/dochan/corpus/lo-src \
-  /Users/illuwa/dev/personal/dochan/corpus/tika-test-docs \
+  corpus/hwp-public/hwp \
+  corpus/poi-src/test-data/document \
+  corpus/poi-src/test-data/slideshow \
+  corpus/poi-src/test-data/spreadsheet \
+  corpus/lo-src corpus/tika-test-docs \
   --mode compare --jobs 4 --timeout 30 --memory-mb 1536 \
   --seed 20261003 --output .codex-work/cfb-compare-final.json
+
+/usr/bin/python3 -m scripts.recheck_cfb_previous \
+  corpus .codex-work/previous-cfb --output .codex-work/cfb-previous-recheck.json
+
+/usr/bin/python3 -m scripts.probe_cfb_residuals \
+  --corpus corpus --compare .codex-work/cfb-compare-final.json \
+  --convert .codex-work/cfb-convert-final.json \
+  --output .codex-work/cfb-residual-evidence.json \
+  --previous .codex-work/cfb-previous-recheck.json
+
+/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp
+ruff check dochan scripts tests
 ```
 
-표준 결과는 `.codex-work/cfb-compare-final.json`, `cfb-convert-final.json`, `cfb-fuzz-final.json`에 있다. 이 경로는 git에서 제외되며 원본 코퍼스를 포함하지 않는다. 비교 스크립트의 파일 ID는 같은 입력 루트에서 정렬한 경로의 순번이므로 코퍼스 구성이나 표본 시드를 바꾸면 다시 계산해야 한다.
-
-## 통합 시 남은 일
-
-오케스트레이터가 `uv.lock`을 다시 잠그고 README의 olefile 감사·의존성 설명을 실제 런타임 상태에 맞게 정리해야 한다. 해당 파일은 이 작업에서 수정하지 않았다. v4 실제 파일 확보, 손상 입력 수용 정책의 인수 기준 확정과 기존 XLS 세 표본의 변환 자원 문제는 남아 있다. 전체 일치와 v4까지 검증됐다는 ✅ 표시는 제안하지 않는다.
+비교기의 부모 프로세스는 자식의 RSS와 시간을 감시한다. macOS의 rlimit 지원과 별도로 부모의 종료 감시가 동작한다. olefile이 없으면 비교 부분은 이유와 함께 건너뛰며 일반 파싱·퍼즈·원시 바이트 감사는 동작한다. 파일 ID는 입력 목록과 표본 시드에 종속되므로 코퍼스가 바뀌면 이름·크기 또는 해시로 재매핑해야 한다.

@@ -16,9 +16,11 @@ python -m pytest tests/test_pdf_reader.py -q   # 단일 파일
   패키지를 모두 잡는다. 따라서 `PYTHONPATH=.` 를 붙일 필요가 없다.
 - 그냥 `pytest tests/` 로 실행하면 (a) site-packages 에 설치된 dochan 이 레포
   소스를 가리거나, (b) 벤치마크 테스트가 `No module named 'scripts'` 로 실패한다.
-- pytest 와 의존성(lxml, olefile, pyyaml, Pillow, pytesseract)은 Python 3.9 환경에
+- pytest 와 의존성(lxml, pyyaml, Pillow, pytesseract)은 Python 3.9 환경에
 만 설치돼 있다. `pytest`(=Xcode python3.9)를 쓰고, homebrew `python3`(3.14, pytest
   없음)를 쓰지 말 것.
+- OLE 컨테이너는 자체 `dochan/cfb.py`로 읽는다. `olefile`은 로컬 비교 검증용이며
+  런타임과 일반 테스트에는 필요하지 않다.
 
 ## 검증 정책
 

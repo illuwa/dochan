@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 
-import olefile
+from dochan import cfb
 
 from dochan.office_binary.ppt import PPTReader
 from dochan.office_binary.ppt_structure import resolve_presentation
@@ -52,7 +52,7 @@ def probe(poi, lo):
         doc = PPTReader().read(str(path))
         links = [target for para in doc.find_all('paragraph')
                  for target in re.findall(r'<(#PowerPoint Document#slide\d+)>', para.text)]
-        with olefile.OleFileIO(str(path)) as ole:
+        with cfb.OleFileIO(str(path)) as ole:
             presentation = resolve_presentation(ole.openstream('PowerPoint Document').read(),
                                                 ole.openstream('Current User').read(), [])
         resolved = read_hyperlinks(presentation.document.children, [s.slide_id for s in presentation.slides])

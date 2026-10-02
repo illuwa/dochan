@@ -137,7 +137,7 @@ def test_v4_keeps_high_size_bits_and_limits():
 def test_invalid_headers_and_directory_graph(offset, value, fmt):
     raw, _ = compound()
     with pytest.raises(cfb.CFBError):
-        with cfb.OleFileIO(change(raw, offset, value, fmt)) as ole:
+        with cfb.OleFileIO(change(raw, offset, value, fmt), raise_defects=cfb.DEFECT_INCORRECT) as ole:
             for name in ole.listdir():
                 ole.openstream(name).read()
 
@@ -155,7 +155,7 @@ def test_invalid_headers_and_directory_graph(offset, value, fmt):
 def test_invalid_allocation_chains(offset, value, name):
     raw, _ = compound()
     with pytest.raises(cfb.CFBError):
-        with cfb.OleFileIO(change(raw, offset, value)) as ole:
+        with cfb.OleFileIO(change(raw, offset, value), raise_defects=cfb.DEFECT_INCORRECT) as ole:
             ole.openstream(name).read()
 
 
@@ -208,7 +208,7 @@ def test_payload_is_lazy_and_streams_have_independent_positions():
 def test_truncated_sector_is_clear_error():
     raw, _ = compound()
     with pytest.raises(cfb.CFBError):
-        with cfb.OleFileIO(raw[:-20]) as ole:
+        with cfb.OleFileIO(raw[:-20], raise_defects=cfb.DEFECT_INCORRECT) as ole:
             ole.openstream('Regular').read()
 
 
@@ -301,9 +301,9 @@ def test_partial_last_sector_with_complete_declared_payload():
     raw = change(raw, 512 + 3 * 128 + 120, 4097, '<Q')
     with cfb.OleFileIO(raw) as ole:
         assert ole.openstream('Regular').read() == payload + b'x'
-    # Missing actual payload bytes must still fail, unlike missing padding.
+    # Strict mode rejects missing payload; default mode exposes only its prefix.
     with pytest.raises(cfb.CFBError):
-        with cfb.OleFileIO(raw[:-1]) as ole:
+        with cfb.OleFileIO(raw[:-1], raise_defects=cfb.DEFECT_INCORRECT) as ole:
             ole.openstream('Regular').read()
 
 
@@ -319,4 +319,229 @@ def test_unused_absent_minifat_count_does_not_hide_regular_stream():
         cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT)
     # An actually needed mini FAT may not be ignored.
     with pytest.raises(cfb.CFBError):
-        cfb.OleFileIO(change(raw, 512 + 2 * 128 + 120, 70, '<Q'))
+        with cfb.OleFileIO(change(raw, 512 + 2 * 128 + 120, 70, '<Q'),
+                           raise_defects=cfb.DEFECT_INCORRECT) as ole:
+            ole.openstream('Folder/한글')
+
+
+@pytest.mark.parametrize('slot,value', [(1, 9999), (1, 1), (108, 0)])
+def test_unused_difat_slots_do_not_address_sectors(slot, value):
+    raw, payload = compound()
+    raw = change(raw, 76 + slot * 4, value)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+    with pytest.raises(cfb.CFBError):
+        cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT)
+
+
+def test_unused_extended_difat_slots_do_not_address_sectors():
+    raw, payload = compound(extra_fat=110)
+    raw = change(raw, len(raw) - 12, 999999)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+
+
+def test_directory_color_and_stream_child_are_not_addresses():
+    raw, payload = compound()
+    raw = change(raw, 512 + 3 * 128 + 67, 255, '<B')
+    raw = change(raw, 512 + 3 * 128 + 76, 99999)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert len(ole.parsing_issues) == 2
+
+
+def test_orphan_directory_slots_are_not_live_objects():
+    raw, payload = compound(4)
+    raw = change(raw, 4096 + 4 * 128 + 66, 255, '<B')
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.listdir() == [['Folder', '한글'], ['Regular']]
+        assert ole.openstream('Regular').read() == payload
+
+
+def test_regular_excess_chain_keeps_declared_extent_and_checks_cycles():
+    raw, payload = compound()
+    raw += b'x' * 512
+    raw = change(change(raw, 1024 + 11 * 4, 12), 1024 + 12 * 4, END)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+    with pytest.raises(cfb.CFBError):
+        with cfb.OleFileIO(change(raw, 1024 + 12 * 4, 4)) as ole:
+            ole.openstream('Regular')
+
+
+def test_partial_minifat_sector_requires_only_referenced_words():
+    raw, _ = compound()
+    # Relocate MiniFAT after the complete data and keep three actual words.
+    raw += raw[1536:1548]
+    raw = change(change(raw, 60, 12), 1024 + 12 * 4, END)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Folder/한글').read() == b'a' * 64 + b'ending'
+        assert ole.parsing_issues
+
+
+@pytest.mark.parametrize('damage', ['physical', 'early_end', 'outside_tail', 'oversized_count'])
+def test_truncated_stream_returns_only_addressable_prefix(damage):
+    raw, payload = compound()
+    expected = payload
+    if damage == 'physical':
+        raw, expected = raw[:-20], payload[:-20]
+    elif damage == 'early_end':
+        raw, expected = change(raw, 1024 + 4 * 4, END), payload[:512]
+    elif damage == 'outside_tail':
+        raw, expected = change(raw, 1024 + 4 * 4, 9999), payload[:512]
+    else:
+        raw = change(raw, 512 + 3 * 128 + 120, 100000)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.get_size('Regular') == (100000 if damage == 'oversized_count' else 4096)
+        stream = ole.openstream('Regular')
+        assert stream.read() == expected
+        assert stream.seek(0, 2) == len(expected)
+        assert ole.parsing_issues
+        assert ole.openstream('Folder/한글').read() == b'a' * 64 + b'ending'
+    with pytest.raises(cfb.CFBError):
+        with cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT) as ole:
+            ole.openstream('Regular').read()
+
+
+def test_failed_chain_releases_claims_for_other_streams():
+    raw, _ = compound()
+    # First attempt walks a real sector then cycles. Repeated errors must be
+    # stable and unrelated streams must remain readable.
+    raw = change(raw, 1024 + 4 * 4, 4)
+    with cfb.OleFileIO(raw) as ole:
+        for _ in range(2):
+            with pytest.raises(cfb.CFBError, match='cyclic'):
+                ole.openstream('Regular')
+            assert ole._owners[4] == -1
+        assert ole.openstream('Folder/한글').read() == b'a' * 64 + b'ending'
+
+
+def test_crosslinked_tail_after_declared_extent_is_not_payload():
+    raw, payload = compound()
+    raw = change(raw, 1024 + 11 * 4, 0)  # Directory, beyond stream extent.
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+
+
+@pytest.mark.parametrize('damage', ['missing', 'unused', 'name'])
+def test_local_directory_damage_preserves_other_branches(damage):
+    raw, payload = compound()
+    if damage == 'missing':
+        raw = change(raw, 512 + 128 + 76, 9999)
+    elif damage == 'unused':
+        raw = change(raw, 512 + 2 * 128 + 66, 0, '<B')
+    else:
+        raw = change(raw, 512 + 2 * 128 + 64, 0, '<H')
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert not ole.exists('Folder/한글')
+        assert ole.parsing_issues
+    with pytest.raises(cfb.CFBError):
+        cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT)
+
+
+def test_huge_unused_minifat_count_does_not_allocate():
+    raw, payload = compound()
+    raw = change(change(raw, 60, END), 64, 0x30303030)
+    raw = change(raw, 512 + 120, 0, '<Q')
+    raw = change(raw, 512 + 2 * 128 + 120, 0, '<Q')
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+
+
+def test_missing_unused_fat_suffix_keeps_available_allocation_words():
+    raw, payload = compound()
+    raw = change(raw, 44, 5)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+    with pytest.raises(cfb.CFBError):
+        cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT)
+
+
+def test_partial_directory_chain_preserves_complete_entries():
+    raw, payload = compound()
+    raw = change(raw, 1024, 9999)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+
+
+def test_minifat_chain_count_is_bounded_by_physical_chain():
+    raw, payload = compound()
+    raw = change(raw, 64, 10)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.openstream('Folder/한글').read() == b'a' * 64 + b'ending'
+        assert ole.parsing_issues
+
+
+def test_unused_tail_does_not_claim_another_stream_payload():
+    raw, payload = compound()
+    raw += payload
+    for sid in range(12, 20):
+        raw = change(raw, 1024 + sid * 4, sid + 1 if sid < 19 else END)
+    raw = change(raw, 1024 + 11 * 4, 12)
+    raw = change(change(raw, 512 + 2 * 128 + 116, 12), 512 + 2 * 128 + 120, 4096)
+    for first, second in [('Regular', 'Folder/한글'), ('Folder/한글', 'Regular')]:
+        with cfb.OleFileIO(raw) as ole:
+            assert ole.openstream(first).read() == payload
+            assert ole.openstream(second).read() == payload
+
+
+def test_chain_traversal_has_cumulative_work_budget(monkeypatch):
+    raw, _ = compound()
+    monkeypatch.setattr(cfb, 'MAX_CHAIN_STEPS', 5, raising=False)
+    with pytest.raises(cfb.CFBError, match='work limit'):
+        with cfb.OleFileIO(raw) as ole:
+            ole.openstream('Regular')
+
+
+@pytest.mark.parametrize('offset', [60, 512 + 116])
+def test_missing_mini_allocator_does_not_hide_regular_stream(offset):
+    raw, payload = compound()
+    raw = change(raw, offset, 9999)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+        assert ole.openstream('Folder/한글').read() == b''
+
+
+def test_invalid_root_label_does_not_change_root_addresses():
+    raw, payload = compound()
+    raw = change(raw, 512 + 64, 0, '<H')
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.openstream('Regular').read() == payload
+        assert ole.parsing_issues
+    with pytest.raises(cfb.CFBError):
+        cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT)
+
+
+
+def test_missing_first_sector_is_empty_prefix_and_keeps_size_contract():
+    from dochan.utils.bounded_io import read_ole_stream, StreamSizeError
+    raw, _ = compound()
+    raw = change(raw, 512 + 3 * 128 + 116, 9999)
+    with cfb.OleFileIO(raw) as ole:
+        assert ole.get_size('Regular') == 4096
+        assert ole.openstream('Regular').read() == b''
+        assert ole.parsing_issues
+        with pytest.raises(StreamSizeError, match='declared=4096, read=0'):
+            read_ole_stream(ole, 'Regular')
+    with pytest.raises(cfb.CFBError):
+        with cfb.OleFileIO(raw, raise_defects=cfb.DEFECT_INCORRECT) as ole:
+            ole.openstream('Regular')
+
+
+
+@pytest.mark.parametrize('method', ['get_size', 'openstream'])
+def test_nonstream_api_error_preserves_existing_diagnostic(method):
+    raw, _ = compound()
+    with cfb.OleFileIO(raw) as ole:
+        with pytest.raises(OSError, match='^this file is not a stream$'):
+            getattr(ole, method)('Folder')

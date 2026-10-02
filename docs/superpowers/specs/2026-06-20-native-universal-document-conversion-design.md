@@ -36,7 +36,6 @@ Current core status:
 
 - dochan is MIT licensed.
 - Existing required dependencies are permissive:
-  - `olefile`: BSD
   - `lxml`: BSD
   - `pyyaml`: MIT
 - Existing optional OCR dependencies are permissive enough for optional use:
@@ -332,7 +331,7 @@ Phase 1 implementation status (updated 2026-08-08):
 
 Implementation targets:
 
-- Keep `olefile` as the only OLE container dependency because it is already permissive and used by HWP parsing.
+- Read OLE containers with the native `dochan/cfb.py` implementation of [MS-CFB]. Keep `olefile` only as an optional local comparison oracle; runtime readers and ordinary tests do not require it.
 - Parse `.xls` BIFF records incrementally rather than delegating to a spreadsheet engine.
 - Parse `.ppt` text records from the PowerPoint Document stream and add slide-level reconstruction later.
 - Parse `.doc` WordDocument text as a conservative first milestone, then add FIB and piece-table interpretation.

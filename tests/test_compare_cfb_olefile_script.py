@@ -63,3 +63,63 @@ def test_parent_watchdog_classifies_worker_exit(monkeypatch):
     assert len(results) == 1
     assert results[0]["error"]["reason"] == "worker_crash"
     assert results[0]["id"] == 0
+
+
+def test_parent_watchdog_reads_result_buffered_during_process_exit(monkeypatch):
+    from types import SimpleNamespace
+    from scripts import compare_cfb_olefile as probe
+
+    class Connection:
+        polls = 0
+        closed = False
+
+        def poll(self):
+            self.polls += 1
+            return self.polls > 1
+
+        def recv(self):
+            assert self.polls == 2
+            return {"status": "equal"}
+
+        def close(self):
+            self.closed = True
+
+    class Process:
+        pid = 123
+
+        def __init__(self, target, args):
+            pass
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            pass
+
+    parent, child = Connection(), Connection()
+    context = SimpleNamespace(
+        Pipe=lambda duplex: (parent, child),
+        Value=lambda *args, **kwargs: SimpleNamespace(value=0),
+        Process=Process,
+    )
+    monkeypatch.setattr(probe.multiprocessing, "get_context", lambda method: context)
+    results = list(probe.bounded_results([("compare", 42, "/opaque.doc", 1, 42)], 1, 1, 128))
+    assert len(results) == 1
+    assert results[0]["status"] == "equal"
+    assert results[0]["id"] == 42
+    assert parent.closed and child.closed
+
+
+def test_comparison_backend_switches_legacy_irm_reader():
+    import pytest
+    from dochan import cfb
+    from dochan.crypto import legacy
+    from scripts import compare_cfb_olefile as probe
+
+    reference = pytest.importorskip("olefile")
+    with probe._backend(reference):
+        assert legacy.cfb is reference
+    assert legacy.cfb is cfb

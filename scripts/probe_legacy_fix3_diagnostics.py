@@ -7,7 +7,7 @@ import struct
 import sys
 import time
 
-import olefile
+from dochan import cfb
 
 
 def record(sid, data=b''):
@@ -70,7 +70,7 @@ def main():
                             embedded_seconds=time.perf_counter() - start,
                             embedded_errors=len(errors), elements=len(output),
                             host_fatal=any(is_fatal_diagnostic(e) for e in errors)))
-    with olefile.OleFileIO(str(args.corpus / 'poi-src/test-data/spreadsheet/SimpleWithColours.xls')) as ole:
+    with cfb.OleFileIO(str(args.corpus / 'poi-src/test-data/spreadsheet/SimpleWithColours.xls')) as ole:
         data = ole.openstream('Workbook').read()
     errors = []
     output = EmbeddedObjects(errors).read(Streams(data), [], None)

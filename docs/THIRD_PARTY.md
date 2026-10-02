@@ -11,7 +11,6 @@
 
 | 구분 | 프로젝트와 선언 | 쓰임 | 확인한 고지와 범위 |
 | --- | --- | --- | --- |
-| 필수 | [olefile](https://github.com/decalage2/olefile), `>=0.47`이다. | OLE 컨테이너를 읽는다. | 설치된 0.47의 `LICENSE.txt`는 BSD-2-Clause 조건과 기원인 PIL의 허가문을 함께 담고 있다. 두 고지를 함께 보존한다. |
 | 필수 | [lxml](https://lxml.de/), `>=4.9`이다. | XML을 읽는다. | 설치된 6.1.1의 주 라이선스는 BSD-3-Clause다. `LICENSES.txt`에는 ElementTree 유래 부분, 테스트 도구, Schematron 자원 등의 별도 고지가 있다. 번들 배포 시 libxml2·libxslt 등 실제 wheel의 고지도 확인해야 한다. |
 | OCR 선택 | [pytesseract](https://github.com/madmaze/pytesseract), `>=0.3; python_version >= '3.10'`이다. | 사용자가 설치한 Tesseract를 호출한다. | 설치된 0.3.13의 고지는 Apache-2.0이다. Tesseract 실행파일은 dochan 소스에 포함하지 않는다. |
 | OCR 선택 | [Pillow](https://github.com/python-pillow/Pillow), `>=12.3; python_version >= '3.10'`이다. | OCR 입력 이미지를 처리한다. | 검증 인터프리터의 11.3.0 메타데이터는 MIT-CMU다. 이 버전은 현재 OCR extra의 최소 버전보다 낮으므로 12.3 배포물의 전체 고지 검증을 대신하지 않는다. 이미지 코덱 고지도 배포물에 따라 별도로 확인한다. |
@@ -20,6 +19,11 @@
 설치하도록 선언되어 있다. Python 3.9에 기존 OCR 패키지가 설치되어 있는 사실을
 3.9 OCR 지원 보장으로 해석하지 않는다. 표준 라이브러리 `zlib`, `hashlib` 등을
 사용하며 AES 구현은 저장소의 `dochan/utils/aes.py`를 재사용한다.
+
+OLE 컨테이너는 [MS-CFB] 명세와 원시 바이트 관찰에 근거한 자체
+`dochan/cfb.py`로 읽는다. `olefile`은 런타임 의존성에서 제거했으며,
+`scripts/compare_cfb_olefile.py`가 로컬에 설치된 경우에만 호출하는 선택적 비교
+정답지다. dochan 패키지에 해당 소스나 라이브러리를 동봉하지 않는다.
 
 `dochan/quality/cross_validator.py`는 검증을 요청할 때 `pdfplumber`를 선택적으로
 import하고, `dochan/quality/batch_validate.py`는 `opendataloader_pdf`를 선택적으로
@@ -91,6 +95,7 @@ XOR한다(결과의 앞 4바이트는 쓰지 않는다). 테스트 픽스처(`te
 | LibreOffice의 공개 문서 코퍼스다. | 호환성 및 손상 입력 사례로 사용한다. 로컬 원본에는 MPL·LGPL·GPL 고지 파일이 함께 있으므로 모든 표본에 단일 라이선스를 임의 부여하지 않는다. | 해당 코드와 코퍼스를 dochan에 넣지 않는다. 외부 변환 엔진을 런타임에 추가하지 않는다. |
 | pdf.js의 PDF 코퍼스다. | PDF 구조·주석·암호·글꼴 검증에 사용한다. 프로젝트의 Apache-2.0 고지와 별개로 PDF별 출처가 있을 수 있다. | 공개 PDF는 외부 경로에서 읽는다. pdf.js의 파서 코드는 가져오지 않는다. |
 | xlrd 정답지다. | `probe_xls_*` 스크립트가 별도 인터프리터에서 셀·수식 캐시를 비교한다. | xlrd 소스나 라이브러리를 dochan에 넣지 않는다. 이번 Python 3.9 환경에는 설치되어 있지 않아 해당 설치본의 고지는 재검증하지 않았다. |
+| [olefile](https://github.com/decalage2/olefile) 정답지다. | 선택적 로컬 비교 스크립트가 컨테이너 목록·스트림·변환 출력을 대조한다. 런타임과 일반 테스트에는 필요하지 않다. | 설치된 0.47의 `LICENSE.txt`는 BSD-2-Clause 조건과 PIL 유래 허가문을 함께 담고 있다. 라이브러리를 별도 배포할 때 두 고지를 보존하며 dochan에는 동봉하지 않는다. |
 | PDFium·Poppler·pdfplumber·Open Dataloader다. | 독립 PDF 글리프 좌표나 추출 텍스트를 비교하는 검증 도구다. | 도구 바이너리를 동봉하지 않는다. 패키지 안에 남아 있는 선택적 검증 어댑터는 앞 절에 구분해 기록했다. |
 | pikepdf/qpdf·pypdf·openpyxl이다. | 합성 암호화 입력의 생성 이력이나 문서 작성기의 관찰 결과로 언급된다. | 생성된 테스트 바이트와 기대값이 남아 있으나 해당 프로젝트의 구현 코드를 포함했다는 근거는 해당 주석에 없다. |
 | 한컴의 공개 명세와 HWP 공개 코퍼스다. | 명세·원시 바이트·CRC·길이로 구현과 복호화를 검증한다. | 원본 문서를 배포하지 않으며 한컴 명세 사용 고지는 기존 `NOTICE`에 유지한다. |

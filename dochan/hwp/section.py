@@ -15,6 +15,7 @@ import struct
 import zlib
 from bisect import bisect_right
 from dataclasses import dataclass, replace as _dc_replace
+from itertools import chain
 from typing import List
 
 from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
@@ -36,12 +37,11 @@ from .records.ctrl_header import (
     CTRL_BOOKMARK,
 )
 from .records.para_text import parse_para_text
-from .records.para_char_shape import parse_para_char_shape
 from .forms import form_text
 from .revisions import project_text_result
 
 
-def _apply_link_ranges(runs, ranges):
+def _apply_link_ranges(runs, ranges, *, max_runs=None, on_limit=None):
     """텍스트 오프셋 범위 [(start, end, url)] 를 런 목록에 적용한다.
 
     정렬한 경계를 한 번 순회하며 마지막 범위가 우선하는 링크를 적용한다.
@@ -64,13 +64,22 @@ def _apply_link_ranges(runs, ranges):
     event_index = 0
     pos = 0
     result = []
-    for run in runs:
+    for run_index, run in enumerate(runs):
         run_start = pos
         run_end = pos + len(run.text)
         if run_end == pos:
             result.append(run)
             continue
         while pos < run_end:
+            if max_runs is not None and len(result) >= max_runs:
+                # Preserve all remaining characters without allocating a run
+                # per boundary. This fallback also covers link-only fanout.
+                tail = [run.text[pos - run_start:]]
+                tail.extend(item.text for item in runs[run_index + 1:])
+                result.append(TextRun(text=''.join(tail)))
+                if on_limit is not None:
+                    on_limit()
+                return result
             while event_index < len(events) and events[event_index][0] <= pos:
                 entry = events[event_index][1]
                 if entry is not None:
@@ -101,6 +110,10 @@ MAX_HWP_TABLE_DEPTH = 32
 MAX_HWP_TABLE_CELLS = 200_000
 MAX_HWP_SECTION_CELLS = 200_000
 MAX_HWP_DOCUMENT_CELLS = 200_000
+# Four times the public corpus maximum (131,072 model runs per document).
+# See docs/benchmarks/2026-10-03-hwp-runs-real-docs.md. Plain fallback runs
+# preserve paragraph boundaries and are not charged to this formatting budget.
+MAX_HWP_DOCUMENT_TEXT_RUNS = 524_288
 
 
 class HWPRecordLimitError(ValueError):
@@ -132,6 +145,7 @@ class SectionParser:
     MAX_TABLE_CELLS = MAX_HWP_TABLE_CELLS
     MAX_SECTION_CELLS = MAX_HWP_SECTION_CELLS
     MAX_DOCUMENT_CELLS = MAX_HWP_DOCUMENT_CELLS
+    MAX_DOCUMENT_TEXT_RUNS = MAX_HWP_DOCUMENT_TEXT_RUNS
 
     def __init__(self, doc_info=None, *, revision_mode="preserve", project_revisions=True):
         if revision_mode not in ("preserve", "final", "original"):
@@ -144,6 +158,7 @@ class SectionParser:
         self._document_cells = 0
         self._document_records = 0
         self._document_bytes = 0
+        self._document_text_runs = 0
         self._structure_depth = 0
         self._table_depth = 0
         self._in_table_cell = False
@@ -499,47 +514,27 @@ class SectionParser:
             if len(para_rec.data) >= 11:
                 para.style_id = para_rec.data[10]
             # CharShape 기반 TextRun 분할
-            text = text_result['text']
-            cs_pairs = parse_para_char_shape(char_shape_data) if char_shape_data else []
-            if cs_pairs and self.doc_info and getattr(self.doc_info, 'char_shapes', None):
-                runs = []
-                raw_to_text = text_result['raw_to_text']
-                start = 0
-                current_id = cs_pairs[0][1]
-
-                def append_run(end, cs_id):
-                    if end == start:
-                        return
-                    run_text = text[start:end]
-                    run = TextRun(text=run_text)
-                    if (self.doc_info and hasattr(self.doc_info, 'char_shapes') and
-                            0 <= cs_id < len(self.doc_info.char_shapes)):
-                        cs = self.doc_info.char_shapes[cs_id]
-                        run.bold = cs.bold
-                        run.italic = cs.italic
-                        run.font_size_pt = cs.size_pt
-                        run.underline = cs.underline_type > 0
-                        run.strikeout = cs.strikeout > 0
-                        run.superscript = cs.superscript
-                        run.subscript = cs.subscript
-                    runs.append(run)
-
-                for pos, cs_id in cs_pairs:
-                    end = min(raw_to_text[min(pos, len(raw_to_text) - 1)], len(text))
-                    if end < start:
-                        continue
-                    append_run(end, current_id)
-                    start = end
-                    current_id = cs_id
-                append_run(len(text), current_id)
-                para.runs = runs if runs else [TextRun(text=text)]
-            else:
-                para.runs = [TextRun(text=text)]
+            remaining = max(0, self.MAX_DOCUMENT_TEXT_RUNS - self._document_text_runs)
+            para.runs, plain_tail = self._text_runs(text_result, char_shape_data, remaining)
 
             # 하이퍼링크 필드(%hlk) 범위에 링크 부여
             link_ranges = self._hyperlink_ranges(text_result, ctrl_nodes)
             if link_ranges:
-                para.runs = _apply_link_ranges(para.runs, link_ranges)
+                # Never apply links to the unformatted suffix. If links exhaust
+                # the budget earlier, join the two plain suffixes only once.
+                tail = para.runs.pop() if plain_tail else None
+                para.runs = _apply_link_ranges(
+                    para.runs, link_ranges, max_runs=remaining,
+                    on_limit=self._text_run_limit,
+                )
+                link_tail = len(para.runs) > remaining
+                if tail is not None:
+                    if link_tail:
+                        para.runs[-1].text += tail.text
+                    else:
+                        para.runs.append(tail)
+                plain_tail = plain_tail or link_tail
+            self._document_text_runs += len(para.runs) - int(plain_tail)
 
             # 책갈피 마커는 문단 앞에 붙인다 (문서 내 앵커 — DOCX 규약과 동일)
             if bookmark_markers:
@@ -581,6 +576,67 @@ class SectionParser:
                 elements.append(ctrl_elem)
 
         return elements
+
+    def _text_run_limit(self):
+        self._document_limit_once(
+            "text-runs",
+            "WARN: HWP document text run budget exceeded; remaining text is unformatted",
+        )
+
+    def _text_runs(self, text_result, char_shape_data, remaining):
+        """Stream shape boundaries; retain at most remaining formatted runs.
+
+        Duplicate boundaries at the same mapped position never create a run.
+        Different positions retain their historical JSON split, even when the
+        styles match: merging those would change public serialized output.
+        """
+        text = text_result['text']
+        if remaining == 0:
+            self._text_run_limit()
+            return [TextRun(text=text)], True
+        shapes = getattr(self.doc_info, 'char_shapes', None)
+        if not char_shape_data or len(char_shape_data) < 8 or not shapes:
+            return [TextRun(text=text)], False
+        # A memoryview and iter_unpack avoid an input-sized list of tuples.
+        pairs = struct.iter_unpack(
+            '<II', memoryview(char_shape_data)[:len(char_shape_data) // 8 * 8])
+        first = next(pairs)
+        current_id = first[1]
+        raw_to_text = text_result['raw_to_text']
+        start = 0
+        runs = []
+
+        def append_run(end):
+            if end == start:
+                return True
+            if len(runs) >= remaining:
+                self._text_run_limit()
+                runs.append(TextRun(text=text[start:]))
+                return False
+            run = TextRun(text=text[start:end])
+            if 0 <= current_id < len(shapes):
+                cs = shapes[current_id]
+                run.bold = cs.bold
+                run.italic = cs.italic
+                run.font_size_pt = cs.size_pt
+                run.underline = cs.underline_type > 0
+                run.strikeout = cs.strikeout > 0
+                run.superscript = cs.superscript
+                run.subscript = cs.subscript
+            runs.append(run)
+            return True
+
+        for pos, cs_id in chain((first,), pairs):
+            end = min(raw_to_text[min(pos, len(raw_to_text) - 1)], len(text))
+            if end < start:
+                continue
+            if not append_run(end):
+                return runs, True
+            start = end
+            current_id = cs_id
+        if not append_run(len(text)):
+            return runs, True
+        return runs, False
 
     def _warn_revision_controls(self, text_result, range_records):
         """개체 변경은 텍스트 투영만으로 확정하지 않고 부분지원으로 알린다."""

@@ -50,6 +50,10 @@ MAX_TABLE_CELLS = 1_000_000          # 표 하나가 주장할 수 있는 최대
 # 문서 전체에서 실체화할 셀 총량. 표를 여럿 두어 상한을 우회하는 메모리 폭탄을 막는다.
 # 실측 기준 실문서 80개의 셀 총합이 31,399개이므로 20만이면 충분히 여유롭다.
 MAX_DOCUMENT_CELLS = 200_000
+# 서식 런만 제한한다. 초과 텍스트와 문단/개체 경계는 무서식으로 보존한다.
+# 공개 HWPX 실측 최대 33,617개의 4.46배이다.
+# 근거: docs/benchmarks/2026-10-03-hwp-runs-real-docs.md.
+MAX_DOCUMENT_TEXT_RUNS = 150_000
 MAX_DRAWING_DEPTH = 32
 MAX_FIELD_DEPTH = 64                 # 짝이 안 맞는 fieldBegin 이 무한히 쌓이는 것을 막는다
 MAX_FONT_SIZE_PT = 4096.0            # HWP 스펙상 글자 크기 상한
@@ -162,6 +166,8 @@ class HWPXParser:
         self._field_overflow = 0      # 상한을 넘겨 버려진 fieldBegin 수 (짝 맞추기용)
         self._note_seq = 0            # 각주/미주 참조 번호
         self._cell_budget = MAX_DOCUMENT_CELLS
+        self._text_runs_remaining = MAX_DOCUMENT_TEXT_RUNS
+        self._text_run_budget_warned = False
         self._part_name_map = {}  # normalized package path -> ZIP entry name
         self._bin_data_map = {}  # exact binary reference -> ZIP entry name
         self._ambiguous_bin_ids = set()
@@ -774,6 +780,13 @@ class HWPXParser:
         self._field_overflow = 0
         try:
             runs = []
+            plain_parts = []
+
+            def flush_plain():
+                if plain_parts:
+                    runs.append(TextRun(text=''.join(plain_parts)))
+                    plain_parts.clear()
+
             for child in _selected_children(p_elem):
                 tag = _local_tag(child.tag)
 
@@ -781,6 +794,10 @@ class HWPXParser:
                     # run 안에 tbl/pic이 있을 수 있음 (실제 HWPX 구조)
                     inline_elems = self._parse_run_with_objects(child)
                     for item in inline_elems:
+                        if isinstance(item, str):
+                            plain_parts.append(item)
+                            continue
+                        flush_plain()
                         if isinstance(item, TextRun):
                             runs.append(item)
                         else:
@@ -795,8 +812,13 @@ class HWPXParser:
                     ctrl_elem = self._parse_ctrl(child)
                     if ctrl_elem:
                         if isinstance(ctrl_elem, TextRun):
-                            runs.append(ctrl_elem)
+                            if self._reserve_text_run():
+                                flush_plain()
+                                runs.append(ctrl_elem)
+                            else:
+                                plain_parts.append(ctrl_elem.text)
                             continue
+                        flush_plain()
                         if runs:
                             para = self._make_paragraph(runs, p_elem)
                             if para.text.strip():
@@ -808,6 +830,7 @@ class HWPXParser:
                             elements.append(ctrl_elem)
 
             # 남은 텍스트
+            flush_plain()
             if runs:
                 para = self._make_paragraph(runs, p_elem)
                 if para.text.strip():
@@ -819,6 +842,30 @@ class HWPXParser:
         return elements
 
     # ── run ──
+
+    def _reserve_text_run(self) -> bool:
+        """모든 섹션과 중첩 본문이 같은 서식 런 예산을 소비한다."""
+        if self._text_runs_remaining > 0:
+            self._text_runs_remaining -= 1
+            return True
+        if not self._text_run_budget_warned:
+            self.errors.append(
+                "WARN: HWPX text run budget exceeded; remaining text is unformatted"
+            )
+            self._text_run_budget_warned = True
+        return False
+
+    def _budgeted_text(self, text, **properties):
+        # 문자열은 문단 수집기가 합친 뒤 한 번만 TextRun으로 만든다.
+        # 초과 런마다 TextRun을 만들거나 문자열을 += 하면 메모리/시간이 증폭된다.
+        if self._reserve_text_run():
+            return TextRun(text=text, **properties)
+        return text
+
+    def _budgeted_existing_run(self, run):
+        if self._reserve_text_run():
+            return run
+        return run.text
 
     def _current_link(self) -> str:
         # 비어있지 않은 URL 만 스택에 담으므로 O(1) 이다.
@@ -866,7 +913,7 @@ class HWPXParser:
             text = ''.join(text_parts)
             del text_parts[:]
             if text:
-                results.append(TextRun(
+                results.append(self._budgeted_text(
                     text=text,
                     bold=bold, italic=italic,
                     font_size_pt=font_size_pt,
@@ -908,7 +955,7 @@ class HWPXParser:
                     strikeout=strikeout, font_size_pt=font_size_pt,
                     link=self._current_link()))
                 if form is not None:
-                    results.append(form)
+                    results.append(self._budgeted_existing_run(form))
             elif tag in DRAWING_TAGS:
                 # 도형(사각형/타원/그룹 등) 내부의 <drawText> 텍스트
                 drawn = self._parse_drawing_elem(child)
@@ -920,7 +967,7 @@ class HWPXParser:
                 if bookmark:
                     # 문서 내 책갈피(앵커) — DOCX 규약과 같은 [bookmark: NAME] 마커.
                     flush()
-                    results.append(TextRun(text=bookmark, font_size_pt=font_size_pt))
+                    results.append(self._budgeted_text(text=bookmark, font_size_pt=font_size_pt))
                     continue
 
                 action = _field_action(child)
@@ -942,7 +989,7 @@ class HWPXParser:
                     flush()
                     if isinstance(ctrl_result, TextRun):
                         # Forms remain inline, just like DOCX content controls.
-                        results.append(ctrl_result)
+                        results.append(self._budgeted_existing_run(ctrl_result))
                         continue
                     if isinstance(ctrl_result, Footnote) and \
                             ctrl_result.type in ('footnote', 'endnote'):

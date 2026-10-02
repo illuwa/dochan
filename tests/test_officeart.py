@@ -4,7 +4,6 @@ import struct
 import zlib
 
 import pytest
-from PIL import Image as PILImage
 
 from dochan.office_binary.officeart import (
     Limits, decode_blip, parse_header, parse_records, read_bstore,
@@ -98,7 +97,8 @@ def test_dib_to_bmp_is_readable_including_palette_and_bitfields():
     fmt, bmp = decode_blip(r)
     assert fmt == "bmp" and bmp[:2] == b"BM"
     assert struct.unpack_from("<I", bmp, 10)[0] == 54
-    assert PILImage.open(io.BytesIO(bmp)).getpixel((0, 0)) == (255, 0, 0)
+    # 24비트 BMP 픽셀은 BGR 순서로 오프셋 54 에서 시작한다 — 빨강 1픽셀(Pillow 없이 확인)
+    assert bmp[54:57] == b"\x00\x00\xff"
     palette = struct.pack("<IiiHHIIiiII", 40, 1, 1, 1, 8, 0, 4, 0, 0, 2, 0) + b"\x00" * 12
     assert struct.unpack_from("<I", decode_blip(parse_records(blip(0xF01F, 0x7A8, palette))[0])[1], 10)[0] == 62
     fields = struct.pack("<IiiHHIIiiII", 40, 1, 1, 1, 16, 3, 4, 0, 0, 0, 0) + b"\x00" * 16

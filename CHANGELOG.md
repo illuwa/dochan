@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 추가 (전 형식 — 이미지 파일 저장)
+
+- `dochan convert … --images-dir DIR` 와 `Dochan(...).save_images(DIR)`: 문서에 들어 있는 이미지 바이너리를
+  문서 순서대로 `<파일이름>-image-NNN.<확장자>` 로 저장한다. 확장자는 바이트 서명(PNG·JPEG·GIF·BMP·TIFF·
+  JP2·EMF·WMF)으로 정하고, 같은 바이트는 한 번만 저장한다. 파일 이름에는 문서 속 경로를 쓰지 않는다.
+  실물 확인: POI `VariousPictures.docx`(미디어 5개 → 5개, 형식 일치), `WithDrawing.xlsx`, pdf.js `alphatrans.pdf`
+
 ### 수정·개선 (전 포맷 공통 계층)
 
 - **PDF 이미지 JSON 출력 크래시 수정**: 추출 가능한 이미지가 있는 PDF 를 `to_json()`/`-f json`/배치 JSON 으로

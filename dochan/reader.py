@@ -85,6 +85,13 @@ class Dochan:
         if ocr:
             self._run_ocr()
 
+    def save_images(self, out_dir: str, stem: str = "") -> list:
+        """문서의 이미지 바이너리를 out_dir 에 `<stem>-image-NNN.<ext>` 로 저장하고 경로 목록을 돌려준다."""
+        from .utils.image_export import export_images
+
+        stem = stem or os.path.splitext(os.path.basename(self.file_path))[0]
+        return export_images(self.doc, out_dir, stem)
+
     def _parse(self):
         # 손상/악성 문서는 정상 흐름이다 — 어떤 파서 예외도 라이브러리
         # 호출자에게 전파하지 않고 doc.errors 로 강등한다

@@ -62,6 +62,8 @@ def main(argv=None):
                       default='markdown', help='출력 형식 (기본: markdown)')
     conv.add_argument('--ocr', action='store_true', help='이미지 OCR 활성화')
     conv.add_argument('--pdf-text-tables', action='store_true', help='PDF 괘선 없는 표 복원')
+    conv.add_argument('--images-dir', default=None,
+                      help='문서 속 이미지 바이너리를 이 디렉터리에 <파일이름>-image-NNN.<확장자> 로 저장')
     _add_hwpx_options(conv)
 
     # batch
@@ -124,6 +126,14 @@ def _cmd_convert(args):
             label = '에러' if _is_fatal_parser_error(error) else '경고'
             print(f"{label}: {error}", file=sys.stderr)
         return 1
+
+    if args.images_dir:
+        try:
+            saved = doc.save_images(args.images_dir)
+        except Exception as exc:
+            print(f"에러: 이미지 저장 실패: {exc}", file=sys.stderr)
+            return 1
+        print(f"이미지 {len(saved)}개 저장: {args.images_dir}", file=sys.stderr)
 
     if args.output:
         try:

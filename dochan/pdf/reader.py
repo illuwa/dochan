@@ -731,8 +731,9 @@ class PDFReader:
         encoding = pdf.resolve(font.get("Encoding"))
         encoding_cmap = None
         if subtype == "Type0" and isinstance(encoding, PDFStream):
-            encoding_cmap = parse_encoding_cmap(pdf.decode_stream_bytes(encoding), pdf.warnings)
-        elif subtype == "Type0" and isinstance(encoding, PDFName):
+            encoding_cmap = self._encoding_stream_cmap(pdf, encoding)
+        elif (subtype == "Type0" and isinstance(encoding, PDFName)
+              and str(encoding) not in ("Identity-H", "Identity-V")):
             encoding_cmap = predefined_cmap(str(encoding))
         decoder = self._build_font_decoder(pdf, name, font, encoding_cmap)
         if subtype == "Type0":
@@ -760,7 +761,8 @@ class PDFReader:
                 pdf.warnings.extend(vertical_metrics.warnings)
         reliable = (subtype in ("Type1", "TrueType", "MMType1") or
                     subtype == "Type0" and str(pdf.resolve(font.get("Encoding"))) == "Identity-H")
-        has_unicode_map = getattr(getattr(decoder, "__self__", None), "mapping", None)
+        has_unicode_map = (getattr(decoder, "mapping", None) or
+                           getattr(getattr(decoder, "__self__", None), "mapping", None))
         reliable = reliable and getattr(getattr(decoder, "__self__", None), "reliable", True)
         if not has_unicode_map:
             base_font = str(pdf.resolve(font.get("BaseFont")) or "")
@@ -772,9 +774,37 @@ class PDFReader:
                                      or encoding is None and standard_font and subtype != "TrueType")
         space_code = 32
         if encoding_cmap is not None:
-            _chunk, mapped_space = next(encoding_cmap.iter_codes(b" "))
-            if mapped_space:
-                space_code = mapped_space
+            selected_space = None
+            if isinstance(has_unicode_map, dict):
+                spaces = set()
+                for key, value in has_unicode_map.items():
+                    if value != " " or not isinstance(key, tuple) or len(key) != 2:
+                        continue
+                    length, code = key
+                    if length not in (1, 2, 3, 4):
+                        continue
+                    if not encoding_cmap._space(length, code):
+                        continue
+                    cid = encoding_cmap._lookup(length, code)
+                    if cid is not None and widths.explicit(cid):
+                        spaces.add(cid)
+                if len(spaces) == 1:
+                    selected_space = spaces.pop()
+            if selected_space is None:
+                recovered_space = getattr(getattr(decoder, "__self__", None), "space_code", None)
+                if recovered_space is not None:
+                    selected_space = recovered_space
+            if selected_space is None:
+                for candidate in (b" ", b"\x00\x20"):
+                    length = len(candidate)
+                    code = int.from_bytes(candidate, "big")
+                    if encoding_cmap._space(length, code):
+                        mapped_space = encoding_cmap._lookup(length, code)
+                        if mapped_space is not None:
+                            selected_space = mapped_space
+                            break
+            if selected_space is not None:
+                space_code = selected_space
         elif subtype == "Type0" and str(encoding) == "Identity-H" and isinstance(has_unicode_map, dict):
             # CID 32 is not necessarily a space. Use a uniquely identified,
             # explicitly measured U+0020, not the width of an unrelated glyph.
@@ -791,6 +821,39 @@ class PDFReader:
                         bold=bold, italic=italic, wmode=wmode, vertical_metrics=vertical_metrics,
                         link_metrics_reliable=reliable, space_code=space_code,
                         encoding_cmap=encoding_cmap)
+
+    def _encoding_stream_cmap(self, pdf: PDFFile, stream: PDFStream, seen=None):
+        """Resolve stream and dictionary parents once per PDF, with a cycle bound."""
+        cache = getattr(pdf, "_encoding_cmap_cache", None)
+        if cache is None:
+            cache = pdf._encoding_cmap_cache = {}
+        key = id(stream)
+        if key in cache:
+            return cache[key]
+        seen = set(seen or ())
+        if key in seen or len(seen) >= 8:
+            pdf.warnings.append("WARN: Encoding CMap /UseCMap 순환 또는 깊이 한도")
+            return None
+        seen.add(key)
+        parent = None
+        parent_obj = pdf.resolve(stream.dictionary.get("UseCMap"))
+        if isinstance(parent_obj, PDFName):
+            parent = predefined_cmap(str(parent_obj))
+        elif isinstance(parent_obj, PDFStream):
+            parent = self._encoding_stream_cmap(pdf, parent_obj, seen)
+        decoded = pdf.decode_stream_bytes(stream)
+        cmap = parse_encoding_cmap(decoded, pdf.warnings, parent_cmap=parent)
+        system = pdf.resolve(stream.dictionary.get("CIDSystemInfo"))
+        if isinstance(system, dict):
+            for key_name, attr in (("Registry", "registry"), ("Ordering", "ordering")):
+                value = pdf.resolve(system.get(key_name))
+                if isinstance(value, bytes) and len(value) <= 32:
+                    setattr(cmap, attr, value.decode("ascii", "ignore"))
+        if not cmap.has_codespace():
+            pdf.warnings.append("WARN: Encoding CMap 코드 공간 없음 — 기존 2바이트 경로 사용")
+            cmap = None
+        cache[key] = cmap
+        return cmap
 
     def _cid_descendant(self, pdf: PDFFile, font: dict):
         descendants = pdf.resolve(font.get("DescendantFonts"))
@@ -893,8 +956,11 @@ class PDFReader:
                 cmap = parse_tounicode(cmap_data, pdf.warnings)
                 if cmap.mapping:
                     if encoding_cmap is not None:
-                        return lambda raw: "".join(cmap.decode(chunk)
-                                                   for chunk, _cid in encoding_cmap.iter_codes(raw, pdf.warnings))
+                        def decode_encoded(raw):
+                            return "".join(cmap.decode(chunk)
+                                           for chunk, _cid in encoding_cmap.iter_codes(raw, pdf.warnings))
+                        decode_encoded.mapping = cmap.mapping
+                        return decode_encoded
                     return cmap.decode
         if str(font.get("Subtype", "")) == "Type0":
             recovered = self._cid_fallback_decoder(pdf, name, font, encoding_cmap)

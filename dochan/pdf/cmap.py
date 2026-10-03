@@ -6,24 +6,66 @@ bfchar/bfrange 해석이 한글 텍스트 추출의 핵심이다.
 import re
 import base64
 import bisect
+import heapq
 import zlib
 from functools import lru_cache
 from typing import Dict, Set, Tuple
 
-_CODESPACE_RE = re.compile(rb"begincodespacerange(.*?)endcodespacerange", re.S)
-_BF_CHAR_RE = re.compile(rb"beginbfchar(.*?)endbfchar", re.S)
-_BF_RANGE_RE = re.compile(rb"beginbfrange(.*?)endbfrange", re.S)
+_TO_UNICODE_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|bfchar|bfrange)\b")
 _HEX_RE = re.compile(rb"<([0-9A-Fa-f]+)>")
 _TOKEN_RE = re.compile(rb"<([0-9A-Fa-f]+)>|(\[)|(\])")
 
 MAX_ENCODING_BYTES = 4 * 1024 * 1024
+MAX_TOUNICODE_BYTES = 16 * 1024 * 1024
 MAX_ENCODING_RANGES = 100_000
 MAX_CID_SPAN = 0x10ffff
-_ENC_BLOCK = re.compile(rb"begin(codespacerange|cidrange|cidchar|notdefrange|notdefchar)\b"
-                        rb"(.*?)end\1\b", re.S)
-_HEX_PAIR = re.compile(rb"<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,8})>")
-_CID_RANGE = re.compile(rb"<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,8})>\s*([0-9]{1,5})(?![0-9])")
-_CID_CHAR = re.compile(rb"<([0-9A-Fa-f]{2,8})>\s*([0-9]{1,5})(?![0-9])")
+_ENC_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|cidrange|cidchar|notdefrange|notdefchar)\b")
+_HEX_PAIR = re.compile(rb"<((?:[0-9A-Fa-f]{2}){1,4})>\s*<((?:[0-9A-Fa-f]{2}){1,4})>")
+_CID_RANGE = re.compile(rb"<((?:[0-9A-Fa-f]{2}){1,4})>\s*<((?:[0-9A-Fa-f]{2}){1,4})>\s*([0-9]{1,5})(?![0-9])")
+_CID_CHAR = re.compile(rb"<((?:[0-9A-Fa-f]{2}){1,4})>\s*([0-9]{1,5})(?![0-9])")
+
+
+def _blocks(source, token_pattern, kinds):
+    """Find blocks in one forward pass; an unclosed begin cannot rescan the tail."""
+    active = None
+    for token in token_pattern.finditer(source):
+        operation, kind = token.groups()
+        if operation == b"begin":
+            active = (kind, token.end())
+        elif active and active[0] == kind:
+            if kind in kinds:
+                yield kind, source[active[1]:token.start()]
+            active = None
+
+
+def _flatten_ranges(rows, constant=False):
+    """Overlay intersecting rows in source order, in O(n log n) time."""
+    events = []
+    for index, (lo, hi, cid) in enumerate(rows):
+        events.append((lo, 1, index))
+        events.append((hi + 1, 0, index))
+    events.sort()
+    active = set()
+    heap = []
+    result = []
+    pos = 0
+    while pos < len(events):
+        point = events[pos][0]
+        while pos < len(events) and events[pos][0] == point:
+            _, entering, index = events[pos]
+            if entering:
+                active.add(index)
+                heapq.heappush(heap, -index)
+            else:
+                active.discard(index)
+            pos += 1
+        while heap and -heap[0] not in active:
+            heapq.heappop(heap)
+        if heap and pos < len(events) and events[pos][0] > point:
+            index = -heap[0]
+            lo, _hi, cid = rows[index]
+            result.append((point, events[pos][0] - 1, cid if constant else cid + point - lo))
+    return result
 
 
 class EncodingCMap:
@@ -40,19 +82,54 @@ class EncodingCMap:
         self.supplement = supplement
         self.wmode = wmode
         self.warnings = warnings
+        self._spaces = {}
+        for length in (1, 2, 3, 4):
+            intervals = sorted((lo, hi) for size, lo, hi in self.codespaces if size == length)
+            merged = []
+            for lo, hi in intervals:
+                if merged and lo <= merged[-1][1] + 1:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+                else:
+                    merged.append((lo, hi))
+            self._spaces[length] = ([lo for lo, _hi in merged], merged)
         self._ranges = {}
         self._notdef = {}
         for source, target in ((self.cidranges, self._ranges),
                                (self.notdefranges, self._notdef)):
             for length in (1, 2, 3, 4):
-                rows = sorted((lo, hi, cid) for size, lo, hi, cid in source
-                              if size == length)
+                rows = _flatten_ranges([(lo, hi, cid) for size, lo, hi, cid in source
+                                        if size == length], source is self.notdefranges)
                 target[length] = ([row[0] for row in rows], rows)
 
     def _space(self, length, code):
-        if any(size == length and lo <= code <= hi for size, lo, hi in self.codespaces):
+        starts, rows = self._spaces[length]
+        pos = bisect.bisect_right(starts, code) - 1
+        if pos >= 0 and code <= rows[pos][1]:
             return True
         return self.parent._space(length, code) if self.parent else False
+
+    def has_codespace(self):
+        return bool(self.codespaces or self.parent and self.parent.has_codespace())
+
+    def _prefix(self, length, prefix_length, value):
+        """Whether a partial code can still fall in a declared code space."""
+        shift = 8 * (length - prefix_length)
+        lo = value << shift
+        hi = lo + (1 << shift) - 1
+        starts, rows = self._spaces[length]
+        pos = bisect.bisect_right(starts, hi) - 1
+        if pos >= 0 and rows[pos][1] >= lo:
+            return True
+        return self.parent._prefix(length, prefix_length, value) if self.parent else False
+
+    def _invalid_length(self, raw, pos):
+        remaining = len(raw) - pos
+        for prefix_length in range(min(3, remaining), 0, -1):
+            value = int.from_bytes(raw[pos:pos + prefix_length], "big")
+            if any(self._prefix(length, prefix_length, value)
+                   for length in range(prefix_length + 1, 5)):
+                return min(prefix_length + 1, remaining)
+        return 1
 
     def _lookup(self, length, code, notdef=False):
         starts, rows = (self._notdef if notdef else self._ranges)[length]
@@ -76,30 +153,35 @@ class EncodingCMap:
                         break
             if match is None:
                 if warnings is not None and not warned:
-                    warnings.append("WARN: Encoding CMap 코드가 코드 공간 밖이거나 잘림 — CID 0 사용")
+                    message = "WARN: Encoding CMap 코드가 코드 공간 밖이거나 잘림 — CID 0 사용"
+                    if message not in warnings:
+                        warnings.append(message)
                     warned = True
-                yield raw[pos:pos + 1], 0
-                pos += 1
+                size = self._invalid_length(raw, pos)
+                yield raw[pos:pos + size], 0
+                pos += size
                 continue
             size, value = match
             cid = self._lookup(size, value)
             if cid is None:
                 cid = self._lookup(size, value, True)
             if cid is None and warnings is not None and not warned:
-                warnings.append("WARN: Encoding CMap에 코드→CID 대응이 없음 — CID 0 사용")
+                message = "WARN: Encoding CMap에 코드→CID 대응이 없음 — CID 0 사용"
+                if message not in warnings:
+                    warnings.append(message)
                 warned = True
             yield raw[pos:pos + size], cid if cid is not None else 0
             pos += size
 
 
-def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None):
+def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cmap=None):
     """내장 CMap의 유한한 범위만 읽는다. usecmap은 이름으로 상속한다."""
     if len(data) > MAX_ENCODING_BYTES:
         if warnings is not None:
             warnings.append("WARN: Encoding CMap 크기 한도 초과")
         return EncodingCMap()
     source = re.sub(rb"%[^\r\n]*", b"", data)
-    parent = None
+    parent = parent_cmap
     seen = set(_seen or ())
     names = re.findall(rb"/([A-Za-z0-9-]+)\s+usecmap\b", source)
     if names:
@@ -109,7 +191,7 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None):
             if parents and name in parents:
                 parent = parse_encoding_cmap(parents[name], warnings, parents, seen)
             else:
-                parent = predefined_cmap(name)
+                parent = predefined_cmap(name) or parent
         elif warnings is not None:
             warnings.append("WARN: Encoding CMap usecmap 순환 또는 깊이 한도")
     fields = {}
@@ -121,8 +203,9 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None):
     spaces, ranges, notdef = [], [], []
     count = 0
     truncated = False
-    for block in _ENC_BLOCK.finditer(source):
-        kind, body = block.groups()
+    for kind, body in _blocks(source, _ENC_BLOCK_TOKEN,
+                              (b"codespacerange", b"cidrange", b"cidchar",
+                               b"notdefrange", b"notdefchar")):
         if kind == b"codespacerange":
             matches = _HEX_PAIR.finditer(body)
         elif kind in (b"cidrange", b"notdefrange"):
@@ -165,6 +248,10 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None):
 def predefined_cmap(name):
     from .predefined_cmap_data import TABLES
 
+    if name in ("Identity-H", "Identity-V"):
+        return EncodingCMap(((2, 0, 65535),), ((2, 0, 65535, 0),),
+                            registry="Adobe", ordering="Identity",
+                            wmode=int(name == "Identity-V"))
     payload = TABLES.get(name)
     if payload is None:
         return None
@@ -320,23 +407,33 @@ class ToUnicodeCMap:
 
 def parse_tounicode(data: bytes, warnings=None) -> ToUnicodeCMap:
     cmap = ToUnicodeCMap()
-    for block in _CODESPACE_RE.findall(data):
-        for hex_tok in _HEX_RE.findall(block):
-            cmap.code_lengths.add(max(len(hex_tok) // 2, 1))
-    for block in _BF_CHAR_RE.findall(data):
-        toks = _HEX_RE.findall(block)
-        for i in range(0, len(toks) - 1, 2):
-            if cmap._mapping_full():
-                break
-            src, dst = toks[i], toks[i + 1]
-            length = max(len(src) // 2, 1)
-            cmap.code_lengths.add(length)
-            cmap.mapping[(length, int(src, 16))] = _hex_to_text(dst)
-    for block in _BF_RANGE_RE.findall(data):
-        try:
-            cmap._parse_bfrange_block(block)
-        except (ValueError, OverflowError):
-            continue  # 손상된 블록 하나가 문서 전체를 막으면 안 된다
+    if len(data) > MAX_TOUNICODE_BYTES:
+        if warnings is not None:
+            warnings.append("WARN: ToUnicode CMap 크기 한도 초과")
+        cmap.code_lengths.add(1)
+        return cmap
+    blocks = {b"codespacerange": [], b"bfchar": [], b"bfrange": []}
+    for kind, block in _blocks(data, _TO_UNICODE_BLOCK_TOKEN, blocks):
+        blocks[kind].append(block)
+    for kind in (b"codespacerange", b"bfchar", b"bfrange"):
+        for block in blocks[kind]:
+            if kind == b"codespacerange":
+                for hex_tok in _HEX_RE.findall(block):
+                    cmap.code_lengths.add(max(len(hex_tok) // 2, 1))
+            elif kind == b"bfchar":
+                toks = _HEX_RE.findall(block)
+                for i in range(0, len(toks) - 1, 2):
+                    if cmap._mapping_full():
+                        break
+                    src, dst = toks[i], toks[i + 1]
+                    length = max(len(src) // 2, 1)
+                    cmap.code_lengths.add(length)
+                    cmap.mapping[(length, int(src, 16))] = _hex_to_text(dst)
+            else:
+                try:
+                    cmap._parse_bfrange_block(block)
+                except (ValueError, OverflowError):
+                    continue  # 손상된 블록 하나가 문서 전체를 막으면 안 된다
     if cmap.truncated and warnings is not None:
         warnings.append(
             f"WARN: ToUnicode CMap 매핑 수가 한도({MAX_MAPPING_ENTRIES})를 초과 — 일부만 사용"

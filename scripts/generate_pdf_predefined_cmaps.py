@@ -32,6 +32,13 @@ UniKS-UTF16-H UniKS-UTF16-V
 """.split())
 
 
+def _copyright(source, name):
+    for raw in source.splitlines():
+        if raw.startswith(b"%%Copyright: Copyright"):
+            return raw[len(b"%%Copyright: "):].decode("ascii").strip()
+    raise ValueError("저작권 줄 없음: %s" % name)
+
+
 def _integer(number):
     number = number * 2 if number >= 0 else -number * 2 - 1
     result = bytearray()
@@ -68,15 +75,24 @@ def generate(source_dir, output):
             sources[Path(relative).name] = source
     if set(sources) != NAMES:
         raise ValueError("원본 CMap 목록이 해시 목록과 다름")
+    license_text = (source_dir / "LICENSE.md").read_text(encoding="utf-8").rstrip()
     lines = ['"""Adobe predefined Encoding CMaps; generated factual ranges.',
              "Source: https://github.com/adobe-type-tools/cmap-resources",
-             "License: BSD-3-Clause. Original CMap files are not distributed.",
-             '"""', "TABLES = {"]
+             "Modified: CMap ranges are parsed and compressed into this module.",
+             "The original CMap files are not distributed with dochan.", ""]
     for name, source in sorted(sources.items()):
-        cmap = parse_encoding_cmap(source, parents=sources)
+        lines.append("%s: %s" % (name, _copyright(source, name)))
+    lines += ["", license_text, '"""', "TABLES = {"]
+    for name, source in sorted(sources.items()):
         clean = re.sub(rb"%[^\r\n]*", b"", source)
         parents = re.findall(rb"/([A-Za-z0-9-]+)\s+usecmap\b", clean)
         parent = parents[-1].decode("ascii") if parents else ""
+        if parent and parent not in sources and parent not in ("Identity-H", "Identity-V"):
+            raise ValueError("선택 목록에 없는 부모 CMap: %s" % parent)
+        warnings = []
+        cmap = parse_encoding_cmap(source, warnings=warnings, parents=sources)
+        if warnings:
+            raise ValueError("CMap 파싱 경고: %s: %s" % (name, warnings[0]))
         meta = (cmap.codespaces, cmap.registry, cmap.ordering, parent,
                 cmap.supplement, cmap.wmode)
         binary = _ranges(cmap.cidranges) + _ranges(cmap.notdefranges)

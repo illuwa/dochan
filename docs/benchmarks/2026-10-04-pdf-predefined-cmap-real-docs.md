@@ -2,7 +2,7 @@
 
 ## 범위와 판정 근거
 
-ISO 32000-1 9.7.5·9.7.6.2·9.10.2의 코드 공간, 코드→CID, 원래 코드의 ToUnicode 조회, CID 기준 폭 계산을 검증했다. Adobe `cmap-resources`에서 선택한 인코딩 CMap 61개를 압축했고, 생성 모듈은 451,331바이트다. 원본별 SHA-256과 저작권 줄은 `NOTICE`에, 고정 해시 목록은 `scripts/pdf_predefined_cmap_hashes.json`에 있다. 요청에 적힌 표 118의 59개 목록과 선택한 61개 목록의 정확한 차이는 오프라인에서 공식 표 원문을 대조하지 못해 확정하지 않았다. 61개가 59개와 정확히 일치한다고 주장하지 않는다.
+ISO 32000-1 9.7.5·9.7.6.2·9.10.2의 코드 공간, 코드→CID, 원래 코드의 ToUnicode 조회, CID 기준 폭 계산을 검증했다. Adobe `cmap-resources`의 인코딩 CMap 61개를 압축했다. 표 118의 59개를 전부 포함하고 `90pv-RKSJ-V`·`KSCpc-EUC-V` 두 개를 추가한 목록이다. 생성 모듈은 456,534바이트이며 표 데이터는 이전 모듈과 바이트 단위로 같다. 원본별 SHA-256과 저작권 줄은 `NOTICE`에, 저작권 줄과 BSD-3 전문은 생성 모듈 머리말에, 고정 해시 목록은 `scripts/pdf_predefined_cmap_hashes.json`에 있다.
 
 공개 pdf.js 코퍼스의 PDF 983개를 객체 수 제한 없이 조사했다. ToUnicode가 없는 미리 정의된 인코딩 글꼴은 `90ms-RKSJ-H` 5개, `GBKp-EUC-H` 4개, `UniGB-UTF16-H` 3개, `GBK-EUC-H` 3개, `UniJIS-UTF16-H` 3개, `UniCNS-UTF16-H`·`UniJIS-UCS2-H`·`EUC-H`·`H`가 각각 1개였다. `/Encoding` 스트림은 ToUnicode 유무와 무관하게 13개 PDF의 글꼴 14개였고, 그중 ToUnicode 없는 글꼴은 1개였다. 조사 실패는 0개였다. 이 수치는 `python -m scripts.probe_pdf_predefined_cmap corpus/pdfjs-src/test/pdfs <출력.json>`으로 다시 얻을 수 있다.
 
@@ -54,8 +54,29 @@ ISO 32000-1 9.7.5·9.7.6.2·9.10.2의 코드 공간, 코드→CID, 원래 코드
 
 추가한 합성 테스트는 가변 코드 분할, CID 범위·문자·notdef, 미리 정의된 부모, ToUnicode의 원래 코드 조회, CIDSystemInfo 불일치, 단일 바이트 0x20의 Tw, CID 기준 가로·세로 폭, 잘린 코드, 순환 부모, 큰 입력, 무작위 입력을 검사한다.
 
-공개 PDF 983개의 변경 전후 Markdown SHA-256 비교에서 965개는 동일하고 18개가 달랐다. 새 글자가 회복되며 바뀐 13개는 `90ms_rksj_h_sample.pdf`, `issue11555.pdf`, `issue11768_reduced.pdf`, `issue13343.pdf`, `issue19182.pdf`, `issue2128r.pdf`, `issue3521.pdf`, `issue6286.pdf`, `issue8372.pdf`, `mixedfonts.pdf`, `noembed-eucjp.pdf`, `noembed-jis7.pdf`, `noembed-sjis.pdf`다. 다른 5개인 `bug1019475_1.pdf`, `issue10519_reduced.pdf`, `issue13242.pdf`, `issue20232.pdf`, `issue9534_reduced.pdf`는 모두 내장 Encoding CMap을 쓰며, 코드→CID 폭 적용에 따른 공백·배치가 달라졌다. 이 5개의 비공백 문자 다중집합 일치 수는 각각 변경 전후 동일했다. `issue13242.pdf`의 Markdown 길이는 3,204자에서 2,922자로 줄었지만 비공백 문자 2,442자는 변경 전후 모두 PDFium과 일치했다. 대체 문자 총수는 1,173개로 동일했다.
+공개 PDF 983개의 Markdown SHA-256을 부모 커밋 `4fd4fc5`와 비교한 결과 965개는 같고 18개가 달랐다. 이전의 18개 변경 중 `issue9534_reduced.pdf`는 부모 출력으로 돌아왔다. 공백 CID를 잘못 골라 `Cina, il Grande`를 `Cina,ilGrande`로 붙였던 회귀가 해소됐다. 추가로 `issue3323.pdf`가 달라졌는데, Encoding 스트림 사전의 `CIDSystemInfo`를 읽어 PNG의 `THANN`을 출력하게 된 개선이다. 변경된 18개를 렌더 PNG와 대조한 판정은 아래와 같다. 이 비교는 `python -m scripts.probe_pdf_cmap_hashes corpus/pdfjs-src/test/pdfs <해시.json>`으로 재현하며 문서 본문은 저장하지 않는다.
 
-내부 실물 79쌍은 `scripts.compare_pdf_fix2`의 `--mode pairs --jobs 6`으로 변경 전후를 각각 측정했다. 79개 모두 완료했고, **79개 문서의 모든 수치 행과 집계가 동일**했다. 주요 집계는 머리글·바닥글 적중 0.9913, join 정확도 0.9378, 평균 토큰 비율 0.9754, 표 셀 적중 0.9152, 병합 일치 0.9277로 양쪽이 같았다. 내부 파일명과 본문은 기록하지 않았다.
+| 변경 PDF | 렌더 대조와 최종 판정 |
+| --- | --- |
+| `90ms_rksj_h_sample.pdf` | `Hello ASCII`와 `日本語テスト`가 PNG와 일치하여 개선이다. |
+| `issue11555.pdf` | 세로 `abc`·`あいう`가 PNG 순서와 일치하여 개선이다. |
+| `issue11768_reduced.pdf` | `cm`이 PNG와 일치하여 개선이다. |
+| `issue13343.pdf` | RKSJ 글자가 PNG와 일치하여 개선이다. |
+| `issue19182.pdf` | 이름 글자가 회복됐지만 부가 문자 1개가 남아 부분 개선이다. |
+| `issue2128r.pdf` | 제목·작성자 20자가 PNG와 일치하여 개선이다. |
+| `issue3323.pdf` | 새로 출력한 `THANN`이 PNG와 일치하여 개선이다. |
+| `issue3521.pdf` | `我们都是黑体字`가 PNG와 일치하여 개선이다. |
+| `issue6286.pdf` | `好酸球`가 든 두 행이 PNG와 일치하여 개선이다. |
+| `issue8372.pdf` | `目录`가 PNG와 일치하여 개선이다. |
+| `mixedfonts.pdf` | 영문 예시의 누락 글자가 회복됐지만 공백·줄바꿈 차이가 남아 부분 개선이다. |
+| `noembed-eucjp.pdf` | `あいうえお`가 PNG와 일치하여 개선이다. |
+| `noembed-jis7.pdf` | 누락 일본어가 PNG와 일치하여 개선이다. |
+| `noembed-sjis.pdf` | 누락 일본어가 PNG와 일치하여 개선이다. |
+| `bug1019475_1.pdf` | 링크 주변 `at https://`와 `the specification repository` 순서, 바닥글의 `Technical`·`2024`가 PNG에 가까워졌다. 명시 폭 U+0020의 실제 CID를 선택해 `formatwas`도 PNG의 `format was`로 고쳤다. 개선이다. |
+| `issue10519_reduced.pdf` | 기존 `ROÍAVDCA`가 PNG의 `DAROVACÍ`로 바뀌어 개선이다. |
+| `issue13242.pdf` | 뒤섞였던 라틴어 문단이 PNG의 문장 순서와 일치하여 개선이다. |
+| `issue20232.pdf` | 기존 `идата`가 PNG의 `и дата`로 바뀌어 개선이다. |
 
-전체 테스트는 `/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp`로 5,052개 통과, 33개 건너뜀, 14개 예상 실패를 확인했다. CID 폭 회귀 테스트 1개를 추가한 뒤 `/usr/bin/python3 -m scripts.block_lxml pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp`로 5,053개 통과, 33개 건너뜀, 14개 예상 실패를 확인했고 lxml import 시도는 0회였다. `ruff check dochan scripts tests`, `git diff --check`, 로컬 절대 경로 검사도 통과했다. 생성기를 다시 실행한 결과 451,331바이트의 모듈이 현재 파일과 바이트 단위로 일치했다.
+앞선 내부 실물 79쌍 비교의 수치 행과 집계는 같았지만, 그 PDF에는 Type0 글꼴이 없고 단순 TrueType 글꼴 494개만 있다. 따라서 이 79쌍은 이번 CMap 경로의 회귀 근거가 아니다. 내부 파일명과 본문은 기록하지 않았다.
+
+리뷰 수정 후 전체 테스트는 `/usr/bin/python3 -m pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp`로 5,066개 통과, 33개 건너뜀, 14개 예상 실패를 확인했다. 생성기를 다시 실행한 결과 표 데이터는 이전 모듈과 바이트 단위로 같았다.

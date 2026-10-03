@@ -627,7 +627,9 @@ class ContentTextExtractor:
                              <= 1e-6 * xscale * yscale)
         for chunk, code in chunks:
             w0 = font.widths.advance(code) / 1000.0
-            disp = (w0 * fs + tc + (tw if len(chunk) == 1 and chunk == b" " else 0.0)) * th
+            valid_space = (chunk == b" " and
+                           (font.encoding_cmap is None or font.encoding_cmap._space(1, 32)))
+            disp = (w0 * fs + tc + (tw if valid_space else 0.0)) * th
             if track_positions:
                 piece = font.decode(chunk)
                 decoded_parts.append(piece)
@@ -663,7 +665,9 @@ class ContentTextExtractor:
         if not chunks:
             return tm
         total_adv = sum(metrics.metrics(cid)[0] / 1000.0 * fs + tc
-                        + (tw if chunk == b" " else 0.0)
+                        + (tw if chunk == b" " and
+                           (font.encoding_cmap is None or font.encoding_cmap._space(1, 32))
+                           else 0.0)
                         for chunk, cid in chunks)
         _w1y, v1x, v1y = metrics.metrics(chunks[0][1])
         origin = _matmul((1, 0, 0, 1, -v1x / 1000.0 * fs * th,

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 추가 (XLS 수식 — 데이터 표·DDE)
+
+- XLS 데이터 표(PtgTbl·TABLE)를 `TABLE(행입력,열입력)` 으로, DDE 링크 이름을 `서비스|토픽!항목` 으로 낸다(공개 1,489셀, 전에는 캐시 값만).
+  방향은 [MS-XLS] TABLE 의 fRw·fTbl2 비트로 정하고, XLSX `dataTable` 셀도 같은 표기를 쓴다. 같은 앵커의 TABLE·ARRAY·SHRFMLA 반복 레코드를
+  앵커당 한 번만 적용해 처리 시간이 레코드 수에 비례하지 않게 했다.
+
 ### 추가 (PDF Form XObject 본문)
 
 - PDF 가 Form XObject(`Do`)로 그린 글자를 읽는다(전에는 통째로 빠졌다). 공개 pdf.js 983개 중 Form 글자가 있는 39개에서 PDFium 대비 읽을 수 있는

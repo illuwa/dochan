@@ -42,3 +42,11 @@ DDE는 SupBook의 서비스·토픽과 ExternName의 항목을 XTI·NameX 인덱
 ruff check dochan scripts tests
 git diff --check
 ```
+
+
+## 정정(2026-10-03, 감수 반영 후)
+
+위 표와 본문의 DDE 표기 서술 중 "`서비스|토픽!항목`으로 낸다", "쉼표도 원문 그대로", "OLE 플래그가 있는 `StdDocumentName`" 은 감수 반영 전 상태다.
+지금은 `[A-Za-z0-9_.]` 밖의 글자가 있는 토픽·항목을 `'…'` 로 감싸고(안의 `'` 는 두 번), `fOle`(0x7FEA) 이름은 [MS-XLS] 2.4.105 대로 DDE
+`StdDocumentName` 항목으로 본다(실물 수식 0셀이라 미검증). 데이터 표 방향은 TABLE(2.4.319)의 fRw·fTbl2 비트로만 정한다. 세부는
+[수정 기록](2026-10-03-xls-tbl-dde-fix-real-docs.md).

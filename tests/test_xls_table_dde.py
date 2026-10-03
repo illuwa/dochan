@@ -1,7 +1,7 @@
 """Synthetic BIFF8 data-table and DDE formula records."""
 import struct
 
-from lxml import etree
+from dochan.utils import safe_xml
 
 from test_xls_formula_extended import formula, namex, record, texts, workbook, xti
 from dochan.office_binary.xls import _decode_formula_token_stream
@@ -109,6 +109,7 @@ def test_xlsx_data_table_uses_the_same_formula_notation():
         ({'r1': 'B38', 'r2': 'B39', 'dt2D': '1'}, '42 (=TABLE($B$38,$B$39))'),
     ]
     for attributes, expected in cases:
-        cell = etree.Element('c')
-        entry = etree.SubElement(cell, 'f', t='dataTable', **attributes)
+        attrs = ''.join(' %s="%s"' % item for item in sorted(attributes.items()))
+        cell = safe_xml.fromstring(('<c><f t="dataTable"%s/></c>' % attrs).encode())
+        entry = cell.find('f')
         assert reader._with_formula('42', cell, {}, entry) == expected

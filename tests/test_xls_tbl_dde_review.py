@@ -2,7 +2,7 @@
 import struct
 import time
 
-from lxml import etree
+from dochan.utils import safe_xml
 
 from test_xls_formula_extended import formula, namex, record, texts, workbook, xti
 from test_xls_table_dde import dde_name, dde_supbook, nonempty_texts, table, table_formula
@@ -107,8 +107,9 @@ def test_xlsx_deleted_table_inputs_keep_cache():
     reader = XLSXReader()
     for attributes in ({'r1': 'B26', 'dtr': '1', 'del1': '1'},
                        {'r1': 'B26', 'r2': 'B27', 'dt2D': '1', 'del2': '1'}):
-        cell = etree.Element('c')
-        entry = etree.SubElement(cell, 'f', t='dataTable', **attributes)
+        attrs = ''.join(' %s="%s"' % item for item in sorted(attributes.items()))
+        cell = safe_xml.fromstring(('<c><f t="dataTable"%s/></c>' % attrs).encode())
+        entry = cell.find('f')
         assert reader._with_formula('42', cell, {}, entry) == '42'
 
 
@@ -119,7 +120,7 @@ def test_duplicate_table_records_run_under_one_second():
     body += table(26, 125, 0, 199, 0x0004, (25, 1), (0xffff, 0)) * 999
     start = time.monotonic()
     doc = workbook(b'', body)
-    assert time.monotonic() - start < 1.0
+    assert time.monotonic() - start < 5.0  # 고치기 전 15초, 지금 0.2초 — CI 여유
     assert any('duplicate TABLE' in error for error in doc.errors)
 
 
@@ -136,5 +137,24 @@ def test_duplicate_array_records_run_under_one_second():
     body += array * 1000
     start = time.monotonic()
     doc = workbook(b'', body)
-    assert time.monotonic() - start < 1.0
+    assert time.monotonic() - start < 5.0  # 고치기 전 15초, 지금 0.2초 — CI 여유
     assert any('duplicate ARRAY' in error for error in doc.errors)
+
+
+def test_repeated_shared_formula_records_are_linear():
+    def exp_formula(row, col):
+        tokens = b'\x01' + struct.pack('<HH', 1, 1)
+        return record(6, struct.pack('<3H', row, col, 0) + struct.pack('<d', 42)
+                      + struct.pack('<HIH', 0, 0, len(tokens)) + tokens)
+
+    def shrfmla(first_row, last_row):
+        tokens = b'\x24' + struct.pack('<HH', 0, 0xc000)
+        return record(0x04BC, struct.pack('<HHBBBB', first_row, last_row, 1, 200, 0, 0)
+                      + struct.pack('<H', len(tokens)) + tokens)
+
+    body = b''.join(exp_formula(row, col) for row in range(1, 101) for col in range(1, 201))
+    body += shrfmla(1, 100)
+    body += (exp_formula(1, 1) + shrfmla(1, 100)) * 100
+    start = time.monotonic()
+    workbook(b'', body)
+    assert time.monotonic() - start < 5.0  # 고치기 전 셀 2만 × 반복 100 이 6~7초

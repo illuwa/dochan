@@ -280,7 +280,7 @@ class FormulaContext:
                     self.dde_text_bytes += reader.offset - start
                     if self.dde_text_bytes > MAX_LINK_TEXT_BYTES:
                         raise FormulaDataError('DDE link text byte limit exceeded')
-                    if any(ord(char) < 32 or ord(char) == 127 or char in '"*/:<>?\\'
+                    if any(ord(char) < 32 or ord(char) == 127 or char in '"*/:<>?\\|'
                            for char in path if char != '\x03'):
                         raise FormulaDataError('invalid DDE path characters')
                     book.kind = 'dde'

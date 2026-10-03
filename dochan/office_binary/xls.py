@@ -1292,7 +1292,8 @@ def _parse_sheet_records(
             if tokens:
                 shared_formula_templates[pending_shared_formula_anchor] = tokens
                 shared_formula_extras[pending_shared_formula_anchor] = extra_data
-                for cell in shared_formula_cells.get(pending_shared_formula_anchor, []):
+                # 앵커당 한 번만 적용하고 대기 목록을 비운다(같은 앵커의 SHRFMLA 반복이 셀 전체를 다시 디코드하지 않게).
+                for cell in shared_formula_cells.pop(pending_shared_formula_anchor, []):
                     _set_sheet_cell(
                         sheet,
                         cell[0],

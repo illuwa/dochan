@@ -54,8 +54,87 @@ class _FormatMetadata:
 
 
 class SpreadsheetNumberFormatter:
+    @staticmethod
+    def _general_number(value: str) -> str:
+        """Render a finite Excel number at 15 significant decimal digits."""
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite numeric value")
+        if number == 0:
+            return "0"
+        decimal = Decimal(format(number, ".15g"))
+        # A bounded display contract for both ends of the exponent range.
+        if not -10 < decimal.adjusted() < 15:
+            digits = format(decimal.normalize(), "E")
+            mantissa, exponent = digits.split("E")
+            return f"{mantissa}E{int(exponent):+03d}"
+        fixed = format(decimal, "f")
+        return fixed.rstrip("0").rstrip(".") if decimal.as_tuple().exponent < 0 else fixed
+
+    def _format_text_cell_value(self, value: str, fmt: str) -> str:
+        """Apply the fourth format section, or an explicit text placeholder."""
+        if not fmt or len(fmt) > 255:
+            return value
+        if self._malformed_text_format(fmt):
+            return value
+        sections = self._format_sections(fmt)
+        if len(sections) >= 4:
+            section = sections[3]
+        else:
+            section = next((part for part in sections if "@" in self._format_code_tokens(part)), None)
+        if section is None:
+            return value
+        if not section:
+            return value
+        # A text cell has at most 32,767 characters in Excel. Count first;
+        # never allocate repeated copies of a shared string on this path.
+        tokens = self._format_literal_tokens(section, text_padding=True)
+        result = []
+        for token, is_format in tokens:
+            if token == "@" and is_format:
+                result.append((token, False, True))
+            elif is_format is None:
+                result.append((token, True, False))
+            elif not (is_format and token.startswith("[")):
+                result.append((token, False, False))
+        while result and result[0][1]:
+            result.pop(0)
+        while result and result[-1][1]:
+            result.pop()
+        length = sum(len(value) if placeholder else len(token)
+                     for token, _, placeholder in result)
+        if length > 32767:
+            errors = getattr(self, "_errors", None)
+            warning = "WARN: spreadsheet text format exceeds cell display limit; original text retained"
+            if errors is not None and warning not in errors:
+                errors.append(warning)
+            return value
+        return "".join(value if placeholder else token
+                       for token, _, placeholder in result)
+
+    @staticmethod
+    def _malformed_text_format(fmt: str) -> bool:
+        if SpreadsheetNumberFormatter._has_unterminated_quote(fmt):
+            return True
+        in_quote = False
+        index = 0
+        while index < len(fmt):
+            char = fmt[index]
+            if char in "\\_*" and not in_quote:
+                index += 2
+                continue
+            if char == '"':
+                in_quote = not in_quote
+            elif char == "[" and not in_quote:
+                end = fmt.find("]", index + 1)
+                if end < 0 or any(c in fmt[index + 1:end] for c in '["'):
+                    return True
+                index = end
+            index += 1
+        return False
+
     def _format_cell_value(self, value: str, fmt: str) -> str:
-        if not value or not fmt or len(fmt) > 255:
+        if not value or len(fmt) > 255:
             return value
         try:
             number = float(value)
@@ -64,6 +143,8 @@ class SpreadsheetNumberFormatter:
         try:
             if not math.isfinite(number):
                 raise ValueError("nonfinite numeric value")
+            if not fmt or fmt.lower() == "general":
+                return self._general_number(value)
             selected = self._conditional_format_section(fmt, number)
             conditional_integer = selected != fmt and selected.strip() == "0"
             sections = self._format_sections(selected)
@@ -890,12 +971,13 @@ class SpreadsheetNumberFormatter:
                          self._format_literal_tokens(section[:match.start()]) if not is_format)
         suffix = "".join(token for token, is_format in
                          self._format_literal_tokens(section[match.end():]) if not is_format)
-        formatted = value.lstrip("-") if number < 0 and position == 1 and prefix.strip() else value
+        general = self._general_number(value)
+        formatted = general.lstrip("-") if number < 0 and position == 1 and prefix.strip() else general
         if number < 0 and position == 1 and self._is_color_only_negative_section(positive, section):
-            return "-" + prefix + value.lstrip("-") + suffix
+            return "-" + prefix + general.lstrip("-") + suffix
         if number < 0 and position == 0 and prefix.strip():
             # 한 구역 서식의 음수는 리터럴 앞에 부호가 온다(NumberFormatTests A22 Excel 저장값).
-            return "-" + prefix + value.lstrip("-") + suffix
+            return "-" + prefix + general.lstrip("-") + suffix
         return prefix + formatted + suffix
 
     def _uses_thousands_separator(self, fmt: str) -> bool:
@@ -1007,14 +1089,14 @@ class SpreadsheetNumberFormatter:
         suffix = "".join(token for token, is_format in tokens[last_numeric + 1:] if not is_format)
         return (prefix, suffix)
 
-    def _format_literal_tokens(self, fmt: str) -> List[Tuple[str, bool]]:
+    def _format_literal_tokens(self, fmt: str, text_padding: bool = False) -> List[Tuple[str, bool]]:
         tokens: List[Tuple[str, bool]] = []
         index = 0
         while index < len(fmt):
             char = fmt[index]
             if char in "_*":
                 if char == "_" and index + 1 < len(fmt):
-                    tokens.append((" ", False))
+                    tokens.append((" ", None if text_padding else False))
                 index += 2
                 continue
             if char == '"':
@@ -1038,7 +1120,7 @@ class SpreadsheetNumberFormatter:
                     tokens.append((fmt[index:end + 1], True))
                     index = end + 1
                     continue
-            tokens.append((char, char in "0#?.,%$"))
+            tokens.append((char, char in ("0#?.,%$@" if text_padding else "0#?.,%$")))
             index += 1
         return tokens
 

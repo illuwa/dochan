@@ -177,6 +177,13 @@ def _value(number):
     return str(int(number)) if number.is_integer() else str(number)
 
 
+def _format_xls_chart_number(value, code, date_1904):
+    if not code or code.lower() == 'general':
+        from ..spreadsheet_format import SpreadsheetNumberFormatter
+        return SpreadsheetNumberFormatter()._format_cell_value(value, 'General')
+    return format_chart_number(value, code, date_1904)
+
+
 def _cell_value(value):
     # XLS formula cells preserve 'value (=formula)' for normal output.
     # Charts consume its cached scalar; formulas without a cache are empty.
@@ -259,7 +266,7 @@ def _reference_values(tokens, sheets, external_sheets, current_sheet, errors, bu
         raw = getattr(value, 'number', None)
         if raw is not None:
             code = format_code if format_code is not None else value.number_format
-            value = format_chart_number(_value(float(raw)), code, date_1904)
+            value = _format_xls_chart_number(_value(float(raw)), code, date_1904)
         else:
             # LABEL/LABELSST strings can look numeric (e.g. "001"). BRAI's
             # IFmt never changes their type; apply it only to numeric sources.
@@ -416,7 +423,7 @@ def _parse_chart(records, sheets, external_sheets, current_sheet, path, sheet_na
             values = points if points is not None else cache.get((index, role), {})
             # A cache has no displayed strings, so its stored IFmt is the fallback.
             if points is None and code:
-                values = {idx: format_chart_number(value, code, date_1904)
+                values = {idx: _format_xls_chart_number(value, code, date_1904)
                           if isinstance(value, _CachedNumber) else value
                           for idx, value in values.items()}
             resolved[role] = values

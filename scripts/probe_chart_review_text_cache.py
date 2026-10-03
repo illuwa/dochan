@@ -107,7 +107,9 @@ def snapshot(args):
                     reader._errors = []
                     reader._date_1904 = date1904
                     if input_type not in ('n', ''):
-                        actual = raw_value
+                        shown = ('TRUE' if raw_value == '1' else 'FALSE') if input_type == 'b' else raw_value
+                        actual = (reader._format_text_cell_value(shown, format_string)
+                                  if hasattr(reader, '_format_text_cell_value') else raw_value)
                     else:
                         try:
                             actual = reader._format_cell_value(raw_value, format_string)

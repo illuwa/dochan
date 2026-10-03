@@ -165,6 +165,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
         self._chart_output_cells_remaining = MAX_CHART_OUTPUT_CELLS
         self._document_range_cells_used = 0
         self._document_range_budget_exhausted = False
+        self._text_format_cache = {}
         with OOXMLPackage(file_path) as package:
             self._package = package
             core_elements = core_property_elements(read_core_properties(package), "xlsx")
@@ -1456,19 +1457,37 @@ class XLSXReader(SpreadsheetNumberFormatter):
     ) -> str:
         cell_children = cell_children or self._cell_children(cell_elem)
         cell_type = cell_elem.get("t", "")
+        fmt = self._cell_format(cell_elem, styles)
         if cell_type == "s":
             value = self._value_text(cell_elem, cell_children)
             try:
-                return self._with_formula(shared_strings[int(value)], cell_elem, shared_formulas, cell_children.get("f"))
+                index = int(value)
+                source = shared_strings[index]
+                if len(source) > 32767:
+                    shown = self._format_text_cell_value(source, fmt)
+                else:
+                    key = (index, fmt)
+                    cache = getattr(self, "_text_format_cache", None)
+                    if cache is None:
+                        cache = self._text_format_cache = {}
+                    if key not in cache:
+                        if len(cache) >= 128:
+                            cache.clear()
+                        cache[key] = self._format_text_cell_value(source, fmt)
+                    shown = cache[key]
+                return self._with_formula(shown, cell_elem, shared_formulas, cell_children.get("f"))
             except (ValueError, IndexError):
                 return ""
         if cell_type == "inlineStr":
-            return self._with_formula(self._text_runs(cell_children.get("is")), cell_elem, shared_formulas, cell_children.get("f"))
+            shown = self._format_text_cell_value(self._text_runs(cell_children.get("is")), fmt)
+            return self._with_formula(shown, cell_elem, shared_formulas, cell_children.get("f"))
         if cell_type == "b":
             value = self._value_text(cell_elem, cell_children)
-            return self._with_formula("TRUE" if value == "1" else "FALSE", cell_elem, shared_formulas, cell_children.get("f"))
+            shown = self._format_text_cell_value("TRUE" if value == "1" else "FALSE", fmt)
+            return self._with_formula(shown, cell_elem, shared_formulas, cell_children.get("f"))
         if cell_type == "str":
-            return self._with_formula(self._value_text(cell_elem, cell_children), cell_elem, shared_formulas, cell_children.get("f"))
+            shown = self._format_text_cell_value(self._value_text(cell_elem, cell_children), fmt)
+            return self._with_formula(shown, cell_elem, shared_formulas, cell_children.get("f"))
         if cell_type == "d" and (getattr(self, "_strict_iso_dates", False)
                                  or cell_elem.tag == f"{{{STRICT_S_NS}}}c"):
             return self._with_formula(

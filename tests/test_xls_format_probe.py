@@ -9,7 +9,7 @@ from scripts import probe_chart_review_text_cache as probe
 
 
 def test_text_cache_probe_preserves_boolean_input_type(tmp_path, monkeypatch):
-    """합성 OOXML: 불리언 저장값은 숫자 서식 적용 대상이 아니다."""
+    """합성 OOXML: 불리언 저장값은 숫자가 아닌 TRUE 텍스트로 표시한다."""
     monkeypatch.setattr(probe, "FILES", ("boolean.xlsx",))
     with ZipFile(tmp_path / "boolean.xlsx", "w") as archive:
         archive.writestr("xl/workbook.xml", '''
@@ -28,4 +28,4 @@ def test_text_cache_probe_preserves_boolean_input_type(tmp_path, monkeypatch):
     probe.snapshot(SimpleNamespace(corpus=tmp_path, tree=Path.cwd(), output=output))
     row = json.loads(output.read_text())[0]
     assert row["input_type"] == "b"
-    assert row["actual"] == "1"
+    assert row["actual"] == "TRUE"

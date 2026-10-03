@@ -54,6 +54,12 @@ def test_chart_title_data_and_caption_contract():
     assert '#chart1' in elements[1].rows[0][0].provenance.path
 
 
+def test_chart_general_cached_number_uses_cell_display_contract():
+    data = chart(series(text('Large')), cache(1, [1.234567890123456e19]))
+    out = parse_chart_substreams(data)
+    assert rows(out[0])[1][1] == '1.23456789012346E+19'
+
+
 def test_chart_brai_resolves_cross_sheet_ranges_without_cache():
     data = chart(series(brai(0, struct.pack('<B3H', 0x3a, 0, 0, 1)),
                         brai(1, area(0, 1, 2, 1, 1)), brai(2, area(0, 1, 2, 0, 0))), rec(0x1018, b'\0\0'))

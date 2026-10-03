@@ -188,13 +188,19 @@ def _format_number_with_format(value: float, format_string: str = "", date_1904:
 def _display_number_with_format(value: float, format_string: str = "", date_1904: bool = False,
                                 formatter=None) -> str:
     raw = _format_number(value)
-    if not format_string or format_string.lower() == "general":
-        return raw
     formatter = formatter if formatter is not None else _number_formatter(date_1904)
     cache = getattr(formatter, "_format_metadata_cache", None)
     if cache is not None and len(cache) >= MAX_NUMBER_FORMAT_CACHE:
         cache.clear()
     return formatter._format_cell_value(raw, format_string)
+
+
+def _display_text_with_format(value: str, format_string: str, formatter=None) -> str:
+    if not format_string:
+        return value
+    formatter = formatter if formatter is not None else _number_formatter(False)
+    shown = formatter._format_text_cell_value(value, format_string)
+    return value if shown == value else shown
 
 
 @lru_cache(maxsize=2)
@@ -860,6 +866,7 @@ def _parse_sheet_records(
 
     pending_formula_cell: Optional[Tuple[int, int]] = None
     pending_formula_text = ""
+    pending_formula_format = ""
     pending_shared_formula_anchor: Optional[Tuple[int, int]] = None
     shared_formula_cells: Dict[Tuple[int, int], List[Tuple[int, int]]] = {}
     # MERGEDCELLS/HLINK 는 좌표 범위를 선언할 뿐인데 그 범위를 전부 채우면
@@ -903,6 +910,7 @@ def _parse_sheet_records(
                 value = shared_strings[sst_index]
             except IndexError:
                 value = ""
+            value = _display_text_with_format(value, _format_for_xf(ixfe, formats, xf_formats), number_formatter)
             if _set_sheet_cell(sheet, row, col, value, "LABELSST"):
                 _capture_rich(row, col, value)
         elif record_type == 0x0204 and len(record_data) >= 8:  # LABEL
@@ -914,7 +922,8 @@ def _parse_sheet_records(
                 sheet,
                 row,
                 col,
-                _read_biff8_label_text(record_data, 6),
+                _display_text_with_format(_read_biff8_label_text(record_data, 6),
+                                          _format_for_xf(ixfe, formats, xf_formats), number_formatter),
                 "LABEL",
             )
         elif record_type == 0x0004 and len(record_data) >= 7:  # BIFF2/3/4 LABEL
@@ -938,6 +947,7 @@ def _parse_sheet_records(
             raw_runs = record_data[end + 2:end + 2 + count * 4]
             runs = [struct.unpack_from("<HH", raw_runs, i) for i in range(0, len(raw_runs) - 3, 4)]
             value = _RichString(value, runs, end + 2 > len(record_data) or len(raw_runs) != count * 4)
+            value = _display_text_with_format(value, _format_for_xf(ixfe, formats, xf_formats), number_formatter)
             if _set_sheet_cell(
                 sheet,
                 row,
@@ -1126,11 +1136,12 @@ def _parse_sheet_records(
         elif record_type in (0x0205, 0x0005) and len(record_data) >= 8:  # BOOLERR
             pending_formula_cell = None
             pending_shared_formula_anchor = None
-            row, col, _, value, is_error = struct.unpack_from("<HHHBB", record_data, 0)
+            row, col, xf_index, value, is_error = struct.unpack_from("<HHHBB", record_data, 0)
             if is_error:
                 formatted = _format_biff_error(value)
             else:
-                formatted = "TRUE" if value else "FALSE"
+                formatted = _display_text_with_format(
+                    "TRUE" if value else "FALSE", _format_for_xf(xf_index, formats, xf_formats), number_formatter)
             _set_sheet_cell(sheet, row, col, formatted, "BOOLERR")
         elif record_type == 0x0006 and len(record_data) >= 14:  # FORMULA cached number
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
@@ -1203,6 +1214,7 @@ def _parse_sheet_records(
                 pending_shared_formula_anchor = None
             pending_formula_cell = (row, col)
             pending_formula_text = formula
+            pending_formula_format = _format_for_xf(xf_index, formats, xf_formats)
         elif record_type == 0x0236:  # TABLE for a PtgTbl data-table range.
             anchor = None
             try:
@@ -1267,6 +1279,7 @@ def _parse_sheet_records(
                     _append_sheet_error_once(sheet, 'WARN: XLS truncated STRING formula result')
             else:
                 value = _read_formula_string_result_text(record_type, record_data)
+            value = _display_text_with_format(value, pending_formula_format, number_formatter)
             sheet.formula_values[pending_formula_cell] = value
             _set_sheet_cell(
                 sheet,
@@ -1569,7 +1582,7 @@ def _decode_formula_cached_result(record_data: bytes, format_string: str = "", d
             # The text is carried by the following STRING record.
             return ""
         if result_type == 0x01:
-            return "TRUE" if result[2] else "FALSE"
+            return _display_text_with_format("TRUE" if result[2] else "FALSE", format_string, formatter)
         if result_type == 0x02:
             return _format_biff_error(result[2])
         if result_type == 0x03:

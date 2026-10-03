@@ -29,6 +29,13 @@
   388개에서 599개로 늘었고, 새로 연결한 211개는 PDFium 글리프와 모두 같다. 바깥 이웃 글자가 같은 단어로 이어지면(TJ 분할로 맞닿은 조각,
   `www.example.com` 처럼 토큰 안의 `.`·`,` 포함) 단어 일부만 연결하지 않고 보류하며, 보류한 링크의 URL 은 전처럼 페이지 끝 문단에 남는다.
 
+### 추가 (PDF CID 글꼴 글자 복원)
+
+- ToUnicode 가 없는 CID 글꼴의 글자를 복원한다. Identity-H/V 글꼴은 Adobe CID→Unicode 사실 표(Adobe `pdf2unicode` 원본에서 생성 스크립트로 만든 BSD-3 데이터,
+  `NOTICE` 에 출처·해시 기록)로, 내장 TrueType 글꼴은 CIDToGIDMap 과 글꼴 자체의 Unicode cmap 역대응으로 찾는다. 공개 경고 PDF 61개 중 10개의 글자가
+  렌더와 맞게 새로 나온다. 내장 글꼴이 CID 를 GID 로 직접 쓰면 Adobe 표가 다른 글자를 지어낼 수 있어 적용하지 않고 경고한다(공개 2개).
+  Adobe 표 값에 붙은 변형 선택자는 떼어 내 기본 글자를 낸다. 비 Identity CMap(`90ms-RKSJ-H` 등)은 아직 복원하지 않는다. 경고가 없던 공개 PDF 922개의 Markdown 은 불변이다.
+
 ### 변경 (HWPX 변경 추적 투영)
 
 - `revision_mode='final'`·`'original'` 이 끝 표지 `paraend="1"` 의 문단 끝을 범위에 넣어 다음 문단과 합친다. 겹치거나 교차하는 범위는

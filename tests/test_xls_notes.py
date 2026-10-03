@@ -47,7 +47,8 @@ def test_xls_notes_join_obj_txo_and_note_by_id_with_mixed_continue_encodings():
              + _note(1, 0, 7, "Reviewer", hidden=True)
              + _record(0x000A))
     doc = parse_biff_workbook(_workbook(sheet))
-    assert _texts(doc) == ["[comment: Other: second]", "[comment: Reviewer: Reviewer: first cell]"]
+    # 메모 줄바꿈은 XLSX 메모 모델처럼 \n 으로 보존한다(Markdown 표는 렌더러가 공백으로 바꾼다).
+    assert _texts(doc) == ["[comment: Other: second]", "[comment: Reviewer: Reviewer:\nfirst cell]"]
     assert doc.errors == []
 
 
@@ -80,3 +81,20 @@ def test_xls_notes_warn_and_keep_author_on_truncated_or_oversize_text():
     doc = parse_biff_workbook(_workbook(sheet))
     assert _texts(doc) == ["[comment: A]", "[comment: B]"]
     assert any("TxO" in error for error in doc.errors)
+
+
+
+def test_xls_note_surrogate_pair_split_across_continues_is_kept():
+    wide = "😀".encode("utf-16-le")
+    sheet = (_record(0x0809, struct.pack("<HH", 0x0600, 0x0010))
+             + _obj(7) + _txo(3, b"\0a", b"\1" + wide[:2], b"\1" + wide[2:])
+             + _note(0, 0, 7, "Me") + _record(0x000A))
+    assert _texts(parse_biff_workbook(_workbook(sheet))) == ["[comment: Me: a😀]"]
+
+
+def test_xls_note_count_has_no_separate_cap():
+    notes = b"".join(_note(row, 0, 0, "A") for row in range(10005))
+    sheet = _record(0x0809, struct.pack("<HH", 0x0600, 0x0010)) + notes + _record(0x000A)
+    doc = parse_biff_workbook(_workbook(sheet))
+    assert sum(1 for text in _texts(doc) if text.startswith("[comment:")) == 10005
+    assert not any("note count limit" in error for error in doc.errors)

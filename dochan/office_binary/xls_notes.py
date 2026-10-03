@@ -26,7 +26,8 @@ def read_txo_text(payload, records):
         return "", None, "TxO text length limit exceeded"
     if char_count == 0:
         return "", None, None
-    parts = []
+    # UTF-16LE 로 모아 한 번에 풀어야 Continue 경계에서 갈린 서로게이트 쌍이 깨지지 않는다.
+    encoded = bytearray()
     remaining = char_count
     while remaining:
         item = next(records, None)
@@ -44,7 +45,9 @@ def read_txo_text(payload, records):
             return "", None, "empty TxO Continue text"
         count = min(remaining, available)
         raw = data[1:1 + count * width]
-        parts.append(raw.decode("utf-16-le" if wide else "latin1", errors="replace"))
+        encoded += raw if wide else raw.decode("latin1").encode("utf-16-le")
         remaining -= count
-    text = "".join(parts).replace("\r\n", " ").replace("\r", " ").replace("\n", " ").strip()
+    # 줄바꿈은 XLSX 메모·XLS 셀처럼 \n 으로 보존한다(Markdown 렌더러가 표 안에서 공백으로 바꾼다).
+    text = bytes(encoded).decode("utf-16-le", errors="replace")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     return text, None, None

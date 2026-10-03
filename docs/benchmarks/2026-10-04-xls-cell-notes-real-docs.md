@@ -16,3 +16,11 @@ LibreOffice 공개 XLS 303개에도 같은 해시 검사를 적용했다. `forum
 합성 BIFF8 단위 테스트는 압축 문자열과 UTF-16 문자열이 서로 다른 Continue에 이어지는 경우, 숨김 메모, ID 불일치, 빈 본문, 작성자 없는 본문, 손상·과대 길이의 경고와 안전한 생략을 확인한다. 전체 테스트는 5208개 통과, 36개 건너뜀, 14개 예상 실패였고 `lxml` import 차단 시도는 0건이었다. `ruff check dochan scripts tests`도 통과했다.
 
 README의 XLS `주석/코멘트` 칸은 이미 ✅이다. 본문 누락을 수정하고 단위 테스트와 공개 실물 검증을 통과했으므로 ✅ 유지를 제안한다. 손상된 퍼저 표본의 NOTE 1개는 출력되지 않으므로 정상 메모의 완전 복원 수치에 포함하지 않았다.
+
+
+## 감수 반영(2026-10-04)
+
+- 메모 본문의 줄바꿈(CR·LF)을 공백으로 접던 것을 `\n` 보존으로 바꿨다. XLSX 메모 모델(`Yegor Kozlov: Yegor Kozlov:\nfirst cell`)과 XLS 셀 텍스트가 줄바꿈을 보존하므로 JSON 계약을 맞춘다. Markdown·일반 텍스트는 렌더러가 표 안에서 공백으로 바꾸므로 바뀐 33개 파일의 출력 해시는 같다.
+- 시트당 NOTE 10,000개 상한을 없앴다(목록은 입력 레코드 수에 비례하고 출력은 셀 예산이 막는다 — 이전에 나가던 작성자를 버리지 않는다). TxO 본문 상한은 그대로다.
+- Continue 경계에서 갈린 서로게이트 쌍(이모지 등)을 UTF-16LE 로 모아 한 번에 풀어 보존한다.
+- 감수 독립 대조: POI 테스트 기대값(TestHSSFComment bug47924·existingFileWithComment, TestBugs bug50833·bug56450, TestExcelExtractor testWithComments) 모두 일치, 독립 디코더와 NOTE 511개 중 암호화·퍼저 표본 2개를 빼고 일치, NOTE·Obj·TxO·Continue 퍼징 1,600건 예외 0.

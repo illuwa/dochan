@@ -1453,10 +1453,8 @@ def _parse_sheet_records(
             row, col = struct.unpack_from("<HH", record_data, 0)
             author = _extract_note_author(record_data)
             object_id = struct.unpack_from("<H", record_data, 6)[0]
-            if len(notes) < MAX_NOTE_OBJECTS:
-                notes.append((row, col, object_id, author))
-            else:
-                _append_sheet_error_once(sheet, 'WARN: XLS note count limit exceeded')
+            # 목록 크기는 입력 레코드 수에 비례하고 출력은 셀 예산이 막는다 — 별도 상한을 두지 않는다.
+            notes.append((row, col, object_id, author))
 
     for row, col, object_id, author in notes:
         text = note_texts.get(object_id, "")

@@ -7,18 +7,27 @@ MAX_SHEET_NOTE_CHARS = 1000000
 MAX_NOTE_OBJECTS = 10000
 
 
-def comment_object_id(payload):
-    """Return ftCmo.id when the Obj is a cell note (object type 0x19)."""
+def object_header(payload):
+    """Return the ftCmo object type and id from a bounded Obj subrecord."""
     if len(payload) < 10:
         return None
     subrecord, length, object_type, object_id = struct.unpack_from("<HHHH", payload)
-    if subrecord != 0x0015 or length < 6 or length + 4 > len(payload) or object_type != 0x0019:
+    if subrecord != 0x0015 or length < 6 or length + 4 > len(payload):
         return None
-    return object_id
+    return object_type, object_id
 
 
-def read_txo_text(payload, records):
-    """Read cchText characters; the next Continue belongs to formatting after that."""
+def comment_object_id(payload):
+    """Return ftCmo.id when the Obj is a cell note (object type 0x19)."""
+    header = object_header(payload)
+    return header[1] if header is not None and header[0] == 0x0019 else None
+
+
+def read_txo_text(payload, records, preserve_lines=True):
+    """Read cchText characters; the next Continue belongs to formatting after that.
+
+    Line breaks are always kept as \\n (notes and text boxes alike); ``preserve_lines`` is accepted for callers.
+    """
     if len(payload) < 14:
         return "", None, "truncated TxO header"
     char_count = struct.unpack_from("<H", payload, 10)[0]

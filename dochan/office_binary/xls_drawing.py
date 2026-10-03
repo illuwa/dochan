@@ -94,12 +94,14 @@ class XlsDrawingReader:
         self.entries = read_bstore(records, limits=self.limits, errors=self.errors)
         self._placements = 0
 
-    def read_sheet(self, sheet_data: bytes, sheet_name: str) -> List[object]:
+    def read_sheet(self, sheet_data: bytes, sheet_name: str,
+                   text_objects=None, path: str = '') -> List[object]:
         data = _drawing_bytes(sheet_data, 0x00EC, self.limits, self.errors)
         records = parse_records(data, limits=self.limits, errors=self.errors)
         shapes = read_shapes(records, errors=self.errors)
         stack = [(shape, None) for shape in reversed(shapes)]
         positioned = []
+        object_shapes = []
         while stack:
             shape, inherited = stack.pop()
             anchor = inherited
@@ -113,6 +115,9 @@ class XlsDrawingReader:
                     else:
                         _warn(self.errors, 'client anchor out of bounds')
             stack.extend((child, anchor) for child in reversed(shape.children))
+            if shape.record is not None and any(
+                    atom.header.rec_type == 0xF011 for atom in shape.record.children):
+                object_shapes.append(anchor)
             if not shape.pib:
                 continue
             if self._placements >= min(self.limits.max_records, 10000):
@@ -150,5 +155,21 @@ class XlsDrawingReader:
                     filename=filename, content_type=mime,
                     metadata={'kind': 'image', 'label': label, 'missing': False,
                               'source_format': 'xls', 'sheet': sheet_name, 'cell': cell}))
-        return [element for _, _, paragraph, image in sorted(positioned, key=lambda item: item[:2])
-                for element in (paragraph, image)]
+        elements = [(position, ordinal, (paragraph, image))
+                    for position, ordinal, paragraph, image in positioned]
+        if text_objects:
+            # Each OfficeArtClientData terminates the shape associated with the
+            # next Obj. Do not guess anchors if either side is incomplete.
+            aligned = len(object_shapes) == len(text_objects)
+            note_ids = {object_id for object_type, object_id, _ in text_objects
+                        if object_type == 0x0019}
+            for ordinal, (object_type, object_id, text) in enumerate(text_objects):
+                if object_type == 0x0019 or object_id in note_ids or not text:
+                    continue
+                anchor = object_shapes[ordinal] if aligned else None
+                position = anchor if anchor is not None else (65536, 256)
+                provenance = Provenance(source_format='xls', sheet=sheet_name, path=path)
+                paragraph = Paragraph(runs=[TextRun(text=text)], provenance=provenance)
+                elements.append((position, ordinal, (paragraph,)))
+        return [element for _, _, group in sorted(elements, key=lambda item: item[:2])
+                for element in group]

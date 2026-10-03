@@ -10,7 +10,7 @@ from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
 from .xls_hyperlink import parse_hlink
-from .xls_notes import MAX_NOTE_OBJECTS, MAX_SHEET_NOTE_CHARS, comment_object_id, read_txo_text
+from .xls_notes import MAX_NOTE_OBJECTS, MAX_SHEET_NOTE_CHARS, object_header, read_txo_text
 from .xls_chart import parse_chart_substreams
 from .xls_drawing import XlsDrawingReader
 from .xls_ftab import FUNCTION_NAMES, FIXED_ARGUMENT_COUNTS
@@ -57,6 +57,7 @@ class _SheetInfo:
     formula_values: Dict[Tuple[int, int], object] = field(default_factory=dict)
     hyperlinks: Dict[Tuple[int, int], str] = field(default_factory=dict)
     comments: Dict[Tuple[int, int], str] = field(default_factory=dict)
+    drawing_objects: List[Tuple[int, int, str]] = field(default_factory=list)
     header: str = ""
     footer: str = ""
     merged_ranges: List[Tuple[int, int, int, int]] = field(default_factory=list)
@@ -547,7 +548,9 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
             doc.errors.append('WARN: XLS chart parsing failed: %s' % exc)
         if drawing_reader is not None:
             try:
-                section.elements.extend(drawing_reader.read_sheet(sheet_streams[sheet_index], sheet.name))
+                section.elements.extend(drawing_reader.read_sheet(
+                    sheet_streams[sheet_index], sheet.name,
+                    text_objects=sheet.drawing_objects, path=sheet_path))
             except Exception as exc:
                 doc.errors.append('WARN: XLS drawing parsing failed: %s' % exc)
         doc.sections.append(section)
@@ -886,7 +889,7 @@ def _parse_sheet_records(
     table_cells = {}
     table_cell_count = 0
     chart_depth = 0
-    note_object_id = None
+    pending_object = None
     note_texts = {}
     notes = []
     note_chars = 0
@@ -916,22 +919,33 @@ def _parse_sheet_records(
                 if record_type == 0x000A:
                     chart_depth -= 1
                 continue
-        if record_type == 0x005D:  # Obj.ftCmo connects the following TxO to NOTE.idObj.
-            note_object_id = comment_object_id(record_data)
-        elif record_type == 0x01B6 and note_object_id is not None:  # TxO
-            object_id = note_object_id
-            note_object_id = None
-            if len(note_texts) >= MAX_NOTE_OBJECTS or note_chars >= MAX_SHEET_NOTE_CHARS:
-                _append_sheet_error_once(sheet, 'WARN: XLS note text limit exceeded')
+        if record_type == 0x005D:  # Obj.ftCmo identifies the following TxO.
+            pending_object = None
+            header = object_header(record_data)
+            if header is not None:
+                if len(sheet.drawing_objects) >= MAX_NOTE_OBJECTS:
+                    _append_sheet_error_once(sheet, 'WARN: XLS object count limit exceeded')
+                else:
+                    pending_object = len(sheet.drawing_objects)
+                    sheet.drawing_objects.append((header[0], header[1], ""))
+        elif record_type == 0x01B6 and pending_object is not None:  # TxO
+            index = pending_object
+            pending_object = None
+            object_type, object_id, _ = sheet.drawing_objects[index]
+            if note_chars >= MAX_SHEET_NOTE_CHARS:
+                _append_sheet_error_once(sheet, 'WARN: XLS TxO text limit exceeded')
             else:
-                text, pending_record, warning = read_txo_text(record_data, records)
+                text, pending_record, warning = read_txo_text(
+                    record_data, records, preserve_lines=object_type != 0x0019)
                 if warning:
                     _append_sheet_error_once(sheet, 'WARN: XLS ' + warning)
                 elif text:
                     if note_chars + len(text) > MAX_SHEET_NOTE_CHARS:
-                        _append_sheet_error_once(sheet, 'WARN: XLS note text limit exceeded')
+                        _append_sheet_error_once(sheet, 'WARN: XLS TxO text limit exceeded')
                     else:
-                        note_texts[object_id] = text
+                        sheet.drawing_objects[index] = (object_type, object_id, text)
+                        if object_type == 0x0019:
+                            note_texts[object_id] = text
                         note_chars += len(text)
         elif record_type == 0x00FD and len(record_data) >= 10:  # LABELSST
             pending_formula_cell = None

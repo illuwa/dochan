@@ -197,6 +197,8 @@ def test_literal_and_numeric_category_caches_keep_date_serials_unformatted():
 @pytest.mark.parametrize("kind", [
     "pieChart", "pie3DChart", "doughnutChart", "lineChart", "line3DChart",
     "barChart", "bar3DChart", "areaChart", "area3DChart", "radarChart",
+    # 공개 HWPX 실물(분리 원형 4·주식형 3·3차원 표면 1)도 범주+값 계열이다.
+    "ofPieChart", "stockChart", "surfaceChart", "surface3DChart",
 ])
 def test_category_value_families_extract_only_their_data(kind):
     elements, warnings = _parse(_chart(_series(), kind=kind))
@@ -338,9 +340,23 @@ def test_namespace_prefix_is_arbitrary_but_uri_is_not():
     assert _parse(spoof)[0] == []
 
 
-def test_unsupported_bubble_and_mixed_charts_have_no_misleading_tables():
-    elements, warnings = _parse(_chart(_series(), kind="bubbleChart"))
+def test_bubble_chart_pairs_x_y_and_optional_size_by_idx():
+    sources = '<c:xVal>%s</c:xVal><c:yVal>%s</c:yVal>' % (
+        _cache([(0, "1"), (1, "2")], numeric=True), _cache([(0, "10"), (1, "20")], numeric=True))
+    elements, warnings = _parse(_chart(_series(sources=sources), kind="bubbleChart"))
+    assert warnings == [] and _rows(elements[0]) == [["X", "판매"], ["1", "10"], ["2", "20"]]
+    sized = sources + '<c:bubbleSize>%s</c:bubbleSize>' % _cache([(1, "7")], numeric=True)
+    elements, warnings = _parse(_chart(_series(sources=sized), kind="bubbleChart"))
+    assert _rows(elements[0]) == [["X", "판매", "크기"], ["1", "10", ""], ["2", "20", "7"]]
+    assert _warned(warnings, "sparse_cache")
+
+
+def test_unsupported_and_mixed_charts_have_no_misleading_tables():
+    elements, warnings = _parse(_chart(_series(), kind="unknownChart"))
     assert elements == [] and _warned(warnings, "unsupported_type")
+    # 거품형은 X/Y 계열이라 범주 계열만 있으면 값을 지어내지 않는다.
+    elements, warnings = _parse(_chart(_series(), kind="bubbleChart"))
+    assert elements == [] and _warned(warnings, "missing_cache")
     mixed = _chart(_series()).replace(b'</c:plotArea>', b'<c:pieChart/>' + b'</c:plotArea>')
     elements, warnings = _parse(mixed)
     assert elements == [] and _warned(warnings, "mixed_chart")

@@ -109,7 +109,7 @@ def test_unsafe_references_are_explicit_and_never_read(tmp_path, monkeypatch, re
 @pytest.mark.parametrize("parts,code", [
     ({}, "missing_part"),
     ({"Chart/chart1.xml": b"<broken>"}, "invalid_xml"),
-    ({"Chart/chart1.xml": chart_xml("bubbleChart")}, "unsupported_type"),
+    ({"Chart/chart1.xml": chart_xml("unknownChart")}, "unsupported_type"),
     ({"Chart/chart1.xml": b'<!DOCTYPE a [<!ENTITY x "secret">]><a/>'}, "doctype"),
 ])
 def test_missing_broken_unsupported_and_unsafe_xml_reach_errors(tmp_path, parts, code):
@@ -351,7 +351,7 @@ def xml_gold(raw, kind):
         if name is None:
             name = tx.findtext("c:strRef/c:strCache/c:pt/c:v", namespaces=NS)
         columns = []
-        for axis in ("cat", "val") if kind != "scatterChart" else ("xVal", "yVal"):
+        for axis in ("xVal", "yVal") if kind in ("scatterChart", "bubbleChart") else ("cat", "val"):
             axis_node = series.find("c:" + axis, NS)
             cache = next(x for x in axis_node.iter() if x.tag in {
                 '{%s}%s' % (C, t) for t in ("strCache", "numCache", "strLit", "numLit")})
@@ -378,13 +378,16 @@ def test_dochan_api_public_documents_match_independent_gold(name, digest, kind, 
     assert [(t.rows[0][1].text, rows(t)[1:]) for t in doc.find_all("table")] == gold
 
 
-@pytest.mark.parametrize("name,digest,count,unsupported", [
+@pytest.mark.parametrize("name,digest,count,kinds", [
     ("14_chart.hwpx", "bf630bc7c87ed48b267c496059846392125eea59ebe3dccaccda815b53cd4aca", 24,
      {"ofPieChart", "bubbleChart", "stockChart"}),
     ("charts.hwpx", "9e5b3ff8f879ea207681b70f2ccbaf330c942e6cc1e77bf16d83363524792a56", 12,
      {"ofPieChart", "surface3DChart"}),
 ])
-def test_many_chart_real_documents_account_for_every_reference(name, digest, count, unsupported):
+def test_many_chart_real_documents_account_for_every_reference(name, digest, count, kinds):
+    # 분리 원형·거품형·주식형·3차원 표면도 저장 캐시 표로 낸다(이전에는 unsupported_type).
+    unsupported = set()
+    seen = set()
     path = public_path(name)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     gold, skipped = [], []
@@ -396,6 +399,7 @@ def test_many_chart_real_documents_account_for_every_reference(name, digest, cou
             raw = z.read(ref)
             plot = ET.fromstring(raw).find("c:chart/c:plotArea", NS)
             kind = next(n.tag.split('}')[-1] for n in plot if n.tag.endswith('Chart'))
+            seen.add(kind)
             if kind in unsupported:
                 skipped.append(ref)
             else:
@@ -407,3 +411,4 @@ def test_many_chart_real_documents_account_for_every_reference(name, digest, cou
     assert len(chart_errors) == len(skipped)
     for ref in skipped:
         assert any('[chart:unsupported_type]' in e and ref in e for e in chart_errors)
+    assert kinds <= seen

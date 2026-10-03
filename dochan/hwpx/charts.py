@@ -33,9 +33,11 @@ _CATEGORY_CHARTS = frozenset(
     _C + name for name in (
         "pieChart", "pie3DChart", "doughnutChart", "lineChart", "line3DChart",
         "barChart", "bar3DChart", "areaChart", "area3DChart", "radarChart",
+        "ofPieChart", "stockChart", "surfaceChart", "surface3DChart",
     )
 )
 _SCATTER = _C + "scatterChart"
+_BUBBLE = _C + "bubbleChart"
 _NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z")
 _UNSIGNED = re.compile(r"[0-9]+\Z")
 
@@ -194,7 +196,7 @@ def _paragraph(text: str) -> Paragraph:
 
 
 def _series_table(series, position: int, scatter: bool, budget: _Budget,
-                  warnings: list[str]) -> Optional[Table]:
+                  warnings: list[str], bubble: bool = False) -> Optional[Table]:
     context = "series %d" % (position + 1)
     name = _text(series.find(_C + "tx"), context + " name", budget, warnings)
     if not name:
@@ -207,20 +209,28 @@ def _series_table(series, position: int, scatter: bool, budget: _Budget,
                     budget, warnings, numeric_only=True)
     if left is None or right is None:
         return None
-    if left.extent != right.extent:
+    caches = [left, right]
+    headers = ["X", name] if scatter else ["범주", name]
+    # 거품 크기는 선택 요소다. 있으면 같은 idx 의 셋째 열로 낸다.
+    if bubble and series.find(_C + "bubbleSize") is not None:
+        size = _source(series.find(_C + "bubbleSize"), context + " bubbleSize",
+                       budget, warnings, numeric_only=True)
+        if size is not None:
+            caches.append(size)
+            headers.append("크기")
+    if len({cache.extent for cache in caches}) > 1:
         _warn(warnings, "length_mismatch", context + ": axis/cache lengths differ; missing cells stay blank")
-    extent = max(left.extent, right.extent)
+    extent = max(cache.extent for cache in caches)
     if not extent:
         _warn(warnings, "empty_series", context + ": caches contain no points")
         return None
-    budget.add_cells((extent + 1) * 2)
-    headers = ["X", name] if scatter else ["범주", name]
+    budget.add_cells((extent + 1) * len(caches))
     rows = [[Cell(paragraphs=[_paragraph(text)], row=0, col=column)
              for column, text in enumerate(headers)]]
     for index in range(extent):
         rows.append([
             Cell(paragraphs=[_paragraph(cache.points.get(index, ""))], row=index + 1, col=column)
-            for column, cache in enumerate((left, right))
+            for column, cache in enumerate(caches)
         ])
     return Table(rows=rows)
 
@@ -257,7 +267,7 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
     if len(groups) > 1:
         _warn(warnings, "mixed_chart", "multiple chart groups are unsupported")
         return elements
-    if not groups or groups[0].tag not in _CATEGORY_CHARTS | {_SCATTER}:
+    if not groups or groups[0].tag not in _CATEGORY_CHARTS | {_SCATTER, _BUBBLE}:
         _warn(warnings, "unsupported_type", "unsupported or absent chart type")
         return elements
     group = groups[0]
@@ -280,7 +290,8 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
         _warn(warnings, "empty_chart", "chart has no series")
     caption = chart_caption(root)
     for display_position, (_, _, series) in enumerate(sorted(ordered, key=lambda item: item[:2])):
-        table = _series_table(series, display_position, group.tag == _SCATTER, budget, warnings)
+        table = _series_table(series, display_position, group.tag in (_SCATTER, _BUBBLE), budget,
+                              warnings, bubble=group.tag == _BUBBLE)
         if table is not None:
             if caption:
                 table.caption = [_paragraph(caption)]

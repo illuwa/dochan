@@ -83,8 +83,9 @@ c:f 수식·관계·원본 워크북·OLE는 평가하거나 따라가지 않으
 namespace는 http://schemas.openxmlformats.org/drawingml/2006/chart,
 제목 DrawingML은 http://schemas.openxmlformats.org/drawingml/2006/main이다.
 접두사는 바뀌어도 되지만 URI가 다른 동명 요소는 차트로 해석하지 않는다.
-Strict OOXML URI, bubble/stock/surface, 다단계 범주, 한 plotArea의 여러 차트
-그룹 및 보조 축의 시각적 의미는 지원하지 않는다.
+Strict OOXML URI, 다단계 범주, 한 plotArea의 여러 차트
+그룹 및 보조 축의 시각적 의미는 지원하지 않는다. bubble·stock·surface·ofPie 는 2026-10-03 에
+추가했다([검증 기록](../2026-10-03-hwpx-chart-types-real-docs.md)).
 
 | 범위 | 구현 | 검증 수준 |
 | --- | --- | --- |

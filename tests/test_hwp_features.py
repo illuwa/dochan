@@ -205,6 +205,7 @@ def test_button_captions_hide_mnemonic_ampersands_like_hancom(raw, shown):
         assert form_text(_form(kind, contents)) == prefix + shown
     # 콤보 상자·입력 상자의 글은 캡션이 아니므로 그대로다.
     assert form_text(_form(b'tde+', _set('EditSet', _parameter('Text', raw)))) == raw
+    assert form_text(_form(b'boc+', _set('ComboBoxSet', _parameter('Text', raw)))) == raw
 
 
 

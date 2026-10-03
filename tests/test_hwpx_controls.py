@@ -132,3 +132,5 @@ def test_hwpx_button_captions_hide_mnemonic_ampersands_like_hancom(tmp_path, raw
     doc = HWPXParser().parse(package(tmp_path, body))
     literal = raw.replace("&amp;", "&")
     assert [p.text for p in doc.sections[0].elements] == [shown, "[x]" + shown, "[ ]" + shown, literal]
+    combo = '<hp:p><hp:run><hp:comboBox selectedValue=""><hp:listItem value="%s"/></hp:comboBox></hp:run></hp:p>' % raw
+    assert HWPXParser().parse(package(tmp_path, combo)).sections[0].elements[0].text == literal

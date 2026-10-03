@@ -479,6 +479,32 @@ class SpreadsheetNumberFormatter:
         letter = exponent_digits[1] if exponent_digits else "E"
         return f"{sign}{mantissa:.{decimals}f}{letter}{'+' if exponent >= 0 else '-'}{abs(exponent):0{width}d}"
 
+    @staticmethod
+    def _continued_fraction(value: float, limit: int) -> Fraction:
+        """Last continued-fraction convergent whose denominator fits ``limit``.
+
+        Excel expands the double in floating point and stops before the first
+        convergent with too large a denominator. It does not search the
+        intermediate fractions, so 0.94 in ``# ?/?`` is 1, not the closer 8/9,
+        and 0.1 is 0 because ``1 / 0.1`` is exactly 10.0. This agrees with all
+        1,416 variable-denominator cells of the public Excel fraction table.
+        """
+        h0, h1, k0, k1 = 0, 1, 1, 0
+        rest = value
+        for _ in range(64):
+            term = math.floor(rest)
+            h2, k2 = term * h1 + h0, term * k1 + k0
+            if k2 > limit:
+                break
+            h0, h1, k0, k1 = h1, h2, k1, k2
+            rest -= term
+            if not rest:
+                break
+            rest = 1 / rest
+            if not math.isfinite(rest):
+                break
+        return Fraction(h1, k1)
+
     def _fraction_number(self, number: float, denominator_limit: int,
                          fixed_denominator: int = 0) -> str:
         sign = "-" if number < 0 else ""
@@ -493,7 +519,7 @@ class SpreadsheetNumberFormatter:
                 numerator = 0
             fraction = Fraction(numerator, fixed_denominator)
         else:
-            fraction = Fraction(value - whole).limit_denominator(max(denominator_limit, 1))
+            fraction = self._continued_fraction(value - whole, max(denominator_limit, 1))
         if fraction.numerator == fraction.denominator:
             whole += 1
             fraction = Fraction(0, 1)

@@ -76,11 +76,17 @@ def test_warning_names_shared_spreadsheet_formatter():
     assert formatter._errors and "XLSX" not in formatter._errors[0]
 
 
-@pytest.mark.xfail(strict=True, reason="공개 Excel 표에서 회귀 없는 가변 분모 규칙 미도출")
 @pytest.mark.parametrize("value, fmt, expected", [
-    ("-0.94", "# ?/?", "-1"),
+    ("-0.94", "# ?/?", "-1"),          # 더 가까운 8/9 가 아니라 수렴분수 1
     ("-1.03", "# ??/??", "-1 1/33"),
+    ("0.7", "# ?/?", "2/3"),           # 5/7 가 더 가깝지만 수렴분수가 아니다
+    ("0.1", "# ?/?", "0"),             # 부동소수 1/0.1 == 10.0 이라 1/10 에서 멈춘다
+    ("0.9", "# ?/?", "8/9"),
+    ("0.01", "# ??/??", "0"),
+    ("0.89", "# ??/??", "8/9"),
+    ("0.87", "# ??/??", "67/77"),       # 부동소수 몫 3.999… → 3
+    ("0.5", "# ?/?", "1/2"),
 ])
 def test_variable_denominator_public_excel_table(value, fmt, expected):
-    """Excel 저장값: 공개 54686 분수 표 D14와 E5의 미해결 사례다."""
+    """Excel 저장값: 공개 54686 분수 표(D·E열)의 가변 분모 사례다."""
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected

@@ -46,21 +46,24 @@ def find_pairs(directories: List[str]) -> List[Tuple[str, str, str]]:
 
 
 def formatting_signature(paragraph) -> tuple:
-    """연속한 같은 굵기/기울기 런을 합친 후 텍스트를 정규화한다."""
+    """연속한 같은 굵기/기울기/첨자 런을 합친 후 텍스트를 정규화한다."""
     merged = []
     for run in paragraph.runs:
         if not run.text:
             continue
-        style = (bool(run.bold), bool(run.italic))
+        style = (bool(run.bold), bool(run.italic),
+                 bool(getattr(run, "superscript", False)), bool(getattr(run, "subscript", False)))
         if merged and merged[-1][1:] == style:
             merged[-1] = (merged[-1][0] + run.text,) + style
         else:
             merged.append((run.text,) + style)
     signature = []
-    for text, bold, italic in merged:
+    for text, bold, italic, superscript, subscript in merged:
         normalized = normalize_text(text)
         if normalized:
-            signature.append((normalized, bold, italic))
+            # 위·아래 첨자는 켜진 경우에만 표지를 붙여 기존 굵기·기울기 서명과 호환한다.
+            signature.append((normalized, bold, italic)
+                             + (("sup",) if superscript else ()) + (("sub",) if subscript else ()))
     return tuple(signature)
 
 

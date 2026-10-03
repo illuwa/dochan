@@ -106,3 +106,12 @@ def test_find_pairs_pairs_each_hwp_once_when_hwpx_names_differ_only_in_normaliza
     pairs = find_pairs(["/virtual"])
     # 경로 정렬 순서에서 먼저 나온 .hwpx 하나만 남는다
     assert [stem for stem, _, _ in pairs] == [nfc]
+
+
+
+def test_formatting_signature_marks_superscript_and_subscript():
+    from dochan.model.document import Paragraph, TextRun
+    para = Paragraph(runs=[TextRun(text="m"), TextRun(text="2", superscript=True),
+                           TextRun(text="H"), TextRun(text="2", subscript=True)])
+    assert formatting_signature(para) == (("m", False, False), ("2", False, False, "sup"),
+                                          ("H", False, False), ("2", False, False, "sub"))

@@ -82,31 +82,51 @@ def snapshot(args):
                     if not format_cell or format_cell[1] is None:
                         continue
                     raw_value = value_cell[1] if value_cell and value_cell[1] is not None else ''
+                    input_type = value_cell[0] if value_cell else ''
                     format_string = (';;;' if concat else '') + format_cell[1]
                     reader = XLSXReader()
                     reader._errors = []
                     reader._date_1904 = date1904
-                    try:
-                        actual = reader._format_cell_value(raw_value, format_string)
-                    except Exception as error:
-                        actual = 'EXCEPTION:' + type(error).__name__
+                    if input_type not in ('n', ''):
+                        actual = raw_value
+                    else:
+                        try:
+                            actual = reader._format_cell_value(raw_value, format_string)
+                        except Exception as error:
+                            actual = 'EXCEPTION:' + type(error).__name__
                     rows.append({'file': filename, 'part': part, 'cell': ref, 'formula': formula,
                                  'value_cell': value_ref, 'format_cell': format_ref,
-                                 'raw': raw_value, 'format': format_string, 'date1904': date1904,
+                                 'raw': raw_value, 'input_type': input_type,
+                                 'format': format_string, 'date1904': date1904,
                                  'excel': expected, 'actual': actual})
     args.output.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + '\n')
     print('TEXT cache rows:', len(rows), 'exact:', sum(row['excel'] == row['actual'] for row in rows))
 
 
 def compare(args):
+    from dochan.spreadsheet_format import SpreadsheetNumberFormatter
+
     before, after = json.loads(args.before.read_text()), json.loads(args.after.read_text())
     assert len(before) == len(after)
     counts = Counter(total=len(before))
     rows = []
+    classifier = SpreadsheetNumberFormatter()
     for old, new in zip(before, after):
-        assert all(old[key] == new[key] for key in ('file', 'part', 'cell', 'excel', 'raw', 'format'))
+        assert all(old[key] == new[key] for key in ('file', 'part', 'cell', 'excel', 'raw', 'format', 'input_type'))
         was_exact, is_exact = old['actual'] == old['excel'], new['actual'] == new['excel']
         is_raw = new['actual'] == new['raw']
+        if new['input_type'] not in ('n', ''):
+            counts['non_numeric_rows'] += 1
+        else:
+            counts['numeric_rows'] += 1
+        if classifier._format_metadata(new['format']).kind in ('date', 'time'):
+            counts['date_time_format_rows'] += 1
+            if new['actual'] != new['excel']:
+                counts['date_time_cache_difference'] += 1
+                if re.fullmatch(
+                        r'\d{4}-\d\d-\d\d(?: \d\d:\d\d(?::\d\d(?:\.\d+)?)?)?'
+                        r'|\d\d:\d\d(?::\d\d(?:\.\d+)?)?', new['actual']):
+                    counts['iso_rendered_difference'] += 1
         counts['before_exact'] += was_exact
         counts['after_exact'] += is_exact
         counts['after_raw'] += not is_exact and is_raw

@@ -67,34 +67,31 @@ class SpreadsheetNumberFormatter:
                 raise ValueError("nonfinite numeric value")
             selected = self._conditional_format_section(fmt, number)
             conditional_integer = selected != fmt and selected.strip() == "0"
-            fmt = selected
-            sections = self._format_sections(fmt)
+            sections = self._format_sections(selected)
             position = 1 if number < 0 and len(sections) > 1 else 2 if number == 0 and len(sections) > 2 else 0
-            # A comma after the last numeric placeholder scales by 1000;
-            # emitting its suffix without scaling would change the meaning.
-            # Keep the raw value until that display operation is supported.
-            if re.search(r"[0#?],+(?![0#?,])", self._format_code_tokens(sections[position])):
-                return value
             section = sections[position]
+            shown = abs(number) if number < 0 and position == 1 else number
+            if self._format_code_tokens(section).strip().lower() == "general":
+                return value
             if not section or section == '""':
                 return ""
-            temporal_metadata = self._format_metadata(section)
-            metadata = self._format_metadata(fmt)
+            if not re.search(r"[0#?@hmsyd]", self._format_code_tokens(section), re.I):
+                return "".join(token for token, is_format in self._format_literal_tokens(section)
+                               if not is_format)
+            metadata = self._format_metadata(section)
             clean = self._format_code_tokens(section).lower()
-            # Select temporal tokens before classification; retain the existing
-            # numeric section/parenthesis contract for non-temporal formats.
-            if (temporal_metadata.kind in ("date", "time", "duration")
-                    or metadata.kind in ("date", "time", "duration")):
-                metadata = temporal_metadata
+            if number == 0 and position == 2 and "0" not in clean and any(
+                    char in clean for char in "#?"):
+                return "".join(" " if token == "?" else "" if is_format else token
+                               for token, is_format in self._format_literal_tokens(section))
             if (metadata.kind == "decimal" and re.search(r"[0#?].*/.*[0#?]", clean)
-                    and "_?" in re.findall(r'"[^"]*"|[\\_*].', fmt)):
+                    and "_?" in re.findall(r'"[^"]*"|[\\_*].', section)):
                 # Unsupported fraction patterns must not become rounded whole
                 # numbers when a padding placeholder (_?) is discarded.
                 return value
             if metadata.kind == "duration":
                 # An explicit negative section is applied to the absolute value
                 # without an automatic minus sign (Excel section rules).
-                shown = abs(number) if position == 1 else number
                 formatted = self._excel_duration(shown, section) if (
                     number >= 0 or getattr(self, "_date_1904", False)) else None
                 return formatted if formatted is not None else value
@@ -128,14 +125,14 @@ class SpreadsheetNumberFormatter:
                     formatted += " " + self._clock_display(number, clock_fmt)
                 return formatted
             if metadata.kind == "zero_fill":
-                formatted = self._zero_filled_number(number, metadata.pattern)
+                formatted = self._zero_filled_number(shown, metadata.pattern)
                 return formatted
             if metadata.kind == "fraction":
-                formatted = self._fraction_number(number, metadata.denominator_limit,
+                formatted = self._fraction_number(shown, metadata.denominator_limit,
                                                   metadata.fixed_denominator)
                 return self._apply_literal_affixes(formatted, metadata)
             if metadata.kind == "scientific":
-                formatted = self._scientific_number(number, section, metadata.decimals)
+                formatted = self._scientific_number(shown, section, metadata.decimals)
                 return self._apply_literal_affixes(formatted, metadata)
             if metadata.kind == "percent":
                 # Excel stores double values and rounds ties away from zero.
@@ -143,18 +140,36 @@ class SpreadsheetNumberFormatter:
                 # Round there first, then avoid binary multiplication artifacts.
                 with localcontext() as context:
                     context.prec = max(32, len(value) + metadata.decimals + 4)
-                    scaled = Decimal(format(number, ".15g")) * 100
+                    scaled = Decimal(format(shown, ".15g")) * 100
                     if metadata.negative_parentheses and number < 0:
                         scaled = abs(scaled)
                     scaled = scaled.quantize(Decimal(1).scaleb(-metadata.decimals), rounding=ROUND_HALF_UP)
                     formatted = f"{scaled:.{metadata.decimals}f}%"
                 formatted = self._apply_literal_affixes(formatted, metadata)
+                if number < 0 and "(" in section and ")" in section:
+                    formatted = formatted.strip()
                 return f"({formatted.strip()})" if metadata.negative_parentheses and number < 0 else formatted
             if metadata.kind == "decimal":
-                separator = "," if metadata.thousands else ""
-                display_number = abs(number) if metadata.negative_parentheses and number < 0 else number
+                if re.search(r"[0#?]\s*/[1-9]\d*", clean) and "?" not in clean:
+                    return value
+                scale_match = re.search(r"[0#?](,+)(?=$|[^0#?,])", clean)
+                scale = len(scale_match[1]) if scale_match else 0
+                separator = "," if metadata.thousands and (not scale or clean.count(",") > scale) else ""
+                display_number = shown / (1000 ** scale)
+                if metadata.negative_parentheses and number < 0:
+                    display_number = abs(display_number)
                 rounded = self._round_decimal(display_number, metadata.decimals)
                 formatted = f"{rounded:{separator}.{metadata.decimals}f}"
+                integer, dot, fraction = formatted.partition(".")
+                sign = "-" if integer.startswith("-") else ""
+                integer = integer.lstrip("-")
+                int_code = clean.split(".", 1)[0]
+                required = int_code.count("0") if re.fullmatch(r"[0#?,]+", int_code) else 0
+                if required:
+                    integer = integer.replace(",", "").zfill(required)
+                    if separator:
+                        integer = f"{int(integer):,}"
+                formatted = sign + integer + (dot + fraction if dot else "")
                 if metadata.optional_decimals and "." in formatted:
                     integer, fraction = formatted.split(".", 1)
                     removed = len(fraction) - len(fraction.rstrip("0"))
@@ -165,15 +180,23 @@ class SpreadsheetNumberFormatter:
                     formatted = (metadata.currency_symbol + metadata.literal_prefix + formatted
                                  + metadata.literal_suffix)
                 else:
-                    if metadata.currency_symbol and formatted.startswith("-"):
-                        formatted = "-" + metadata.currency_symbol + formatted[1:]
-                    else:
-                        formatted = metadata.currency_symbol + formatted
+                    if metadata.currency_symbol:
+                        code = self._format_code_tokens(section)
+                        symbol_after = code.find("$") > max(code.find("0"), code.find("#"), code.find("?"))
+                        if symbol_after:
+                            formatted += metadata.currency_symbol
+                        elif formatted.startswith("-"):
+                            formatted = "-" + metadata.currency_symbol + formatted[1:]
+                        else:
+                            formatted = metadata.currency_symbol + formatted
                     formatted = self._apply_literal_affixes(
                         formatted, metadata)
+                if number < 0 and "(" in section and ")" in section:
+                    formatted = formatted.strip()
                 return f"({formatted.strip()})" if metadata.negative_parentheses and number < 0 else formatted
         except (OverflowError, ValueError, InvalidOperation):
-            warning = f"WARN: XLSX formatted numeric value is out of range: {value[:80]}"
+            source = getattr(self, "_format_warning_source", "spreadsheet")
+            warning = f"WARN: {source} formatted numeric value is out of range: {value[:80]}"
             errors = getattr(self, "_errors", None)
             if errors is not None and warning not in errors:
                 errors.append(warning)
@@ -227,10 +250,9 @@ class SpreadsheetNumberFormatter:
                 literal_suffix=literal_suffix,
             )
         elif self._is_fraction_format(fmt):
-            literal_prefix, literal_suffix = self._literal_affixes(fmt)
             fixed_denominator = self._fraction_fixed_denominator(fmt)
-            if fixed_denominator:
-                literal_suffix = re.sub(r"^/\d+", "", literal_suffix)
+            affix_pattern = re.sub(r"/[1-9]\d*", "/?", fmt) if fixed_denominator else fmt
+            literal_prefix, literal_suffix = self._literal_affixes(affix_pattern)
             metadata = _FormatMetadata(
                 kind="fraction",
                 literal_prefix=literal_prefix,
@@ -348,12 +370,15 @@ class SpreadsheetNumberFormatter:
         if not units:
             return None
         if elapsed:
-            if not units[0].startswith("[") or any("[" in unit for unit in units[1:]):
+            bracketed = [unit for unit in units if unit.startswith("[")]
+            if len(bracketed) != 1 or any(len(unit) > 2 for unit in units if not unit.startswith("[")):
                 return None
-            first = units[0][1:-1]
-            tail = [unit[0] for unit in units[1:]]
-            allowed = {"h": ([], ["m"], ["m", "s"]), "m": ([], ["s"]), "s": ([],)}
-            if tail not in allowed[first[0]] or any(len(unit) > 2 for unit in units[1:]):
+            kinds = [unit[1] if unit.startswith("[") else unit[0] for unit in units]
+            order = "hms"
+            if len(set(kinds)) != len(kinds):
+                return None
+            indexes = sorted(order.index(kind) for kind in kinds)
+            if indexes != list(range(indexes[0], indexes[-1] + 1)):
                 return None
         elif any("[" in unit or len(unit) > 2 for unit in units):
             return None
@@ -368,7 +393,7 @@ class SpreadsheetNumberFormatter:
                 continue
             before = plain[index - 1][0] if index else ""
             after = plain[index + 1][0] if index + 1 < len(plain) else ""
-            if before != "h" and after != "s" and not (elapsed and units[0].startswith("[h")):
+            if before != "h" and after != "s" and not (elapsed and any(unit.startswith("[h") for unit in units)):
                 return None
         ticks = self._temporal_ticks(serial, precision)
         seconds, fraction = divmod(ticks, 10 ** precision)
@@ -421,7 +446,10 @@ class SpreadsheetNumberFormatter:
                 digit_index += 1
             else:
                 result.append(char)
-        return sign + prefix + "".join(result)
+        first_slot = next((index for index, token in enumerate(tokens)
+                           if token == ("0", True)), 0)
+        result.insert(first_slot, prefix)
+        return sign + "".join(result)
 
     @staticmethod
     def _round_decimal(number: float, decimals: int) -> Decimal:
@@ -431,19 +459,23 @@ class SpreadsheetNumberFormatter:
             return decimal.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
 
     def _scientific_number(self, number: float, section: str, decimals: int) -> str:
-        exponent_digits = re.search(r"E[+-](0+)", self._format_code_tokens(section), re.I)
-        width = len(exponent_digits[1]) if exponent_digits else 2
+        code = self._format_code_tokens(section)
+        exponent_digits = re.search(r"([Ee])[+-](0+)", code)
+        width = len(exponent_digits[2]) if exponent_digits else 2
+        mantissa_code = re.split(r"[Ee][+-]", code, maxsplit=1)[0]
+        integer_slots = max(1, sum(char in "0#?" for char in mantissa_code.split(".", 1)[0]))
         if not number:
             exponent, mantissa = 0, Decimal(0)
         else:
             decimal = Decimal(format(abs(number), ".15g"))
-            exponent = decimal.adjusted()
+            exponent = decimal.adjusted() // integer_slots * integer_slots
             mantissa = self._round_decimal(float(decimal.scaleb(-exponent)), decimals)
-            if mantissa >= 10:
-                mantissa /= 10
-                exponent += 1
+            if mantissa >= 10 ** integer_slots:
+                mantissa /= 10 ** integer_slots
+                exponent += integer_slots
         sign = "-" if number < 0 else ""
-        return f"{sign}{mantissa:.{decimals}f}E{'+' if exponent >= 0 else '-'}{abs(exponent):0{width}d}"
+        letter = exponent_digits[1] if exponent_digits else "E"
+        return f"{sign}{mantissa:.{decimals}f}{letter}{'+' if exponent >= 0 else '-'}{abs(exponent):0{width}d}"
 
     def _fraction_number(self, number: float, denominator_limit: int,
                          fixed_denominator: int = 0) -> str:
@@ -451,15 +483,9 @@ class SpreadsheetNumberFormatter:
         value = abs(number)
         whole = int(value)
         if fixed_denominator:
-            # Excel's mixed fraction first subtracts the whole part in binary.
-            # This makes 1.15 land just below the 1.5/10 tie in the fixture;
-            # fractions below one use the usual 15-digit display precision.
-            with localcontext() as context:
-                context.prec = 340
-                fractional = (Decimal.from_float(value - whole) if whole
-                              else Decimal(format(value, ".15g")))
-                numerator = int((fractional * fixed_denominator)
-                                .quantize(Decimal(1), rounding=ROUND_HALF_UP))
+            # Round the binary fraction after removing the whole part. This
+            # agrees with all fixed-denominator cells in the public Excel table.
+            numerator = math.floor((value - whole) * fixed_denominator + 0.5)
             if numerator >= fixed_denominator:
                 whole += 1
                 numerator = 0

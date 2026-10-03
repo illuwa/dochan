@@ -1,13 +1,23 @@
 """공개 분수 XLS의 3,540개 표시를 Excel 저장 텍스트와 비교한다."""
 import argparse
 from collections import Counter
+import importlib.util
 import json
 from pathlib import Path
+import sys
 
 from dochan.office_binary.xls import _display_number_with_format
 from dochan.spreadsheet_format import BUILTIN_NUM_FORMATS
 from scripts.probe_chart_review_evidence import xls_cells
-from scripts.probe_xls_format_pairs import _load_before
+
+def _load_before(path):
+    name = "dochan._fraction_before_probe"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    formatter = module.SpreadsheetNumberFormatter()
+    return lambda value, fmt: formatter._format_cell_value(str(value), fmt)
 
 
 def _normalize(value):

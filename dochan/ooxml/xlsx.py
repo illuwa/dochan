@@ -133,6 +133,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
     def _read_document(self, file_path: str) -> Document:
         doc = Document(source_format="xlsx")
         self._errors = doc.errors
+        self._format_warning_source = "XLSX"
         self._image_asset_ids = set()
         self._image_bytes_total = 0
         self._pending_images = []

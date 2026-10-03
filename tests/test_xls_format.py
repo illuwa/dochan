@@ -22,6 +22,7 @@ def _formatted_workbook(cases, date_1904=False):
 
 
 def test_xls_format_records_use_xlsx_numeric_display_rules():
+    """XLS가 공용 서식기에 값을 전달하는 배관을 확인한다."""
     cases = [
         ("0.0%", 0.164),
         ("0%", 0.125),
@@ -37,6 +38,7 @@ def test_xls_format_records_use_xlsx_numeric_display_rules():
 
 
 def test_xls_datemode_record_applies_to_datetime_cells():
+    """DATEMODE 플래그가 공용 서식기에 연결되는지 확인한다."""
     cases = [("yyyy-mm-dd hh:mm:ss", 1.5)]
     doc = parse_biff_workbook(_formatted_workbook(cases, date_1904=True))
     formatter = XLSXReader()

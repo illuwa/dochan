@@ -1,4 +1,4 @@
-"""Excel 저장 표시값으로 XLS/XLSX 공용 숫자 서식 회귀를 검사한다."""
+"""Excel 저장값과 규칙 추론을 구분해 XLS/XLSX 공용 서식을 검사한다."""
 import struct
 
 import pytest
@@ -30,6 +30,10 @@ from test_xls_reader import _bof, _boundsheet, _eof, _styled_number, _xf
     ("1234.5", "[$€-2] #,##0.00", "€ 1,234.50"),
 ])
 def test_excel_numeric_display_examples(value, fmt, expected):
+    """K191·K223·L3, NumberFormat A10·A15, FormatChoice A24는 저장값이다.
+
+    나머지 사례의 기대는 서식 규칙에서 추론했다.
+    """
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
 
 

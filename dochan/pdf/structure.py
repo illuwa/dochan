@@ -1,11 +1,10 @@
-"""PDF 파일 구조 — startxref, 고전 xref 테이블, trailer, 페이지 트리.
+"""PDF 파일 구조 — startxref, 고전 xref 테이블·xref 스트림, 객체 스트림, trailer, 페이지 트리.
 
-xref 스트림(PDF 1.5+)과 객체 스트림은 이번 마일스톤에서 지원하지 않는다.
-발견하면 경고를 남기고 `N G obj` 패턴 스캔으로 대체 복구를 시도한다.
+xref 가 깨졌거나 가리키는 자리가 객체 헤더가 아니면 `N G obj` 패턴 스캔으로 복구한다.
 """
 import bisect
 import re
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from .crypto import StandardSecurityHandler, UnsupportedEncryption
@@ -67,7 +66,7 @@ class PDFFile:
         start = self._find_startxref()
         ok = start is not None and self._parse_xref_chain(start)
         if not ok or "Root" not in self.trailer:
-            self._rescanned = True  # review prototype: a scanned file is not scanned again
+            self._rescanned = True  # a file recovered by scanning is not scanned again
             self._scan_objects()
         if self.trailer.get("Encrypt") is not None:
             self.encrypted = True
@@ -306,7 +305,7 @@ class PDFFile:
                 self.warnings.append("WARN: 객체 수가 한도를 초과 — 일부만 파싱")
                 break
         self._recover_trailers()
-        objstm_warning = "WARN: 객체 스트림(/ObjStm, PDF 1.5+)은 아직 지원하지 않음 — 일부 객체가 누락될 수 있음"
+        objstm_warning = "WARN: 스캔 복구는 객체 스트림(/ObjStm) 안 객체를 새로 찾지 못함 — 일부 객체가 누락될 수 있음"
         if b"/ObjStm" in self.data and objstm_warning not in self.warnings:
             self.warnings.append(objstm_warning)
         if "Root" not in self.trailer:
@@ -317,7 +316,7 @@ class PDFFile:
         compressed = dict(self._compressed)
         self._scan_objects()
         for num, location in compressed.items():
-            # review prototype: the newest xref said "compressed"; a plain match is older
+            # The newest xref said "compressed"; a plain scanned match is older.
             self.xref.pop(num, None)
             self._compressed[num] = location
 
@@ -349,25 +348,32 @@ class PDFFile:
             self.trailer["Encrypt"] = True
 
     def _find_root_by_scan(self) -> None:
-        # Only objects whose bytes say /Type /Catalog are parsed (a catalog is
-        # a plain dictionary, never a stream), latest in the file first so an
-        # incremental update's catalog wins over a superseded one.
+        # Only objects whose bytes say /Type /Catalog are examined, latest in
+        # the file first so an incremental update's catalog wins. Matches are
+        # kept in a bounded deque, and only the dictionary after the header is
+        # parsed: a catalog is never a stream, so no endstream search runs.
         located = sorted((offset, num) for num, offset in self.xref.items()
                          if isinstance(offset, int))
         starts = [offset for offset, _ in located]
         tried = set()
-        matches = list(_CATALOG_RE.finditer(self.data))
-        for match in reversed(matches[-_SCAN_ROOT_LIMIT:]):
+        recent = deque(_CATALOG_RE.finditer(self.data), maxlen=_SCAN_ROOT_LIMIT)
+        for match in reversed(recent):
             index = bisect.bisect_right(starts, match.start()) - 1
             if index < 0:
                 continue
-            num = located[index][1]
+            offset, num = located[index]
             if num in tried:
                 continue
             tried.add(num)
+            lexer = PDFLexer(self.data, offset)
             try:
-                obj = self.get_object(PDFRef(num, 0))
-            except Exception:
+                lexer.skip_whitespace()
+                head = (lexer.read_token(), lexer.skip_whitespace(), lexer.read_token(),
+                        lexer.skip_whitespace(), lexer.read_token())
+                if not (head[0].isdigit() and head[2].isdigit() and head[4] == b"obj"):
+                    continue
+                obj = lexer.parse_object()  # the dictionary only; a catalog is never a stream
+            except PDFSyntaxError:
                 continue
             if isinstance(obj, dict) and str(obj.get("Type", "")) == "Catalog":
                 self.trailer["Root"] = PDFRef(num, 0)

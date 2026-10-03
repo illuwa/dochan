@@ -194,9 +194,15 @@ class SpreadsheetNumberFormatter:
                 return formatted if formatted is not None else value
             if metadata.kind in ("date", "time") and number < 0:
                 return value
+            if (metadata.kind in ("date", "time")
+                    and re.search(r"(?i)(?<![a-z])(?:a/pm|am/p)(?![a-z])", code)):
+                return value
             if conditional_integer:
                 return str(Decimal(value).quantize(Decimal(1), rounding=ROUND_HALF_UP))
             if metadata.kind == "time":
+                # A wall clock still belongs to Excel's supported calendar.
+                # Do not wrap an out-of-range date into a plausible clock.
+                self._excel_date(math.floor(number))
                 formatted = (self._normalized_clock(number, clean)
                              if "h" in clean and self._has_meridiem(clean)
                              else self._clock_display(number, section))
@@ -207,10 +213,18 @@ class SpreadsheetNumberFormatter:
                 if precision is None:
                     return value
                 date_units = re.sub(r"a(?:m)?/p(?:m)?", "", clean)
-                if has_time and "d" in date_units and "y" not in date_units and "m" not in date_units:
+                previously_iso = any(token in date_units for token in
+                                     ("yy", "mm", "dd", "mmm", "h:mm"))
+                explicit_day_hour_minutes = bool(re.search(
+                    r'(?i)\bd\s+"[^"]+"\s+h:mm', section))
+                if ((not previously_iso or explicit_day_hour_minutes)
+                        and "y" not in date_units and not re.search(r"d{3,}|m{3,}", date_units)
+                        and (re.search(r"(?<!d)d(?!d)", date_units)
+                             or re.search(r"(?<!m)m(?!m)", date_units))):
                     shown_day_hour = self._render_day_hour_tokens(number, section)
                     if shown_day_hour is not None:
                         return shown_day_hour
+                    return value
                 if has_time:
                     ticks = self._temporal_ticks(number, precision)
                     # Use the rounded integral day for the date; float datetime
@@ -396,8 +410,14 @@ class SpreadsheetNumberFormatter:
         lower_fmt = self._format_code_tokens(lower_fmt)
         if "%" in lower_fmt:
             return False
+        if any(token in lower_fmt for token in ("yy", "mm", "dd", "mmm", "h:mm")):
+            return True
         lower_fmt = re.sub(r"a(?:m)?/p(?:m)?", "", lower_fmt)
-        return bool(re.search(r"[ydm]", lower_fmt))
+        if re.search(r"[0#?]", re.sub(r"s\]?\.0+", "", lower_fmt)):
+            return False
+        return bool(re.search(
+            r"(?<!(?![ydmhs])[^\W\d_])[ydm]+(?!(?![ydmhs])[^\W\d_])",
+            lower_fmt))
 
     def _is_duration_format(self, lower_fmt: str) -> bool:
         clean_fmt = self._format_without_literals(lower_fmt)
@@ -412,7 +432,7 @@ class SpreadsheetNumberFormatter:
 
     @staticmethod
     def _has_meridiem(clean: str) -> bool:
-        return bool(re.search(r"(?i)a(?:m)?/p(?:m)?", clean))
+        return bool(re.search(r"(?i)(?:am/pm|a/p)", clean))
 
     def _normalized_clock(self, serial: float, fmt: str) -> Optional[str]:
         """ISO wall clock, rounded once at the format's second precision."""
@@ -432,25 +452,45 @@ class SpreadsheetNumberFormatter:
         return result
 
     def _render_day_hour_tokens(self, serial: float, fmt: str) -> Optional[str]:
-        """Keep day/hour labels when ISO would imply a year and month not shown."""
-        tokens = re.findall(r'"[^"]*"|\\.|[dDhH]+|[aA](?:[mM])?/[pP](?:[mM])?|.', fmt)
+        """Render numeric partial dates without inventing a year or month."""
+        if self._has_unterminated_quote(fmt):
+            return None
+        tokens = re.findall(r'"[^"]*"|\\.|\[[^\]]*\]|[aA][mM]/[pP][mM]|[aA]/[pP]|[dDmMhHsS]+|.', fmt)
         meridiem = self._has_meridiem(self._format_code_tokens(fmt))
-        clock = self._temporal_ticks(serial) % 86400
-        hour = clock // 3600
-        day = self._excel_date(math.floor(serial)).day
+        precision = self._second_precision(self._format_code_tokens(fmt))
+        if precision is None:
+            return None
+        has_time = any(re.fullmatch(r"[hHsS]+", token) for token in tokens)
+        ticks = self._temporal_ticks(serial, precision) if has_time else None
+        unit = 86400 * 10 ** precision
+        whole_day = ticks // unit if ticks is not None else math.floor(serial)
+        clock = (ticks % unit) // (10 ** precision) if ticks is not None else 0
+        hour, remainder = divmod(clock, 3600)
+        minute, second = divmod(remainder, 60)
+        month, day = self._excel_month_day(whole_day)
         result = []
+        after_hour = False
         for token in tokens:
             lower = token.lower()
             if token.startswith('"'):
                 result.append(token[1:-1])
             elif token.startswith("\\"):
                 result.append(token[1:])
-            elif re.fullmatch(r"d+", lower):
+            elif token.startswith("["):
+                if not re.fullmatch(r"\[[^\]]+\]", token):
+                    return None
+            elif re.fullmatch(r"d{1,2}", lower):
                 result.append(str(day).zfill(len(token)))
+                after_hour = False
+            elif re.fullmatch(r"m{1,2}", lower):
+                result.append(str(minute if after_hour else month).zfill(len(token)))
             elif re.fullmatch(r"h+", lower):
                 shown = hour % 12 or 12 if meridiem else hour
                 result.append(str(shown).zfill(len(token)))
-            elif re.fullmatch(r"a(?:m)?/p(?:m)?", lower):
+                after_hour = True
+            elif re.fullmatch(r"s{1,2}", lower):
+                result.append(str(second).zfill(len(token)))
+            elif lower in ("am/pm", "a/p"):
                 marker = "AM" if hour < 12 else "PM"
                 if len(token) == 3:
                     marker = marker[0]
@@ -460,6 +500,15 @@ class SpreadsheetNumberFormatter:
             else:
                 return None
         return "".join(result)
+
+    def _excel_month_day(self, day: int) -> Tuple[int, int]:
+        if not getattr(self, "_date_1904", False):
+            if day == 0:
+                return (1, 0)
+            if day == 60:
+                return (2, 29)
+        date = self._excel_date(day)
+        return (date.month, date.day)
 
     def _excel_date(self, serial: float) -> datetime:
         if getattr(self, "_date_1904", False):
@@ -524,7 +573,8 @@ class SpreadsheetNumberFormatter:
             if any(kinds.count(kind) > 1 and kind != bracketed[0][1] for kind in set(kinds)):
                 return None
             if kinds.count(bracketed[0][1]) > 1:
-                bracket_index = tokens.index(bracketed[0])
+                bracket_index = next(index for index, token in enumerate(tokens)
+                                     if token.lower() == bracketed[0])
                 for token in tokens[bracket_index + 1:]:
                     if re.fullmatch(bracketed[0][1] + r"{1,2}", token, re.I):
                         break

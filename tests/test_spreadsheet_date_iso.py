@@ -3,6 +3,7 @@
 import pytest
 
 from dochan.spreadsheet_format import SpreadsheetNumberFormatter
+from dochan.ooxml.charts import format_chart_number
 
 
 @pytest.mark.parametrize("cell,raw,fmt,expected", [
@@ -53,4 +54,54 @@ def test_number_format_tests_xlsx_percent_grouping(cell, raw, fmt, expected):
 def test_second_precision_and_unterminated_literal():
     formatter = SpreadsheetNumberFormatter()
     assert formatter._format_cell_value("0.5", "hh:mm:ss.000") == "12:00:00.000"
-    assert isinstance(formatter._format_cell_value("0.5", 'd "unfinished h'), str)
+    assert formatter._format_cell_value("0.5", 'd "unfinished h') == "0.5"
+
+
+@pytest.mark.parametrize("fmt", [
+    "Standard", "Estándar", "Padrão", "Ogólny", "Allmänt", "Yleinen",
+    '0.00 "day', '#,##0 "pound', '[Red 0.00', '0.00 m',
+    '0.0 dB', '#,##0.00 y',
+])
+def test_non_date_labels_are_not_classified_as_dates(fmt):
+    formatter = SpreadsheetNumberFormatter()
+    assert formatter._format_metadata(fmt).kind != "date"
+
+
+@pytest.mark.parametrize("fmt,raw,expected", [
+    ("d", "40735", "11"),
+    ('m"月"d"日"', "40735", "7月11日"),
+    ('d "days" h', "0.5", "0 days 12"),
+    ('d "days" h', "60.25", "29 days 6"),
+    ('d "days" h', "29.999999", "30 days 0"),
+    ('d "days" h:mm', "40735.5", "11 days 12:00"),
+    ('[Red]d "days" h', "40735.5", "11 days 12"),
+    ('d "days" h a/p', "40735.5", "11 days 12 p"),
+    ('d "days" h a/pm', "40735.5", "40735.5"),
+    ('d "days" h am/p', "40735.5", "40735.5"),
+])
+def test_partial_date_tokens_and_excel_1900_edges(fmt, raw, expected):
+    assert SpreadsheetNumberFormatter()._format_cell_value(raw, fmt) == expected
+
+
+@pytest.mark.parametrize("fmt,raw,expected", [
+    ('d "days" h', "0", "0 days 0"),
+    ('d "days" h', "60", "29 days 0"),
+    ("[H]:mm", "3.14159", "75:23"),
+    ('[H]" [yes, "H"] hours"', "3.14159", "75 [yes, 75] hours"),
+    ("dddd h", "45000.6", "2023-03-15 14:24"),
+    ('ddd "at" h AM/PM', "45000.6", "2023-03-15 14:24"),
+])
+def test_elapsed_case_and_existing_named_date_contract(fmt, raw, expected):
+    formatter = SpreadsheetNumberFormatter()
+    formatter._errors = []
+    assert formatter._format_cell_value(raw, fmt) == expected
+    assert not formatter._errors
+
+
+def test_chart_general_labels_and_out_of_range_clock():
+    for label in ("Standard", "Estándar", "Padrão", "Ogólny", "Allmänt", "Yleinen"):
+        assert format_chart_number("13", label) == "13"
+    assert SpreadsheetNumberFormatter()._format_cell_value(
+        "10000000", "hh:mm:ss.00 AM/PM") == "10000000"
+    assert SpreadsheetNumberFormatter()._format_cell_value(
+        "0.5", "h:mm a/pm") == "0.5"

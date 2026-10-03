@@ -50,7 +50,10 @@ switch/OLE 대체 분기 선택, 경고 전달을 담당한다. 현재 `parser.p
 | 잘못되거나 없는 ptCount | 관찰한 idx로 길이 도출, invalid_count 경고 |
 | ptCount와 포인트 수/최대 idx 불일치 | 관찰 데이터 보존, count_mismatch 경고 |
 | 숫자 변환 실패·NaN·INF | 빈 셀과 invalid_number 경고; 정상 숫자로 처리하지 않음 |
-| 필수 cat/val 또는 xVal/yVal 캐시 없음 | 해당 계열 표 생략, missing_cache 경고 |
+| val/yVal 캐시 없음 | 해당 계열 표 생략, missing_cache 경고 |
+| c:cat 요소 없음(범주 계열) | 같은 그림 영역에서 c:order 순으로 읽을 수 있는 첫 범주를 빌림, shared_categories 경고(한컴 화면 실측) |
+| 범주·X 가 하나도 없음 | 1부터 번호, implicit_categories 경고(한컴 화면 실측: 축 이름 1~n) |
+| c:cat·xVal 이 있으나 캐시를 읽을 수 없음 | 해당 계열 표 생략, missing_cache/unsupported_cache 경고 |
 | 다단계 범주·문자열 Y 값·중복 데이터 소스 | 해당 계열 표 생략, unsupported_cache/ambiguous_cache 경고 |
 | 양쪽 캐시의 길이가 0 | 계열 표 생략, empty_series 경고 |
 | 혼합/미지원 차트 유형 | 명시적 제목만 보존하고 mixed_chart/unsupported_type 경고 |

@@ -345,7 +345,10 @@ def xml_gold(raw, kind):
     group = root.find("c:chart/c:plotArea/c:" + kind, NS)
     assert group is not None
     result = []
-    for series in sorted(group.findall("c:ser", NS), key=lambda s: int(s.find("c:order", NS).get("val"))):
+    ordered = sorted(group.findall("c:ser", NS), key=lambda s: int(s.find("c:order", NS).get("val")))
+    # 한컴 화면 실측: 범주 없는 계열은 같은 그림 영역의 범주 축을 쓴다.
+    shared = next((s.find("c:cat", NS) for s in ordered if s.find("c:cat", NS) is not None), None)
+    for series in ordered:
         tx = series.find("c:tx", NS)
         name = tx.findtext("c:v", namespaces=NS)
         if name is None:
@@ -353,6 +356,8 @@ def xml_gold(raw, kind):
         columns = []
         for axis in ("xVal", "yVal") if kind in ("scatterChart", "bubbleChart") else ("cat", "val"):
             axis_node = series.find("c:" + axis, NS)
+            if axis_node is None and axis == "cat":
+                axis_node = shared
             cache = next(x for x in axis_node.iter() if x.tag in {
                 '{%s}%s' % (C, t) for t in ("strCache", "numCache", "strLit", "numLit")})
             values = {int(p.get("idx")): p.findtext("c:v", default="", namespaces=NS)
@@ -404,3 +409,24 @@ def test_many_chart_real_documents_account_for_every_reference(name, digest, cou
     assert [(t.rows[0][1].text, rows(t)[1:]) for t in tables] == gold
     assert [e for e in doc.errors if '[chart:' in e] == []
     assert kinds <= seen
+
+
+def test_public_series_without_categories_borrow_the_axis_like_hancom():
+    # 공개 실물 두 차트의 첫 계열(order=0)에 c:cat 이 없다. 1.12.0 은 이 계열(값 6개씩)을 버렸다.
+    path = public_path("rhwp-1790387_prep_final_report.hwpx")
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == (
+        "c68baed24096386f9041930d24d39409b61ac99463bf04dfd242440dfdeb739f")
+    gold = []
+    with zipfile.ZipFile(path) as z:
+        for part in ("Chart/chart1.xml", "Chart/chart2.xml"):
+            raw = z.read(part)
+            first = sorted(ET.fromstring(raw).iter('{%s}ser' % C),
+                           key=lambda s: int(s.find("c:order", NS).get("val")))[0]
+            assert first.find("c:cat", NS) is None and first.find("c:val", NS) is not None
+            gold.extend(xml_gold(raw, "barChart"))
+    doc = Dochan(path, include_assets=False).doc
+    # 이 문서에는 위쪽 캡션이 달린 일반 표도 있어 차트 표 머리글(범주)로 고른다.
+    tables = [t for t in doc.find_all("table") if t.caption_side == "TOP" and t.rows[0][0].text == "범주"]
+    assert [(t.rows[0][1].text, rows(t)[1:]) for t in tables] == gold
+    chart_errors = [e for e in doc.errors if '[chart:' in e]
+    assert len(chart_errors) == 2 and all('[chart:shared_categories]' in e for e in chart_errors)

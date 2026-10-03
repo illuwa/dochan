@@ -168,6 +168,22 @@ def _source(parent, context: str, budget: _Budget, warnings: list[str],
     return _read_cache(source, numeric, context, budget, warnings)
 
 
+def _usable_source(parent) -> bool:
+    """Whether _source would read one cache or literal, without spending budget."""
+    if parent is None or parent.find(_C + "multiLvlStrRef") is not None:
+        return False
+    sources = [child for child in parent if child.tag in {
+        _C + "strRef", _C + "numRef", _C + "strLit", _C + "numLit",
+    }]
+    if len(sources) != 1:
+        return False
+    source = sources[0]
+    if source.tag in {_C + "strRef", _C + "numRef"}:
+        cache = "numCache" if source.tag == _C + "numRef" else "strCache"
+        return len(source.findall(_C + cache)) == 1
+    return True
+
+
 def _text(tx, context: str, budget: _Budget, warnings: list[str]) -> str:
     if tx is None:
         return ""
@@ -303,8 +319,10 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
         _warn(warnings, "empty_chart", "chart has no series")
     caption = chart_caption(root)
     ordered.sort(key=lambda item: item[:2])
+    # c:order 순으로 읽을 수 있는 첫 범주를 빌린다. 한컴 통제 표본은 모든 계열의 범주가 같아
+    # 어느 계열 범주인지까지는 가르지 못했다(같은 축을 쓰는 Office 차트 의미와 일치하는 선택).
     shared_categories = next((series.find(_C + "cat") for _, _, series in ordered
-                              if series.find(_C + "cat") is not None), None)
+                              if _usable_source(series.find(_C + "cat"))), None)
     for display_position, (_, _, series) in enumerate(ordered):
         table = _series_table(series, display_position, group.tag in (_SCATTER, _BUBBLE), budget,
                               warnings, bubble=group.tag == _BUBBLE,
@@ -332,8 +350,10 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
 def parse_chart_xml(data: bytes, display_values: bool = False) -> tuple[list[Union[Paragraph, Table]], list[str]]:
     """Return title/series tables and separate diagnostics without any I/O.
 
-    Malformed/unsafe XML and budget overruns return no elements. Missing caches
-    skip the affected series; unsupported/mixed types may retain the explicit
+    Malformed/unsafe XML and budget overruns return no elements. A series
+    without values (or with an unreadable category/X cache) is skipped; one
+    without c:cat borrows the group's first readable categories, and one with
+    no categories or X values numbers points from 1. Mixed types may retain the explicit
     title. Callers own bounded ZIP part reads and placement in the document.
     display_values opts into formatted numbers and automatic titles; the default
     retains the raw-cache API. The HWPX document reader uses display values.

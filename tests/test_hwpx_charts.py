@@ -562,3 +562,17 @@ def test_bubble_size_non_numeric_or_longer_cache_is_explicit():
     elements, warnings = _parse(_chart(_series(sources=long_size), kind="bubbleChart"))
     assert _rows(elements[0]) == [["X", "판매", "크기"], ["1", "10", "3"], ["", "", "4"]]
     assert _warned(warnings, "length_mismatch")
+
+
+@pytest.mark.parametrize("unusable", [
+    '<c:cat><c:multiLvlStrRef><c:multiLvlStrCache/></c:multiLvlStrRef></c:cat>',
+    '<c:cat><c:strRef><c:f>Sheet1!A1:A2</c:f></c:strRef></c:cat>',
+])
+def test_borrowed_categories_skip_unusable_category_sources(unusable):
+    values = '<c:val>%s</c:val>' % _cache([(0, "5"), (1, "6")], numeric=True)
+    first = _series("앞", 0, sources=unusable + values)
+    bare = _series("가운데", 1, sources=values)
+    elements, warnings = _parse(_chart(first + bare + _series("뒤", 2)))
+    assert [table.rows[0][1].text for table in elements] == ["가운데", "뒤"]
+    assert _rows(elements[0])[1:] == [["첫째", "5"], ["둘째", "6"]]
+    assert _warned(warnings, "shared_categories")

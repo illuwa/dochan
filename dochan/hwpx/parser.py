@@ -874,14 +874,17 @@ class HWPXParser:
     @staticmethod
     def _detect_heading_level_by_font(runs) -> int:
         """Font size 기반 제목 레벨 감지 (개요 정보가 없을 때의 폴백)"""
-        if runs:
-            size = runs[0].font_size_pt
+        for run in runs:
+            if not run.text.strip():
+                continue
+            size = run.font_size_pt
             if size >= 20:
                 return 1
             elif size >= 16:
                 return 2
             elif size >= 13:
                 return 3
+            break
         return 0
 
     def _xml_parents(self):
@@ -962,9 +965,11 @@ class HWPXParser:
                 if runs:
                     para = self._make_paragraph(runs, p_elem)
                     if para.text.strip():
-                        if len(images) == 1:
-                            para._image_target = images[0]
                         elements.append(para)
+                        # 중첩 글상자 문단에서 이미 텍스트 뒤에 배치한 그림은
+                        # 바깥 문단의 대기 목록에 다시 넣지 않는다.
+                        for image in images:
+                            image._paragraph_picture_placed = True
                     runs = []
                 elements.extend(images)
                 images.clear()
@@ -983,7 +988,11 @@ class HWPXParser:
                         if isinstance(item, TextRun):
                             runs.append(item)
                         elif isinstance(item, Image):
-                            images.append(item)
+                            if getattr(item, '_paragraph_picture_placed', False):
+                                flush_flow()
+                                elements.append(item)
+                            else:
+                                images.append(item)
                         else:
                             # 표·수식·도형은 기존 문단 경계를 유지한다.
                             flush_flow()

@@ -18,7 +18,9 @@ def _document(tmp_path, paragraph):
     path = tmp_path / "picture-flow.hwpx"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("mimetype", "application/hwp+zip")
-        archive.writestr("Contents/header.xml", '<hh:head %s><hh:charPr id="7" height="1000"><hh:bold/></hh:charPr></hh:head>' % NS)
+        archive.writestr("Contents/header.xml", ('<hh:head %s><hh:charPr id="7" height="1000">'
+                         '<hh:bold/></hh:charPr><hh:charPr id="8" height="2000"/>'
+                         '</hh:head>') % NS)
         archive.writestr("Contents/section0.xml", '<hs:sec %s>%s</hs:sec>' % (NS, paragraph))
         archive.writestr("Contents/content.hpf", '<package><manifest><item id="image1" href="BinData/image1.png"/>'
                          '<item id="image2" href="BinData/image2.png"/></manifest></package>')
@@ -45,8 +47,68 @@ def test_picture_inside_sentence_keeps_one_paragraph_and_asset(tmp_path):
     assert elements[1].alt_text == "그림 1"
     assert elements[1].filename == "BinData/image1.png"
     assert elements[1].image_data == b"first-image"
-    assert elements[0]._image_target is elements[1]
     assert "앞뒤\n\n![그림 1]" in to_markdown(doc)
+
+
+def test_textbox_picture_stays_before_outer_suffix(tmp_path):
+    box = ('<hp:rect><hp:drawText><hp:subList><hp:p><hp:run>'
+           '<hp:t>상자 앞</hp:t>%s<hp:t>상자 뒤</hp:t>'
+           '</hp:run></hp:p></hp:subList></hp:drawText></hp:rect>') % _pic()
+    body = '<hp:p><hp:run><hp:t>밖 앞</hp:t>%s<hp:t>밖 뒤</hp:t></hp:run></hp:p>' % box
+    elements = _document(tmp_path, body).sections[0].elements
+    assert _types_and_text(elements) == [
+        (Paragraph, "밖 앞"), (Paragraph, "상자 앞상자 뒤"),
+        (Image, ""), (Paragraph, "밖 뒤")]
+
+
+def test_direct_picture_in_textbox_and_group_keeps_deferred_order(tmp_path):
+    textbox = ('<hp:rect><hp:drawText><hp:subList><hp:p><hp:run>'
+               '<hp:t>상자</hp:t></hp:run></hp:p></hp:subList></hp:drawText></hp:rect>')
+    for drawing in (_pic() + textbox, '<hp:container>%s%s</hp:container>' % (_pic(), textbox)):
+        body = '<hp:p><hp:run><hp:t>앞</hp:t>%s<hp:t>뒤</hp:t></hp:run></hp:p>' % drawing
+        elements = _document(tmp_path, body).sections[0].elements
+        assert _types_and_text(elements) == [
+            (Paragraph, "앞"), (Image, ""), (Paragraph, "상자"), (Paragraph, "뒤")]
+
+
+def test_picture_only_textbox_stays_deferred(tmp_path):
+    box = ('<hp:rect><hp:drawText><hp:subList><hp:p><hp:run>%s'
+           '</hp:run></hp:p></hp:subList></hp:drawText></hp:rect>') % _pic()
+    body = '<hp:p><hp:run><hp:t>앞</hp:t>%s<hp:t>뒤</hp:t></hp:run></hp:p>' % box
+    assert _types_and_text(_document(tmp_path, body).sections[0].elements) == [
+        (Paragraph, '앞뒤'), (Image, '')]
+
+
+def test_header_footer_picture_stays_with_nested_paragraph(tmp_path):
+    controls = ''.join(
+        '<hp:ctrl><hp:%s><hp:subList><hp:p><hp:run><hp:t>%s 앞</hp:t>%s'
+        '<hp:t>%s 뒤</hp:t></hp:run></hp:p></hp:subList></hp:%s></hp:ctrl>'
+        % (kind, kind, _pic(number), kind, kind)
+        for number, kind in ((1, 'header'), (2, 'footer')))
+    body = '<hp:p><hp:run>%s<hp:t>본문</hp:t></hp:run></hp:p>' % controls
+    elements = _document(tmp_path, body).sections[0].elements
+    assert [item.type for item in elements[:2]] == ['header', 'footer']
+    for item, kind in zip(elements[:2], ('header', 'footer')):
+        assert _types_and_text(item.paragraphs) == [(Paragraph, kind + ' 앞' + kind + ' 뒤'), (Image, '')]
+    assert _types_and_text(elements[2:]) == [(Paragraph, '본문')]
+
+
+def test_equation_after_picture_keeps_boundary(tmp_path):
+    body = ('<hp:p><hp:run><hp:t>앞</hp:t>%s<hp:t>중</hp:t>'
+            '<hp:equation><hp:script>x+1</hp:script></hp:equation>'
+            '<hp:t>뒤</hp:t></hp:run></hp:p>') % _pic()
+    from dochan.model.equation import Equation
+    elements = _document(tmp_path, body).sections[0].elements
+    assert _types_and_text(elements) == [
+        (Paragraph, '앞중'), (Image, ''), (Equation, ''), (Paragraph, '뒤')]
+
+
+def test_heading_uses_first_nonblank_run(tmp_path):
+    for first, second, expected in ((7, 8, 1), (8, 7, 0)):
+        body = ('<hp:p><hp:run charPrIDRef="%d"><hp:t> </hp:t></hp:run>'
+                '<hp:run charPrIDRef="%d"><hp:t>실제 제목</hp:t></hp:run></hp:p>') % (first, second)
+        paragraph = _document(tmp_path, body).sections[0].elements[0]
+        assert paragraph.heading_level == expected
 
 
 def test_picture_at_start_and_picture_only(tmp_path):

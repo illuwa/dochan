@@ -9,7 +9,7 @@ from dochan.hwp.doc_info import DocInfo, DocInfoParser
 from dochan.hwp.records.char_shape import CharShape
 from dochan.hwp.section import RawRecord, SectionParser
 from dochan.hwpx.parser import HWPXParser
-from dochan.model.document import Document
+from dochan.model.document import Document, Paragraph, TextRun
 from dochan.model.style import StyleEntry
 from dochan.output.json_out import to_dict
 from dochan.output.markdown import to_markdown
@@ -66,6 +66,15 @@ def _first_paragraph(doc, cell_depth):
     for _ in range(cell_depth):
         element = element.rows[0][0].paragraphs[0]
     return element
+
+
+@pytest.mark.parametrize('first_size,second_size,expected', [
+    (10, 20, 1), (20, 10, 0),
+])
+def test_hwp_font_heading_uses_first_nonblank_run(first_size, second_size, expected):
+    para = Paragraph(runs=[TextRun(text=' ', font_size_pt=first_size),
+                           TextRun(text='실제 제목', font_size_pt=second_size)])
+    assert SectionParser._heading_level_by_font(para) == expected
 
 
 @pytest.mark.parametrize('source', ['direct', 'name', 'default'])

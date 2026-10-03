@@ -944,14 +944,17 @@ class SectionParser:
     @staticmethod
     def _heading_level_by_font(para) -> int:
         # 개요 정보가 없는 셀 밖 문단만 글꼴 크기로 판단한다.
-        if para.runs:
-            size = para.runs[0].font_size_pt
+        for run in para.runs:
+            if not run.text.strip():
+                continue
+            size = run.font_size_pt
             if size >= 20:
                 return 1
             elif size >= 16:
                 return 2
             elif size >= 13:
                 return 3
+            break
 
         return 0
 

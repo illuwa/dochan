@@ -29,7 +29,6 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 ## 표·캡션
 
-- **이미지 참조·읽기 순서 · HWPX**: 문단 안 그림은 문단 텍스트 뒤에 원래 순서대로 내며 문장을 나누지 않는다. 공개 HWPX 2,046개 중 변경된 209개 모두 문단 안 그림이 있고, 보도자료 HWP·PDF 짝 2개에서 이어진 문장을 확인했다([검증 기록](benchmarks/2026-10-04-hwpx-picture-flow-real-docs.md)).
 - **표 (중첩 텍스트) · PPT·PPTX (—)**: PowerPoint 표 셀은 다른 표를 담는 구조가 없다. 셀 안 여러 문단은 보존한다.
 - **텍스트 · PDF Form XObject**: 페이지가 Form XObject(`Do`)로 그린 글자도 읽는다(행렬·자원 상속·텍스트 상태 상속·BBox 클립·MCID 격리). 공개 pdf.js 983개 중
   Form 글자가 있는 39개에서 PDFium 대비 읽을 수 있는 문자 재현율 95.8%→98.5%. 순환·깊이·반복 호출·Form 바이트(페이지당 16 MiB)·Form 해제 예산(문서당 200 MiB,
@@ -124,6 +123,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 ## HWP·HWPX·DOCX 세부
 
+- **이미지 참조·읽기 순서 · HWPX**: 문단 안 그림은 문단 텍스트 뒤에 원래 순서대로 내며 문장을 나누지 않는다. 공개 HWPX 2,046개에서 기존 수정으로 Markdown 209개와 JSON 213개가 바뀌었고, 구조 골격·이미지 순서·공백 제외 글자 및 한 문단 이내의 그림 이동을 확인했다. 보도자료 HWP·PDF 짝 2개에서도 이어진 문장을 확인했다([검증 기록](benchmarks/2026-10-04-hwpx-picture-flow-real-docs.md)).
 - **변경 추적 · HWP·HWPX (⬜)**: `revision_mode`(preserve·final·original)로 삽입·삭제 텍스트를 투영한다. 개체·서식 변경 이력은
   재현하지 않는다. 한컴오피스 HWP(Mac)는 변경 추적을 만들 수는 없지만 `hh:trackChange` 의 `hide` 를 바꾼 통제 표본으로 최종본·원본·전체 보기를
   보여 주므로 정답 화면으로 쓸 수 있다(2026-10-03). 공개 `hwpxlib-ChangeTrack.hwpx` 와 `korea-mid-30-7_…(축산원).hwpx`(변경 문단 5개)는 세 모드가

@@ -1,6 +1,7 @@
 """A link can select complete glyphs by center despite clipped outer edges."""
 import pytest
 
+from dochan.pdf import annotations
 from dochan.pdf.annotations import LinkRegion, attach_comments, attach_links
 from dochan.pdf.content import Fragment
 from test_pdf_link_review import _document
@@ -184,3 +185,44 @@ def test_tj_split_word_keeps_annotation_fallback(tmp_path):
             for run in paragraph.runs if run.link]
     assert all(run.provenance.path == "annots" for run in runs)
     assert "example and more" in "".join(paragraph.text for paragraph in document.find_all("paragraph"))
+
+
+def _dense_page(lines):
+    """One glyph per run; every fifth word link has exact edges, the rest a clipped left edge."""
+    text = "word " * 12
+    fragments, regions = [], []
+    for line in range(lines):
+        y = 1000 - line * 14
+        for index, char in enumerate(text):
+            fragments.append(Fragment(10 * index, y, 10, 10, char, 5, order=len(fragments),
+                                      char_offsets=(0, 10)))
+        for word in range(12):
+            x0 = 50 * word + (-1 if word % 5 == 0 else 3)
+            target = ("full%d-%d" if word % 5 == 0 else "clip%d-%d") % (line, word)
+            regions.append(LinkRegion(target, [[(x0, y - 2), (50 * word + 41, y - 2),
+                                                (50 * word + 41, y + 12), (x0, y + 12)]]))
+    return fragments, regions
+
+
+def _linked(fragments, prefix):
+    return {target for fragment in fragments for _, _, target in fragment.link_spans
+            if target.startswith(prefix)}
+
+
+def test_dense_clipped_links_connect_after_space_neighbours():
+    fragments, regions = _dense_page(3)
+    warnings = []
+    attach_links(fragments, regions, warnings, allow_clipped_edges=True)
+    assert len(_linked(fragments, "full")) == 9
+    assert len(_linked(fragments, "clip")) == 27
+    assert not warnings
+
+
+def test_exhausted_neighbour_budget_defers_only_clipped_links(monkeypatch):
+    monkeypatch.setattr(annotations, "_NEIGHBOR_CHECK_LIMIT", 500)
+    fragments, regions = _dense_page(3)
+    warnings = []
+    attach_links(fragments, regions, warnings, allow_clipped_edges=True)
+    assert len(_linked(fragments, "full")) == 9
+    assert len(_linked(fragments, "clip")) < 27
+    assert any("이웃 글자 검사 한도" in warning for warning in warnings)

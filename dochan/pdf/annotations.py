@@ -383,6 +383,10 @@ _CLOSING_BOUNDARIES = (")]}>\"\u201d\u00bb"
 # ASCII sentence marks also occur inside tokens (www.example.com, 3.14, 1,000);
 # they end a word only before whitespace, a closing boundary or line end.
 _SENTENCE_MARKS = ",.;:!?"
+# Neighbour lookups for clipped edges have their own budget. When it runs out
+# only the clipped links still unchecked are deferred, as before clipped-edge
+# support; links with exact glyph edges on the page keep their body text.
+_NEIGHBOR_CHECK_LIMIT = 2000000
 
 
 def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
@@ -426,6 +430,7 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
     bounds.sort()
     lower_edges = [bound[0] for bound in bounds]
     # Runs whose end glyphs can continue a word across a Tj/TJ split.
+    neighbor_checks = 0
     runs = {}
     for frag in fragments:
         direction = math.hypot(frag.dir_x, frag.dir_y)
@@ -441,16 +446,18 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
         Line assembly joins runs whose gap is at most half a space, and any
         overlap. Order, not distance alone, picks the side, so the previous
         glyph of a one-glyph-per-Tj line is not taken as the next one.
-        Returns None when the geometry check budget is exhausted.
+        Returns None when the neighbour check budget is exhausted.
         """
-        nonlocal checks
+        nonlocal neighbor_checks
         frag, ux, uy, vx, vy = run
         start, end = frag.char_offsets[0], frag.char_offsets[-1]
         found = []
         for other_run in runs.values():
             other, ox, oy = other_run[:3]
-            checks += 1
-            if checks > 2000000:
+            neighbor_checks += 1
+            if neighbor_checks > _NEIGHBOR_CHECK_LIMIT:
+                if neighbor_checks == _NEIGHBOR_CHECK_LIMIT + 1:
+                    warnings.append("WARN: PDF 링크 이웃 글자 검사 한도 초과 — 잘린 경계 링크는 본문 연결 보류")
                 return None
             if other is frag or ux * ox + uy * oy < 0.999:
                 continue
@@ -566,8 +573,8 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                 # split or a separate Tj); its touching glyph gets the same test.
                 adjacent = touching(runs[id(frag)], side)
                 if adjacent is None:
-                    warnings.append("WARN: PDF 링크 기하 검사 한도 초과 — 본문 연결 생략")
-                    return
+                    ambiguous.add(region_index)
+                    continue
                 neighbors = []
                 for run in adjacent:
                     other, ox, oy, ovx, ovy = run
@@ -575,7 +582,7 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                     distance = (other.char_offsets[glyph] + other.char_offsets[glyph + 1]) / 2
                     cx = other.x + ox * distance + ovx * other.size * 0.5
                     cy = other.y + oy * distance + ovy * other.size * 0.5
-                    checks += len(regions[region_index].polygons)
+                    neighbor_checks += len(regions[region_index].polygons)
                     neighbors.append((run, glyph, any(
                         _contains(polygon, cx, cy) for polygon in regions[region_index].polygons)))
             for run, glyph, inside in neighbors:
@@ -589,11 +596,10 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                         following = [run[0].text[glyph + 1]]
                     else:
                         after = touching(run, 1)
-                        if after is None:
-                            warnings.append("WARN: PDF 링크 기하 검사 한도 초과 — 본문 연결 생략")
-                            return
-                        following = [item[0].text[0] for item in after]
-                    boundary = all(c.isspace() or c in _CLOSING_BOUNDARIES for c in following)
+                        # An unchecked continuation cannot prove a word end.
+                        following = None if after is None else [item[0].text[0] for item in after]
+                    boundary = following is not None and all(
+                        c.isspace() or c in _CLOSING_BOUNDARIES for c in following)
                 else:
                     boundary = False
                 if inside or not boundary:

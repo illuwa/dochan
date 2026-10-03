@@ -20,8 +20,9 @@ from typing import BinaryIO, Optional, Sequence, Union
 
 from ..utils import safe_xml as etree
 from ..utils.heading_font import (
-    MAX_FONT_HEADING_PARAGRAPHS, finalize_font_headings,
-    first_visible_font_size, relative_heading_level,
+    MAX_FONT_HEADING_LENGTH, MAX_FONT_HEADING_PARAGRAPHS,
+    finalize_font_headings, first_visible_font_size,
+    heading_level_from_style_name,
 )
 
 from ..model.document import Document, Section, Paragraph, TextRun
@@ -152,8 +153,6 @@ FORM_TAGS = {'btn', 'checkBtn', 'radioBtn', 'comboBox', 'edit'}
 _INVISIBLE_STRIKEOUT_SHAPES = {'NONE', '3D', '3D_REVERS', 'THICK_3D', 'THICK_3D_REVERS'}
 
 # 스타일 이름에서 개요 수준을 읽어내기 위한 패턴 ("개요 1", "Outline 2", "Heading 3")
-_STYLE_HEADING_RE = re.compile(r'^\s*(?:개요|outline|heading)\s*(\d+)\s*$', re.IGNORECASE)
-
 _ALIGN_MAP = {'JUSTIFY': 0, 'LEFT': 1, 'RIGHT': 2, 'CENTER': 3, 'DISTRIBUTE': 4}
 _STYLE_TYPE_MAP = {'PARA': 0, 'CHAR': 1}
 
@@ -354,7 +353,10 @@ class HWPXParser:
         if self._body_tail_run is not None:
             self._body_tail_run.text = self._body_tail.getvalue()
         self._body_tail.close()
-        finalize_font_headings(self._font_heading_paragraphs)
+        try:
+            finalize_font_headings(self._font_heading_paragraphs, doc=doc)
+        finally:
+            self._font_heading_paragraphs.clear()
         doc.errors = self.errors
         return doc
 
@@ -890,10 +892,10 @@ class HWPXParser:
         return comments
 
     @staticmethod
-    def _detect_heading_level_by_font(runs, body_size=0) -> int:
+    def _detect_heading_level_by_font(runs) -> int:
         """Font size 기반 제목 레벨 감지 (개요 정보가 없을 때의 폴백)"""
-        if body_size:
-            return relative_heading_level(runs, body_size)
+        if len(''.join(run.text for run in runs).strip()) > MAX_FONT_HEADING_LENGTH:
+            return 0
         size = first_visible_font_size(runs)
         if size >= 20:
             return 1
@@ -1838,16 +1840,8 @@ def _field_action(ctrl_elem):
 
 
 def _heading_level_from_style_name(name: str) -> int:
-    """'개요 1' / 'Outline 2' / 'Heading 3' → 정수 레벨. 아니면 0."""
-    if not name:
-        return 0
-    match = _STYLE_HEADING_RE.match(name)
-    if not match:
-        return 0
-    try:
-        return int(match.group(1))
-    except (TypeError, ValueError):
-        return 0
+    """HWP와 같은 스타일 이름 판정."""
+    return heading_level_from_style_name(name)
 
 
 def _build_grid(

@@ -168,9 +168,13 @@ def compare(args):
             hwpx = versions['.hwpx'][time_index]
             answer = Counter((text, level) for text, level in hwpx if text)
             candidate = Counter((text, level) for text, level in hwp if text)
+            answer_status = Counter((text, bool(level)) for text, level in hwpx if text)
+            candidate_status = Counter((text, bool(level)) for text, level in hwp if text)
             texts_a = Counter(text for text, _ in hwpx if text)
             texts_b = Counter(text for text, _ in hwp if text)
             pair_stats[label + '_matched'] += sum((answer & candidate).values())
+            pair_stats[label + '_status_matched'] += sum(
+                (answer_status & candidate_status).values())
             pair_stats[label + '_common_text'] += sum((texts_a & texts_b).values())
     result = {'root': 'private' if args.private else str(root),
               'files': stats['files'], 'exceptions': stats['exceptions'],

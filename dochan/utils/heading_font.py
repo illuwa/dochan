@@ -4,6 +4,23 @@ from collections import Counter
 
 
 MAX_FONT_HEADING_PARAGRAPHS = 200_000
+MAX_FONT_HEADING_LENGTH = 120
+_BODY_EXCLUDED_PREFIXES = ('※', '*', '주:', '(단위')
+
+
+def heading_level_from_style_name(name):
+    """두 한글 형식에 공통인 개요·제목 스타일 이름 규칙."""
+    name = (name or '').lower()
+    if '개요' in name or 'outline' in name or 'heading' in name:
+        for level in range(1, 7):
+            if str(level) in name:
+                return level
+        return 1
+    if name.startswith(('부제목', 'subtitle')):
+        return 2
+    if '제목' in name or 'title' in name:
+        return 1
+    return 0
 
 
 def first_visible_font_size(runs):
@@ -14,16 +31,39 @@ def first_visible_font_size(runs):
     return 0
 
 
-def body_font_size(paragraphs):
+def _sample_exclusions(doc):
+    """본문 추정에서만 제외할 중첩 문단 ID를 모은다."""
+    if doc is None:
+        return None, set()
+    reachable = {id(para) for para in doc.find_all('paragraph')}
+    excluded = set()
+    for kind in ('header_footer', 'note'):
+        for container in doc.find_all(kind):
+            excluded.update(id(para) for para in container.paragraphs)
+    for kind in ('table', 'image'):
+        for container in doc.find_all(kind):
+            excluded.update(id(para) for para in container.caption)
+    return reachable, excluded
+
+
+def body_font_size(paragraphs, doc=None):
     """문단 길이 가중 최빈 글꼴 크기. 빈약한 표본에는 0을 반환한다."""
     weights = Counter()
     count = 0
+    reachable, excluded = _sample_exclusions(doc)
     for para in paragraphs:
+        if para is None or id(para) in excluded:
+            continue
+        if reachable is not None and id(para) not in reachable:
+            continue
+        text = para.text.strip()
+        if text.startswith(_BODY_EXCLUDED_PREFIXES):
+            continue
         size = first_visible_font_size(para.runs)
         if size <= 0:
             continue
         count += 1
-        weights[round(size, 1)] += min(len(para.text.strip()), 200)
+        weights[round(size, 1)] += min(len(text), 200)
     if count < 3 or sum(weights.values()) < 40:
         return 0
     return min(weights, key=lambda size: (-weights[size], size))
@@ -32,10 +72,12 @@ def body_font_size(paragraphs):
 def relative_heading_level(runs, body_size):
     """본문 크기보다 뚜렷이 큰 첫 글자 런만 H1~H3로 판정한다."""
     size = first_visible_font_size(runs)
+    if len(''.join(run.text for run in runs).strip()) > MAX_FONT_HEADING_LENGTH:
+        return 0
     if body_size <= 0 or size <= 0:
         return 0
     ratio = size / body_size
-    if ratio >= 1.4:
+    if ratio >= 1.5:
         return 1
     if ratio >= 1.25:
         return 2
@@ -44,10 +86,14 @@ def relative_heading_level(runs, body_size):
     return 0
 
 
-def finalize_font_headings(paragraphs):
+def finalize_font_headings(paragraphs, doc=None):
     """본문 크기를 추정할 수 있는 문서만 글꼴 폴백을 다시 계산한다."""
     paragraphs = tuple(paragraphs)
-    body_size = body_font_size(paragraphs)
+    if any(para is None for para in paragraphs):
+        # 한도 뒤 문단은 고정 기준으로 읽었다. 앞부분도 그대로 두어
+        # 하나의 문서 안에서 서로 다른 제목 기준을 쓰지 않는다.
+        return 0
+    body_size = body_font_size(paragraphs, doc=doc)
     if body_size:
         for para in paragraphs:
             para.heading_level = relative_heading_level(para.runs, body_size)

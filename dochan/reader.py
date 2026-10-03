@@ -450,7 +450,10 @@ class Dochan:
             self.doc.errors.extend(section_parser.errors)
             finalize_headings = getattr(section_parser, 'finalize_font_headings', None)
             if finalize_headings is not None:
-                finalize_headings()
+                if isinstance(section_parser, SectionParser):
+                    finalize_headings(self.doc)
+                else:
+                    finalize_headings()
 
             # 4. BinData 이미지 연결
             bin_items = {}

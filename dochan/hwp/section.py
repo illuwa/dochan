@@ -21,8 +21,9 @@ from typing import List
 
 from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
 from ..utils.heading_font import (
-    MAX_FONT_HEADING_PARAGRAPHS, finalize_font_headings,
-    first_visible_font_size, relative_heading_level,
+    MAX_FONT_HEADING_LENGTH, MAX_FONT_HEADING_PARAGRAPHS,
+    finalize_font_headings, first_visible_font_size,
+    heading_level_from_style_name,
 )
 
 from ..constants import (
@@ -553,6 +554,10 @@ class SectionParser:
 
             # 책갈피 마커는 문단 앞에 붙인다 (문서 내 앵커 — DOCX 규약과 동일)
             if bookmark_markers:
+                marker_size = first_visible_font_size(para.runs)
+                if marker_size > 0:
+                    for marker in bookmark_markers:
+                        marker.font_size_pt = marker_size
                 para.runs = bookmark_markers + para.runs
 
             # 제목 감지
@@ -925,17 +930,9 @@ class SectionParser:
         # 1. Style 이름 기반
         if self.doc_info and hasattr(self.doc_info, 'styles') and 0 <= para.style_id < len(self.doc_info.styles):
             style = self.doc_info.styles[para.style_id]
-            name = style.name.lower()
-            # "개요 1" → level 1, "개요 2" → level 2, etc.
-            if '개요' in name or 'outline' in name or 'heading' in name:
-                for i in range(1, 7):
-                    if str(i) in name:
-                        return i if i <= MAX_OUTLINE_HEADING_LEVEL else 0
-                return 1  # default heading level
-            if name.startswith(('부제목', 'subtitle')):
-                return 2
-            if '제목' in name or 'title' in name:
-                return 1
+            level = heading_level_from_style_name(style.name)
+            if level:
+                return level if level <= MAX_OUTLINE_HEADING_LEVEL else 0
             if (not direct and 0 <= style.para_shape_id < len(shapes)
                     and shapes[style.para_shape_id].heading_type == 1):
                 return self._outline_level(style.para_shape_id)
@@ -954,10 +951,10 @@ class SectionParser:
         return self._heading_level_by_font(para)
 
     @staticmethod
-    def _heading_level_by_font(para, body_size=0) -> int:
+    def _heading_level_by_font(para) -> int:
         # 개요 정보가 없는 셀 밖 문단만 글꼴 크기로 판단한다.
-        if body_size:
-            return relative_heading_level(para.runs, body_size)
+        if len(para.text.strip()) > MAX_FONT_HEADING_LENGTH:
+            return 0
         size = first_visible_font_size(para.runs)
         if size >= 20:
             return 1
@@ -967,9 +964,11 @@ class SectionParser:
             return 3
         return 0
 
-    def finalize_font_headings(self):
-        return finalize_font_headings(
-            para for para in self._font_heading_paragraphs if para is not None)
+    def finalize_font_headings(self, doc=None):
+        try:
+            return finalize_font_headings(self._font_heading_paragraphs, doc=doc)
+        finally:
+            self._font_heading_paragraphs.clear()
 
     def _outline_level(self, shape_id):
         shapes = getattr(self.doc_info, 'para_shapes', [])

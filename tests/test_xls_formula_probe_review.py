@@ -50,6 +50,23 @@ def test_formula_corpus_inventory_counts_coordinates_without_decoding_tokens():
     assert formula_coordinates(boundsheet + formula * 2 + numeric) == {('Public', 'D3')}
 
 
+def test_formula_corpus_inventory_uses_workbook_biff5_sheet_encoding():
+    """A BIFF5 BOF 00 05 and BOUNDSHEET 06 46 65 75 69 6c 31 encode Feuil1.
+
+    The public testEXCEL_5.xls has this BOUNDSHEET payload at stream offset
+    0x3b9. The first byte is a legacy byte count, not a Unicode flag.
+    """
+    from scripts.probe_xls_formula_corpus import formula_coordinates
+    def record(kind, payload):
+        return struct.pack('<HH', kind, len(payload)) + payload
+    bof = record(0x809, struct.pack('<HH', 0x500, 0x10))
+    label = b'Feuil1'
+    start = len(bof) + 4 + 7 + len(label)
+    bound = record(0x85, struct.pack('<IBBB', start, 0, 0, len(label)) + label)
+    formula = record(6, struct.pack('<HHH', 5, 1, 0))
+    assert formula_coordinates(bof + bound + formula) == {('Feuil1', 'B6')}
+
+
 def test_formula_corpus_inventory_excludes_encrypted_denominator():
     from scripts.probe_xls_formula_corpus import formula_coordinates
     with pytest.raises(ValueError, match='encrypted FILEPASS'):
@@ -69,3 +86,20 @@ def test_formula_corpus_name_inventory_excludes_empty_and_truncated_names():
     stream += name_record(b'truncated', b'\x1e', claimed_length=3)
     stream += name_record(b'no_formula', b'')
     assert named_formula_count(stream) == 1
+
+
+def test_formula_corpus_name_inventory_uses_biff5_fourteen_byte_header():
+    """The public biff5.xls NAME at 0xb4 has 14 header bytes before its name."""
+    from scripts.probe_xls_formula_corpus import named_formula_count
+    def record(kind, payload):
+        return struct.pack('<HH', kind, len(payload)) + payload
+    bof = record(0x809, struct.pack('<HH', 0x0500, 0x0005))
+    header = bytes.fromhex('01 00 00 0f 15 00 01 00 01 00 00 00 00 00')
+    tokens = bytes.fromhex('3b ff ff 00 00 00 00 00 00 01 00 00 00 00 00 04 00 77 01 00 05')
+    assert named_formula_count(bof + record(0x18, header + b'_FilterDatabase' + tokens)) == 1
+
+
+def test_formula_probe_recognizes_formula_before_comment_annotation():
+    from scripts.probe_xls_formula_pairs import split_formula
+    assert split_formula('2,830.07 (=OFFSET(B45,MEP-MNR-1,0,1)) [comment: Marian]') == (
+        '2,830.07', 'OFFSET(B45,MEP-MNR-1,0,1)')

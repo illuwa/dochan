@@ -365,8 +365,11 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                                         else 'cp%d' % codepage)
             break
     index = 0
+    in_workbook_globals = True
     while index < len(records):
         offset, record_type, record_data = records[index]
+        if record_type == 0x000A:
+            in_workbook_globals = False
         if record_type == 0x0085 and len(record_data) >= 8:  # BOUNDSHEET
             sheet_offset = struct.unpack_from("<I", record_data, 0)[0]
             sheets.append(
@@ -383,8 +386,16 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                 index += 1
                 sst_segments.append(records[index][2])
             shared_strings = _parse_sst_segments(sst_segments)
+        elif (record_type == 0x0016 and formula_context.biff_version == 0x0500
+              and in_workbook_globals and len(record_data) >= 2):  # EXTERNCOUNT
+            formula_context.legacy_extern_count = min(
+                struct.unpack_from('<H', record_data)[0], 65535)
         elif record_type == 0x0017 and len(record_data) >= 2:  # EXTERNSHEET
-            external_sheets.extend(_parse_externsheet(record_data))
+            if formula_context.biff_version == 0x0500:
+                if in_workbook_globals:
+                    formula_context.add_legacy_externsheet(record_data, doc.errors)
+            else:
+                external_sheets.extend(_parse_externsheet(record_data))
         elif record_type == 0x01AE:  # SupBook
             formula_context.add_supbook(record_data, doc.errors)
         elif record_type == 0x0023:  # EXTERNNAME belongs to the preceding SupBook.
@@ -1739,9 +1750,37 @@ def _decode_formula_token_stream(
                     return ""
             frames.append((offset + length, len(stack)))
             continue
-        if legacy and token in (0x20, 0x23, 0x39, 0x3A, 0x3B, 0x3C, 0x3D):
+        if legacy and token in (0x20, 0x23, 0x39, 0x3C, 0x3D):
             warn("unsupported BIFF5 token 0x%02X; expression omitted" % token)
             return ""
+        if legacy and token in (0x3A, 0x3B):
+            area = token == 0x3B
+            size = 14 + (6 if area else 3)
+            if offset + size > token_end:
+                warn("truncated BIFF5 3D reference token; expression omitted")
+                return ""
+            if formula_context is None:
+                warn("unresolved BIFF5 3D context; expression omitted")
+                return ""
+            try:
+                prefix = formula_context.legacy_3d_prefix(tokens[offset:offset + 14])
+            except FormulaDataError as exc:
+                warn(str(exc) + '; expression omitted')
+                return ""
+            reference = offset + 14
+            if area:
+                r1, r2, c1, c2 = struct.unpack_from('<HHBB', tokens, reference)
+            else:
+                r1, c1 = struct.unpack_from('<HB', tokens, reference)
+            def legacy_3d_ref(row, col):
+                flags = row & 0xc000
+                return _formula_cell_ref(row & 0x3fff, flags | col, row_delta, col_delta)
+            value = prefix + legacy_3d_ref(r1, c1)
+            if area:
+                value += ':' + legacy_3d_ref(r2, c2)
+            stack.append(value)
+            offset += size
+            continue
         if legacy and token in (0x24, 0x25, 0x2C, 0x2D, 0x2A, 0x2B):
             area = token in (0x25, 0x2D, 0x2B)
             size = 6 if area else 3

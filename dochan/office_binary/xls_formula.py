@@ -214,11 +214,44 @@ class FormulaContext:
         self.books = []  # type: List[SupBook]
         self.external_count = 0
         self.xtis = []
+        self.legacy_extern_count = 0
+        self.legacy_externs = []
+        self.legacy_extern_bytes = 0
         self.sheets = []
         self.names = []
         self.current_book = None
         self.sheet_name_bytes = 0
         self.dde_text_bytes = 0
+
+    def add_legacy_externsheet(self, data, errors):
+        """Read the observed BIFF5 EXTERNSHEET name form, retaining its index."""
+        if len(self.legacy_externs) >= min(self.legacy_extern_count, MAX_LINK_ENTRIES):
+            return
+        label = None
+        if (len(data) >= 2 and data[1] == 3 and len(data) == data[0] + 2
+                and self.legacy_extern_bytes + len(data) <= MAX_LINK_TEXT_BYTES):
+            try:
+                label = bytes(data[2:]).decode(self.codepage, errors='replace')
+            except LookupError:
+                pass
+            if label not in self.sheets and self.sheets:
+                label = None
+        self.legacy_extern_bytes += len(data)
+        self.legacy_externs.append(label)
+
+    def legacy_3d_prefix(self, qualifier):
+        # The public BIFF5 NAME contains this 14-byte form. Other qualifier
+        # forms stay unresolved until their sheet selection can be observed.
+        if (len(qualifier) != 14 or qualifier[:8] != b'\xff\xff' + b'\0' * 6
+                or qualifier[10:] != b'\0' * 4):
+            raise FormulaDataError('unsupported BIFF5 3D qualifier')
+        index, = struct.unpack_from('<H', qualifier, 8)
+        if not 1 <= index <= self.legacy_extern_count or index > len(self.legacy_externs):
+            raise FormulaDataError('unresolved BIFF5 EXTERNSHEET index')
+        label = self.legacy_externs[index - 1]
+        if not label or label not in self.sheets:
+            raise FormulaDataError('unresolved BIFF5 EXTERNSHEET name')
+        return quote_reference(label) + '!'
 
     def add_deleted_label(self, data, errors):
         # [MS-XLS] Lel / PtgElfLel: ilel 2..2048 indexes this array at ilel-2.

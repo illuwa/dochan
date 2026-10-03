@@ -36,11 +36,22 @@ def formula_coordinates(data):
     )
     if has_filepass_record(data):
         raise ValueError('encrypted FILEPASS stream cannot be inventoried')
+    version, codepage = 0x0600, 'cp1252'
+    for _, kind, payload in _iter_records(data):
+        if kind == 0x809 and len(payload) >= 2:
+            version = struct.unpack_from('<H', payload)[0]
+            break
+    for _, kind, payload in _iter_records(data):
+        if kind == 0x42 and len(payload) >= 2:
+            value = struct.unpack_from('<H', payload)[0]
+            codepage = ('mac_roman' if value in (10000, 32768) else
+                        'cp1252' if value == 32769 else 'cp%d' % value)
+            break
     sheets = []
     for _, kind, payload in _iter_records(data):
-        if kind == 0x85 and len(payload) >= 8:
+        if kind == 0x85 and len(payload) >= (7 if version == 0x0500 else 8):
             sheets.append((struct.unpack_from('<I', payload)[0],
-                           _read_boundsheet_name(payload)))
+                           _read_boundsheet_name(payload, version, codepage)))
     sheets.sort()
     coordinates = set()
     for index, (start, name) in enumerate(sheets):
@@ -58,14 +69,20 @@ def formula_coordinates(data):
 def named_formula_count(data):
     """Count complete NAME formula records independently of token decoding."""
     from dochan.office_binary.xls import _iter_records
+    version = 0x0600
+    for _, kind, payload in _iter_records(data):
+        if kind == 0x809 and len(payload) >= 2:
+            version = struct.unpack_from('<H', payload)[0]
+            break
     count = 0
     for _, kind, payload in _iter_records(data):
-        if kind != 0x18 or len(payload) < 15:
+        header_size = 14 if version == 0x0500 else 15
+        if kind != 0x18 or len(payload) < header_size:
             continue
         name_length = payload[3]
         formula_length = struct.unpack_from('<H', payload, 4)[0]
-        name_bytes = name_length * (2 if payload[14] & 1 else 1)
-        if name_length and formula_length and 15 + name_bytes + formula_length <= len(payload):
+        name_bytes = name_length * (2 if version != 0x0500 and payload[14] & 1 else 1)
+        if name_length and formula_length and header_size + name_bytes + formula_length <= len(payload):
             count += 1
     return count
 

@@ -100,8 +100,10 @@ def decoded_cells(document):
 
 
 def split_formula(text):
-    if ' (=' in text and text.endswith(')'):
-        cache, formula = text.rsplit(' (=', 1)
+    # A cell comment is displayed after the formula, outside its closing ')'.
+    formula_text = re.sub(r' \[comment:.*\]$', '', text)
+    if ' (=' in formula_text and formula_text.endswith(')'):
+        cache, formula = formula_text.rsplit(' (=', 1)
         return cache, formula[:-1]
     if text.startswith('='):
         return '', text[1:]

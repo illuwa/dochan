@@ -20,6 +20,10 @@ from itertools import chain
 from typing import List
 
 from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
+from ..utils.heading_font import (
+    MAX_FONT_HEADING_PARAGRAPHS, finalize_font_headings,
+    first_visible_font_size, relative_heading_level,
+)
 
 from ..constants import (
     HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT, HWPTAG_PARA_CHAR_SHAPE,
@@ -169,6 +173,7 @@ class SectionParser:
         self._document_error_keys = set()
         self._table_failure_serial = 0
         self._chart_count = 0
+        self._font_heading_paragraphs = []
 
     def _document_limit_once(self, key, message):
         if key not in self._document_error_keys:
@@ -939,24 +944,32 @@ class SectionParser:
         if level:
             return level
 
-        return 0 if self._in_table_cell else self._heading_level_by_font(para)
+        if self._in_table_cell:
+            return 0
+        if len(self._font_heading_paragraphs) < MAX_FONT_HEADING_PARAGRAPHS:
+            self._font_heading_paragraphs.append(para)
+        elif len(self._font_heading_paragraphs) == MAX_FONT_HEADING_PARAGRAPHS:
+            self.errors.append('WARN: HWP 글꼴 제목 문단 한도 초과')
+            self._font_heading_paragraphs.append(None)
+        return self._heading_level_by_font(para)
 
     @staticmethod
-    def _heading_level_by_font(para) -> int:
+    def _heading_level_by_font(para, body_size=0) -> int:
         # 개요 정보가 없는 셀 밖 문단만 글꼴 크기로 판단한다.
-        for run in para.runs:
-            if not run.text.strip():
-                continue
-            size = run.font_size_pt
-            if size >= 20:
-                return 1
-            elif size >= 16:
-                return 2
-            elif size >= 13:
-                return 3
-            break
-
+        if body_size:
+            return relative_heading_level(para.runs, body_size)
+        size = first_visible_font_size(para.runs)
+        if size >= 20:
+            return 1
+        if size >= 16:
+            return 2
+        if size >= 13:
+            return 3
         return 0
+
+    def finalize_font_headings(self):
+        return finalize_font_headings(
+            para for para in self._font_heading_paragraphs if para is not None)
 
     def _outline_level(self, shape_id):
         shapes = getattr(self.doc_info, 'para_shapes', [])

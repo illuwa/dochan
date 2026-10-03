@@ -19,6 +19,10 @@ import zipfile
 from typing import BinaryIO, Optional, Sequence, Union
 
 from ..utils import safe_xml as etree
+from ..utils.heading_font import (
+    MAX_FONT_HEADING_PARAGRAPHS, finalize_font_headings,
+    first_visible_font_size, relative_heading_level,
+)
 
 from ..model.document import Document, Section, Paragraph, TextRun
 from ..model.table import Table, Cell
@@ -199,6 +203,7 @@ class HWPXParser:
         # 중첩 글상자 문단이 텍스트 뒤에 이미 배치한 그림·각주(id). 모델에 표지를 남기지 않는다.
         self._placed_pictures = set()
         self._chart_count = 0
+        self._font_heading_paragraphs = []
         self._chart_bytes = 0
         self._chart_series = 0
         self._chart_points = 0
@@ -349,6 +354,7 @@ class HWPXParser:
         if self._body_tail_run is not None:
             self._body_tail_run.text = self._body_tail.getvalue()
         self._body_tail.close()
+        finalize_font_headings(self._font_heading_paragraphs)
         doc.errors = self.errors
         return doc
 
@@ -884,19 +890,17 @@ class HWPXParser:
         return comments
 
     @staticmethod
-    def _detect_heading_level_by_font(runs) -> int:
+    def _detect_heading_level_by_font(runs, body_size=0) -> int:
         """Font size 기반 제목 레벨 감지 (개요 정보가 없을 때의 폴백)"""
-        for run in runs:
-            if not run.text.strip():
-                continue
-            size = run.font_size_pt
-            if size >= 20:
-                return 1
-            elif size >= 16:
-                return 2
-            elif size >= 13:
-                return 3
-            break
+        if body_size:
+            return relative_heading_level(runs, body_size)
+        size = first_visible_font_size(runs)
+        if size >= 20:
+            return 1
+        if size >= 16:
+            return 2
+        if size >= 13:
+            return 3
         return 0
 
     def _xml_parents(self):
@@ -905,7 +909,7 @@ class HWPXParser:
                                      if self._section_root is not None else {})
         return self._section_parents
 
-    def _heading_level_for(self, p_elem, runs) -> int:
+    def _heading_level_for(self, p_elem, runs, para=None) -> int:
         """직접 개요 → 스타일 이름/기본 개요 → 폰트 크기로 제목 수준을 정한다."""
         direct_id = _int_attr(p_elem, 'paraPrIDRef', -1)
         direct = self._para_prs.get(direct_id)
@@ -930,11 +934,17 @@ class HWPXParser:
                 return self._outline_level(style['para_pr_id'])
 
         # (c) 셀 안의 문단/중첩 개체는 글꼴 크기만으로 제목이 되지 않는다.
-        level = self._detect_heading_level_by_font(runs)
-        if level and any(parent.tag == '{%s}tc' % NS['hp']
-                         for parent in etree.ancestors(p_elem, self._xml_parents())):
+        in_cell = any(parent.tag == '{%s}tc' % NS['hp']
+                      for parent in etree.ancestors(p_elem, self._xml_parents()))
+        if in_cell:
             return 0
-        return level
+        if para is not None:
+            if len(self._font_heading_paragraphs) < MAX_FONT_HEADING_PARAGRAPHS:
+                self._font_heading_paragraphs.append(para)
+            elif len(self._font_heading_paragraphs) == MAX_FONT_HEADING_PARAGRAPHS:
+                self.errors.append('WARN: HWPX 글꼴 제목 문단 한도 초과')
+                self._font_heading_paragraphs.append(None)
+        return self._detect_heading_level_by_font(runs)
 
     def _outline_level(self, para_pr_id: int) -> int:
         info = self._para_prs.get(para_pr_id)
@@ -947,7 +957,7 @@ class HWPXParser:
         para = Paragraph(runs=runs)
         para.style_id = _int_attr(p_elem, 'styleIDRef', -1)
         para.para_shape_id = _int_attr(p_elem, 'paraPrIDRef', -1)
-        para.heading_level = self._heading_level_for(p_elem, runs)
+        para.heading_level = self._heading_level_for(p_elem, runs, para)
         return para
 
     def _parse_paragraph_elem(self, p_elem) -> list:

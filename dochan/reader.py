@@ -448,6 +448,9 @@ class Dochan:
                 except Exception as e:
                     self.doc.errors.append(f"ERR: 섹션 {section_idx} 파싱 실패: {e}")
             self.doc.errors.extend(section_parser.errors)
+            finalize_headings = getattr(section_parser, 'finalize_font_headings', None)
+            if finalize_headings is not None:
+                finalize_headings()
 
             # 4. BinData 이미지 연결
             bin_items = {}

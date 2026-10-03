@@ -9,7 +9,7 @@ from dochan import cfb
 from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
-from .summary_info import parse_summary_information
+from .summary_info import parse_summary_information, prepend_summary, summary_elements
 from .xls_hyperlink import parse_hlink
 from .xls_notes import MAX_DRAWING_OBJECTS, MAX_SHEET_NOTE_CHARS, object_header, read_txo_text
 from .xls_chart import parse_chart_substreams
@@ -2369,15 +2369,7 @@ def _parse_summary_information(data: bytes, errors=None) -> Dict[str, str]:
 
 
 def _summary_elements(properties: Dict[str, str]) -> List[Paragraph]:
-    provenance = Provenance(source_format="xls", path="\x05SummaryInformation")
-    elements = []
-    if properties.get("title"):
-        elements.append(Paragraph(runs=[TextRun(properties["title"])], heading_level=1,
-                                  provenance=provenance))
-    if properties.get("creator"):
-        elements.append(Paragraph(runs=[TextRun("Author: " + properties["creator"])],
-                                  provenance=provenance))
-    return elements
+    return summary_elements(properties, "XLS")
 
 
 class XLSReader:
@@ -2452,19 +2444,7 @@ class XLSReader:
                 if doc.errors:
                     best_document.errors.extend(doc.errors)
                 doc = best_document
-                if ole.exists("\x05SummaryInformation"):
-                    try:
-                        summary_data = read_ole_stream(
-                            ole, "\x05SummaryInformation", max_bytes=1024 * 1024,
-                            budget=stream_budget)
-                        properties = _parse_summary_information(summary_data, doc.errors)
-                        elements = _summary_elements(properties)
-                        if elements:
-                            if not doc.sections:
-                                doc.sections.append(Section())
-                            doc.sections[0].elements[:0] = elements
-                    except Exception as exc:
-                        doc.errors.append("WARN: XLS SummaryInformation unavailable: %s" % exc)
+                prepend_summary(ole, doc, "XLS", stream_budget, warn_partial=False)
                 return doc
             return doc
         except Exception as exc:

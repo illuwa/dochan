@@ -22,16 +22,27 @@ def snapshot(path, include_json=False):
     converted = Dochan(str(path))
     doc = converted.doc
     markdown = converted.to_markdown()
+    json_digest = _digest(converted.to_json()) if include_json else None
     metadata = []
+    metadata_positions = []
+    header_positions = []
     if doc.sections:
         elements = doc.sections[0].elements
-        while elements and getattr(getattr(elements[0], "provenance", None), "path", "") == "\x05SummaryInformation":
-            metadata.append(elements.pop(0).text)
+        for index, element in enumerate(elements):
+            if getattr(getattr(element, "provenance", None), "path", "") == "\x05SummaryInformation":
+                metadata.append(element.text)
+                metadata_positions.append(index)
+            elif type(element).__name__ == "HeaderFooter" and element.type == "header":
+                header_positions.append(index)
+        for index in reversed(metadata_positions):
+            elements.pop(index)
     body = to_markdown(doc) if metadata else markdown
     result = {"markdown_sha256": _digest(markdown), "body_sha256": _digest(body),
-              "characters": len(markdown), "metadata": metadata, "errors": doc.errors}
+              "characters": len(markdown), "metadata": metadata,
+              "metadata_positions": metadata_positions, "header_positions": header_positions,
+              "errors": doc.errors}
     if include_json:
-        result["json_sha256"] = _digest(converted.to_json())
+        result["json_sha256"] = json_digest
     return result
 
 

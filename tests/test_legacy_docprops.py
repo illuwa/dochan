@@ -7,6 +7,9 @@ from dochan.office_binary.summary_info import parse_summary_information
 from dochan.office_binary.doc import DOCReader
 from dochan.office_binary.ppt import PPTReader
 from dochan.output.markdown import to_markdown
+from dochan.model.document import Document, Paragraph, Section, TextRun
+from dochan.model.header_footer import HeaderFooter
+from dochan.conversion import Provenance
 
 
 FMTID_SUMMARY = bytes.fromhex("e0859ff2f94f6810ab9108002b27b3d9")
@@ -113,3 +116,185 @@ def test_encrypted_legacy_document_does_not_emit_plaintext_properties(
     doc = reader().read(str(path))
     assert doc.sections == []
     assert any(error.startswith("ERR:") for error in doc.errors)
+
+
+@pytest.mark.parametrize("codepage,encoding,title", [
+    (51949, "euc_kr", "계획서"), (54936, "gb18030", "计划"),
+    (10007, "mac_cyrillic", "План"), (20127, "ascii", "Plan"),
+    (10006, "mac_greek", "Αθήνα"), (10029, "mac_latin2", "Čas"),
+    (10079, "mac_iceland", "Ísland"), (10081, "mac_turkish", "İzmir"),
+    (28591, "iso8859_1", "Café"), (28599, "iso8859_9", "İzmir"),
+    (65001, "utf-8", "계획"),
+])
+def test_summary_information_decodes_additional_valid_codepages(codepage, encoding, title):
+    encoded = (title + "\0").encode(encoding)
+    data = _summary_with_encoded_title(encoded, codepage)
+    assert parse_summary_information(data, "DOC")["title"] == title
+
+
+def _summary_with_encoded_title(encoded, codepage):
+    entries = [(1, struct.pack("<IH", 2, codepage) + b"\0\0"),
+               (2, _property(30, encoded, len(encoded))),
+               (4, _property(30, b"Alice\0", 6))]
+    offset = 8 + 8 * len(entries)
+    table = []
+    for identifier, value in entries:
+        table.append(struct.pack("<II", identifier, offset))
+        offset += len(value)
+    section = struct.pack("<II", offset, len(entries)) + b"".join(table)
+    section += b"".join(value for _, value in entries)
+    return b"\xfe\xff\0\0" + b"\0" * 20 + struct.pack("<I", 1) + FMTID_SUMMARY + struct.pack("<I", 48) + section
+
+
+def test_unknown_codepage_warns_before_fallback():
+    errors = []
+    assert parse_summary_information(_summary(), "DOC", errors)["title"] == "Board"
+    data = _summary().replace(struct.pack("<H", 1252), struct.pack("<H", 65534), 1)
+    assert parse_summary_information(data, "DOC", errors)["title"] == "Board"
+    assert any("code page" in error for error in errors)
+
+
+def test_empty_summary_stream_is_ignored_without_warning():
+    from dochan.office_binary.summary_info import read_summary_elements
+    from dochan.utils.bounded_io import ByteBudget
+    from io import BytesIO
+
+    class Ole:
+        def exists(self, name):
+            return True
+
+        def openstream(self, name):
+            return BytesIO(b"")
+
+    errors = []
+    assert read_summary_elements(Ole(), "DOC", errors, ByteBudget(1024)) == []
+    assert errors == []
+
+
+def test_doc_structure_path_places_properties_after_header(monkeypatch, tmp_path):
+    from io import BytesIO
+
+    word = bytearray(64)
+    word[:2] = b"\xec\xa5"
+
+    class Ole:
+        def __init__(self, path):
+            pass
+
+        def exists(self, name):
+            return name in ("WordDocument", "0Table", "\x05SummaryInformation")
+
+        def openstream(self, name):
+            return BytesIO({"WordDocument": bytes(word), "0Table": b"table",
+                            "\x05SummaryInformation": _summary()}[name])
+
+        def close(self):
+            pass
+
+    calls = []
+
+    def structured(word_data, table_data, load_data, **kwargs):
+        calls.append(table_data)
+        return Document(source_format="doc", sections=[Section(elements=[
+            HeaderFooter(type="header", paragraphs=[Paragraph(runs=[TextRun("Head")])]),
+            Paragraph(runs=[TextRun("Body")]),
+        ])])
+
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", Ole)
+    monkeypatch.setattr("dochan.office_binary.doc_structure.parse_structured_doc", structured)
+    path = tmp_path / "structure.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+    doc = DOCReader().read(str(path))
+    assert calls == [b"table"]
+    assert [type(e).__name__ for e in doc.sections[0].elements] == [
+        "HeaderFooter", "Paragraph", "Paragraph", "Paragraph"]
+    assert [e.text for e in doc.sections[0].elements[1:]] == ["Board", "Author: Alice", "Body"]
+
+
+def test_doc_fib_encryption_blocks_plaintext_properties(monkeypatch, tmp_path):
+    from io import BytesIO
+    word = bytearray(64)
+    word[:2] = b"\xec\xa5"
+    struct.pack_into("<H", word, 10, 0x0100)
+
+    class Ole:
+        def __init__(self, path):
+            pass
+
+        def exists(self, name):
+            return name in ("WordDocument", "0Table", "\x05SummaryInformation")
+
+        def openstream(self, name):
+            return BytesIO({"WordDocument": bytes(word), "0Table": b"bad",
+                            "\x05SummaryInformation": _summary()}[name])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", Ole)
+    path = tmp_path / "encrypted.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+    for password in (None, "wrong"):
+        doc = DOCReader(password=password).read(str(path))
+        assert doc.sections == []
+        assert any(error.startswith("ERR:") for error in doc.errors)
+
+
+def test_ppt_decryption_failure_blocks_plaintext_properties(monkeypatch, tmp_path):
+    from io import BytesIO
+
+    class Ole:
+        def __init__(self, path):
+            pass
+
+        def exists(self, name):
+            return name in ("PowerPoint Document", "Current User", "\x05SummaryInformation")
+
+        def openstream(self, name):
+            return BytesIO({"PowerPoint Document": b"encrypted", "Current User": b"current",
+                            "\x05SummaryInformation": _summary()}[name])
+
+        def close(self):
+            pass
+
+    def rejected(*args):
+        raise ValueError("PPT password required")
+
+    monkeypatch.setattr("dochan.office_binary.ppt.cfb.OleFileIO", Ole)
+    monkeypatch.setattr("dochan.crypto.ppt.decrypt_presentation", rejected)
+    path = tmp_path / "encrypted.ppt"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+    for password in (None, "wrong"):
+        doc = PPTReader(password=password).read(str(path))
+        assert doc.sections == []
+        assert any(error.startswith("ERR:") for error in doc.errors)
+
+
+def test_probe_separates_metadata_after_header(monkeypatch, tmp_path):
+    from scripts import probe_legacy_docprops as probe
+    from dochan.output.markdown import to_markdown
+
+    header = HeaderFooter(type="header", paragraphs=[Paragraph(runs=[TextRun("Head")])])
+    property_element = Paragraph(runs=[TextRun("Author: Alice")],
+                                 provenance=Provenance(source_format="doc", path="\x05SummaryInformation"))
+    body = Paragraph(runs=[TextRun("Body")])
+    doc = Document(source_format="doc", sections=[Section(elements=[header, property_element, body])])
+    markdown = to_markdown(doc)
+
+    class Converted:
+        def __init__(self, path):
+            self.doc = doc
+
+        def to_markdown(self):
+            return markdown
+
+        def to_json(self):
+            return "{}"
+
+    monkeypatch.setattr(probe, "Dochan", Converted)
+    result = probe.snapshot(tmp_path / "synthetic.doc", include_json=True)
+    assert result["metadata"] == ["Author: Alice"]
+    assert result["metadata_positions"] == [1]
+    assert result["header_positions"] == [0]
+    assert result["body_sha256"] == probe._digest(to_markdown(
+        Document(source_format="doc", sections=[Section(elements=[header, body])])))

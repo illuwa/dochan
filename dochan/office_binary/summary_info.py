@@ -4,6 +4,7 @@ from typing import Dict, List
 
 from ..conversion import Provenance
 from ..model.document import Paragraph, Section, TextRun
+from ..model.header_footer import HeaderFooter
 from ..utils.bounded_io import read_ole_stream
 
 
@@ -15,6 +16,14 @@ MAX_SUMMARY_BYTES = 1024 * 1024
 MAX_SECTIONS = 16
 MAX_PROPERTIES = 1024
 MAX_STRING_CHARS = 4096
+# [MS-UCODEREF] code pages whose Python codec is not named cp<id>.
+CODEPAGE_CODECS = {
+    10000: "mac_roman", 10006: "mac_greek", 10007: "mac_cyrillic",
+    10029: "mac_latin2", 10079: "mac_iceland", 10081: "mac_turkish",
+    1200: "utf-16-le", 20127: "ascii", 32768: "mac_roman",
+    32769: "cp1252", 51949: "euc_kr", 54936: "gb18030",
+    65001: "utf-8",
+}
 
 
 def parse_summary_information(data: bytes, source_format: str, errors=None,
@@ -29,6 +38,8 @@ def parse_summary_information(data: bytes, source_format: str, errors=None,
             or data[:2] != b"\xfe\xff"):
         return invalid()
     section_count = struct.unpack_from("<I", data, 24)[0]
+    # [MS-OLEPS] 2.21 defines one or two sections. Keep the older bounded
+    # tolerance for extra sections because only the first summary FMTID is read.
     if (not 1 <= section_count <= MAX_SECTIONS
             or 28 + 20 * section_count > len(data)
             or data[28:44] != FMTID_SUMMARY):
@@ -59,6 +70,19 @@ def parse_summary_information(data: bytes, source_format: str, errors=None,
         else:
             malformed = True
     result = {}
+    if codepage in CODEPAGE_CODECS:
+        encoding = CODEPAGE_CODECS[codepage]
+    elif 28591 <= codepage <= 28599:
+        encoding = "iso8859_%d" % (codepage - 28590)
+    else:
+        encoding = "cp%d" % codepage
+    try:
+        "".encode(encoding)
+    except LookupError:
+        if warn_partial and errors is not None:
+            errors.append("WARN: %s unknown SummaryInformation code page %d; using cp1252" % (
+                source_format, codepage))
+        encoding = "cp1252"
     for identifier, key in ((2, "title"), (4, "creator")):
         offset = offsets.get(identifier)
         if offset is None:
@@ -76,15 +100,7 @@ def parse_summary_information(data: bytes, source_format: str, errors=None,
             malformed = True
             continue
         raw = data[offset + 8:offset + 8 + byte_count]
-        if value_type == 31 or codepage == 1200:
-            encoding = "utf-16-le"
-        else:
-            encoding = ("mac_roman" if codepage in (10000, 32768)
-                        else "cp1252" if codepage == 32769 else "cp%d" % codepage)
-        try:
-            value = raw.decode(encoding, errors="replace")
-        except LookupError:
-            value = raw.decode("cp1252", errors="replace")
+        value = raw.decode("utf-16-le" if value_type == 31 else encoding, errors="replace")
         value = value.split("\x00", 1)[0].strip()
         if value:
             result[key] = value
@@ -105,23 +121,34 @@ def summary_elements(properties: Dict[str, str], source_format: str) -> List[Par
     return elements
 
 
-def read_summary_elements(ole, source_format: str, errors, budget) -> List[Paragraph]:
+def read_summary_elements(ole, source_format: str, errors, budget,
+                          warn_partial: bool = True) -> List[Paragraph]:
     """Read optional metadata after the caller has accepted or decrypted the body."""
     if not ole.exists(SUMMARY_STREAM):
         return []
     try:
         data = read_ole_stream(ole, SUMMARY_STREAM, max_bytes=MAX_SUMMARY_BYTES,
                                budget=budget)
-        properties = parse_summary_information(data, source_format, errors)
+        if not data:
+            return []
+        properties = parse_summary_information(data, source_format, errors,
+                                               warn_partial=warn_partial)
         return summary_elements(properties, source_format)
     except Exception as exc:
         errors.append("WARN: %s SummaryInformation unavailable: %s" % (source_format, exc))
         return []
 
 
-def prepend_summary(ole, doc, source_format: str, budget) -> None:
-    elements = read_summary_elements(ole, source_format, doc.errors, budget)
+def prepend_summary(ole, doc, source_format: str, budget,
+                    warn_partial: bool = True) -> None:
+    elements = read_summary_elements(ole, source_format, doc.errors, budget,
+                                     warn_partial=warn_partial)
     if elements:
         if not doc.sections:
             doc.sections.append(Section())
-        doc.sections[0].elements[:0] = elements
+        existing = doc.sections[0].elements
+        index = 0
+        if source_format.upper() == "DOC":
+            while index < len(existing) and isinstance(existing[index], HeaderFooter) and existing[index].type == "header":
+                index += 1
+        existing[index:index] = elements

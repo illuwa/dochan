@@ -4,7 +4,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 붙인다. 검증 표본·정답 근거·수치는 `docs/benchmarks/` 의 날짜별 기록에 있다(2026-10-02·03 기록이 1.7.0 분).
 실물 표본은 공개 자료(Apache POI·LibreOffice·Apache Tika 테스트 문서, pdf.js 테스트 PDF, 공개 HWP/HWPX)와
 저장소 밖 내부 실물 짝이며, 내부 문서의 이름·내용은 기록하지 않는다.
-- **DOC·PPT 문서 속성**: 유효한 OLE SummaryInformation의 제목·작성자를 본문 앞에 표시하며, 손상된 속성은 경고로 건너뛰고 암호로 본문을 열지 못한 문서에는 속성을 표시하지 않는다([검증 기록](benchmarks/2026-10-04-legacy-docprops-real-docs.md)).
+- **DOC·PPT 문서 속성**: 유효한 OLE SummaryInformation의 제목·작성자를 표시한다. DOC에서는 머리글 뒤, 본문 앞에 놓는다. 공개 DOC 490개·PPT 220개의 본문은 각각 490/490·220/220 불변이고, DOC 짝 13/13·PPT 짝 8/8에서 속성 요소 위치가 같다. 0바이트 속성 스트림은 건너뛰고 손상된 비어 있지 않은 속성은 경고로 남긴다. 암호로 본문을 열지 못하면 속성도 표시하지 않는다. 암호를 열 수 있는 CryptoAPI PPT의 `EncryptedSummary` 속성 복호화는 지원하지 않는다([검증 기록](benchmarks/2026-10-04-legacy-docprops-real-docs.md), [리뷰 반영](benchmarks/2026-10-04-legacy-docprops-fix-real-docs.md)).
 
 ## 암호화 문서
 

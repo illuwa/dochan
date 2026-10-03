@@ -327,7 +327,7 @@ def test_hyperlink_range_claiming_whole_sheet_fills_only_anchor():
 
 
 def test_biff2_eight_byte_dimension_is_applied():
-    """8바이트 DIMENSION(BIFF2)도 사용 범위로 인정한다.
+    """8바이트 DIMENSION(BIFF2)을 읽되 끝의 빈 서식 범위는 표시하지 않는다.
 
     고치기 전에는 12바이트 형식만 가정해 이 레코드를 통째로 무시했다.
     """
@@ -336,8 +336,8 @@ def test_biff2_eight_byte_dimension_is_applied():
     doc = parse_biff_workbook(_workbook("Biff2Dim", body))
     table = _first_table(doc.sections[0])
 
-    assert table.row_count == 4
-    assert table.col_count == 3
+    assert table.row_count == 1
+    assert table.col_count == 1
     assert table.rows[0][0].text == "X"
 
 
@@ -351,8 +351,8 @@ def test_biff4_ten_byte_dimension_does_not_raise_struct_error():
     doc = parse_biff_workbook(_workbook("Biff4Dim", body))
     table = _first_table(doc.sections[0])
 
-    assert table.row_count == 4
-    assert table.col_count == 3
+    assert table.row_count == 1
+    assert table.col_count == 1
     assert table.rows[0][0].text == "X"
 
 
@@ -412,8 +412,8 @@ def test_xls_reader_reports_filepass_protected_workbook(monkeypatch, tmp_path):
 # --- 8. 내용 없는 큰 격자 ----------------------------------------------------
 
 
-def test_empty_large_grid_produces_no_table_but_small_empty_grid_is_kept():
-    """탭만 수천 개인 표는 만들지 않되, 작은 빈 격자는 기존대로 보존한다."""
+def test_empty_grids_produce_no_table_regardless_of_declared_size():
+    """내용 없는 BLANK와 ROW/COLINFO만으로 빈 표를 만들지 않는다."""
     large_body = _blank(0, 0) + _row_record(199) + _colinfo(0, 19)
     small_body = _blank(0, 0) + _blank(0, 2)
 
@@ -422,21 +422,19 @@ def test_empty_large_grid_produces_no_table_but_small_empty_grid_is_kept():
     small_table = _first_table(small_doc.sections[0])
 
     assert _first_table(large_doc.sections[0]) is None
-    assert small_table is not None
-    assert [cell.text for cell in small_table.rows[0]] == ["", "", ""]
+    assert small_table is None
 
 
-def test_large_grid_with_any_content_is_still_rendered():
-    """내용이 한 칸이라도 있으면 큰 격자(2만 셀)를 버리지도 자르지도 않는다."""
+def test_large_declared_grid_keeps_content_without_trailing_empty_cells():
+    """내용 한 칸은 보존하고 ROW/COLINFO의 끝 빈 좌표는 자른다."""
     body = _label(0, 0, "Only value") + _row_record(999) + _colinfo(0, 19)
 
     doc = parse_biff_workbook(_workbook("SparseButUsed", body))
     table = _first_table(doc.sections[0])
 
-    assert table.row_count == 1000
-    assert table.col_count == 20
+    assert table.row_count == 1
+    assert table.col_count == 1
     assert table.rows[0][0].text == "Only value"
-    assert table.rows[999][19].text == ""
 
 
 # --- 9·10. DOC 후보 스트림 파싱 실패와 빈 본문 진단 --------------------------

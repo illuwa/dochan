@@ -144,7 +144,7 @@ def test_array_formula_anchor_and_follower_keep_template_and_cache():
     array = record(0x221, struct.pack('<HHBBHIH',0,1,1,1,0,0,len(tokens)) + tokens)
     doc = xls.parse_biff_workbook(workbook(b'', formula(0,10) + array + formula(1,20)))
     assert doc.sections[0].elements[0].rows[0][1].text == '10 (=A1)'
-    assert doc.sections[0].elements[0].rows[1][1].text == '20 (=A1)'
+    assert doc.sections[0].elements[0].rows[1][1].text == '20'
 
 
 def test_rejected_cells_do_not_capture_font_metadata(monkeypatch):

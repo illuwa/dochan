@@ -140,7 +140,7 @@ def test_formula_array_template_and_followers_receive_extra_data():
                       + struct.pack('<H', len(tokens)) + tokens + array_extra([[1, 2]]))
     exp = b'\x01' + b'\0' * 4
     doc = workbook(b'', formula(exp) + template + formula(exp, row=1))
-    assert texts(doc) == ['42 (=TRANSPOSE({1,2}))'] * 2
+    assert texts(doc) == ['42 (=TRANSPOSE({1,2}))', '42']
 
 
 def test_formula_defined_name_array_extra():

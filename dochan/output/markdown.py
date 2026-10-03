@@ -128,7 +128,11 @@ def _is_meaningful_sheet_name(name: str) -> bool:
 def _is_sheet_preamble(elem) -> bool:
     provenance = getattr(elem, "provenance", None)
     path = str(getattr(provenance, "path", "") or "")
-    return path == "docProps/core.xml" or path == "xl/workbook.xml"
+    if path in {"docProps/core.xml", "xl/workbook.xml", "\x05SummaryInformation"}:
+        return True
+    return (path in {"Workbook", "Book"}
+            and getattr(provenance, "source_format", "") == "xls"
+            and isinstance(elem, Paragraph) and elem.text.startswith("Defined name: "))
 
 
 def _should_include_slide_headings(doc: Document) -> bool:

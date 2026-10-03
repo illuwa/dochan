@@ -57,8 +57,9 @@ def test_biff5_name_uses_externcount_and_externsheet_record():
     bound = record(0x85, struct.pack('<IBBB', sheet_start, 0, 0, 6) + b'Sheet1')
     doc = parse_biff_workbook(bof + externs + name + bound + record(10)
                               + record(0x809, struct.pack('<HH', 0x0500, 0x0010)) + record(10))
-    assert any('Defined name: _FilterDatabase = Sheet1!$A$5:$F$376' in e.text
-               for s in doc.sections for e in s.elements if hasattr(e, 'text'))
+    assert not any('Defined name: _FilterDatabase' in e.text
+                   for s in doc.sections for e in s.elements if hasattr(e, 'text'))
+    assert not doc.errors
 
 
 @pytest.mark.parametrize('tokens', [

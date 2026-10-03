@@ -73,6 +73,7 @@ class _DefinedName:
     tokens: bytes = b""
     scope: int = 0
     extra: bytes = b""
+    hidden: bool = False
 
 
 MAX_BIFF_ROWS = 65536
@@ -576,6 +577,7 @@ def _read_name_record(record_data: bytes, biff_version: int = 0x0600,
                       codepage: str = 'cp1252') -> _DefinedName:
     if len(record_data) < 15:
         return _DefinedName("")
+    name_options = struct.unpack_from("<H", record_data, 0)[0]
     scope = struct.unpack_from("<H", record_data, 8)[0]
     name_length = record_data[3]
     formula_length = struct.unpack_from("<H", record_data, 4)[0]
@@ -608,7 +610,7 @@ def _read_name_record(record_data: bytes, biff_version: int = 0x0600,
     if offset > len(record_data):
         return _DefinedName("")
     # RgbExtra precedes the optional menu/description/help/status strings.
-    return _DefinedName(name, tokens, scope, record_data[offset:])
+    return _DefinedName(name, tokens, scope, record_data[offset:], bool(name_options & 0x0001))
 
 
 def _defined_name_elements(
@@ -623,7 +625,8 @@ def _defined_name_elements(
 ) -> List[Paragraph]:
     elements = []
     for defined_name in defined_names:
-        if not defined_name.name or not defined_name.tokens:
+        if (not defined_name.name or not defined_name.tokens or defined_name.hidden
+                or defined_name.name.startswith("_xlfn.")):
             continue
         target = _decode_formula_token_stream(
             defined_name.tokens, extra_data=defined_name.extra,
@@ -1215,6 +1218,8 @@ def _parse_sheet_records(
                 pending_shared_formula_anchor = formula_anchor
                 if formula_anchor in array_formulas:
                     formula = array_formulas[formula_anchor]
+                    if (row, col) != formula_anchor:
+                        formula = ''
                     _set_sheet_cell(sheet, row, col, _with_formula_text(formatted, formula), 'ARRAY formula')
                 elif formula_anchor in shared_formula_templates:
                     formula = _decode_shared_formula_for_cell(
@@ -1335,9 +1340,11 @@ def _parse_sheet_records(
             cells = shared_formula_cells.pop(anchor, [])
             for cell in cells:
                 cached = sheet.formula_values.get(cell) or ''
-                _set_sheet_cell(sheet, cell[0], cell[1], _with_formula_text(cached, formula), 'ARRAY formula')
+                _set_sheet_cell(sheet, cell[0], cell[1],
+                                _with_formula_text(cached, formula if cell == anchor else ''),
+                                'ARRAY formula')
             if pending_formula_cell in cells:
-                pending_formula_text = formula
+                pending_formula_text = formula if pending_formula_cell == anchor else ''
         elif record_type == 0x04BC and pending_shared_formula_anchor is not None:  # SHRFMLA
             tokens, extra_data = _shared_formula_data(record_data)
             if tokens:
@@ -2192,7 +2199,7 @@ def _sheet_to_table(
     errors: Optional[List[str]] = None,
     budget: Optional[List[int]] = None,
 ) -> Table:
-    if not sheet.cells and not sheet.row_indices and not sheet.col_indices:
+    if not sheet.cells and not sheet.merged_ranges and not sheet.hyperlinks and not sheet.comments:
         return Table()
 
     # 경계는 '내용이 있는 좌표' 로 잡아야 한다. MULBLANK/BLANK 가 만든 빈 자리표시자까지
@@ -2200,32 +2207,21 @@ def _sheet_to_table(
     content_keys = [key for key, value in sheet.cells.items() if value]
     content_keys.extend(sheet.hyperlinks.keys())
     content_keys.extend(sheet.comments.keys())
+    for first_row, last_row, first_col, last_col in sheet.merged_ranges:
+        content_keys.extend(((first_row, first_col), (last_row, last_col)))
     content_rows = {row for row, _ in content_keys}
     content_cols = {col for _, col in content_keys}
 
-    cell_rows = {row for row, _ in sheet.cells.keys()}
-    cell_cols = {col for _, col in sheet.cells.keys()}
-
-    max_row = max(cell_rows | sheet.row_indices, default=-1)
-    max_col = max(cell_cols | sheet.col_indices, default=-1)
-
-    # DIMENSION 은 생성기가 주장하는 값이라 실제 데이터 범위보다 훨씬 클 수 있다.
-    # 경계값만 반영한다. range() 로 집합에 풀면 65536개 정수를 채우게 된다.
-    if sheet.dimension:
-        first_row, last_row, first_col, last_col = sheet.dimension
-        if last_row > first_row:
-            max_row = max(max_row, last_row - 1)
-            sheet.row_indices.update((first_row, last_row - 1))
-        if last_col > first_col:
-            max_col = max(max_col, last_col - 1)
-            sheet.col_indices.update((first_col, last_col - 1))
+    # ROW, COLINFO, DIMENSION and BLANK describe formatting/used range, not
+    # visible content. XLSX likewise stops at the last displayed cell or merge.
+    max_row = max(content_rows, default=-1)
+    max_col = max(content_cols, default=-1)
 
     if max_row < 0 or max_col < 0:
         return Table()
 
 
-    # 내용이 하나도 없는 큰 격자는 탭만 수십만 개인 표가 되어 출력 가치가 없다.
-    # 작은 격자는 빈 좌표 보존을 위해 그대로 둔다.
+    # 병합만 있고 표시 내용이 없는 큰 격자는 출력하지 않는다.
     has_content = any(sheet.cells.values()) or sheet.hyperlinks or sheet.comments
     if not has_content and (max_row + 1) * (max_col + 1) > MAX_EMPTY_GRID_CELLS:
         return Table()
@@ -2338,6 +2334,75 @@ def _score_biff_document(document: Document) -> tuple[int, int, int]:
     return (section_count, table_cells, text_elements)
 
 
+def _parse_summary_information(data: bytes, errors=None) -> Dict[str, str]:
+    """Read title and author from the [MS-OLEPS] SummaryInformation section."""
+    def invalid():
+        if errors is not None:
+            errors.append("WARN: XLS malformed SummaryInformation ignored")
+        return {}
+
+    if len(data) < 48 or data[:2] != b"\xfe\xff":
+        return invalid()
+    section_count = struct.unpack_from("<I", data, 24)[0]
+    if not 1 <= section_count <= 16 or 28 + 20 * section_count > len(data):
+        return invalid()
+    section_offset = struct.unpack_from("<I", data, 44)[0]
+    if section_offset + 8 > len(data):
+        return invalid()
+    section_size, property_count = struct.unpack_from("<II", data, section_offset)
+    if (section_size < 8 or section_offset + section_size > len(data)
+            or property_count > 1024 or 8 + property_count * 8 > section_size):
+        return invalid()
+    end = section_offset + section_size
+    offsets = {}
+    for index in range(property_count):
+        identifier, relative = struct.unpack_from("<II", data, section_offset + 8 + index * 8)
+        if identifier in (1, 2, 4) and 8 + property_count * 8 <= relative <= section_size - 4:
+            offsets[identifier] = section_offset + relative
+    codepage = 1252
+    if 1 in offsets and offsets[1] + 6 <= end:
+        offset = offsets[1]
+        if struct.unpack_from("<I", data, offset)[0] == 2:
+            codepage = struct.unpack_from("<H", data, offset + 4)[0]
+    result = {}
+    for identifier, key in ((2, "title"), (4, "creator")):
+        offset = offsets.get(identifier)
+        if offset is None or offset + 8 > end:
+            continue
+        value_type, count = struct.unpack_from("<II", data, offset)
+        if value_type not in (30, 31) or count > 4096:
+            continue
+        byte_count = count * (2 if value_type == 31 else 1)
+        if offset + 8 + byte_count > end:
+            continue
+        raw = data[offset + 8:offset + 8 + byte_count]
+        if value_type == 31:
+            encoding = "utf-16-le"
+        elif codepage == 1200:
+            encoding = "utf-16-le"
+        else:
+            encoding = "cp%d" % codepage
+        try:
+            value = raw.decode(encoding, errors="replace").rstrip("\x00").strip()
+        except LookupError:
+            value = raw.decode("cp1252", errors="replace").rstrip("\x00").strip()
+        if value:
+            result[key] = value
+    return result
+
+
+def _summary_elements(properties: Dict[str, str]) -> List[Paragraph]:
+    provenance = Provenance(source_format="xls", path="\x05SummaryInformation")
+    elements = []
+    if properties.get("title"):
+        elements.append(Paragraph(runs=[TextRun(properties["title"])], heading_level=1,
+                                  provenance=provenance))
+    if properties.get("creator"):
+        elements.append(Paragraph(runs=[TextRun("Author: " + properties["creator"])],
+                                  provenance=provenance))
+    return elements
+
+
 class XLSReader:
     format_name = "xls"
     extensions = (".xls",)
@@ -2410,6 +2475,19 @@ class XLSReader:
                 if doc.errors:
                     best_document.errors.extend(doc.errors)
                 doc = best_document
+                if ole.exists("\x05SummaryInformation"):
+                    try:
+                        summary_data = read_ole_stream(
+                            ole, "\x05SummaryInformation", max_bytes=1024 * 1024,
+                            budget=stream_budget)
+                        properties = _parse_summary_information(summary_data, doc.errors)
+                        elements = _summary_elements(properties)
+                        if elements:
+                            if not doc.sections:
+                                doc.sections.append(Section())
+                            doc.sections[0].elements[:0] = elements
+                    except Exception as exc:
+                        doc.errors.append("WARN: XLS SummaryInformation unavailable: %s" % exc)
                 return doc
             return doc
         except Exception as exc:

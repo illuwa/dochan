@@ -537,8 +537,8 @@ def test_parse_biff_workbook_tracks_hidden_sheet_visibility():
     assert doc.sections[0].provenance.hidden is False
     assert doc.sections[1].provenance.sheet == "Hidden"
     assert doc.sections[1].provenance.hidden is True
-    assert doc.sections[0].elements[0].rows[0][0].text == ""
-    assert doc.sections[1].elements[0].rows[0][0].text == ""
+    assert not doc.sections[0].elements
+    assert not doc.sections[1].elements
 
 
 def test_parse_biff_workbook_preserves_cp1252_punctuation_in_shared_strings():
@@ -646,7 +646,7 @@ def test_parse_biff_workbook_reads_older_biff_blank_cells():
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert [cell.text for cell in table.rows[0]] == ["Left", "", ""]
+    assert [cell.text for cell in table.rows[0]] == ["Left"]
 
 
 def test_parse_biff_workbook_restores_unicode_labels_blanks_and_merged_cells():
@@ -811,14 +811,10 @@ def test_parse_biff_workbook_preserves_mulblank_cell_coordinates():
     table = doc.sections[0].elements[0]
 
     assert table.row_count == 1
-    assert table.col_count == 3
-    assert [cell.text for cell in table.rows[0]] == ["10", "", ""]
+    assert table.col_count == 1
+    assert [cell.text for cell in table.rows[0]] == ["10"]
     assert table.rows[0][0].row == 0
     assert table.rows[0][0].col == 0
-    assert table.rows[0][1].row == 0
-    assert table.rows[0][1].col == 1
-    assert table.rows[0][2].row == 0
-    assert table.rows[0][2].col == 2
 
 
 def test_parse_biff_workbook_preserves_row_and_colinfo_extents():
@@ -836,10 +832,9 @@ def test_parse_biff_workbook_preserves_row_and_colinfo_extents():
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert table.row_count == 3
-    assert table.col_count == 4
-    assert [cell.text for cell in table.rows[0]] == ["10", "", "", ""]
-    assert [cell.text for cell in table.rows[2]] == ["", "", "", ""]
+    assert table.row_count == 1
+    assert table.col_count == 1
+    assert [cell.text for cell in table.rows[0]] == ["10"]
 
 
 def test_parse_biff_workbook_preserves_dimension_used_range():
@@ -856,10 +851,9 @@ def test_parse_biff_workbook_preserves_dimension_used_range():
     doc = parse_biff_workbook(workbook)
     table = doc.sections[0].elements[0]
 
-    assert table.row_count == 4
-    assert table.col_count == 3
-    assert [cell.text for cell in table.rows[0]] == ["10", "", ""]
-    assert [cell.text for cell in table.rows[3]] == ["", "", ""]
+    assert table.row_count == 1
+    assert table.col_count == 1
+    assert [cell.text for cell in table.rows[0]] == ["10"]
 
 
 def test_parse_biff_workbook_accepts_empty_dimension_without_diagnostic():

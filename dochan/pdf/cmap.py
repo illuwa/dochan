@@ -4,6 +4,10 @@
 bfchar/bfrange 해석이 한글 텍스트 추출의 핵심이다.
 """
 import re
+import base64
+import bisect
+import zlib
+from functools import lru_cache
 from typing import Dict, Set, Tuple
 
 _CODESPACE_RE = re.compile(rb"begincodespacerange(.*?)endcodespacerange", re.S)
@@ -11,6 +15,190 @@ _BF_CHAR_RE = re.compile(rb"beginbfchar(.*?)endbfchar", re.S)
 _BF_RANGE_RE = re.compile(rb"beginbfrange(.*?)endbfrange", re.S)
 _HEX_RE = re.compile(rb"<([0-9A-Fa-f]+)>")
 _TOKEN_RE = re.compile(rb"<([0-9A-Fa-f]+)>|(\[)|(\])")
+
+MAX_ENCODING_BYTES = 4 * 1024 * 1024
+MAX_ENCODING_RANGES = 100_000
+MAX_CID_SPAN = 0x10ffff
+_ENC_BLOCK = re.compile(rb"begin(codespacerange|cidrange|cidchar|notdefrange|notdefchar)\b"
+                        rb"(.*?)end\1\b", re.S)
+_HEX_PAIR = re.compile(rb"<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,8})>")
+_CID_RANGE = re.compile(rb"<([0-9A-Fa-f]{2,8})>\s*<([0-9A-Fa-f]{2,8})>\s*([0-9]{1,5})(?![0-9])")
+_CID_CHAR = re.compile(rb"<([0-9A-Fa-f]{2,8})>\s*([0-9]{1,5})(?![0-9])")
+
+
+class EncodingCMap:
+    """ISO 32000-1 §9.7.5: 바이트 코드 공간과 CID 범위."""
+
+    def __init__(self, codespaces=(), cidranges=(), notdefranges=(), parent=None,
+                 registry="", ordering="", supplement=0, wmode=0, warnings=None):
+        self.codespaces = tuple(codespaces)
+        self.cidranges = tuple(cidranges)
+        self.notdefranges = tuple(notdefranges)
+        self.parent = parent
+        self.registry = registry or (parent.registry if parent else "")
+        self.ordering = ordering or (parent.ordering if parent else "")
+        self.supplement = supplement
+        self.wmode = wmode
+        self.warnings = warnings
+        self._ranges = {}
+        self._notdef = {}
+        for source, target in ((self.cidranges, self._ranges),
+                               (self.notdefranges, self._notdef)):
+            for length in (1, 2, 3, 4):
+                rows = sorted((lo, hi, cid) for size, lo, hi, cid in source
+                              if size == length)
+                target[length] = ([row[0] for row in rows], rows)
+
+    def _space(self, length, code):
+        if any(size == length and lo <= code <= hi for size, lo, hi in self.codespaces):
+            return True
+        return self.parent._space(length, code) if self.parent else False
+
+    def _lookup(self, length, code, notdef=False):
+        starts, rows = (self._notdef if notdef else self._ranges)[length]
+        pos = bisect.bisect_right(starts, code) - 1
+        if pos >= 0:
+            lo, hi, cid = rows[pos]
+            if code <= hi:
+                return cid if notdef else cid + code - lo
+        return self.parent._lookup(length, code, notdef) if self.parent else None
+
+    def iter_codes(self, raw, warnings=None):
+        warned = False
+        pos = 0
+        while pos < len(raw):
+            match = None
+            for size in (1, 2, 3, 4):
+                if pos + size <= len(raw):
+                    value = int.from_bytes(raw[pos:pos + size], "big")
+                    if self._space(size, value):
+                        match = (size, value)
+                        break
+            if match is None:
+                if warnings is not None and not warned:
+                    warnings.append("WARN: Encoding CMap 코드가 코드 공간 밖이거나 잘림 — CID 0 사용")
+                    warned = True
+                yield raw[pos:pos + 1], 0
+                pos += 1
+                continue
+            size, value = match
+            cid = self._lookup(size, value)
+            if cid is None:
+                cid = self._lookup(size, value, True)
+            if cid is None and warnings is not None and not warned:
+                warnings.append("WARN: Encoding CMap에 코드→CID 대응이 없음 — CID 0 사용")
+                warned = True
+            yield raw[pos:pos + size], cid if cid is not None else 0
+            pos += size
+
+
+def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None):
+    """내장 CMap의 유한한 범위만 읽는다. usecmap은 이름으로 상속한다."""
+    if len(data) > MAX_ENCODING_BYTES:
+        if warnings is not None:
+            warnings.append("WARN: Encoding CMap 크기 한도 초과")
+        return EncodingCMap()
+    source = re.sub(rb"%[^\r\n]*", b"", data)
+    parent = None
+    seen = set(_seen or ())
+    names = re.findall(rb"/([A-Za-z0-9-]+)\s+usecmap\b", source)
+    if names:
+        name = names[-1].decode("ascii")
+        if name not in seen and len(seen) < 8:
+            seen.add(name)
+            if parents and name in parents:
+                parent = parse_encoding_cmap(parents[name], warnings, parents, seen)
+            else:
+                parent = predefined_cmap(name)
+        elif warnings is not None:
+            warnings.append("WARN: Encoding CMap usecmap 순환 또는 깊이 한도")
+    fields = {}
+    for key in (b"Registry", b"Ordering"):
+        match = re.search(rb"/" + key + rb"\s*\(([A-Za-z0-9-]{1,32})\)", source)
+        fields[key] = match.group(1).decode("ascii") if match else ""
+    supplement = re.search(rb"/Supplement\s+([0-9]{1,3})\b", source)
+    mode = re.search(rb"/WMode\s+([01])\s+def\b", source)
+    spaces, ranges, notdef = [], [], []
+    count = 0
+    truncated = False
+    for block in _ENC_BLOCK.finditer(source):
+        kind, body = block.groups()
+        if kind == b"codespacerange":
+            matches = _HEX_PAIR.finditer(body)
+        elif kind in (b"cidrange", b"notdefrange"):
+            matches = _CID_RANGE.finditer(body)
+        else:
+            matches = _CID_CHAR.finditer(body)
+        for item in matches:
+            if count >= MAX_ENCODING_RANGES:
+                truncated = True
+                break
+            first = item.group(1)
+            size = len(first) // 2
+            lo = int(first, 16)
+            if kind in (b"cidchar", b"notdefchar"):
+                hi, cid = lo, int(item.group(2))
+            else:
+                second = item.group(2)
+                if len(second) != len(first):
+                    continue
+                hi = int(second, 16)
+                cid = int(item.group(3)) if kind != b"codespacerange" else 0
+            if (hi < lo or (kind != b"codespacerange" and hi - lo > MAX_CID_SPAN)
+                    or cid > 65535 or kind == b"cidrange" and cid + hi - lo > 65535):
+                truncated = True
+                continue
+            row = (size, lo, hi, cid) if kind != b"codespacerange" else (size, lo, hi)
+            (spaces if kind == b"codespacerange" else
+             notdef if kind.startswith(b"notdef") else ranges).append(row)
+            count += 1
+        if truncated and count >= MAX_ENCODING_RANGES:
+            break
+    if truncated and warnings is not None:
+        warnings.append("WARN: Encoding CMap 항목 또는 범위 한도 초과 — 일부만 사용")
+    return EncodingCMap(spaces, ranges, notdef, parent, fields[b"Registry"],
+                        fields[b"Ordering"], int(supplement.group(1)) if supplement else 0,
+                        int(mode.group(1)) if mode else (parent.wmode if parent else 0), warnings)
+
+
+@lru_cache(maxsize=32)
+def predefined_cmap(name):
+    from .predefined_cmap_data import TABLES
+
+    payload = TABLES.get(name)
+    if payload is None:
+        return None
+    meta, packed = payload
+    parent = predefined_cmap(meta[3]) if meta[3] and meta[3] != name else None
+    binary = zlib.decompress(base64.b85decode(packed))
+    pos = 0
+
+    def integer():
+        nonlocal pos
+        value, shift = 0, 0
+        while True:
+            byte = binary[pos]
+            pos += 1
+            value |= (byte & 127) << shift
+            if byte < 128:
+                return value // 2 if value % 2 == 0 else -(value // 2) - 1
+            shift += 7
+
+    tables = []
+    for _kind in range(2):
+        rows = []
+        for size in (1, 2, 3, 4):
+            count = integer()
+            hi, next_cid = -1, 0
+            for _ in range(count):
+                lo = hi + 1 + integer()
+                hi = lo + integer()
+                cid = next_cid + integer()
+                rows.append((size, lo, hi, cid))
+                next_cid = cid + hi - lo + 1
+        tables.append(rows)
+    return EncodingCMap(meta[0], tables[0], tables[1], parent, meta[1], meta[2],
+                        meta[4], meta[5])
 
 _MAX_RANGE = 65536
 # 누적 매핑 총량 상한 — 개별 bfrange 만 제한하면 압축 1KB 짜리 CMap 으로

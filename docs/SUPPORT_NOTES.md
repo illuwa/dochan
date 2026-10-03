@@ -27,7 +27,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 - **텍스트 · PDF Form XObject**: 페이지가 Form XObject(`Do`)로 그린 글자도 읽는다(행렬·자원 상속·텍스트 상태 상속·BBox 클립·MCID 격리). 공개 pdf.js 983개 중
   Form 글자가 있는 39개에서 PDFium 대비 읽을 수 있는 문자 재현율 95.8%→98.5%. 순환·깊이·반복 호출·Form 바이트(페이지당 16 MiB)·Form 해제 예산(문서당 200 MiB,
   페이지 본문 예산과 별도)에 상한을 둔다. 주석 외관 스트림(/AP)과 Form 안 이미지는 읽지 않는다([검증 기록](benchmarks/2026-10-02-pdf-forms-fix-real-docs.md)).
-- **텍스트 · PDF CID 폰트**: ToUnicode가 없으면 Identity-H/V의 Adobe CID→Unicode 표 또는 내장 TrueType의 CIDToGIDMap·Unicode cmap을 확인해 복원한다. 내장 CIDFontType2가 CID를 GID로 직접 쓰고 명시적 CIDToGIDMap 스트림이 없으면 Adobe 표를 적용하지 않는다. 제어 문자·사설 영역·비문자 대응은 버리고 변형 선택자는 떼어 내 기본 글자만 내며, 근거가 없는 코드는 경고와 함께 생략한다. 비 Identity 인코딩 CMap과 내장 Unicode cmap이 없는 글꼴은 아직 복원하지 않는다([검증 기록](benchmarks/2026-10-03-pdf-cid-unicode-real-docs.md)).
+- **텍스트 · PDF CID 폰트**: ToUnicode가 없으면 Identity-H/V와 Adobe의 미리 정의된 CMap에서 코드→CID를 찾고, Adobe CID→Unicode 표 또는 내장 TrueType의 CIDToGIDMap·Unicode cmap을 확인해 복원한다. 내장 Encoding CMap 스트림의 코드 공간·CID 범위·미리 정의된 부모 CMap도 읽는다. ToUnicode가 있으면 원래 코드 바이트로 조회하며, 폭은 CID를 기준으로 계산한다. 내장 CIDFontType2가 CID를 GID로 직접 쓰고 명시적 CIDToGIDMap 스트림이 없으면 Adobe 표를 적용하지 않는다. 제어 문자·사설 영역·비문자 대응은 버리고 변형 선택자는 떼어 내 기본 글자만 내며, 근거가 없는 코드는 경고와 함께 생략한다([기존 검증](benchmarks/2026-10-03-pdf-cid-unicode-real-docs.md), [CMap 검증](benchmarks/2026-10-04-pdf-predefined-cmap-real-docs.md)).
 - **표 (중첩 텍스트) · PDF (⬜)**: 셀 안에 따로 그려진 표와, 부모 셀의 한 변만 공유하는 닫힌 연결형 중첩 표를 복원한다(내부 실물 66개 중 26개 일치,
   중첩 없는 음성 66문서·공개 983개 오탐 0). 여러 변을 공유하는 연결형과 한 성분 안의 복수 후보는 원형대로 둔다.
 - **표 병합 span · PDF**: 1pt 미만 반복 점선으로 그린 경계를 기존 격자 축 안에서 보강한다(내부 병합 span 216→218/235). 페이지 경계에서 잘린 셀의 결합과

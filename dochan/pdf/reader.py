@@ -13,7 +13,7 @@ from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
 from .content import (MAX_FORM_CACHE_BYTES, ContentTextExtractor, FontInfo,
                       VerticalMetrics, assemble_lines, default_byte_decoder)
-from .cmap import encoding_wmode, parse_tounicode
+from .cmap import encoding_wmode, parse_tounicode, parse_encoding_cmap, predefined_cmap
 from .cid_unicode import (CIDDecoder, MAX_FONT_BYTES, adobe_cid, adobe_space_cid,
                           reverse_truetype_cmap)
 from .images import extract_image_bytes
@@ -727,8 +727,14 @@ class PDFReader:
         return infos
 
     def _build_font_info(self, pdf: PDFFile, name: str, font: dict) -> FontInfo:
-        decoder = self._build_font_decoder(pdf, name, font)
         subtype = str(font.get("Subtype", ""))
+        encoding = pdf.resolve(font.get("Encoding"))
+        encoding_cmap = None
+        if subtype == "Type0" and isinstance(encoding, PDFStream):
+            encoding_cmap = parse_encoding_cmap(pdf.decode_stream_bytes(encoding), pdf.warnings)
+        elif subtype == "Type0" and isinstance(encoding, PDFName):
+            encoding_cmap = predefined_cmap(str(encoding))
+        decoder = self._build_font_decoder(pdf, name, font, encoding_cmap)
         if subtype == "Type0":
             code_bytes = 2  # Identity-H/V — 2바이트 CID (가장 흔한 한국어 폰트)
             widths = self._cid_widths(pdf, font)
@@ -740,8 +746,10 @@ class PDFReader:
         bold, italic = self._font_style_flags(pdf, font, descriptor_font)
         wmode, vertical_metrics = 0, None
         if subtype == "Type0":
-            encoding = pdf.resolve(font.get("Encoding"))
-            if isinstance(encoding, PDFStream):
+            if encoding_cmap is not None:
+                wmode = encoding_wmode(data=pdf.decode_stream_bytes(encoding),
+                                       dictionary_mode=pdf.resolve(encoding.dictionary.get("WMode"))) if isinstance(encoding, PDFStream) else encoding_cmap.wmode
+            elif isinstance(encoding, PDFStream):
                 wmode = encoding_wmode(data=pdf.decode_stream_bytes(encoding),
                                        dictionary_mode=pdf.resolve(encoding.dictionary.get("WMode")))
             else:
@@ -752,7 +760,6 @@ class PDFReader:
                 pdf.warnings.extend(vertical_metrics.warnings)
         reliable = (subtype in ("Type1", "TrueType", "MMType1") or
                     subtype == "Type0" and str(pdf.resolve(font.get("Encoding"))) == "Identity-H")
-        encoding = pdf.resolve(font.get("Encoding"))
         has_unicode_map = getattr(getattr(decoder, "__self__", None), "mapping", None)
         reliable = reliable and getattr(getattr(decoder, "__self__", None), "reliable", True)
         if not has_unicode_map:
@@ -764,7 +771,11 @@ class PDFReader:
             reliable = reliable and (str(encoding) in ("WinAnsiEncoding", "MacRomanEncoding")
                                      or encoding is None and standard_font and subtype != "TrueType")
         space_code = 32
-        if subtype == "Type0" and str(encoding) == "Identity-H" and isinstance(has_unicode_map, dict):
+        if encoding_cmap is not None:
+            _chunk, mapped_space = next(encoding_cmap.iter_codes(b" "))
+            if mapped_space:
+                space_code = mapped_space
+        elif subtype == "Type0" and str(encoding) == "Identity-H" and isinstance(has_unicode_map, dict):
             # CID 32 is not necessarily a space. Use a uniquely identified,
             # explicitly measured U+0020, not the width of an unrelated glyph.
             spaces = [key[1] for key, value in has_unicode_map.items()
@@ -778,7 +789,8 @@ class PDFReader:
                 space_code = recovered_space
         return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes,
                         bold=bold, italic=italic, wmode=wmode, vertical_metrics=vertical_metrics,
-                        link_metrics_reliable=reliable, space_code=space_code)
+                        link_metrics_reliable=reliable, space_code=space_code,
+                        encoding_cmap=encoding_cmap)
 
     def _cid_descendant(self, pdf: PDFFile, font: dict):
         descendants = pdf.resolve(font.get("DescendantFonts"))
@@ -872,17 +884,24 @@ class PDFReader:
         pdf.warnings.extend(widths.warnings)
         return widths
 
-    def _build_font_decoder(self, pdf: PDFFile, name: str, font: dict) -> Callable[[bytes], str]:
+    def _build_font_decoder(self, pdf: PDFFile, name: str, font: dict,
+                            encoding_cmap=None) -> Callable[[bytes], str]:
         to_unicode = pdf.resolve(font.get("ToUnicode"))
         if isinstance(to_unicode, PDFStream):
             cmap_data = pdf.decode_stream_bytes(to_unicode)
             if cmap_data:
                 cmap = parse_tounicode(cmap_data, pdf.warnings)
                 if cmap.mapping:
+                    if encoding_cmap is not None:
+                        return lambda raw: "".join(cmap.decode(chunk)
+                                                   for chunk, _cid in encoding_cmap.iter_codes(raw, pdf.warnings))
                     return cmap.decode
         if str(font.get("Subtype", "")) == "Type0":
-            recovered = self._cid_fallback_decoder(pdf, name, font)
+            recovered = self._cid_fallback_decoder(pdf, name, font, encoding_cmap)
             if recovered is not None:
+                if encoding_cmap is not None:
+                    return lambda raw: "".join(recovered.decode(cid.to_bytes(2, "big"))
+                                                   for _chunk, cid in encoding_cmap.iter_codes(raw, pdf.warnings))
                 return recovered.decode
         # ToUnicode 없는 CID 폰트를 cp1252 로 해석하면 NUL 등 제어문자가
         # 본문으로 새어 나간다 — 경고를 남기고 해당 텍스트는 버린다 (감수 M4)
@@ -904,9 +923,11 @@ class PDFReader:
             return lambda raw: raw.decode("mac_roman", errors="replace")
         return default_byte_decoder
 
-    def _cid_fallback_decoder(self, pdf: PDFFile, name: str, font: dict):
+    def _cid_fallback_decoder(self, pdf: PDFFile, name: str, font: dict,
+                              encoding_cmap=None):
         encoding = pdf.resolve(font.get("Encoding"))
-        if not isinstance(encoding, PDFName) or encoding not in ("Identity-H", "Identity-V"):
+        if encoding_cmap is None and (not isinstance(encoding, PDFName)
+                                      or encoding not in ("Identity-H", "Identity-V")):
             return None  # 다른 미리 정의된 CMap은 코드→CID 표가 필요하다.
         descendant = self._cid_descendant(pdf, font)
         system = pdf.resolve(descendant.get("CIDSystemInfo"))
@@ -924,6 +945,10 @@ class PDFReader:
                         and len(registry) <= 32 else str(registry) if isinstance(registry, PDFName) else "")
             ordering = (ordering.decode("ascii", "ignore") if isinstance(ordering, bytes)
                         and len(ordering) <= 32 else str(ordering) if isinstance(ordering, PDFName) else "")
+            if encoding_cmap is not None and (registry != encoding_cmap.registry
+                                                or ordering != encoding_cmap.ordering):
+                pdf.warnings.append(f"WARN: 폰트 {name}: Encoding CMap과 CIDFont CIDSystemInfo 불일치")
+                return None
             if (registry == "Adobe" and ordering in ("Japan1", "GB1", "CNS1", "Korea1", "KR")
                     and not embedded_identity_gid):
                 return CIDDecoder(lambda cid: adobe_cid(ordering, cid), pdf.warnings, name,

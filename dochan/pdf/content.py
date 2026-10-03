@@ -120,6 +120,7 @@ class FontInfo:
     vertical_metrics: Optional[VerticalMetrics] = None
     link_metrics_reliable: bool = True
     space_code: int = 32  # ToUnicode may assign a CID other than 32 to U+0020.
+    encoding_cmap: object = None
 
 
 @dataclass
@@ -614,7 +615,8 @@ class ContentTextExtractor:
         total_adv = 0.0
         offsets = [0.0]
         decoded_parts = []
-        codes = self._iter_codes(raw, font.code_bytes)
+        chunks = self._iter_code_chunks(raw, font.code_bytes, font.encoding_cmap)
+        codes = [cid for _chunk, cid in chunks]
         geometry_reliable = (self._link_position_reliable and font.link_metrics_reliable
                              and all(font.widths.explicit(code) for code in codes))
         self._link_position_reliable = geometry_reliable
@@ -623,11 +625,11 @@ class ContentTextExtractor:
                              and math.isclose(xscale, yscale, rel_tol=1e-6)
                              and abs(start_tm[0] * start_tm[2] + start_tm[1] * start_tm[3])
                              <= 1e-6 * xscale * yscale)
-        for code in codes:
+        for chunk, code in chunks:
             w0 = font.widths.advance(code) / 1000.0
-            disp = (w0 * fs + tc + (tw if (font.code_bytes == 1 and code == 32) else 0.0)) * th
+            disp = (w0 * fs + tc + (tw if len(chunk) == 1 and chunk == b" " else 0.0)) * th
             if track_positions:
-                piece = font.decode(code.to_bytes(font.code_bytes, "big"))
+                piece = font.decode(chunk)
                 decoded_parts.append(piece)
                 for index in range(len(piece)):
                     offsets.append(total_adv + disp * (index + 1) / len(piece))
@@ -657,13 +659,13 @@ class ContentTextExtractor:
     def _show_vertical(self, raw, text, tm, font, fs, tc, tw, th, frags, ctm):
         """세로 폰트는 y축으로 전진하며 가로 스케일은 원점 x에만 적용한다."""
         metrics = font.vertical_metrics or VerticalMetrics(None, None, font.widths)
-        codes = self._iter_codes(raw, font.code_bytes)
-        if not codes:
+        chunks = self._iter_code_chunks(raw, font.code_bytes, font.encoding_cmap)
+        if not chunks:
             return tm
-        total_adv = sum(metrics.metrics(code)[0] / 1000.0 * fs + tc
-                        + (tw if font.code_bytes == 1 and code == 32 else 0.0)
-                        for code in codes)
-        _w1y, v1x, v1y = metrics.metrics(codes[0])
+        total_adv = sum(metrics.metrics(cid)[0] / 1000.0 * fs + tc
+                        + (tw if chunk == b" " else 0.0)
+                        for chunk, cid in chunks)
+        _w1y, v1x, v1y = metrics.metrics(chunks[0][1])
         origin = _matmul((1, 0, 0, 1, -v1x / 1000.0 * fs * th,
                           -v1y / 1000.0 * fs), tm)
         start_tm = _matmul(origin, ctm)
@@ -684,7 +686,18 @@ class ContentTextExtractor:
         return _matmul((1, 0, 0, 1, 0, total_adv), tm)
 
     @staticmethod
-    def _iter_codes(raw: bytes, code_bytes: int):
+    def _iter_code_chunks(raw: bytes, code_bytes: int, encoding_cmap=None):
+        if encoding_cmap is not None:
+            return list(encoding_cmap.iter_codes(raw, encoding_cmap.warnings))
+        if code_bytes == 2:
+            return [(raw[i:i + 2], (raw[i] << 8) | raw[i + 1])
+                    for i in range(0, len(raw) - 1, 2)]
+        return [(bytes((byte,)), byte) for byte in raw]
+
+    @staticmethod
+    def _iter_codes(raw: bytes, code_bytes: int, encoding_cmap=None):
+        if encoding_cmap is not None:
+            return [cid for _chunk, cid in encoding_cmap.iter_codes(raw)]
         if code_bytes == 2:
             return [(raw[i] << 8) | raw[i + 1] for i in range(0, len(raw) - 1, 2)]
         return list(raw)

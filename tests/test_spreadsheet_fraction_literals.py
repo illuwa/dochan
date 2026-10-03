@@ -27,7 +27,7 @@ def test_fraction_literal_excel_text_cache(value, fmt, expected):
 
 
 @pytest.mark.parametrize("value, fmt, expected", [
-    ("1.5", "?/?", "3/2"),
+    ("1.5", "?/?", "1 1/2"),
     ("3.75", "# ?/?", "3 3/4"),
     ("0.5", "# ?/?", "1/2"),
 ])

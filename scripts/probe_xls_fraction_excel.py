@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 from dochan.office_binary.xls import _display_number_with_format
-from dochan.spreadsheet_format import BUILTIN_NUM_FORMATS
+from dochan.spreadsheet_format import BUILTIN_NUM_FORMATS, SpreadsheetNumberFormatter
 from scripts.probe_chart_review_evidence import xls_cells
 
 def _load_before(path):
@@ -64,6 +64,33 @@ def _normalize(value):
     return "".join(value.split())
 
 
+def token_compare(corpus):
+    """Compare all 3,540 public cells through both token-path affixes."""
+    cells = xls_cells(corpus / "54686_fraction_formats.xls")
+    lines = (corpus / "54686_fraction_formats.txt").read_text(encoding="utf-8").splitlines()
+    formatter = SpreadsheetNumberFormatter()
+    counts = Counter()
+    examples = []
+    for row_number, line in enumerate(lines[1:355], 2):
+        columns = line.split("\t")
+        for column_index, letter in enumerate("DEFGHIJKLM", 3):
+            cell = cells["Sheet1!" + letter + str(row_number)]
+            fmt = cell["format"]
+            if fmt.startswith("builtin:"):
+                fmt = BUILTIN_NUM_FORMATS[int(fmt.split(":", 1)[1])]
+            expected = columns[column_index]
+            for variant, wrapped in (("red", "[Red]" + fmt),
+                                     ("empty_suffix", fmt + '""')):
+                actual = formatter._format_cell_value(str(float(cell["raw"])), wrapped)
+                counts[variant + "_exact"] += actual == expected
+                counts[variant + "_normalized"] += _normalize(actual) == _normalize(expected)
+                if actual != expected and len(examples) < 20:
+                    examples.append({"cell": letter + str(row_number), "variant": variant,
+                                     "format": fmt, "expected": expected, "actual": actual})
+            counts["total"] += 1
+    return {**counts, "examples": examples}
+
+
 def compare(corpus, before_code):
     cells = xls_cells(corpus / "54686_fraction_formats.xls")
     lines = (corpus / "54686_fraction_formats.txt").read_text(encoding="utf-8").splitlines()
@@ -109,12 +136,18 @@ def compare(corpus, before_code):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("corpus", type=Path)
-    parser.add_argument("--before-code", type=Path, required=True)
+    parser.add_argument("--before-code", type=Path)
+    parser.add_argument("--token-path", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    result = compare(args.corpus, args.before_code)
+    if args.token_path:
+        result = token_compare(args.corpus)
+    else:
+        if args.before_code is None:
+            parser.error("--before-code is required outside --token-path")
+        result = compare(args.corpus, args.before_code)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
-    print(json.dumps(result["counts"], ensure_ascii=False))
+    print(json.dumps(result if args.token_path else result["counts"], ensure_ascii=False))
 
 
 if __name__ == "__main__":

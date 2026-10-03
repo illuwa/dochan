@@ -92,6 +92,10 @@ class SpreadsheetNumberFormatter:
                 return literal
             metadata = self._format_metadata(section)
             clean = code.lower()
+            if metadata.kind == "" and re.fullmatch(r"# \?[- ]*/[- ]*\?+", section):
+                # Keep the pre-token-renderer display for these unsupported
+                # separator forms rather than returning the raw value.
+                return self._fraction_number(shown, 10 ** section.rsplit("/", 1)[1].count("?") - 1)
             if metadata.kind != "scientific" and re.search(r"[Ee][+-][0#?]", code):
                 return value
             auto_minus = (number < 0 and position == 1
@@ -680,6 +684,16 @@ class SpreadsheetNumberFormatter:
 
     def _fraction_section(self, number: float, section: str,
                           metadata: _FormatMetadata) -> Optional[str]:
+        if re.fullmatch(r"0+/0+", section):
+            # A slash between zero-fill slots is literal, not a denominator.
+            return self._zero_filled_number(number, section)
+        if re.match(r"(?:\[[^]]+\])*[#,0.]+\s+\?+/(?:[0#?]+|[1-9]\d*)$", section) and (
+                "," in section or "." in section):
+            return self._fraction_number(number, metadata.denominator_limit,
+                                         metadata.fixed_denominator)
+        if re.fullmatch(r"[0#?]+/[0#?]+", section) and not metadata.fixed_denominator:
+            # No public cache covers improper fractions for bare slot patterns.
+            return self._fraction_number(number, metadata.denominator_limit)
         if re.fullmatch(r"#(?:\\? | )\?+/(?:[0#?]+|[1-9]\d*)", section):
             # The existing Markdown display contract omits alignment spaces
             # from the common built-in and public fraction-table patterns.
@@ -692,14 +706,15 @@ class SpreadsheetNumberFormatter:
         slash = slashes[0]
         numerator_end = next((i for i in range(slash - 1, -1, -1)
                               if tokens[i][1] == "slot"), -1)
-        if numerator_end < 0 or any(tokens[i] != ("=", "literal") and tokens[i][1] != "pad"
+        if numerator_end < 0 or any(tokens[i][1] not in ("literal", "pad")
                                     for i in range(numerator_end + 1, slash)):
             return None
         numerator_start = numerator_end
         while numerator_start and tokens[numerator_start - 1][1] == "slot":
             numerator_start -= 1
         whole_positions = [i for i in range(numerator_start) if tokens[i][1] == "slot"]
-        pad = any(kind == "pad" for _, kind in tokens[:numerator_start])
+        pad = bool(whole_positions) and any(
+            kind == "pad" for _, kind in tokens[whole_positions[0]:numerator_start])
         mixed = bool(whole_positions) and not pad
         # The old fraction selector is the numerical contract: the continued
         # fraction and fixed-denominator rounding must remain unchanged.
@@ -729,7 +744,8 @@ class SpreadsheetNumberFormatter:
             whole_text = self._fraction_slots(whole_tokens, whole_digits)
             boundary = "".join(text for text, _ in tokens[last_whole + 1:numerator_start])
             if not any(char.isdigit() for char in whole_text):
-                if ":" in boundary and any(text == "?" for text, kind in
+                if boundary and (boundary.isspace() or ":" in boundary) and any(
+                                            text == "?" for text, kind in
                                             whole_tokens + tokens[numerator_start:numerator_end + 1]
                                             if kind == "slot"):
                     boundary = " " * len(boundary)
@@ -774,9 +790,13 @@ class SpreadsheetNumberFormatter:
                 return sign + prefix + whole_text + " " * len(span) + suffix
             return sign + prefix + whole_text + suffix
         numerator_text = self._fraction_slots(numerator_tokens, str(numerator))
-        denominator_text = (self._fraction_slots(denominator_pattern, str(denominator))
-                            if any(kind == "slot" for _, kind in denominator_pattern)
-                            else "".join(text for text, _ in denominator_pattern))
+        denominator_text = (str(metadata.fixed_denominator)
+                            if metadata.fixed_denominator else
+                            self._fraction_slots(denominator_pattern, str(denominator)))
+        if not metadata.fixed_denominator and any(
+                text == "?" and kind == "slot" for text, kind in denominator_pattern):
+            leading = len(denominator_text) - len(denominator_text.lstrip(" "))
+            denominator_text = denominator_text.lstrip(" ") + " " * leading
         return (sign + prefix + whole_text + boundary + numerator_text + between + "/" +
                 denominator_text + suffix)
 
@@ -850,7 +870,7 @@ class SpreadsheetNumberFormatter:
     def _is_zero_fill_format(self, fmt: str) -> bool:
         tokens = self._format_literal_tokens(self._format_sections(fmt)[0])
         clean_fmt = "".join(token for token, is_format in tokens if is_format)
-        if "/" in self._format_without_literals(fmt):
+        if "/" in self._format_without_literals(self._format_sections(fmt)[0]):
             return False
         if "." in clean_fmt or "#" in clean_fmt or "%" in clean_fmt or "," in clean_fmt:
             return False

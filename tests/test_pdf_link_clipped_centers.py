@@ -226,3 +226,18 @@ def test_exhausted_neighbour_budget_defers_only_clipped_links(monkeypatch):
     assert len(_linked(fragments, "full")) == 9
     assert len(_linked(fragments, "clip")) < 27
     assert any("이웃 글자 검사 한도" in warning for warning in warnings)
+
+
+def test_exhausted_neighbour_budget_warns_with_multi_rect_links(monkeypatch):
+    # Polygon checks advance the budget by several steps at once.
+    fragments, regions = _dense_page(3)
+    for region in regions:
+        region.polygons.extend([region.polygons[0], region.polygons[0]])
+    for limit in range(355, 366):
+        monkeypatch.setattr(annotations, "_NEIGHBOR_CHECK_LIMIT", limit)
+        copies = [Fragment(f.x, f.y, f.width, f.size, f.text, f.space_width, order=f.order,
+                           char_offsets=f.char_offsets) for f in fragments]
+        warnings = []
+        attach_links(copies, regions, warnings, allow_clipped_edges=True)
+        if len(_linked(copies, "clip")) < 27:
+            assert any("이웃 글자 검사 한도" in warning for warning in warnings), limit

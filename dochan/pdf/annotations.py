@@ -431,6 +431,7 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
     lower_edges = [bound[0] for bound in bounds]
     # Runs whose end glyphs can continue a word across a Tj/TJ split.
     neighbor_checks = 0
+    neighbor_warned = []
     runs = {}
     for frag in fragments:
         direction = math.hypot(frag.dir_x, frag.dir_y)
@@ -456,7 +457,8 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
             other, ox, oy = other_run[:3]
             neighbor_checks += 1
             if neighbor_checks > _NEIGHBOR_CHECK_LIMIT:
-                if neighbor_checks == _NEIGHBOR_CHECK_LIMIT + 1:
+                if not neighbor_warned:
+                    neighbor_warned.append(True)
                     warnings.append("WARN: PDF 링크 이웃 글자 검사 한도 초과 — 잘린 경계 링크는 본문 연결 보류")
                 return None
             if other is frag or ux * ox + uy * oy < 0.999:

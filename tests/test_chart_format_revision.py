@@ -109,8 +109,9 @@ def test_chart_selects_conditional_section_before_temporal_kind():
     assert charts.format_chart_number("43831", "[<1]h:mm;yyyy-mm-dd") == "2020-01-01"
 
 
-def test_unsupported_fraction_does_not_become_a_rounded_integer():
-    assert XLSXReader()._format_cell_value("-3.75", "|#_?=/=#|") == "-3.75"
+def test_padded_fraction_uses_improper_numerator():
+    """NumberFormatTests.xlsx A188의 Excel TEXT() 저장값."""
+    assert XLSXReader()._format_cell_value("-3.75", "|#_?=/=#|") == "-|15 =/=4|"
 
 
 def test_fraction_fallback_does_not_change_formats_without_padding():

@@ -45,10 +45,10 @@ def test_fixed_denominator_digits_are_not_suffix(value, fmt, expected):
     ("1234567", "0,,", "1"),
     ("1234", "000,", "001"),
     ("12", "0$", "12$"),
-    ("2.3", "# 0/8", "2.3"),
+    ("2.3", "# 0/8", "2 2/8"),
 ])
 def test_decimal_display_positions(value, fmt, expected):
-    """Excel 저장값: 000.00과 0,; 나머지는 규칙 추론이다."""
+    """Excel 저장값: 000.00과 0,; 분수 포함 나머지는 자리 규칙 추론이다."""
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
 
 

@@ -71,7 +71,10 @@ class SpreadsheetNumberFormatter:
             section = sections[position]
             if (self._has_unterminated_quote(section)
                     and re.search(r"[Ee][+-]", self._format_without_literals(section))):
-                # Only the scientific renderer cannot place an unclosed literal.
+                # Scientific display cannot place an unclosed literal.
+                return value
+            if (self._has_unterminated_quote(section)
+                    and self._is_fraction_format(section.split('"', 1)[0])):
                 return value
             shown = abs(number) if number < 0 and position == 1 else number
             if not section or section == '""':
@@ -141,9 +144,9 @@ class SpreadsheetNumberFormatter:
                 formatted = self._zero_filled_number(shown, metadata.pattern)
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "fraction":
-                formatted = self._fraction_number(shown, metadata.denominator_limit,
-                                                  metadata.fixed_denominator)
-                formatted = self._apply_literal_affixes(formatted, metadata)
+                formatted = self._fraction_section(shown, section, metadata)
+                if formatted is None:
+                    return value
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "scientific":
                 formatted = self._scientific_number(shown, section)
@@ -624,6 +627,159 @@ class SpreadsheetNumberFormatter:
             return f"{sign}{whole} {shown_numerator}/{denominator}"
         return f"{sign}{shown_numerator}/{denominator}"
 
+    @staticmethod
+    def _fraction_tokens(section: str) -> List[Tuple[str, str]]:
+        """Lex fraction slots without losing escaped literals or _ padding."""
+        tokens = []
+        index = 0
+        while index < len(section):
+            char = section[index]
+            if char == '"':
+                end = section.find('"', index + 1)
+                if end < 0:
+                    return []
+                tokens.append((section[index + 1:end], "literal"))
+                index = end + 1
+            elif char in "\\_*":
+                if index + 1 >= len(section):
+                    return []
+                if char != "*":
+                    tokens.append((" " if char == "_" else section[index + 1],
+                                   "pad" if char == "_" else "literal"))
+                index += 2
+            elif char == "[":
+                end = section.find("]", index + 1)
+                if end < 0:
+                    return []
+                if section[index + 1:index + 2] == "$":
+                    tokens.append((section[index + 2:end].split("-", 1)[0], "literal"))
+                index = end + 1
+            else:
+                tokens.append((char, "slot" if char in "0#?" else
+                               "slash" if char == "/" else "literal"))
+                index += 1
+        return tokens
+
+    @staticmethod
+    def _fraction_slots(tokens: List[Tuple[str, str]], digits: str) -> str:
+        """Place digits right to left while preserving literals between slots."""
+        positions = [i for i, (_, kind) in enumerate(tokens) if kind == "slot"]
+        if not positions:
+            return "".join(text for text, _ in tokens)
+        rendered = [text if kind != "slot" else "" for text, kind in tokens]
+        remaining = digits
+        for position in reversed(positions):
+            slot = tokens[position][0]
+            if remaining:
+                rendered[position] = remaining[-1]
+                remaining = remaining[:-1]
+            else:
+                rendered[position] = "0" if slot == "0" else " " if slot == "?" else ""
+        rendered[positions[0]] = remaining + rendered[positions[0]]
+        return "".join(rendered)
+
+    def _fraction_section(self, number: float, section: str,
+                          metadata: _FormatMetadata) -> Optional[str]:
+        if re.fullmatch(r"#(?:\\? | )\?+/(?:[0#?]+|[1-9]\d*)", section):
+            # The existing Markdown display contract omits alignment spaces
+            # from the common built-in and public fraction-table patterns.
+            return self._fraction_number(number, metadata.denominator_limit,
+                                         metadata.fixed_denominator)
+        tokens = self._fraction_tokens(section)
+        slashes = [i for i, (_, kind) in enumerate(tokens) if kind == "slash"]
+        if len(slashes) != 1:
+            return None
+        slash = slashes[0]
+        numerator_end = next((i for i in range(slash - 1, -1, -1)
+                              if tokens[i][1] == "slot"), -1)
+        if numerator_end < 0 or any(tokens[i] != ("=", "literal") and tokens[i][1] != "pad"
+                                    for i in range(numerator_end + 1, slash)):
+            return None
+        numerator_start = numerator_end
+        while numerator_start and tokens[numerator_start - 1][1] == "slot":
+            numerator_start -= 1
+        whole_positions = [i for i in range(numerator_start) if tokens[i][1] == "slot"]
+        pad = any(kind == "pad" for _, kind in tokens[:numerator_start])
+        mixed = bool(whole_positions) and not pad
+        # The old fraction selector is the numerical contract: the continued
+        # fraction and fixed-denominator rounding must remain unchanged.
+        selected = self._fraction_number(number, metadata.denominator_limit,
+                                         metadata.fixed_denominator)
+        sign = "-" if selected.startswith("-") else ""
+        parts = selected.lstrip("-").split(" ", 1)
+        if len(parts) == 2:
+            whole, proper = int(parts[0]), parts[1]
+            numerator, denominator = (int(piece) for piece in proper.split("/", 1))
+        elif "/" in parts[0]:
+            whole = 0
+            numerator, denominator = (int(piece) for piece in parts[0].split("/", 1))
+        else:
+            whole, numerator, denominator = int(parts[0]), 0, 1
+        fraction_visible = numerator != 0 or any(
+            text == "0" for text, kind in tokens[numerator_start:numerator_end + 1]
+            if kind == "slot")
+        if mixed:
+            first_whole = whole_positions[0]
+            last_whole = whole_positions[-1]
+            prefix = "".join(text for text, _ in tokens[:first_whole])
+            whole_tokens = tokens[first_whole:last_whole + 1]
+            show_zero = not numerator and (not fraction_visible or any(
+                text == "?" for text, kind in whole_tokens if kind == "slot"))
+            whole_digits = str(whole) if whole or show_zero else ""
+            whole_text = self._fraction_slots(whole_tokens, whole_digits)
+            boundary = "".join(text for text, _ in tokens[last_whole + 1:numerator_start])
+            if not any(char.isdigit() for char in whole_text):
+                if ":" in boundary and any(text == "?" for text, kind in
+                                            whole_tokens + tokens[numerator_start:numerator_end + 1]
+                                            if kind == "slot"):
+                    boundary = " " * len(boundary)
+                else:
+                    boundary = ""
+            elif not whole_text.strip():
+                boundary = ""
+        else:
+            prefix = "".join(text for text, kind in tokens[:numerator_start]
+                             if kind != "slot")
+            whole_text = ""
+            boundary = ""
+        numerator_tokens = tokens[numerator_start:numerator_end + 1]
+        between = "".join(text for text, _ in tokens[numerator_end + 1:slash])
+        denominator_tokens = tokens[slash + 1:]
+        denominator_end = next((i for i, (text, kind) in enumerate(denominator_tokens)
+                                if kind == "slot" or (text.isdigit() and text != "0")), -1)
+        if denominator_end < 0:
+            return None
+        # A fixed denominator is literal digits; variable slots consume the
+        # selected denominator. Suffix literals start after the last digit slot.
+        last_denominator = max(i for i, (text, kind) in enumerate(denominator_tokens)
+                               if kind == "slot" or text.isdigit())
+        denominator_pattern = denominator_tokens[:last_denominator + 1]
+        suffix = "".join(text for text, _ in denominator_tokens[last_denominator + 1:])
+        if not mixed:
+            numerator += whole * denominator
+            if pad and whole_positions:
+                # Excel treats _x between two placeholder groups as padding,
+                # so the left group holds the improper numerator.
+                pad_index = next(i for i in range(numerator_start) if tokens[i][1] == "pad")
+                prefix = "".join(text for text, kind in tokens[:whole_positions[0]]
+                                 if kind != "slot")
+                numerator_tokens = tokens[whole_positions[0]:pad_index]
+                between = "".join(text for text, kind in tokens[pad_index:slash]
+                                  if kind != "slot")
+        if not fraction_visible and mixed:
+            if any(text == "?" for text, kind in whole_tokens + tokens[numerator_start:slash] +
+                   denominator_pattern if kind == "slot"):
+                span = boundary + "".join(text for text, _ in tokens[numerator_start:slash + 1]) + \
+                    "".join(text for text, _ in denominator_pattern)
+                return sign + prefix + whole_text + " " * len(span) + suffix
+            return sign + prefix + whole_text + suffix
+        numerator_text = self._fraction_slots(numerator_tokens, str(numerator))
+        denominator_text = (self._fraction_slots(denominator_pattern, str(denominator))
+                            if any(kind == "slot" for _, kind in denominator_pattern)
+                            else "".join(text for text, _ in denominator_pattern))
+        return (sign + prefix + whole_text + boundary + numerator_text + between + "/" +
+                denominator_text + suffix)
+
     def _apply_literal_affixes(self, text: str, metadata: _FormatMetadata) -> str:
         if not metadata.literal_prefix and not metadata.literal_suffix:
             return text
@@ -694,6 +850,8 @@ class SpreadsheetNumberFormatter:
     def _is_zero_fill_format(self, fmt: str) -> bool:
         tokens = self._format_literal_tokens(self._format_sections(fmt)[0])
         clean_fmt = "".join(token for token, is_format in tokens if is_format)
+        if "/" in self._format_without_literals(fmt):
+            return False
         if "." in clean_fmt or "#" in clean_fmt or "%" in clean_fmt or "," in clean_fmt:
             return False
         if not re.fullmatch(r"0+", clean_fmt):
@@ -703,7 +861,7 @@ class SpreadsheetNumberFormatter:
     def _is_fraction_format(self, fmt: str) -> bool:
         clean_fmt = self._format_without_literals(fmt)
         first_section = self._format_sections(clean_fmt)[0]
-        return "/" in first_section and "?" in first_section
+        return bool(re.search(r"[0#?]=*/=*(?:[0#?]+|[1-9]\d*)", first_section))
 
     def _fraction_denominator_limit(self, fmt: str) -> int:
         clean_fmt = self._format_without_literals(fmt)

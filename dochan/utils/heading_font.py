@@ -1,6 +1,7 @@
 """HWP/HWPX의 개요 정보 없는 문단에 쓰는 공통 글꼴 제목 규칙."""
 
 import re
+import unicodedata
 from collections import Counter
 
 
@@ -12,6 +13,11 @@ _BODY_EXCLUDED_PREFIXES = ('※', '*', '주:', '(단위')
 _NONHEADING_STYLE = re.compile(
     r'(?<![별대])표\s*제목|통계표|도표|표안|그림|캡션|(?:차례|목차)\D{0,6}\d|(?:차례|목차)\s*(?:개요|\()')
 _OUTLINE_STYLE = re.compile(r'(?:개요|outline|heading)\s*(\d+)')
+_NUMBER_MARKER = re.compile(r'(?:\d+(?:-\d+)?|[가-하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)](?=\s|[<〈\[【])')
+_BRACKET_END = {'<': '>', '〈': '〉', '[': ']', '【': '】'}
+_SENTENCE_END = re.compile(r'(?:다\.|음\.?|함\.?)$')
+_TABLE_LABEL = re.compile(r'(?:표|그림)\s*\d+[.)]')
+_DATE_LINE = re.compile(r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*$')
 
 
 def is_nonheading_style_name(name):
@@ -104,6 +110,57 @@ def relative_heading_level(runs, body_size):
     return 0
 
 
+def _section_marker(text):
+    """절 표지의 길이와 종류. 괄호형은 줄 전체를 감싸야 한다."""
+    if text.startswith(('□', '■')):
+        return 1, 'square'
+    match = _NUMBER_MARKER.match(text)
+    if match:
+        return match.end(), 'number'
+    closing = _BRACKET_END.get(text[:1])
+    if closing and text.endswith(closing) and len(text) > 2:
+        return 1, 'bracket'
+    if text and unicodedata.category(text[0]) == 'Co':
+        return 1, 'pua'
+    return 0, ''
+
+
+def emphasized_heading_level(runs, body_size):
+    """본문 크기와 비슷한, 절 표지와 시각 강조가 함께 있는 줄만 H3으로 올린다."""
+    text = ''.join(run.text for run in runs).strip()
+    if (not text or len(text) > MAX_FONT_HEADING_LENGTH
+            or text.startswith(_BODY_EXCLUDED_PREFIXES)
+            or '\n' in text or '\r' in text or ':' in text or '：' in text
+            or _SENTENCE_END.search(text) or _DATE_LINE.fullmatch(text)):
+        return 0
+    marker_end, kind = _section_marker(text)
+    if not marker_end or (kind == 'square' and _TABLE_LABEL.match(text[marker_end:].strip())):
+        return 0
+    # 앞 공백과 표지는 글자 크기·굵기 판정에서 뺀다. 특히 HWP의 PUA
+    # 글머리 글자만 작고 뒤의 실제 제목은 큰 경우가 있다.
+    leading = len(''.join(run.text for run in runs)) - len(''.join(run.text for run in runs).lstrip())
+    start = leading + marker_end
+    first_size = 0
+    all_bold = True
+    content = 0
+    position = 0
+    for run in runs:
+        for char in run.text:
+            if position >= start and not char.isspace() and char not in _BRACKET_END.values():
+                if not first_size:
+                    first_size = run.font_size_pt
+                all_bold = all_bold and run.bold
+                content += 1
+            position += 1
+    if not content or body_size <= 0:
+        return 0
+    if first_size > body_size:
+        return 3
+    if kind not in ('pua', 'number') and first_size >= body_size and all_bold:
+        return 3
+    return 0
+
+
 def finalize_font_headings(paragraphs, doc=None):
     """본문 크기를 추정할 수 있는 문서만 글꼴 폴백을 다시 계산한다."""
     paragraphs = tuple(paragraphs)
@@ -113,6 +170,11 @@ def finalize_font_headings(paragraphs, doc=None):
         return 0
     body_size = body_font_size(paragraphs, doc=doc)
     if body_size:
+        top_level = ({id(para) for section in doc.sections for para in section.elements
+                      if hasattr(para, 'heading_level')} if doc is not None else None)
         for para in paragraphs:
-            para.heading_level = relative_heading_level(para.runs, body_size)
+            level = relative_heading_level(para.runs, body_size)
+            if not level and (top_level is None or id(para) in top_level):
+                level = emphasized_heading_level(para.runs, body_size)
+            para.heading_level = level
     return body_size

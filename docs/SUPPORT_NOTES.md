@@ -70,7 +70,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
   7개만 검출했다. 굵기·번호·배치만 다른 절 제목은 놓칠 수 있다
   ([검증 기록](benchmarks/2026-10-04-hwp-heading-relative-real-docs.md)). 같은 크기 강조·표지 규칙을 별도 공개 PDF 표본으로 개발했으나,
   보류한 780문단 평가에서 재현율은 17/82에서 46/82로 오르는 대신 오검출도 1건에서 5건으로 늘었다.
-  정밀도 조건을 충족하지 못해 해당 규칙은 채택하지 않았다([진단](benchmarks/2026-10-04-heading-recall-real-docs.md)).
+  시험 규칙을 그대로 복원했으며 채택 판정은 독립 라벨 평가 대기 상태다([진단](benchmarks/2026-10-04-heading-recall-real-docs.md)).
 
 ## 수식
 

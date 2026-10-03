@@ -23,8 +23,10 @@
 
 - `doc` (문서) + `한` (韓, 한국) = **dochan** — "독한 파서"라는 더블 미닝
 - HWP 5.0 바이너리 + HWPX(OWPML) XML + Office OOXML/legacy binary + PDF(텍스트·표·읽기 순서) 네이티브 지원
-- 동일 문서 HWP/HWPX/PDF 80쌍과 공개 HWP/HWPX 7,188개 회귀 코퍼스로 검증(2026-08 기준), 공개가능한 문서로 계속 학습시켜 개선할 예정
-- 공개 OOXML fixture 50개의 고정 SHA-256 corpus와 형식별 회귀 테스트로 지속 검증
+- 실물 문서로 검증하고, 검증 문서를 계속 늘린다(2026-10-04 기준): 공개 HWP·HWPX 7,076개, 정책브리핑 보도자료 HWP·HWPX·PDF 삼중 짝 592건(규칙 조정용 375·보류 검증용 217),
+  Apache POI·LibreOffice 의 Office 실물 4천여 개, pdf.js PDF 983개, 내부 HWP·HWPX·PDF 80쌍. 정답지는 같은 문서의 다른 형식, 한컴오피스·PowerPoint 실측, 공개 테스트 기대값,
+  제품 코드와 분리된 독립 해독기, PDF 렌더 판독 라벨이다 — [검증 코퍼스와 정답지](docs/VALIDATION.md), 칸별 기록은 [`docs/benchmarks/`](docs/benchmarks/)
+- 공개 OOXML fixture 50개의 고정 SHA-256 corpus와 형식별 회귀 테스트(5,000개 이상)로 지속 검증
 
 ```python
 from dochan import Dochan

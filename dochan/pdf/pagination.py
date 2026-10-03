@@ -1,4 +1,5 @@
 """인접 PDF 페이지의 표 연속 여부와 행 병합."""
+from collections import Counter
 from dataclasses import dataclass
 import math
 from typing import Tuple
@@ -87,13 +88,29 @@ def _row_key(row):
     return [(" ".join(cell.text.split()), cell.row_span, cell.col_span) for cell in row]
 
 
+def _repeated_group_subheader(first_row, second_row):
+    """여러 열 그룹 밑에 같은 문자 소제목 배열이 반복되면 둘째 줄도 제목이다."""
+    groups = []
+    for col, cell in enumerate(first_row):
+        if cell.col_span < 2 or not cell.text.strip():
+            continue
+        labels = tuple(" ".join(part.text.split())
+                       for part in second_row[col:col + cell.col_span])
+        if (len(labels) == cell.col_span and
+                all(label and any(char.isalpha() for char in label) for label in labels)):
+            groups.append((" ".join(cell.text.split()), labels))
+    patterns = Counter(labels for _heading, labels in groups)
+    return any(count >= 3 and len({heading for heading, labels in groups
+                                   if labels == pattern}) >= 3
+               for pattern, count in patterns.items())
+
+
 def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
     """뒤 표 첫머리에 반복된 제목 행 수.
 
-    제목 높이는 첫 행 셀의 최대 row_span 으로만 정한다. 열 병합만 쓰는 2단 제목의 둘째 행은
-    구조만으로는 우연히 같은 데이터 행과 구별할 수 없으므로 제목으로 보지 않는다(둘째 행이
-    데이터처럼 남는 쪽이 데이터 행을 지우는 쪽보다 낫다). 뒤 표에는 제목 뒤에 데이터 행이
-    하나는 남아야 한다.
+    기본 제목 높이는 첫 행 셀의 최대 row_span 이다. 열 병합만 쓰는 2단 제목은
+    독립적인 세 그룹 이상 아래에 동일한 문자 소제목 배열이 반복될 때만 둘째 줄도
+    제목으로 본다. 뒤 표에는 제목 뒤에 데이터 행이 하나는 남아야 한다.
     """
     if not prev_table.rows or not next_table.rows:
         return 0
@@ -107,6 +124,9 @@ def repeated_header_rows(prev_table: Table, next_table: Table) -> int:
         return 0
     if not any(text for row in prev_keys[:span_height] for text, _, _ in row):
         return 0
+    if (span_height == 1 and limit >= 2 and prev_keys[1] == next_keys[1]
+            and _repeated_group_subheader(prev_table.rows[0], prev_table.rows[1])):
+        return 2
     return span_height
 
 

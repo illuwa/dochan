@@ -953,7 +953,7 @@ class HWPXParser:
         try:
             runs = []
             plain_parts = []
-            images = []
+            deferred = []
 
             def flush_plain():
                 if plain_parts:
@@ -971,10 +971,11 @@ class HWPXParser:
                         elements.append(para)
                         # 중첩 글상자 문단에서 이미 텍스트 뒤에 배치한 그림은
                         # 바깥 문단의 대기 목록에 다시 넣지 않는다.
-                        self._placed_pictures.update(id(image) for image in images)
+                        self._placed_pictures.update(
+                            id(item) for item in deferred if isinstance(item, Image))
                     runs = []
-                elements.extend(images)
-                images.clear()
+                elements.extend(deferred)
+                deferred.clear()
 
             for child in _selected_children(p_elem):
                 tag = _local_tag(child.tag)
@@ -994,7 +995,9 @@ class HWPXParser:
                                 flush_flow()
                                 elements.append(item)
                             else:
-                                images.append(item)
+                                deferred.append(item)
+                        elif isinstance(item, Footnote) and item.type in ('footnote', 'endnote'):
+                            deferred.append(item)
                         else:
                             # 표·수식·도형은 기존 문단 경계를 유지한다.
                             flush_flow()
@@ -1011,7 +1014,7 @@ class HWPXParser:
                             continue
                         flush_plain()
                         if isinstance(ctrl_elem, Image):
-                            images.append(ctrl_elem)
+                            deferred.append(ctrl_elem)
                             continue
                         flush_flow()
                         if isinstance(ctrl_elem, list):

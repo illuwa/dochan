@@ -1758,6 +1758,16 @@ def test_xls_reader_reads_workbook_stream(monkeypatch, tmp_path):
     assert to_markdown(doc) == "| Name | Value |\n| --- | --- |\n| A | 10 |"
 
 
+def test_xls_unterminated_scientific_quote_keeps_workbook_cells():
+    globals_part = _bof() + _format_record(200, '"x0.00E+00') + _xf(200)
+    sheet = _bof() + _number(0, 0, 1234) + _number(1, 0, 5) + _eof()
+    offset = len(globals_part) + len(_boundsheet(0, "Sheet1"))
+    document = parse_biff_workbook(globals_part + _boundsheet(offset, "Sheet1") + sheet)
+    table = document.sections[0].elements[0]
+    assert [row[0].text for row in table.rows] == ["1234", "5"]
+    assert not any("문서 파싱 실패" in error for error in document.errors)
+
+
 def test_xls_reader_returns_error_when_workbook_stream_unreadable(monkeypatch, tmp_path):
     class BadWorkbookOle:
         def __init__(self, path):

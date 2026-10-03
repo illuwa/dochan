@@ -2415,6 +2415,36 @@ def test_reads_xlsx_scientific_number_formats(tmp_path):
     assert table.rows[0][2].text == "-9.9E+03"
 
 
+def test_xlsx_unterminated_scientific_quote_keeps_workbook_cells(tmp_path):
+    path = tmp_path / "unterminated-scientific.xlsx"
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    _write_xlsx(
+        path,
+        f'<workbook xmlns="{namespace}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        {"xl/worksheets/sheet1.xml": f'<worksheet xmlns="{namespace}"><sheetData><row r="1">'
+         '<c r="A1" s="1"><v>1234</v></c><c r="B1"><v>5</v></c>'
+         '</row></sheetData></worksheet>'},
+        styles_xml=f'<styleSheet xmlns="{namespace}"><numFmts count="1">'
+        '<numFmt numFmtId="165" formatCode="&quot;x0.00E+00"/></numFmts>'
+        '<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="165"/></cellXfs></styleSheet>',
+    )
+    document = XLSXReader().read(str(path))
+    table = document.sections[0].elements[0]
+    assert [cell.text for cell in table.rows[0]] == ["1234", "5"]
+    assert not any("문서 파싱 실패" in error for error in document.errors)
+
+
+def test_xlsx_iso_date_ignores_oversized_number_format(monkeypatch):
+    reader = XLSXReader()
+
+    def unexpected_metadata(_fmt):
+        raise AssertionError("oversized format must not be classified")
+
+    monkeypatch.setattr(reader, "_format_metadata", unexpected_metadata)
+    assert reader._format_iso_date("2026-10-03", '"E+"' * 30000) == "2026-10-03"
+
+
 def test_caches_xlsx_number_format_metadata(monkeypatch):
     reader = XLSXReader()
     original_decimal_places = reader._decimal_places

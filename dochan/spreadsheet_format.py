@@ -69,6 +69,8 @@ class SpreadsheetNumberFormatter:
             sections = self._format_sections(selected)
             position = 1 if number < 0 and len(sections) > 1 else 2 if number == 0 and len(sections) > 2 else 0
             section = sections[position]
+            if self._has_unterminated_quote(section):
+                return value
             shown = abs(number) if number < 0 and position == 1 else number
             if not section or section == '""':
                 return ""
@@ -143,6 +145,8 @@ class SpreadsheetNumberFormatter:
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "scientific":
                 formatted = self._scientific_number(shown, section)
+                if formatted is None:
+                    return value
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "percent":
                 # Excel stores double values and rounds ties away from zero.
@@ -486,12 +490,15 @@ class SpreadsheetNumberFormatter:
             else:
                 padded.append("0" if slot == "0" else " " if slot == "?" else "")
         slot_text = "".join(reversed(padded))
-        if not number and len(slots) > 1:
+        if not number and len(slots) > 1 and "0" not in slots:
             slot_text = "0" * len(slots)
         shown_integer = integer[:digit_index + 1] + slot_text
         if "," in integer_code.rstrip(","):
             if "?" in slots and number:
-                slot_text = "".join(char if char else " " for char in reversed(padded))
+                slot_text = "".join(
+                    char if char or slot != "?" else " "
+                    for char, slot in zip(reversed(padded), slots)
+                )
                 shown_integer = integer[:digit_index + 1] + slot_text
             groups = []
             while shown_integer:
@@ -503,6 +510,24 @@ class SpreadsheetNumberFormatter:
                 group + ("," if groups[index + 1].strip() and group.strip() else " ")
                 for index, group in enumerate(groups[:-1])
             ) + (groups[-1] if groups else "")
+        elif slots and set(slots) == {"0"}:
+            integer_tokens = before[:next((index for index, token in enumerate(before)
+                                           if token == (".", True)), len(before))]
+            positions = [index for index, token in enumerate(integer_tokens)
+                         if token[1] and token[0] == "0"]
+            if positions:
+                inserts = []
+                count = 0
+                for index in range(positions[0], positions[-1] + 1):
+                    token, is_format = integer_tokens[index]
+                    if is_format and token == "0":
+                        count += 1
+                    elif not is_format:
+                        inserts.append((count, token))
+                offset = len(shown_integer) - len(slots)
+                for count, literal in reversed(inserts):
+                    shown_integer = (shown_integer[:offset + count] + literal +
+                                     shown_integer[offset + count:])
         shown_fraction = list(fraction)
         for index in range(len(fraction_slots) - 1, -1, -1):
             if fraction_slots[index] == "0" or shown_fraction[index] != "0":
@@ -511,20 +536,27 @@ class SpreadsheetNumberFormatter:
         mantissa_text = shown_integer + ("." + "".join(shown_fraction) if dot else "")
         numeric = [index for index, (token, is_format) in enumerate(before)
                    if is_format and token in "0#?.,"]
+        if not numeric:
+            return None
         prefix = "".join(token for token, is_format in before[:numeric[0]] if not is_format)
         suffix = "".join(token for token, is_format in before[numeric[-1] + 1:]
                          if not is_format or token == "%")
         exp_slots = [index for index, (token, is_format) in enumerate(after)
                      if is_format and token in "0#?"]
+        if not exp_slots:
+            return None
         exp_code = "".join(after[index][0] for index in exp_slots)
         exp_digits = str(abs(exponent))
         exp_width = max(exp_code.count("0"), len(exp_digits))
         exp_text = exp_digits.zfill(exp_width)
-        exp_text = exp_text.rjust(max(exp_code.count("?"), len(exp_text)))
+        exp_text = exp_text.rjust(max(exp_code.count("?") + exp_code.count("0"), len(exp_text)))
         exp_sign = "-" if exponent < 0 else "+" if marker[0][1] == "+" else ""
         exp_prefix = "".join(token for token, is_format in after[:exp_slots[0]] if not is_format)
         exp_suffix = "".join(token for token, is_format in after[exp_slots[-1] + 1:]
                              if not is_format or token == "%")
+        currency = self._currency_symbol(section)
+        if currency and ("$" in section[:marker.start()] or "[$" in section[:marker.start()]):
+            prefix = currency + prefix
         return (sign + prefix + mantissa_text + suffix + marker[0][0] + exp_prefix +
                 exp_sign + exp_text + exp_suffix)
 
@@ -678,13 +710,46 @@ class SpreadsheetNumberFormatter:
 
     @staticmethod
     def _scientific_marker(section: str):
-        masked = re.sub(r'"[^"]*"|[\\_*].|\[[^\]]*\]',
-                        lambda match: " " * len(match[0]), section)
+        # Mask with the same quote/escape rules as _format_literal_tokens.
+        # Keep offsets so the match still slices the original section.
+        masked = list(section)
+        index = 0
+        while index < len(section):
+            char = section[index]
+            if char in "\\_*" and index + 1 < len(section):
+                masked[index:index + 2] = "  "
+                index += 2
+            elif char in ('"', "["):
+                end = section.find('"' if char == '"' else "]", index + 1)
+                if end == -1 and char == "[":
+                    index += 1
+                    continue
+                end = len(section) - 1 if end == -1 else end
+                masked[index:end + 1] = " " * (end + 1 - index)
+                index = end + 1
+            else:
+                index += 1
+        masked = "".join(masked)
+        slots = [match.start() for match in re.finditer(r"[0#?]", masked)]
+        if not slots:
+            return None
         for marker in re.finditer(r"[Ee][+-]", masked):
-            if (re.search(r"[0#?]", masked[:marker.start()])
-                    and re.search(r"[0#?]", masked[marker.end():])):
+            if slots[0] < marker.start() and slots[-1] >= marker.end():
                 return marker
         return None
+
+    @staticmethod
+    def _has_unterminated_quote(section: str) -> bool:
+        in_quote = False
+        index = 0
+        while index < len(section):
+            if section[index] in "\\_*" and not in_quote:
+                index += 2
+                continue
+            if section[index] == '"':
+                in_quote = not in_quote
+            index += 1
+        return in_quote
 
     def _currency_symbol(self, fmt: str) -> str:
         clean_fmt = self._format_without_literals(fmt)

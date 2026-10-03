@@ -1503,7 +1503,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             if warning not in self._errors:
                 self._errors.append(warning)
             return value
-        kind = self._format_metadata(fmt).kind if fmt else ""
+        kind = self._format_metadata(fmt).kind if fmt and len(fmt) <= 255 else ""
         if kind == "date":
             return date.strftime("%Y-%m-%d")
         if kind == "time":

@@ -215,8 +215,10 @@ class SpreadsheetNumberFormatter:
                 date_units = re.sub(r"a(?:m)?/p(?:m)?", "", clean)
                 previously_iso = any(token in date_units for token in
                                      ("yy", "mm", "dd", "mmm", "h:mm"))
+                # Day count with a literal and hour:minute ("d \"days\" h:mm"),
+                # in any spacing or one/two-digit spelling.
                 explicit_day_hour_minutes = bool(re.search(
-                    r'(?i)\bd\s+"[^"]+"\s+h:mm', section))
+                    r'(?i)\bd{1,2}\s*"[^"]+"\s*h{1,2}:mm', section))
                 if ((not previously_iso or explicit_day_hour_minutes)
                         and "y" not in date_units and not re.search(r"d{3,}|m{3,}", date_units)
                         and (re.search(r"(?<!d)d(?!d)", date_units)
@@ -224,7 +226,10 @@ class SpreadsheetNumberFormatter:
                     shown_day_hour = self._render_day_hour_tokens(number, section)
                     if shown_day_hour is not None:
                         return shown_day_hour
-                    return value
+                    if not previously_iso:
+                        return value
+                    # A layout the token renderer cannot draw keeps the ISO
+                    # display it had before day/hour token rendering.
                 if has_time:
                     ticks = self._temporal_ticks(number, precision)
                     # Use the rounded integral day for the date; float datetime

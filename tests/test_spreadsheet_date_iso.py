@@ -105,3 +105,14 @@ def test_chart_general_labels_and_out_of_range_clock():
         "10000000", "hh:mm:ss.00 AM/PM") == "10000000"
     assert SpreadsheetNumberFormatter()._format_cell_value(
         "0.5", "h:mm a/pm") == "0.5"
+
+
+@pytest.mark.parametrize("fmt, expected", [
+    ('d "days" hh:mm', "11 days 18:00"),
+    ('d" days "h:mm', "11 days 18:00"),
+    ('d "days" h:mm:ss.000', "2011-07-11 18:00:00.000"),
+    ('d "days" h:mm_)', "2011-07-11 18:00"),
+])
+def test_day_hour_layouts_render_tokens_or_keep_iso(fmt, expected):
+    """토큰 렌더러가 그리지 못하는 배치는 원시값이 아니라 이전 ISO 표시로 돌아간다."""
+    assert SpreadsheetNumberFormatter()._format_cell_value("40735.75", fmt) == expected

@@ -90,3 +90,17 @@ def test_warning_names_shared_spreadsheet_formatter():
 def test_variable_denominator_public_excel_table(value, fmt, expected):
     """Excel 저장값: 공개 54686 분수 표(D·E열)의 가변 분모 사례다."""
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
+
+
+@pytest.mark.parametrize("fmt, expected", [
+    ("# ?/?", "123 1/2"),       # 가장 가까운 4/9 가 아니다
+    ("# ??/??", "123 26/57"),   # 가장 가까운 31/68 이 아니다
+    ("# ???/???", "123 57/125"),
+])
+def test_variable_denominator_microsoft_support_example(fmt, expected):
+    """Microsoft 지원 문서 'Display numbers as fractions' 의 123.456 예시다."""
+    assert SpreadsheetNumberFormatter()._format_cell_value("123.456", fmt) == expected
+
+
+def test_continued_fraction_without_room_is_zero():
+    assert SpreadsheetNumberFormatter._continued_fraction(0.5, 0) == 0

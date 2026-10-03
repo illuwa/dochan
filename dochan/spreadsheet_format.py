@@ -503,7 +503,7 @@ class SpreadsheetNumberFormatter:
             rest = 1 / rest
             if not math.isfinite(rest):
                 break
-        return Fraction(h1, k1)
+        return Fraction(h1, k1) if k1 else Fraction(0, 1)
 
     def _fraction_number(self, number: float, denominator_limit: int,
                          fixed_denominator: int = 0) -> str:

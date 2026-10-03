@@ -67,3 +67,61 @@ def test_hanging_indent_after_per_glyph_marker_keeps_continuation():
     notes, consumed, references, _following = detect(fragments)
     assert [note.text for note in notes] == ["Detail\ncontinued"]
     assert consumed == {2, 3, 4, 5, 6}
+
+
+def caption_page(segments=None):
+    """쪽 최빈 크기는 15pt 제목이고 표지는 12pt 캡션에 붙는다(공개 156784165 7쪽의 크기 구성)."""
+    fragments = [frag("Heading %d" % index, 40, 700 - 20 * index, size=15, order=index) for index in range(6)]
+    fragments += [frag("Caption", 40, 500, order=20),
+                  frag("1", 82, 502.5, size=9, order=21),
+                  frag(")", 86.5, 502.5, size=9, order=22),
+                  frag("1) Detail", 40, 100, size=10, order=23)]
+    return detect_notes(fragments, [Segment(40, 115, 180, 115)] if segments is None else segments,
+                        (0, 800), 3, 1)
+
+
+def test_marker_host_may_be_smaller_than_page_mode_but_larger_than_definition():
+    notes, _consumed, references, _following = caption_page()
+    assert [note.text for note in notes] == ["Detail"] and references == {21: 1}
+
+
+def test_table_bottom_border_is_not_a_footnote_separator():
+    """표 아래 주석: 하단선 위로 같은 폭의 괘선이 쌓여 있으면 표 테두리다(감수 재현)."""
+    table = [Segment(40, 160, 400, 160), Segment(40, 182, 400, 182), Segment(40, 200, 400, 200),
+             Segment(140, 160, 140, 200)]
+    fragments = [frag("Body text line %d" % index, 40, 760 - 14 * index, size=10, order=index)
+                 for index in range(20)]
+    fragments += [frag("Growth", 150, 188, size=8, order=30),
+                  frag("1)", 174, 189.6, size=6, order=31),
+                  frag("1) year over year change", 40, 148, size=7, order=32)]
+    assert detect_notes(fragments, table, (0, 800), 3, 1)[0] == []
+    # 같은 쪽이라도 짧은 단독 구분선이면 각주다.
+    assert len(detect_notes(fragments, [Segment(40, 160, 180, 160)], (0, 800), 3, 1)[0]) == 1
+
+
+def test_parenthesised_number_is_not_split_into_marker():
+    fragments = split_sample()
+    fragments.insert(1, frag("(", 59.5, 502.5, size=9, order=1, width=4.5))
+    for index, fragment in enumerate(fragments[2:4], start=2):
+        fragment.order = index
+    fragments[0].width = 19.5
+    assert detect(fragments)[0] == []
+
+
+def test_two_digit_split_marker_has_no_phantom_suffix():
+    fragments = split_sample()
+    fragments[1:3] = [frag("1", 64, 502.5, size=9, order=1, width=4.5),
+                      frag("2", 68.5, 502.5, size=9, order=2, width=4.5),
+                      frag(")", 73, 502.5, size=9, order=3, width=2.7)]
+    fragments[4].text = "12) Detail"
+    fragments[4].order = 4
+    notes, consumed, references, _following = detect(fragments)
+    assert [note.number for note in notes] == [1] and references == {1: 1}
+    assert {2, 3} <= consumed
+
+
+def test_marker_detection_does_not_mutate_fragments():
+    fragments = split_sample()
+    fragments[1:3] = [frag("1)", 64, 502.5, size=9, order=1)]
+    assert len(detect(fragments)[0]) == 1
+    assert not any(hasattr(fragment, "extra_orders") for fragment in fragments)

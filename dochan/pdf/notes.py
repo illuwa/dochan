@@ -22,6 +22,8 @@ MAX_NOTE_GEOMETRY_CHECKS = 200000
 GEOMETRY_TOLERANCE = 1.5
 # 두 내부 양성 문서의 구분선은 첫 정의보다 정확히 15pt 위였다.
 MAX_SEPARATOR_GAP = 15.0 + GEOMETRY_TOLERANCE
+# 표 행 괘선이 쌓인 간격으로 보는 거리(한 행 높이 여유). 각주 구분선 위로는 본문이 온다.
+STACKED_RULE_DISTANCE = 48.0
 _MARKER = re.compile(r"^\s*(\d{1,3})\)\s*$")
 _DEFINITION = re.compile(r"^\s*(\d{1,3})\)\s*\S")
 _DIGITS = re.compile(r"^\s*\d{1,3}\s*$")
@@ -51,6 +53,12 @@ def _has_separator(segments, line, budget, warnings):
                        and abs(segment.x0 - segment.x1) <= GEOMETRY_TOLERANCE
                        and abs(segment.y0 - segment.y1) > GEOMETRY_TOLERANCE)
     vertical_xs = [item[0] for item in verticals]
+    horizontal = sorted(((segment.y0 + segment.y1) / 2, *sorted((segment.x0, segment.x1)))
+                        for segment in segments
+                        if all(math.isfinite(value) for value in
+                               (segment.x0, segment.y0, segment.x1, segment.y1))
+                        and abs(segment.y1 - segment.y0) <= GEOMETRY_TOLERANCE)
+    horizontal_ys = [item[0] for item in horizontal]
     for segment in segments:
         if not _spend(budget, 1, warnings):
             return False
@@ -65,7 +73,16 @@ def _has_separator(segments, line, budget, warnings):
                 and abs(left - line.left) <= GEOMETRY_TOLERANCE
                 and right - left > line.size):
             continue
-        # 표 테두리는 각주 구분선이 아니다. 끝점에 세로선이 붙으면 거부한다.
+        # 표 테두리는 각주 구분선이 아니다. 바로 위에 같은 폭의 가로선이 쌓여 있으면
+        # (좌우 테두리가 없는 표의 행 괘선) 거부한다.
+        low = bisect_right(horizontal_ys, y + GEOMETRY_TOLERANCE)
+        high = bisect_right(horizontal_ys, y + STACKED_RULE_DISTANCE)
+        if not _spend(budget, high - low, warnings):
+            return False
+        if any(abs(other_left - left) <= GEOMETRY_TOLERANCE and abs(other_right - right) <= GEOMETRY_TOLERANCE
+               for _y, other_left, other_right in horizontal[low:high]):
+            continue
+        # 끝점에 세로선이 붙어도 표 테두리다.
         nearby = []
         for edge in (left, right):
             low = bisect_left(vertical_xs, edge - GEOMETRY_TOLERANCE)
@@ -80,8 +97,8 @@ def _has_separator(segments, line, budget, warnings):
     return False
 
 
-class _SplitMarker:
-    """숫자와 닫는 괄호가 따로 그려진 위첨자 표지. 첫 조각 자리에 참조를 단다."""
+class _Marker:
+    """각주 표지 후보. 숫자와 닫는 괄호가 따로 그려졌으면 여러 조각이고, 첫 조각 자리에 참조를 단다."""
 
     def __init__(self, parts):
         first, last = parts[0], parts[-1]
@@ -91,32 +108,40 @@ class _SplitMarker:
         self.extra_orders = {part.order for part in parts[1:]}
 
 
+def _touching(left, right, size):
+    gap = right.x - left.x - left.width
+    return (right.order == left.order + 1
+            and abs(right.size - size) <= 0.05 * size
+            and abs(right.y - left.y) <= 0.1 * size
+            and -0.1 * size <= gap <= 0.3 * size)
+
+
 def _marker_candidates(small):
     """작은 조각 중 각주 표지 `n)` 후보. 한 조각이거나, 내용 순서로 이어지고
-    같은 기준선·크기에서 맞닿은 숫자 조각과 괄호 조각(최대 4조각)을 합친다."""
+    같은 기준선·크기에서 맞닿은 숫자 조각과 괄호 조각(최대 4조각)을 합친다.
+    앞에 맞닿은 `(`·숫자가 있으면(`(1)`, `12)` 의 뒷부분) 시작점으로 쓰지 않는다."""
     ordered = sorted(small, key=lambda frag: frag.order)
-    markers = []
+    markers, used = [], set()
     for index, frag in enumerate(ordered):
         match = _MARKER.match(frag.text)
         if match:
-            frag.extra_orders = set()
-            markers.append((frag, match))
+            markers.append((_Marker([frag]), match))
             continue
-        if not _DIGITS.match(frag.text):
+        if frag.order in used or not _DIGITS.match(frag.text):
+            continue
+        previous = ordered[index - 1] if index else None
+        if (previous is not None and _touching(previous, frag, frag.size)
+                and (previous.text.strip() == "(" or _DIGITS.match(previous.text))):
             continue
         parts = [frag]
         for following in ordered[index + 1:index + 4]:
-            previous = parts[-1]
-            gap = following.x - previous.x - previous.width
-            if (following.order != previous.order + 1
-                    or abs(following.size - frag.size) > 0.05 * frag.size
-                    or abs(following.y - frag.y) > 0.1 * frag.size
-                    or not -0.1 * frag.size <= gap <= 0.3 * frag.size):
+            if not _touching(parts[-1], following, frag.size):
                 break
             parts.append(following)
             match = _MARKER.match("".join(part.text for part in parts))
             if match:
-                markers.append((_SplitMarker(parts), match))
+                markers.append((_Marker(parts), match))
+                used.update(part.order for part in parts)
                 break
     return markers
 

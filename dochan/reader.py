@@ -524,7 +524,7 @@ class Dochan:
         """HWPX (ZIP/XML) 파싱"""
         parser = HWPXParser()
         self.doc = parser.parse(self.file_path, include_assets=self._include_assets,
-                                revision_mode=self._revision_mode)
+                                revision_mode=self._revision_mode, password=self._password)
 
     def _parse_xls(self):
         """XLS (BIFF/OLE) 파싱"""

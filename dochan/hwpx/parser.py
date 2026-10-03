@@ -31,6 +31,8 @@ from ..hwp.forms import caption_display
 from ..hwp.records.ctrl_header import field_command_to_url
 from . import charts
 from .revisions import RevisionProjector, validate_revision_mode
+from .crypto import (HWPXCryptoError, MAX_MANIFEST_SIZE, MAX_SPIN_COUNT, decrypt_part,
+                     read_encryption_manifest)
 from ..constants import MAX_OUTLINE_HEADING_LEVEL
 
 # Zip bomb protection constants
@@ -200,9 +202,14 @@ class HWPXParser:
         self._chart_points = 0
         self._chart_cells = 0
         self._chart_document_cells = 0  # Actual table cells + grid fillers + charts.
+        self._password = None
+        self._encrypted_parts = {}
+        self._encrypted_cache = {}
+        self._verified_parts = set()
+        self._crypto_budget = [MAX_SPIN_COUNT]
 
     def parse(self, file_path: Union[str, os.PathLike[str], BinaryIO], *, include_assets: bool = True,
-              revision_mode: str = "preserve") -> Document:
+              revision_mode: str = "preserve", password: Optional[str] = None) -> Document:
         """HWPX 경로 또는 seek 가능한 바이너리 스트림 파싱.
 
         include_assets=False면 이미지 참조·대체 텍스트·캡션은 보존하고
@@ -212,6 +219,7 @@ class HWPXParser:
         """
         validate_revision_mode(revision_mode)
         self._reset()
+        self._password = password
         self._revisions = RevisionProjector(self.errors, revision_mode)
         doc = Document()
         doc.source_format = "hwpx"
@@ -246,6 +254,31 @@ class HWPXParser:
                 if mimetype != "application/hwp+zip":
                     raise ValueError(f"invalid HWPX mimetype marker: {mimetype!r}")
 
+                manifest_name = self._part_name_map.get('META-INF/manifest.xml')
+                if manifest_name:
+                    manifest = self._read_zip_part(zf, manifest_name, MAX_MANIFEST_SIZE)
+                    if b'encryption-data' in manifest:
+                        self._encrypted_parts = read_encryption_manifest(
+                            manifest, self._part_name_map, self._encrypted_limit)
+                        if any(self._part_name_map[name] != name
+                               for name in self._encrypted_parts):
+                            raise HWPXCryptoError(
+                                'ERR: 지원하지 않는 HWPX 암호화 또는 손상된 암호화 데이터')
+                        logical_total = total_size + sum(
+                            metadata[4] - zf.getinfo(name).file_size
+                            for name, metadata in self._encrypted_parts.items())
+                        if logical_total > MAX_ARCHIVE_UNCOMPRESSED_SIZE:
+                            raise HWPXCryptoError(
+                                'ERR: 지원하지 않는 HWPX 암호화 또는 손상된 암호화 데이터')
+                        if self._encrypted_parts and password is None:
+                            raise HWPXCryptoError('ERR: 암호화된 HWPX 문서 — 암호가 필요함')
+                        if self._encrypted_parts:
+                            first = next((name for name in ('Contents/header.xml', 'header.xml')
+                                          if name in self._encrypted_parts),
+                                         next(iter(self._encrypted_parts)))
+                            self._encrypted_cache[first] = self._read_zip_part(
+                                zf, first, self._encrypted_limit(first))
+
                 # content.hpf 를 한 번만 읽어 섹션 목록과 바이너리 매핑을 함께 얻는다
                 self._read_content_hpf(zf)
 
@@ -262,7 +295,8 @@ class HWPXParser:
                 for sf in self._section_files:
                     try:
                         info = zf.getinfo(sf)
-                        if info.file_size > MAX_SECTION_XML_SIZE:
+                        if info.file_size > MAX_SECTION_XML_SIZE + (
+                                16 if sf in self._encrypted_parts else 0):
                             self.errors.append(f"ERR: 섹션 {sf} 크기 초과: {info.file_size} bytes")
                             continue
                         if _compression_ratio_exceeded(info.file_size, info.compress_size):
@@ -276,14 +310,24 @@ class HWPXParser:
                         section = self._parse_section_xml(xml_data, part_name=sf)
                         doc.sections.append(section)
                     except Exception as e:
+                        if isinstance(e, HWPXCryptoError):
+                            raise
                         self.errors.append(f"ERR: 섹션 {sf} 파싱 실패: {e}")
 
                 # 이미지 바이너리 데이터 로드
                 if include_assets:
                     self._load_image_data(zf, doc)
 
+                # Preview/settings and unreferenced BinData are still part of
+                # the authenticated encrypted package.
+                for name in self._encrypted_parts:
+                    if name not in self._verified_parts:
+                        self._read_zip_part(zf, name, self._encrypted_limit(name))
+
         except zipfile.BadZipFile:
             self.errors.append("ERR: 유효하지 않은 HWPX 파일")
+        except HWPXCryptoError as e:
+            self.errors.append(str(e))
         except Exception as e:
             self.errors.append(f"ERR: HWPX 파싱 실패: {e}")
         finally:
@@ -307,14 +351,31 @@ class HWPXParser:
 
     def _read_zip_part(self, zf: zipfile.ZipFile, name: str, max_size: int) -> bytes:
         """zip 파트를 크기·압축률 상한 안에서만 읽는다."""
+        if name in self._encrypted_cache:
+            return self._encrypted_cache[name]
         info = zf.getinfo(name)
-        if info.file_size > max_size:
+        encrypted = name in self._encrypted_parts
+        if info.file_size > max_size + (16 if encrypted else 0):
             raise ValueError(
                 f"{name} size exceeds limit: {info.file_size} > {max_size}"
             )
         if _compression_ratio_exceeded(info.file_size, info.compress_size):
             raise ValueError(f"{name} compression ratio exceeds limit")
-        return zf.read(name)
+        data = zf.read(name)
+        if encrypted:
+            plain = decrypt_part(data, self._encrypted_parts[name], self._password,
+                                 max_size, self._crypto_budget)
+            self._verified_parts.add(name)
+            return plain
+        return data
+
+    @staticmethod
+    def _encrypted_limit(name):
+        if re.search(r'(^|/)section\d+\.xml$', name, re.IGNORECASE):
+            return MAX_SECTION_XML_SIZE
+        if name.startswith('BinData/'):
+            return MAX_FILE_SIZE
+        return MAX_XML_FILE_SIZE
 
     # ── Chart/ parts (only read while the package is open) ──
 
@@ -357,7 +418,8 @@ class HWPXParser:
 
         try:
             info = zf.getinfo(actual)
-            if (info.file_size > charts.MAX_XML_BYTES
+            if (info.file_size > charts.MAX_XML_BYTES + (
+                    16 if actual in self._encrypted_parts else 0)
                     or (info.file_size > 0 and info.compress_size <= 0)
                     or _compression_ratio_exceeded(info.file_size, info.compress_size)):
                 self._chart_error("limit", label + ": ZIP size/compression ratio exceeded")
@@ -369,17 +431,22 @@ class HWPXParser:
             if actual not in self._chart_cache:
                 # ZipFile.read() has no bound. Check both metadata and bytes
                 # actually returned, including a one-byte overrun sentinel.
-                with zf.open(actual) as stream:
-                    data = stream.read(charts.MAX_XML_BYTES + 1)
+                if actual in self._encrypted_parts:
+                    data = self._read_zip_part(zf, actual, charts.MAX_XML_BYTES)
+                else:
+                    with zf.open(actual) as stream:
+                        data = stream.read(charts.MAX_XML_BYTES + 1)
                 if len(data) > charts.MAX_XML_BYTES:
                     self._chart_error("limit", label + ": chart XML bytes exceeded")
                     return []
-                if len(data) != info.file_size:
+                if actual not in self._encrypted_parts and len(data) != info.file_size:
                     self._chart_error("part_read", label + ": ZIP size mismatch")
                     return []
                 series, points = _chart_input_counts(data)
                 self._chart_cache[actual] = (data, series, points)
             data, series, points = self._chart_cache[actual]
+        except HWPXCryptoError:
+            raise
         except Exception:
             # ZIP codecs have different exception classes (zlib/LZMA/CRC,
             # encryption, unsupported methods). Isolate a damaged chart part
@@ -460,7 +527,8 @@ class HWPXParser:
             info = zf.getinfo(name)
         except KeyError:
             return None
-        if info.file_size > MAX_META_FILE_SIZE:
+        if info.file_size > MAX_META_FILE_SIZE + (
+                16 if name in self._encrypted_parts else 0):
             self.errors.append(
                 f"ERR: {name} size exceeds limit: {info.file_size} > {MAX_META_FILE_SIZE}"
             )
@@ -469,7 +537,9 @@ class HWPXParser:
             self.errors.append(f"{name} 압축률 초과")
             return None
         try:
-            return zf.read(name)
+            return self._read_zip_part(zf, name, MAX_META_FILE_SIZE)
+        except HWPXCryptoError:
+            raise
         except Exception as e:
             self.errors.append(f"{name} 읽기 실패: {e}")
             return None
@@ -1481,14 +1551,17 @@ class HWPXParser:
                 info = zf.getinfo(zip_name)
             except KeyError:
                 continue
-            if info.file_size > MAX_FILE_SIZE:
+            if info.file_size > MAX_FILE_SIZE + (
+                    16 if zip_name in self._encrypted_parts else 0):
                 self.errors.append(f"이미지 {zip_name} 크기 초과: {info.file_size} bytes")
                 continue
             if _compression_ratio_exceeded(info.file_size, info.compress_size):
                 self.errors.append(f"이미지 {zip_name} 압축률 초과")
                 continue
             try:
-                data = zf.read(zip_name)
+                data = self._read_zip_part(zf, zip_name, MAX_FILE_SIZE)
+            except HWPXCryptoError:
+                raise
             except Exception:
                 continue
             cache[zip_name] = data

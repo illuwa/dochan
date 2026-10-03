@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 추가 (PDF Form XObject 본문)
+
+- PDF 가 Form XObject(`Do`)로 그린 글자를 읽는다(전에는 통째로 빠졌다). 공개 pdf.js 983개 중 Form 글자가 있는 39개에서 PDFium 대비 읽을 수 있는
+  문자 재현율이 95.8%→98.5% 로 올랐고, 나머지 944개 출력은 그대로다. 순환·증폭·바이트·해제 예산 상한을 두고 Form 예산은 페이지 본문 예산과 분리했다.
+  Opus 감수 5회(본문 소실 회귀 2건 포함)를 거쳤다.
+
 ### 변경 (런타임 의존성 — lxml 제거)
 
 - XML 을 lxml 대신 표준 라이브러리(expat·ElementTree) 위의 자체 안전 파서 `dochan/utils/safe_xml.py` 로 읽는다. 런타임 의존성이 없어졌다.

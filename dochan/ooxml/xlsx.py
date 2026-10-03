@@ -87,16 +87,58 @@ def _node_text(node) -> str:
 def _sheet_rows(stream):
     options = dict(events=("end",), tag=(f"{{{S_NS}}}row", f"{{{STRICT_S_NS}}}row"),
                    max_depth=2048, clear=True)
-    try:
-        yield from etree.iterparse(stream, **options)
-    except etree.ForbiddenDTD:
-        # Declarations precede the root, hence no row has been yielded. Only
-        # this exceptional legacy path needs a bounded buffer for sanitizing.
-        stream.seek(0)
-        data = stream.read(etree.MAX_BYTES + 1)
-        if len(data) > etree.MAX_BYTES:
-            raise ValueError("XML size limit exceeded")
-        yield from etree.iterparse(BytesIO(etree.sanitize_dtd(data)), **options)
+    source = stream
+    emitted = 0
+    retries = 0
+    data = None
+    while True:
+        seen = 0
+        try:
+            for event, row in etree.iterparse(source, **options):
+                seen += 1
+                if seen > emitted:
+                    emitted += 1
+                    yield event, row
+            return
+        except etree.ForbiddenDTD:
+            if data is not None:
+                raise
+            stream.seek(0)
+            data = stream.read(etree.MAX_BYTES + 1)
+            if len(data) > etree.MAX_BYTES:
+                raise ValueError("XML size limit exceeded")
+            data = etree.sanitize_dtd(data)
+        except etree.XMLSyntaxError as exc:
+            if retries >= 4:
+                raise
+            if not hasattr(exc, 'position'):
+                raise
+            if data is None:
+                stream.seek(0)
+                data = stream.read(etree.MAX_BYTES + 1)
+                if len(data) > etree.MAX_BYTES:
+                    raise ValueError("XML size limit exceeded")
+            line, column = exc.position
+            offset = 0
+            for _ in range(line - 1):
+                newline = data.find(b'\n', offset)
+                if newline < 0:
+                    raise
+                offset = newline + 1
+            offset = min(offset + column, len(data))
+            broken = data.rfind(b'<', 0, offset + 1)
+            if broken < 0:
+                raise
+            next_row = re.search(rb'<(?:[A-Za-z_][\w.-]*:)?row(?=[\s/>])',
+                                 data[offset + 1:offset + 1 + 4 * 1024 * 1024])
+            if next_row is None:
+                raise
+            resume = offset + 1 + next_row.start()
+            if resume <= broken:
+                raise
+            data = data[:broken] + b' ' * (resume - broken) + data[resume:]
+            retries += 1
+        source = BytesIO(data)
 
 def _column_index(cell_ref: str) -> int:
     value = 0

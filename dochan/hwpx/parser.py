@@ -99,13 +99,14 @@ _safe_xml_parser = etree.XMLParser(resolve_entities=False, no_network=True)
 _INVALID_XML_CHAR_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
-def _parse_xml_tolerant(data: bytes):
+def _parse_xml_tolerant(data: bytes, *, sanitize=True):
     """일부 실제 문서에는 XML 1.0에서 금지된 제어문자가 하나씩 섞여 있어
     XML 파서가 전체를 못 읽는 경우가 있다. 그런 경우 무효 문자만 제거하고
     한 번 더 시도한다 — 그래도 안 되면(다른 종류의 오류) 원래 예외를
     그대로 올려 호출자의 기존 처리 로직을 그대로 탄다.
     """
-    data = etree.sanitize_dtd(data)
+    if sanitize:
+        data = etree.sanitize_dtd(data)
     try:
         return etree.fromstring(data, parser=_safe_xml_parser)
     except etree.XMLSyntaxError:
@@ -660,8 +661,9 @@ class HWPXParser:
         """섹션 XML → Section 모델"""
         if xml_data.count(b"<") > MAX_XML_ELEMENTS:
             raise ValueError("HWPX section XML element limit exceeded")
+        etree.check_prolog(xml_data)
         section = Section()
-        root = _parse_xml_tolerant(xml_data)
+        root = _parse_xml_tolerant(xml_data, sanitize=False)
         self._section_root = root
         self._section_parents = None
         # The revision module deliberately projects text only. Present charts
@@ -714,6 +716,7 @@ class HWPXParser:
         # ElementTree child iterators skip the next sibling after removal.
         # Snapshot each selected child sequence before this pass mutates it.
         stack = [iter(list(_selected_children(root)))]
+        removed = {}
         while stack:
             node = next(stack[-1], None)
             if node is None:
@@ -737,11 +740,13 @@ class HWPXParser:
                 parent = self._xml_parents().get(node)
                 node.clear()
                 if parent is not None:
-                    parent.remove(node)
+                    removed.setdefault(parent, set()).add(node)
             else:
                 self._body_nodes_remaining -= cost
                 if len(node):
                     stack.append(iter(list(_selected_children(node))))
+        for parent, discarded in removed.items():
+            parent[:] = [child for child in parent if child not in discarded]
 
     def _append_plain_body(self, root):
         """선택된 분기의 표시 텍스트만 보존한다. 양식 비밀번호 정책도 재사용한다."""

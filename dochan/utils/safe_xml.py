@@ -6,7 +6,7 @@ No parser here installs a resource resolver or performs network/file I/O.
 """
 import codecs
 import re
-from html.parser import HTMLParser
+from html import unescape
 from weakref import WeakKeyDictionary
 from xml.parsers import expat  # nosemgrep: use-defused-xml -- declaration-rejecting prolog only
 from xml.etree import ElementTree as _ET  # nosemgrep: use-defused-xml -- guarded by this module
@@ -22,7 +22,10 @@ MAX_DEPTH = 256
 MAX_NAMESPACE_WORK = 1000000
 CHUNK_SIZE = 1024 * 1024
 _namespaces = WeakKeyDictionary()
+_declared_uris = WeakKeyDictionary()
 _encoding = re.compile(br'^\s*<\?xml\s[^?]*encoding\s*=\s*[\'"]([^\'"]+)[\'"]', re.I)
+_expat_numbers = tuple(int(value) for value in re.findall(r'\d+', expat.EXPAT_VERSION)[:3])
+EXPAT_BELOW_RECOMMENDED = _expat_numbers < (2, 4, 0)
 
 
 class ForbiddenDTD(ValueError):
@@ -62,6 +65,8 @@ def _decode(data):
             normalized = codecs.lookup(name).name
         except LookupError as exc:
             raise XMLSyntaxError('unknown XML encoding') from exc
+        if normalized == 'utf-8' and name.lower() not in ('utf-8', 'utf_8'):
+            return _encoding.sub(lambda m: m[0].replace(m[1], b'UTF-8'), data, count=1)
         if normalized not in ('utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'ascii', 'iso8859-1'):
             return data.decode(name)
     return data
@@ -91,8 +96,45 @@ def sanitize_dtd(data):
         data = text.encode('utf-8')
     if b'<!DOCTYPE' not in data.upper():
         return data
-    data = re.sub(br'<!DOCTYPE\b[^[]*\[[\s\S]*?\]\s*>', b'', data, flags=re.I)
-    data = re.sub(br'<!DOCTYPE\b[^>]*>', b'', data, flags=re.I)
+    # A single forward scan avoids retrying every incomplete declaration over
+    # the same suffix. Quotes and the internal subset both protect '>'.
+    upper = data.upper()
+    chunks = []
+    cursor = 0
+    search = 0
+    while True:
+        start = upper.find(b'<!DOCTYPE', search)
+        if start < 0:
+            chunks.append(data[cursor:])
+            break
+        after = start + len(b'<!DOCTYPE')
+        if after < len(data) and (65 <= upper[after] <= 90 or upper[after] == 95):
+            search = after
+            continue
+        chunks.append(data[cursor:start])
+        position = after
+        quote = 0
+        subset = 0
+        while position < len(data):
+            char = data[position]
+            if quote:
+                if char == quote:
+                    quote = 0
+            elif char in (34, 39):
+                quote = char
+            elif char == 91:
+                subset += 1
+            elif char == 93 and subset:
+                subset -= 1
+            elif char == 62 and not subset:
+                position += 1
+                break
+            position += 1
+        cursor = position
+        search = cursor
+        if cursor == len(data):
+            break
+    data = b''.join(chunks)
     predefined = {b'amp', b'lt', b'gt', b'apos', b'quot'}
     return re.sub(br'&([A-Za-z_][A-Za-z0-9_.:-]*);',
                   lambda match: match[0] if match[1] in predefined else b'', data)
@@ -104,6 +146,8 @@ def check_prolog(data):
         parser.Parse(data, True)
     except _RootReached:
         return
+    except LookupError as exc:
+        raise XMLSyntaxError('unknown XML encoding') from exc
     except expat.ExpatError as exc:
         # Keep the reader's public diagnostic for non-XML package parts. This
         # is based on the XML prolog grammar, not a corpus filename or payload.
@@ -155,6 +199,10 @@ def namespace_map(node):
     return _namespaces.get(node, {})
 
 
+def namespace_uris(root):
+    return _declared_uris.get(root, ()) if root is not None else ()
+
+
 def map_namespaces(root, mapping):
     seen = set()
     for node in root.iter():
@@ -202,49 +250,85 @@ def _check_depth(root, max_depth, truncate=False):
             stack.extend((child, depth + 1) for child in node)
 
 
-def _parse_tree(data, options, namespaces, max_namespaces):
-    builder = _ET.TreeBuilder(insert_comments=not options.remove_comments,
-                              insert_pis=not options.remove_pis)
-    parser = _ET.XMLParser(target=builder)  # nosemgrep: use-defused-xml -- prolog already rejected declarations
-    if not namespaces and not options.recover:
-        return _ET.fromstring(data, parser=parser)  # nosemgrep: use-defused-xml -- size/prolog guards precede this call
-    pull = _ET.XMLPullParser(events=('start', 'end', 'start-ns'), _parser=parser)  # nosemgrep: use-defused-xml -- guarded input
-    root = None
-    scopes = []
-    pending = {}
-    count = 0
-    scope_work = 0
-    def tree_events():
-        yield from pull.read_events()
-        pull.close()
-        yield from pull.read_events()
+class _BoundedTree:
+    """TreeBuilder target that checks limits before each node is allocated."""
+    def __init__(self, options, namespaces, max_namespaces, max_depth, truncate):
+        self.builder = _ET.TreeBuilder(insert_comments=not options.remove_comments,
+                                       insert_pis=not options.remove_pis)
+        self.data = self.builder.data
+        self.comment = self.builder.comment
+        self.pi = self.builder.pi
+        self.close = self.builder.close
+        self.namespaces = namespaces
+        self.max_namespaces = max_namespaces
+        self.max_depth = max_depth * 8 if truncate else max_depth
+        self.depth = 0
+        self.greatest_depth = 0
+        self.elements = 0
+        self.declarations = 0
+        self.uris = set()
+        self.scope_work = 0
+        self.scopes = [{}]
+        self.pending = {}
+        self.root = None
 
+    def start_ns(self, prefix, uri):
+        if uri is not None and '}' in uri:
+            suffix = '; Expat 2.4.0 or newer is recommended' if EXPAT_BELOW_RECOMMENDED else ''
+            raise ValueError('XML namespace URI contains a closing brace' + suffix)
+        self.declarations += 1
+        if uri:
+            self.uris.add(uri)
+        if self.declarations > self.max_namespaces:
+            raise ValueError('package XML namespace limit exceeded')
+        self.pending[prefix] = uri
+
+    def start(self, tag, attrs):
+        self.depth += 1
+        self.greatest_depth = max(self.greatest_depth, self.depth)
+        self.elements += 1
+        if self.depth > self.max_depth:
+            raise ValueError('XML depth limit exceeded')
+        if self.elements > 1000000:
+            raise ValueError('XML element limit exceeded')
+        scope = self.scopes[-1]
+        declared = bool(self.pending)
+        if declared:
+            self.scope_work += len(scope) + len(self.pending)
+            if self.scope_work > self.max_namespaces:
+                raise ValueError('package XML namespace limit exceeded')
+            scope = dict(scope, **self.pending)
+            self.pending.clear()
+        self.scopes.append(scope)
+        node = self.builder.start(tag, attrs)
+        if self.root is None:
+            self.root = node
+        if self.namespaces is True or (self.namespaces == 'choices' and
+                (self.root is node or declared or tag.endswith('}Choice'))):
+            _namespaces[node] = scope
+        return node
+
+    def end(self, tag):
+        node = self.builder.end(tag)
+        self.scopes.pop()
+        self.depth -= 1
+        return node
+
+
+def _parse_tree(data, options, namespaces, max_namespaces, max_depth, truncate):
+    target = _BoundedTree(options, namespaces, max_namespaces, max_depth, truncate)
+    parser = _ET.XMLParser(target=target)  # nosemgrep: use-defused-xml -- prolog rejected; target checks before allocation
     try:
-        pull.feed(data)
-        for event, value in tree_events():
-            if event == 'start-ns':
-                count += 1
-                if count > max_namespaces:
-                    raise ValueError('package XML namespace limit exceeded')
-                pending[value[0]] = value[1]
-            elif event == 'start':
-                if root is None:
-                    root = value
-                scope = scopes[-1] if scopes else {}
-                if pending:
-                    scope_work += len(scope) + len(pending)
-                    if scope_work > max_namespaces:
-                        raise ValueError('package XML namespace limit exceeded')
-                    scope = dict(scope, **pending)
-                    pending = {}
-                scopes.append(scope)
-                if namespaces:
-                    _namespaces[value] = scope
-            else:
-                scopes.pop()
+        parser.feed(data)
+        root = parser.close()
     except XMLSyntaxError:
-        if not options.recover or root is None:
+        if not options.recover or target.root is None:
             raise
+        root = target.root
+    if root is not None and truncate and target.greatest_depth >= max_depth:
+        _check_depth(root, max_depth, truncate=True)
+    if root is not None and target.uris:
+        _declared_uris[root] = frozenset(target.uris)
     return root
 
 
@@ -257,14 +341,16 @@ def fromstring(data, parser=None, *, max_bytes=MAX_BYTES, max_depth=None,
         namespaces = ('Requires' if isinstance(data, str) else b'Requires') in data
     check_prolog(data)
     options = parser or XMLParser(recover=recover)
-    root = _parse_tree(data, options, namespaces, max_namespaces)
-    if root is not None:
-        _check_depth(root, options.max_depth if max_depth is None else max_depth, truncate)
+    depth = options.max_depth if max_depth is None else max_depth
+    try:
+        root = _parse_tree(data, options, namespaces, max_namespaces, depth, truncate)
+    except LookupError as exc:
+        raise XMLSyntaxError('unknown XML encoding') from exc
     return root
 
 
 def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
-              max_depth=MAX_DEPTH, clear=False):
+              max_depth=MAX_DEPTH, clear=False, max_elements=1000000):
     """Pull events in >=1MiB chunks; optionally release completed selected nodes.
 
     The stream belongs to the caller. Prolog chunks are quarantined until the
@@ -274,13 +360,24 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
     pending = []
     total = 0
     parser = _ET.XMLParser(target=_ET.TreeBuilder(insert_comments=True, insert_pis=True))  # nosemgrep: use-defused-xml -- input quarantined until prolog check
-    pull = _ET.XMLPullParser(events=('start', 'end'), _parser=parser)  # nosemgrep: use-defused-xml -- each prolog guarded before feed
+    pull = _ET.XMLPullParser(events=('start', 'end', 'start-ns'), _parser=parser)  # nosemgrep: use-defused-xml -- each prolog guarded before feed
     stack = []
+    elements = 0
+    declarations = 0
     decoder = None
     selected = (tag,) if isinstance(tag, str) else tag
     def drain():
+        nonlocal elements, declarations
         for event, node in pull.read_events():
+            if event == 'start-ns':
+                declarations += 1
+                if declarations > MAX_NAMESPACE_WORK or (node[1] is not None and '}' in node[1]):
+                    raise ValueError('XML namespace limit exceeded')
+                continue
             if event == 'start':
+                elements += 1
+                if elements > max_elements:
+                    raise ValueError('XML element limit exceeded')
                 stack.append(node)
                 if len(stack) > max_depth:
                     raise ValueError('XML depth limit exceeded')
@@ -292,7 +389,7 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
                 if clear and matched:
                     node.clear()
                     if stack:
-                        stack[-1].remove(node)
+                        del stack[-1][:]
 
     while True:
         chunk = source.read(CHUNK_SIZE)
@@ -337,6 +434,8 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
                 pending.clear()
             except expat.ExpatError as exc:
                 raise XMLSyntaxError(str(exc)) from exc
+            except LookupError as exc:
+                raise XMLSyntaxError('unknown XML encoding') from exc
         pull.feed(chunk)
         yield from drain()
     if guard is not None:
@@ -384,50 +483,111 @@ def vml_fromstring(data):
         data = data.decode('utf-16' if data.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig')
     root = Element('xml')
 
-    class Images(HTMLParser):
-        def __init__(self):
-            super().__init__(convert_charrefs=True)
-            self.scopes = [({}, '')]
-            self.count = 0
-            self.namespace_work = 0
-
-        def handle_starttag(self, tag, attrs):
-            self.count += 1
-            if self.count > 1000000:
-                raise ValueError('XML element limit exceeded')
-            scope = self.scopes[-1][0]
-            declarations = {}
-            for name, value in attrs:
-                if name == 'xmlns':
-                    declarations[''] = value
-                elif name.startswith('xmlns:'):
-                    declarations[name[6:]] = value
-            if declarations:
-                self.namespace_work += len(scope) + len(declarations)
-                if self.namespace_work > MAX_NAMESPACE_WORK:
-                    raise ValueError('XML namespace limit exceeded')
-                scope = dict(scope, **declarations)
-
-            def expanded(name):
-                prefix, sep, local = name.partition(':')
-                uri = scope.get(prefix if sep else '')
-                return '{%s}%s' % (uri, local if sep else name) if uri else name
-
-            if expanded(tag) == '{urn:schemas-microsoft-com:vml}imagedata':
-                SubElement(root, expanded(tag), {expanded(k) if ':' in k else k: v or ''
-                                                for k, v in attrs if not k.startswith('xmlns')})
-            if tag not in ('br', 'hr', 'img', 'meta', 'link', 'input'):
-                self.scopes.append((scope, tag))
-                if len(self.scopes) > MAX_DEPTH:
-                    raise ValueError('XML depth limit exceeded')
-
-        def handle_endtag(self, tag):
-            for index in range(len(self.scopes) - 1, 0, -1):
-                if self.scopes[index][1] == tag:
-                    del self.scopes[index:]
+    scopes = [({}, '')]
+    count = 0
+    namespace_work = 0
+    position = 0
+    length = len(data)
+    while position < length:
+        start = data.find('<', position)
+        if start < 0:
+            break
+        index = start + 1
+        quote = ''
+        # A second '<' outside a quoted attribute resynchronizes an
+        # incomplete start tag. No suffix is rescanned.
+        while index < length:
+            char = data[index]
+            if quote:
+                if char == quote:
+                    quote = ''
+            elif char in ('"', "'"):
+                quote = char
+            elif char == '<':
+                break
+            elif char == '>':
+                break
+            index += 1
+        if index == length:
+            break
+        if data[index] == '<':
+            position = index
+            continue
+        token = data[start + 1:index].strip()
+        position = index + 1
+        if not token or token[0] in ('!', '?'):
+            continue
+        if token[0] == '/':
+            tag = token[1:].strip().lower()
+            for scope_index in range(len(scopes) - 1, 0, -1):
+                if scopes[scope_index][1] == tag:
+                    del scopes[scope_index:]
                     break
+            continue
+        self_closing = token.endswith('/')
+        if self_closing:
+            token = token[:-1].rstrip()
+        tag_end = 0
+        while tag_end < len(token) and not token[tag_end].isspace():
+            tag_end += 1
+        tag = token[:tag_end].lower()
+        if not tag:
+            continue
+        count += 1
+        if count > 1000000:
+            raise ValueError('XML element limit exceeded')
+        attrs = []
+        attr_pos = tag_end
+        while attr_pos < len(token):
+            while attr_pos < len(token) and token[attr_pos].isspace():
+                attr_pos += 1
+            begin = attr_pos
+            while attr_pos < len(token) and not token[attr_pos].isspace() and token[attr_pos] != '=':
+                attr_pos += 1
+            if attr_pos == begin:
+                attr_pos += 1
+                continue
+            name = token[begin:attr_pos].lower()
+            while attr_pos < len(token) and token[attr_pos].isspace():
+                attr_pos += 1
+            value = ''
+            if attr_pos < len(token) and token[attr_pos] == '=':
+                attr_pos += 1
+                while attr_pos < len(token) and token[attr_pos].isspace():
+                    attr_pos += 1
+                if attr_pos < len(token) and token[attr_pos] in ('"', "'"):
+                    delimiter = token[attr_pos]
+                    attr_pos += 1
+                    begin = attr_pos
+                    while attr_pos < len(token) and token[attr_pos] != delimiter:
+                        attr_pos += 1
+                    value = token[begin:attr_pos]
+                    attr_pos += attr_pos < len(token)
+                else:
+                    begin = attr_pos
+                    while attr_pos < len(token) and not token[attr_pos].isspace():
+                        attr_pos += 1
+                    value = token[begin:attr_pos]
+            attrs.append((name, unescape(value)))
+        scope = scopes[-1][0]
+        declarations = {name[6:] if name.startswith('xmlns:') else '': value
+                        for name, value in attrs if name == 'xmlns' or name.startswith('xmlns:')}
+        if declarations:
+            namespace_work += len(scope) + len(declarations)
+            if namespace_work > MAX_NAMESPACE_WORK or any('}' in uri for uri in declarations.values()):
+                raise ValueError('XML namespace limit exceeded')
+            scope = dict(scope, **declarations)
 
-    parser = Images()
-    parser.feed(data)
-    parser.close()
+        def expanded(name):
+            prefix, sep, local = name.partition(':')
+            uri = scope.get(prefix if sep else '')
+            return '{%s}%s' % (uri, local if sep else name) if uri else name
+
+        if expanded(tag) == '{urn:schemas-microsoft-com:vml}imagedata':
+            SubElement(root, expanded(tag), {expanded(k) if ':' in k else k: value
+                                            for k, value in attrs if not k.startswith('xmlns')})
+        if not self_closing and tag not in ('br', 'hr', 'img', 'meta', 'link', 'input'):
+            scopes.append((scope, tag))
+            if len(scopes) > MAX_DEPTH:
+                raise ValueError('XML depth limit exceeded')
     return root

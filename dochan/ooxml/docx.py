@@ -229,6 +229,7 @@ class DOCXReader:
     def read(self, file_path: str) -> Document:
         doc = Document(source_format="docx")
         self._parents = {}
+        self._sibling_positions = {}
         self._numbering_counts = {}
         self._note_reference_numbers = {}
         self._note_reference_order = []
@@ -285,6 +286,7 @@ class DOCXReader:
             etree.XMLSyntaxError,
         ) as exc:
             self._parents.clear()
+            self._sibling_positions.clear()
             doc.errors.append(f"ERR: DOCX package parse failed: {exc}")
             return doc
 
@@ -294,6 +296,7 @@ class DOCXReader:
         body = root.find("w:body", namespaces=NS)
         if body is None:
             self._parents.clear()
+            self._sibling_positions.clear()
             doc.errors.append("ERR: DOCX body not found")
             doc.sections.append(section)
             return doc
@@ -320,6 +323,7 @@ class DOCXReader:
         doc.sections.append(section)
         self._release_source_elements(doc)
         self._parents.clear()
+        self._sibling_positions.clear()
         self._package = None
         self._active_relationships = {}
         self._alt_chunk_data = {}
@@ -329,8 +333,13 @@ class DOCXReader:
         """Register each story once; direct subtree parsing uses the same context."""
         if not hasattr(self, "_parents"):
             self._parents = {}
+        if not hasattr(self, "_sibling_positions"):
+            self._sibling_positions = {}
         if root not in self._parents:
-            self._parents.update(etree.parent_map(root))
+            for parent in root.iter():
+                for position, child in enumerate(parent):
+                    self._parents[child] = parent
+                    self._sibling_positions[child] = position
             self._parents[root] = None
 
     def _release_source_elements(self, doc):
@@ -523,10 +532,11 @@ class DOCXReader:
             parent = self._parents.get(current)
             if parent is None:
                 return None
-            siblings = list(parent)
-            position = siblings.index(current)
-            following = siblings[position + 1:] if direction > 0 else reversed(siblings[:position])
-            for sibling in following:
+            position = self._sibling_positions[current]
+            following = (range(position + 1, len(parent)) if direction > 0
+                         else range(position - 1, -1, -1))
+            for sibling_index in following:
+                sibling = parent[sibling_index]
                 candidate = edge(sibling)
                 if candidate is not None:
                     return candidate

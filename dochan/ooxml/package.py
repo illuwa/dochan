@@ -191,17 +191,24 @@ class OOXMLPackage:
         data = _sanitize_dtd(self.read_part(name))
         if data.count(b"<") > MAX_XML_ELEMENTS:
             raise ValueError(f"package XML element limit exceeded: {_validate_part_name(name)}")
-        root = etree.fromstring(data, namespaces=True,
+        needs_scopes = (b'Requires' in data or _STRICT_BASE.encode() in data or b'&#' in data)
+        if not needs_scopes and b'\0' in data:
+            compact = data.replace(b'\0', b'')
+            needs_scopes = (b'Requires' in compact or _STRICT_BASE.encode() in compact or b'&#' in compact)
+        root = etree.fromstring(data, namespaces='choices' if needs_scopes else False,
                                 max_namespaces=MAX_XML_NAMESPACE_BINDINGS,
                                 max_depth=2048, truncate=True, recover=recover)
         if root is not None and etree.QName(root).namespace in _STRICT_NAMESPACES:
             self._strict_parts.add(_validate_part_name(name))
         # Transitional parts need no rewriting. The exact URI prefix check is
         # only a fast-path gate; structural names alone are changed below.
-        strict = _STRICT_BASE.encode() in data or b'&#' in data
-        if not strict and b'\0' in data:
-            decoded_names = data.replace(b'\0', b'')
-            strict = _STRICT_BASE.encode() in decoded_names or b'&#' in decoded_names
+        strict = any(uri.startswith(_STRICT_BASE) for uri in etree.namespace_uris(root))
+        if root is not None and not strict and (_STRICT_BASE.encode() in data or b'&#' in data):
+            # A Strict relationship Type or graphicData URI can occur in a
+            # Transitional part without a Strict namespace declaration.
+            strict = any(value.startswith(_STRICT_BASE)
+                         for node in root.iter() for key, value in node.attrib.items()
+                         if key in ('Type', 'uri'))
         return _normalize_strict_tree(root) if strict else root
 
 

@@ -6,7 +6,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.ooxml.pptx import PPTXReader
 from dochan.model.equation import Equation
@@ -39,7 +39,7 @@ def raw_math_scripts(container):
     scripts = []
     for node in selected_children(container):
         if node.tag in {"{%s}m" % A14, "{%s}oMath" % NS["m"], "{%s}oMathPara" % NS["m"]}:
-            scripts.append("".join(node.itertext()))
+            scripts.append("".join(etree.itertext(node)))
         else:
             scripts.extend(raw_math_scripts(node))
     return scripts
@@ -81,7 +81,7 @@ def cell_texts(tc, relationships=None):
                 if "".join(pieces).strip():
                     blocks.append(("paragraph", "".join(pieces)))
                 pieces = []
-                blocks.append(("equation", "".join(node.itertext())))
+                blocks.append(("equation", "".join(etree.itertext(node))))
         if "".join(pieces).strip():
             blocks.append(("paragraph", "".join(pieces)))
         props = p.find("a:pPr", NS)

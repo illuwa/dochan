@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 from dochan import cfb
 
 from dochan import Dochan
@@ -103,7 +103,7 @@ def _paired_revisions(ole, header, pair, changes, authors):
             for path in sorted(p for p in archive.namelist() if p.startswith('Contents/section') and p.endswith('.xml')):
                 section = _xml_part(archive, path)
                 projector.project_section(section)
-                xml_text.extend(''.join(''.join(t.itertext()) for run in paragraph.findall(HP + 'run') for t in run.findall(HP + 't')) for paragraph in section.iter(HP + 'p'))
+                xml_text.extend(''.join(''.join(etree.itertext(t)) for run in paragraph.findall(HP + 'run') for t in run.findall(HP + 't')) for paragraph in section.iter(HP + 'p'))
             binary_errors = []
             binary_text = [project_text_result(text, ranges, changes, mode, binary_errors)['text'] if text else '' for text, ranges in paragraphs]
             matches = sum(a == b for a, b in zip(binary_text, xml_text))

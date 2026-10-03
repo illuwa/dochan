@@ -11,7 +11,7 @@ import posixpath
 import re
 import struct
 import subprocess
-from lxml import etree as ET
+from dochan.utils import safe_xml as ET
 
 from pathlib import Path
 from zipfile import ZipFile

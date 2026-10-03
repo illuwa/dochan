@@ -3,7 +3,7 @@ import io
 import zipfile
 
 import pytest
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.ooxml import charts
 from dochan.ooxml.package import OOXMLPackage

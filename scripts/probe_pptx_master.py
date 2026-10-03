@@ -45,7 +45,7 @@ def read_xml(archive, name):
                for codec in ("ascii", "utf-16-le", "utf-16-be")]
     if any(marker in raw for marker in markers):
         raise ValueError("DTD not accepted by independent probe")
-    return ET.fromstring(raw)
+    return ET.fromstring(raw)  # nosemgrep: use-defused-xml -- bounded independent gold, declaration markers rejected above
 
 
 def relations(archive, part):

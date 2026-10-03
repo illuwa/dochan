@@ -8,9 +8,9 @@ from bisect import bisect_left
 import math
 import re
 from typing import Optional
-from xml.sax.saxutils import escape, quoteattr  # nosemgrep: use-defused-xml (문자열 이스케이프만, XML 파싱은 lxml 안전 파서)
+from xml.sax.saxutils import escape, quoteattr  # nosemgrep: use-defused-xml (문자열 이스케이프만, XML 파싱은 공용 안전 모듈)
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 from ..model.equation import Equation
 from .annotations import text_string

@@ -15,7 +15,7 @@ import time
 import zipfile
 
 from dochan import cfb
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.hwp.distdoc import decode_distribution_section
 from dochan.hwp.header import FileHeader
@@ -128,8 +128,7 @@ def scan_hwpx(path):
                 # 32 MiB part limit; the 512 MiB archive cap still bounds input.
                 with archive.open(info) as stream:
                     context = etree.iterparse(stream, events=("start", "end"),
-                                              resolve_entities=False, load_dtd=False,
-                                              no_network=True, huge_tree=False)
+                                              max_bytes=512 * 1024 * 1024, clear=True)
                     child_points = []
                     for event, elem in context:
                         if event == "start":
@@ -161,15 +160,11 @@ def scan_hwpx(path):
                             item["chart_max_cache_declared_points"] = max(item["chart_max_cache_declared_points"], declared)
                         if isinstance(elem.tag, str) and elem.tag.startswith(CHART_NS):
                             item["chart_max_cache_actual_points"] = max(item["chart_max_cache_actual_points"], actual_points)
-                        elem.clear()
-                        while elem.getprevious() is not None:
-                            del elem.getparent()[0]
-                if context.root.getroottree().docinfo.doctype:
-                    out["errors"].append("doctype")
-                    continue
                 item = dict(item)
                 item["stream"] = info.filename
                 out["sections" if is_section else "charts"].append(item)
+            except etree.ForbiddenDTD:
+                out["errors"].append("doctype")
             except Exception as exc:
                 out["errors"].append(type(exc).__name__)
     return out

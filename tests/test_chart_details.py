@@ -1,6 +1,6 @@
 """합성 OOXML로 차트의 축 역할과 표시 계약을 검증한다."""
 import pytest
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.ooxml import charts
 from dochan.ooxml.xlsx import XLSXReader

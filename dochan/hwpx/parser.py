@@ -18,7 +18,7 @@ import re
 import zipfile
 from typing import BinaryIO, Optional, Sequence, Union
 
-import lxml.etree as etree
+from ..utils import safe_xml as etree
 
 from ..model.document import Document, Section, Paragraph, TextRun
 from ..model.table import Table, Cell
@@ -101,10 +101,11 @@ _INVALID_XML_CHAR_RE = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 def _parse_xml_tolerant(data: bytes):
     """일부 실제 문서에는 XML 1.0에서 금지된 제어문자가 하나씩 섞여 있어
-    lxml이 전체를 못 읽는 경우가 있다. 그런 경우 무효 문자만 제거하고
+    XML 파서가 전체를 못 읽는 경우가 있다. 그런 경우 무효 문자만 제거하고
     한 번 더 시도한다 — 그래도 안 되면(다른 종류의 오류) 원래 예외를
     그대로 올려 호출자의 기존 처리 로직을 그대로 탄다.
     """
+    data = etree.sanitize_dtd(data)
     try:
         return etree.fromstring(data, parser=_safe_xml_parser)
     except etree.XMLSyntaxError:
@@ -186,6 +187,8 @@ class HWPXParser:
         self._table_cells_remaining = MAX_TABLE_CELLS
         self._table_cell_budget_exhausted = False
         self._chart_archive = None
+        self._section_root = None
+        self._section_parents = None
         self._chart_cache = {}  # Immutable XML bytes/counts only; never shared models.
         self._chart_seen = set()
         self._chart_count = 0
@@ -277,8 +280,10 @@ class HWPXParser:
         except Exception as e:
             self.errors.append(f"ERR: HWPX 파싱 실패: {e}")
         finally:
-            # No closed ZIP handle, source XML or lxml section nodes escape parse().
+            # No closed ZIP handle, source XML or section nodes escape parse().
             self._chart_archive = None
+            self._section_root = None
+            self._section_parents = None
             self._chart_cache.clear()
             self._chart_seen.clear()
 
@@ -657,6 +662,8 @@ class HWPXParser:
             raise ValueError("HWPX section XML element limit exceeded")
         section = Section()
         root = _parse_xml_tolerant(xml_data)
+        self._section_root = root
+        self._section_parents = None
         # The revision module deliberately projects text only. Present charts
         # as opaque objects during that pass so ranges crossing a chart retain
         # the established "object / unresolved content preserved" diagnostic.
@@ -704,7 +711,9 @@ class HWPXParser:
         초과 이후에는 XML을 한 번만 훑어 표시 텍스트를 문서 꼬리에 모은다.
         """
         blocks = DRAWING_TAGS | {'tbl', 'pic', 'equation', 'chart', 'header', 'footer'}
-        stack = [iter(_selected_children(root))]
+        # ElementTree child iterators skip the next sibling after removal.
+        # Snapshot each selected child sequence before this pass mutates it.
+        stack = [iter(list(_selected_children(root)))]
         while stack:
             node = next(stack[-1], None)
             if node is None:
@@ -724,14 +733,15 @@ class HWPXParser:
                 )
             if self._body_budget_exceeded:
                 self._append_plain_body(node)
-                # 큰 하위 트리를 분리하면 lxml의 네임스페이스 재조정이 증폭된다.
                 # 본문을 수집한 뒤 원래 문서 안에서 비우고 빈 노드만 분리한다.
+                parent = self._xml_parents().get(node)
                 node.clear()
-                node.getparent().remove(node)
+                if parent is not None:
+                    parent.remove(node)
             else:
                 self._body_nodes_remaining -= cost
                 if len(node):
-                    stack.append(iter(_selected_children(node)))
+                    stack.append(iter(list(_selected_children(node))))
 
     def _append_plain_body(self, root):
         """선택된 분기의 표시 텍스트만 보존한다. 양식 비밀번호 정책도 재사용한다."""
@@ -789,6 +799,12 @@ class HWPXParser:
                 return 3
         return 0
 
+    def _xml_parents(self):
+        if self._section_parents is None:
+            self._section_parents = (etree.parent_map(self._section_root)
+                                     if self._section_root is not None else {})
+        return self._section_parents
+
     def _heading_level_for(self, p_elem, runs) -> int:
         """직접 개요 → 스타일 이름/기본 개요 → 폰트 크기로 제목 수준을 정한다."""
         direct_id = _int_attr(p_elem, 'paraPrIDRef', -1)
@@ -814,9 +830,11 @@ class HWPXParser:
                 return self._outline_level(style['para_pr_id'])
 
         # (c) 셀 안의 문단/중첩 개체는 글꼴 크기만으로 제목이 되지 않는다.
-        if any(parent.tag == '{%s}tc' % NS['hp'] for parent in p_elem.iterancestors()):
+        level = self._detect_heading_level_by_font(runs)
+        if level and any(parent.tag == '{%s}tc' % NS['hp']
+                         for parent in etree.ancestors(p_elem, self._xml_parents())):
             return 0
-        return self._detect_heading_level_by_font(runs)
+        return level
 
     def _outline_level(self, para_pr_id: int) -> int:
         info = self._para_prs.get(para_pr_id)
@@ -1130,7 +1148,7 @@ class HWPXParser:
             if elem.get('passwordChar'):
                 return None
             text_elem = elem.find('hp:text', namespaces=NS)
-            text = ''.join(text_elem.itertext()) if text_elem is not None else ''
+            text = ''.join(etree.itertext(text_elem)) if text_elem is not None else ''
         else:
             # 한컴오피스는 selectedValue·displayText 와 관계없이 첫 listItem 의 value 를 콤보 상자에
             # 표시한다(통제 표본 실측). HWP 의 ComboBoxSet Text 가 이 자리에 저장된다.
@@ -1499,8 +1517,6 @@ def _chart_input_counts(data: bytes) -> tuple[int, int]:
         root = etree.fromstring(data, parser=safe)
     except (etree.XMLSyntaxError, ValueError):
         return 0, 0
-    if root.getroottree().docinfo.doctype:
-        return 0, 0
     namespace = '{http://schemas.openxmlformats.org/drawingml/2006/chart}'
     return (sum(1 for _ in root.iter(namespace + 'ser')),
             sum(1 for _ in root.iter(namespace + 'pt')))
@@ -1581,8 +1597,7 @@ def _text_of_t(t_elem) -> str:
         parts.append(t_elem.text)
 
     for sub in t_elem:
-        # 주석/처리명령/엔티티 노드는 tag 가 문자열이 아니고 itertext() 도 못 쓴다.
-        # 걸러내지 않으면 lxml 이 TypeError 를 던져 섹션 전체가 날아간다.
+        # 주석과 처리명령은 본문이 아니지만 뒤에 이어진 tail은 보존한다.
         if not isinstance(sub.tag, str):
             if sub.tail:
                 parts.append(sub.tail)
@@ -1596,7 +1611,7 @@ def _text_of_t(t_elem) -> str:
         elif tag in ('fwSpace', 'nbSpace'):
             parts.append(' ')
         else:
-            inner = ''.join(sub.itertext())
+            inner = ''.join(etree.itertext(sub))
             if inner:
                 parts.append(inner)
         if sub.tail:

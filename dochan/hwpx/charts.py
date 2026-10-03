@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Optional, Union
 
-import lxml.etree as etree
+from ..utils import safe_xml as etree
 
 from ..model.document import Paragraph, TextRun
 from ..model.table import Cell, Table
@@ -51,6 +51,7 @@ class _Budget:
     points: int = 0
     cells: int = 0
     display_values: bool = False
+    chart_root: object = None
 
     def add_points(self, count: int) -> None:
         if count > MAX_POINTS or self.points + count > MAX_TOTAL_POINTS:
@@ -104,7 +105,7 @@ def _read_cache(node, numeric: bool, context: str, budget: _Budget,
     if declared is not None and declared != len(point_nodes):
         _warn(warnings, "count_mismatch", context + ": ptCount differs from point node count")
     points = {}
-    format_point = chart_point_formatter(node) if budget.display_values and numeric else None
+    format_point = chart_point_formatter(node, budget.chart_root) if budget.display_values and numeric else None
     for point in point_nodes:
         index = _unsigned(point.get("idx"), MAX_POINTS - 1)
         if index is None:
@@ -265,6 +266,7 @@ def _series_table(series, position: int, scatter: bool, budget: _Budget,
 
 
 def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph, Table]]:
+    budget.chart_root = root
     if root.tag != _C + "chartSpace":
         _warn(warnings, "invalid_root", "expected OOXML chartSpace QName")
         return []
@@ -370,11 +372,11 @@ def parse_chart_xml(data: bytes, display_values: bool = False) -> tuple[list[Uni
                              load_dtd=False, huge_tree=False, recover=False)
     try:
         root = etree.fromstring(data, parser=parser)
+    except etree.ForbiddenDTD:
+        _warn(warnings, "doctype", "DTD/entity declarations are unsupported")
+        return [], warnings
     except (etree.XMLSyntaxError, ValueError):
         _warn(warnings, "invalid_xml", "malformed or excessively deep XML")
-        return [], warnings
-    if root.getroottree().docinfo.doctype:
-        _warn(warnings, "doctype", "DTD/entity declarations are unsupported")
         return [], warnings
     try:
         elements = _extract(root, _Budget(display_values=display_values), warnings)

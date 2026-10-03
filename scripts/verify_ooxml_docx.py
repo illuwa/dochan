@@ -12,7 +12,7 @@ import re
 import zipfile
 from urllib.parse import unquote
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.model.document import Paragraph
 from dochan.model.table import Table
@@ -33,6 +33,33 @@ NS = {
 }
 
 
+def xml_texts(root, *paths):
+    """Select text in document order, retaining XPath union deduplication."""
+    selected = {node for path in paths for node in root.findall(path, NS)}
+    texts = []
+    stack = [(root, False)]
+    while stack:
+        node, tail = stack.pop()
+        if tail:
+            if node.tail is not None:
+                texts.append(node.tail)
+            continue
+        if node in selected and node.text is not None:
+            texts.append(node.text)
+        for child in reversed(node):
+            # XPath text() selects direct text and every child's tail, including
+            # comments and processing instructions, but not descendant text.
+            if node in selected:
+                stack.append((child, True))
+            stack.append((child, False))
+    return texts
+
+
+def has_local_name(root, names):
+    return any(isinstance(node.tag, str) and etree.QName(node).localname in names
+               for node in root.iter() if node is not root)
+
+
 def logical_body_text(package, structural=False):
     """원시 XML과 관계에서 기존 출력 계약의 기대열을 만든다.
 
@@ -41,12 +68,16 @@ def logical_body_text(package, structural=False):
     수식의 LaTeX 변환만 공용 변환기를 쓰며 수식 순서는 XML에서 결정한다.
     지원하지 않는 검증 구문은 성공으로 취급하지 않고 ValueError를 낸다.
     """
+    parents = {}
+
     def xml(name):
         if name not in package.namelist():
             return None
         if package.getinfo(name).file_size > 32 * 1024 * 1024:
             raise ValueError('oracle XML size limit')
-        return etree.fromstring(package.read(name), etree.XMLParser(resolve_entities=False, no_network=True))
+        root = etree.fromstring(package.read(name))
+        parents.update(etree.parent_map(root))
+        return root
 
     def attr(node, key='val', ns='w'):
         return node.get('{%s}%s' % (NS[ns], key), '') if node is not None else ''
@@ -169,7 +200,7 @@ def logical_body_text(package, structural=False):
             if not target:
                 return ''
             label = ''
-            for parent in node.iterancestors():
+            for parent in etree.ancestors(node, parents):
                 docpr = parent.find('wp:docPr', NS)
                 if docpr is not None:
                     label = ' '.join(docpr.get(k) for k in ('title', 'descr', 'name') if docpr.get(k))
@@ -178,7 +209,8 @@ def logical_body_text(package, structural=False):
                     break
             return '![%s](%s)' % (label or 'image', target)
         if ns == NS['wp'] and name == 'docPr':
-            blips = node.getparent().findall('.//a:blip', NS)
+            parent = parents.get(node)
+            blips = parent.findall('.//a:blip', NS) if parent is not None else []
             if any(attr(b, 'embed', 'r') in rels for b in blips):
                 return ''
             return ' '.join(node.get(k) for k in ('title', 'descr') if node.get(k))
@@ -240,7 +272,7 @@ def chart_logical_text(root, structural=False):
             raise ValueError('oracle chart type unsupported: ' + kind)
         if label not in types:
             types.append(label)
-    title = ''.join(root.xpath('c:chart/c:title/c:tx/c:rich//a:t/text()|c:chart/c:title/c:tx/c:strRef/c:strCache/c:pt/c:v/text()', namespaces=NS))
+    title = ''.join(xml_texts(root, 'c:chart/c:title/c:tx/c:rich//a:t', 'c:chart/c:title/c:tx/c:strRef/c:strCache/c:pt/c:v'))
     captions = ['Chart type: ' + ' + '.join(types)] if types else []
     for axis in plot:
         name = etree.QName(axis).localname
@@ -249,13 +281,13 @@ def chart_logical_text(root, structural=False):
         deleted = axis.find('c:delete', NS)
         if deleted is not None and deleted.get('val', '1') not in ('0', 'false', 'off'):
             continue
-        text = ''.join(axis.xpath('c:title/c:tx/c:rich//a:t/text()', namespaces=NS))
+        text = ''.join(xml_texts(axis, 'c:title/c:tx/c:rich//a:t'))
         if text:
             captions.append({'catAx': 'Category', 'valAx': 'Value', 'dateAx': 'Date', 'serAx': 'Series'}[name] + ' axis: ' + text)
     if types == ['scatter']:
         rows = [['Series', 'X', 'Y']]
         for index, series in enumerate(plot.findall('c:scatterChart/c:ser', NS)):
-            name = ''.join(series.xpath('c:tx/c:v/text()|c:tx/c:strRef/c:strCache/c:pt/c:v/text()', namespaces=NS)) or 'Series %d' % (index + 1)
+            name = ''.join(xml_texts(series, 'c:tx/c:v', 'c:tx/c:strRef/c:strCache/c:pt/c:v')) or 'Series %d' % (index + 1)
             xs, ys = points(series.find('c:xVal', NS)), points(series.find('c:yVal', NS))
             for key in sorted(set(xs) | set(ys)):
                 rows.append([name, xs.get(key, ''), ys.get(key, '')])
@@ -334,7 +366,7 @@ def cached_rows(root):
     items = []
     if etree.QName(root).namespace == NS['c']:
         for position, series in enumerate(root.findall('.//c:plotArea/*/c:ser', NS)):
-            name = ''.join(series.xpath('c:tx/c:v/text()|c:tx/c:strRef/c:strCache/c:pt/c:v/text()', namespaces=NS))
+            name = ''.join(xml_texts(series, 'c:tx/c:v', 'c:tx/c:strRef/c:strCache/c:pt/c:v'))
             categories = points(series.find('c:cat', NS))
             values = points(series.find('c:val', NS))
             items.append((name or 'Series %d' % (position + 1), categories, values))
@@ -349,7 +381,7 @@ def cached_rows(root):
             for index in set(i for level in levels for i in level):
                 categories[index] = ' / '.join(level.get(index, '') for level in reversed(levels) if level.get(index, ''))
             values = {int(p.get('idx')): p.text or '' for p in data.findall('cx:numDim/cx:lvl/cx:pt', NS)}
-            name = ''.join(series.xpath('cx:tx/cx:txData/cx:v/text()', namespaces=NS))
+            name = ''.join(xml_texts(series, 'cx:tx/cx:txData/cx:v'))
             items.append((name or 'Series %d' % (position + 1), categories, values))
     indices = sorted(set(i for _, cats, vals in items for i in set(cats) | set(vals)))
     rows = [['Category'] + [name for name, _, _ in items]]
@@ -485,6 +517,7 @@ def active_nodes(root, stop_at_paragraph=False):
 
 
 def caption_evidence(root, style_ids, doc):
+    parents = etree.parent_map(root)
     attached = Counter(' '.join(elem.caption_text.split())
                        for kind in ('table', 'image') for elem in doc.find_all(kind)
                        if elem.caption_text)
@@ -507,7 +540,7 @@ def caption_evidence(root, style_ids, doc):
                                if node.tag == '{%s}t' % NS['w']).split())
         if not text:
             continue
-        in_cell = any(node.tag == '{%s}tc' % NS['w'] for node in para.iterancestors())
+        in_cell = any(node.tag == '{%s}tc' % NS['w'] for node in etree.ancestors(para, parents))
         rows.append({'text': text, 'style': style_id, 'field': fields,
                      'in_cell': in_cell, 'attached': attached[text] > 0,
                      'preserved': text in actual})
@@ -546,8 +579,9 @@ def probe(corpus, per_feature=0):
                                 break
                             visited.add(ancestor)
                             ancestor = based_on.get(ancestor, '')
-                cap_ids = root.xpath('.//w:pStyle/@w:val', namespaces=NS)
-                seq = root.xpath('.//w:instrText/text()|.//w:fldSimple/@w:instr', namespaces=NS)
+                cap_ids = [node.get('{%s}val' % NS['w'], '') for node in root.findall('.//w:pStyle', NS)]
+                seq = [node.text or '' if node.tag == '{%s}instrText' % NS['w'] else node.get('{%s}instr' % NS['w'], '')
+                       for node in root.iter() if node.tag in {'{%s}instrText' % NS['w'], '{%s}fldSimple' % NS['w']}]
                 if any('SEQ' in s for s in seq) or any(s in style_ids or s.casefold() == 'caption' for s in cap_ids):
                     doc = DOCXReader().read(str(path))
                     results['caption_documents'].append({'file': path.name,
@@ -563,18 +597,18 @@ def probe(corpus, per_feature=0):
                         expected = cached_rows(chart)
                         table = by_path.get(name)
                         actual = [[cell.text for cell in row] for row in table.rows] if table else []
-                        title = ''.join(chart.xpath('c:chart/c:title/c:tx/c:rich/a:p/a:r/a:t/text()|cx:chart/cx:title/cx:tx/cx:rich/a:p/a:r/a:t/text()', namespaces=NS))
+                        title = ''.join(xml_texts(chart, 'c:chart/c:title/c:tx/c:rich/a:p/a:r/a:t', 'cx:chart/cx:title/cx:tx/cx:rich/a:p/a:r/a:t'))
                         headings = [e.text for e in doc.sections[0].elements if isinstance(e, Paragraph) and e.heading_level == 3]
                         rows.append({'part': name, 'rows': len(expected) - 1, 'cells': sum(map(len, expected)), 'data_match': actual == expected, 'title': title, 'title_match': not title or title in headings, 'caption': table.caption_text if table else ''})
                     results['chart_documents'].append({'file': path.name, 'charts': rows, 'errors': doc.errors})
                 features = []
                 if root.find('.//w:txbxContent', NS) is not None:
                     features.append('textbox')
-                if root.xpath('.//*[local-name()="anchor"]|.//*[local-name()="shape"]'):
+                if has_local_name(root, {'anchor', 'shape'}):
                     features.append('floating_shape')
                 if root.find('.//w:sdt', NS) is not None:
                     features.append('content_control')
-                if root.xpath('.//*[local-name()="wgp" or local-name()="grpSp" or local-name()="group"]'):
+                if has_local_name(root, {'wgp', 'grpSp', 'group'}):
                     features.append('group_shape')
                 if features:
                     reading_candidates[path] = features

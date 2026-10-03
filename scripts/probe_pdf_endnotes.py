@@ -12,7 +12,7 @@ import subprocess
 import unicodedata
 from unittest.mock import patch
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.pdf.reader import PDFReader
 from dochan.pdf.notes import detect_endnotes
@@ -33,7 +33,7 @@ def probe(corpus):
     result = subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
         ["pdftotext", "-bbox-layout", str(path), "-"],
         capture_output=True, check=True, timeout=60)
-    root = etree.fromstring(result.stdout, etree.XMLParser(
+    root = etree.fromstring(etree.sanitize_dtd(result.stdout), etree.XMLParser(
         resolve_entities=False, load_dtd=False, no_network=True))
     pages = root.findall(".//x:page", NS)
     raw_lines = []

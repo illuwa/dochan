@@ -12,7 +12,7 @@ from unittest.mock import patch
 import unicodedata
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan import Dochan
 from dochan.model.document import Paragraph
@@ -67,6 +67,14 @@ def _closed_edge(segments, left, right, y, tolerance):
     return False
 
 
+def _local_name(node):
+    return node.tag.rsplit("}", 1)[-1] if isinstance(node.tag, str) else ""
+
+
+def _local_elements(root, name):
+    return (node for node in root.iter() if _local_name(node) == name)
+
+
 def borderless_texts(hwpx_path):
     """HWPX 원시 셀 borderFill의 네 방향 모두 NONE인 1×1 표만 반환한다."""
     parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
@@ -80,7 +88,7 @@ def borderless_texts(hwpx_path):
     borderless = set()
     sides = {"leftBorder", "rightBorder", "topBorder", "bottomBorder"}
     for root in roots:
-        for fill in root.xpath('//*[local-name()="borderFill"]'):
+        for fill in _local_elements(root, 'borderFill'):
             borders = {etree.QName(child).localname: child.get("type")
                        for child in fill if isinstance(child.tag, str)
                        and etree.QName(child).localname in sides}
@@ -88,16 +96,18 @@ def borderless_texts(hwpx_path):
                 borderless.add(fill.get("id"))
     found = []
     for root in roots:
-        for table in root.xpath('//*[local-name()="tbl"]'):
+        for table in _local_elements(root, 'tbl'):
             if table.get("rowCnt") != "1" or table.get("colCnt") != "1":
                 continue
-            cells = table.xpath('./*[local-name()="tr"]/*[local-name()="tc"]')
+            cells = [cell for row in table if _local_name(row) == 'tr'
+                     for cell in row if _local_name(cell) == 'tc']
             if len(cells) != 1 or cells[0].get("borderFillIDRef") not in borderless:
                 continue
             # 중첩 표를 품은 셀은 글상자 후보가 아니다.
-            if cells[0].xpath('.//*[local-name()="tbl"]'):
+            if any(n is not cells[0] for n in _local_elements(cells[0], 'tbl')):
                 continue
-            text = compact("".join(cells[0].xpath('.//*[local-name()="t"]/text()')))
+            text = compact(''.join(text for node in _local_elements(cells[0], 't')
+                                   for text in [node.text or ''] + [child.tail or '' for child in node]))
             if text:
                 found.append(text)
     return found

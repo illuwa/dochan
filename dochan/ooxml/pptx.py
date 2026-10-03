@@ -5,7 +5,7 @@ import zipfile
 from fractions import Fraction
 from typing import Dict, List
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
@@ -481,7 +481,7 @@ class PPTXReader:
                      "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex"}
         for choice in elem.findall("{%s}Choice" % MC_NS):
             prefixes = choice.get("Requires", "").split()
-            if prefixes and all(choice.nsmap.get(prefix) in supported for prefix in prefixes):
+            if prefixes and all(etree.namespace_map(choice).get(prefix) in supported for prefix in prefixes):
                 return choice
         return elem.find("{%s}Fallback" % MC_NS)
 
@@ -532,7 +532,7 @@ class PPTXReader:
                     flush()
                     latex = omml_to_latex(child)
                     if latex.strip():
-                        blocks.append(Equation(script="".join(child.itertext()), latex_override=latex))
+                        blocks.append(Equation(script="".join(etree.itertext(child)), latex_override=latex))
                 else:
                     chunk.append(deepcopy(child))
 
@@ -1136,6 +1136,7 @@ class PPTXReader:
         return texts
 
     def _chart_series_table(self, chart_root) -> Table:
+        parents = etree.parent_map(chart_root)
         if getattr(self, "_chart_budget_exhausted", False):
             return Table()
         series_items = []
@@ -1154,12 +1155,12 @@ class PPTXReader:
             series_name = self._chart_series_name(series)
             # 분산형·거품형은 c:cat/c:val 대신 c:xVal/c:yVal 에 값을 둔다.
             has_x_values = series.find("c:xVal", namespaces=NS) is not None
-            xy_flags.append(is_xy_series(series))
+            xy_flags.append(is_xy_series(series, parents))
             xy = xy or xy_flags[-1]
             implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
-            categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
-            values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
-            sizes.append(self._chart_points(series, "c:bubbleSize"))
+            categories = self._chart_points(series, "c:cat", chart_root) or self._chart_points(series, "c:xVal", chart_root)
+            values = self._chart_points(series, "c:val", chart_root) or self._chart_points(series, "c:yVal", chart_root)
+            sizes.append(self._chart_points(series, "c:bubbleSize", chart_root))
             if getattr(self, "_chart_budget_exhausted", False):
                 return Table()
             series_items.append((series_name, categories, values))
@@ -1240,12 +1241,12 @@ class PPTXReader:
             if node.text
         ).strip()
 
-    def _chart_points(self, series, parent_path: str) -> Dict[int, str]:
+    def _chart_points(self, series, parent_path: str, chart_root=None) -> Dict[int, str]:
         points = {}
         parent = series.find(parent_path, namespaces=NS)
         if parent is None:
             return points
-        format_point = chart_point_formatter(parent)
+        format_point = chart_point_formatter(parent, chart_root)
         for point in parent.iterfind(".//c:pt", namespaces=NS):
             if not self._reserve_chart_resource(
                 "_chart_points_remaining",

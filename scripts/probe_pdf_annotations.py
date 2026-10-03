@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import signal
 import sys
-from lxml import etree
+from xml.etree import ElementTree as etree  # nosemgrep: use-defused-xml -- independent gold, declarations rejected before parse
 
 from dochan.model.header_footer import Comment
 from dochan.pdf.annotations import CommentExtractor, DestinationResolver, MARKUP_SUBTYPES
@@ -46,19 +46,23 @@ def independent_string(value):
 
 
 def independent_rc(value):
-    if (not isinstance(value, bytes) or len(value) > 65536
-            or b"<!DOCTYPE" in value.upper() or b"<!ENTITY" in value.upper()):
+    if not isinstance(value, bytes) or len(value) > 65536:
         return ""
-    if value[:2] == b"\xfe\xff":
-        value = value[2:].decode("utf-16-be").encode("utf-8")
     try:
-        parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
-        root = etree.fromstring(value, parser)
-    except (ValueError, etree.XMLSyntaxError):
+        if value.startswith((b"\xff\xfe\0\0", b"\0\0\xfe\xff")):
+            decoded = value.decode("utf-32")
+        elif value.startswith((b"\xff\xfe", b"\xfe\xff")):
+            decoded = value.decode("utf-16")
+        else:
+            decoded = value.decode("utf-8-sig")
+        if "<!DOCTYPE" in decoded.upper() or "<!ENTITY" in decoded.upper():
+            return ""
+        root = etree.fromstring(decoded)  # nosemgrep: use-defused-xml -- bounded independent gold; decoded declarations rejected
+    except (ValueError, etree.ParseError):
         return ""
 
     def local(node):
-        return etree.QName(node).localname if isinstance(node.tag, str) else ""
+        return node.tag.rsplit("}", 1)[-1] if isinstance(node.tag, str) else ""
 
     def text(node):
         # 감수 기준은 제품 코드와 독립적으로 itertext 로 모은다
@@ -67,7 +71,7 @@ def independent_rc(value):
     blocks = []
     for node in root.iter():
         if local(node) in ("p", "div"):
-            if not any(local(child) in ("p", "div") for child in node.iterdescendants()):
+            if not any(local(child) in ("p", "div") for child in node.iter() if child is not node):
                 blocks.append(text(node).strip())
     result = "\n".join(blocks).strip() if blocks else text(root).strip()
     return result

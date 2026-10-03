@@ -4,9 +4,9 @@ from pathlib import Path
 import struct
 import zlib
 # Independent gold reader: every external archive is SHA-256 verified before XML parsing.
-import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml
+import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml -- independent gold, declarations rejected before parsing
 # quoteattr only escapes generated test attributes; it does not parse XML.
-from xml.sax.saxutils import quoteattr  # nosemgrep: use-defused-xml
+from xml.sax.saxutils import quoteattr  # nosemgrep: use-defused-xml -- escaping only, no XML parsing
 import zipfile
 
 import pytest
@@ -339,9 +339,18 @@ def public_path(name):
     return path
 
 
+def _gold_xml(raw):
+    # Pinned public gold is UTF-8. Decoding and rejecting NUL also closes
+    # UTF-16/32 byte-marker bypasses without depending on the product parser.
+    decoded = raw.decode('utf-8-sig')
+    if '\0' in decoded or '<!DOCTYPE' in decoded.upper() or '<!ENTITY' in decoded.upper():
+        raise ValueError('Declarations are forbidden in independent gold')
+    return ET.fromstring(decoded)  # nosemgrep: use-defused-xml -- decoded gold rejected declarations above
+
+
 def xml_gold(raw, kind):
     """Independent oracle for complete stored string/numeric caches only."""
-    root = ET.fromstring(raw)
+    root = _gold_xml(raw)
     group = root.find("c:chart/c:plotArea/c:" + kind, NS)
     assert group is not None
     result = []
@@ -395,12 +404,12 @@ def test_many_chart_real_documents_account_for_every_reference(name, digest, cou
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     gold, seen = [], set()
     with zipfile.ZipFile(path) as z:
-        section = ET.fromstring(z.read("Contents/section0.xml"))
+        section = _gold_xml(z.read("Contents/section0.xml"))
         references = [n.get("chartIDRef") for n in section.iter('{%s}chart' % HP)]
         assert len(references) == count
         for ref in references:
             raw = z.read(ref)
-            plot = ET.fromstring(raw).find("c:chart/c:plotArea", NS)
+            plot = _gold_xml(raw).find("c:chart/c:plotArea", NS)
             kind = next(n.tag.split('}')[-1] for n in plot if n.tag.endswith('Chart'))
             seen.add(kind)
             gold.extend(xml_gold(raw, kind))

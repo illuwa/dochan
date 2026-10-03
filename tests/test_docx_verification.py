@@ -1,9 +1,45 @@
 """실물 프로브의 완전 토큰 정렬이 추가와 중복도 검출하는지 확인한다."""
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from scripts import verify_ooxml_docx as verify
 from test_docx_remaining import write_docx, paragraph, R
 import zipfile
+
+
+def test_xml_text_union_retains_direct_tails_and_document_order():
+    root = etree.fromstring('<r xmlns:c="%s"><c:v>before<!--comment-->after'
+                            '<?pi value?>tail<child>nested</child>end</c:v>'
+                            '<c:v>last</c:v></r>' % verify.NS['c'])
+    assert verify.xml_texts(root, 'c:v', 'c:v') == ['before', 'after', 'tail', 'end', 'last']
+    assert verify.xml_texts(root, 'c:v/child', 'c:v') == [
+        'before', 'after', 'tail', 'nested', 'end', 'last']
+
+
+def test_stdlib_paragraph_retains_inherited_run_style():
+    w = verify.NS['w']
+    root = etree.fromstring('<w:p xmlns:w="%s"><w:pPr><w:pStyle w:val="Body"/>'
+                            '</w:pPr><w:hyperlink><w:r><w:t>styled</w:t></w:r>'
+                            '</w:hyperlink></w:p>' % w)
+    properties = etree.fromstring('<w:rPr xmlns:w="%s"><w:b/></w:rPr>' % w)
+    reader = verify.DOCXReader()
+    reader._style_definitions = {'Body': ('', properties)}
+    runs = reader._parse_runs(root)
+    assert len(runs) == 1
+    assert runs[0].text == 'styled'
+    assert runs[0].bold
+
+
+def test_docx_reader_releases_parent_map_after_read(tmp_path):
+    reader = verify.DOCXReader()
+    for name, body in [('valid', paragraph('body')), ('empty', '')]:
+        path = tmp_path / (name + '.docx')
+        write_docx(path, body)
+        reader.read(str(path))
+        assert reader._parents == {}
+    broken = tmp_path / 'broken.docx'
+    write_docx(broken, paragraph('body'), {'word/styles.xml': '<broken'})
+    assert reader.read(str(broken)).errors
+    assert reader._parents == {}
 
 
 def test_alignment_detects_duplicate_and_extra_output_tokens():

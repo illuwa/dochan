@@ -15,7 +15,7 @@ import re
 import signal
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.ooxml.docx import DOCXReader
 from dochan.ooxml.pptx import PPTXReader

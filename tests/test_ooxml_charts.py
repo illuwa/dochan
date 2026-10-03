@@ -1,6 +1,6 @@
 """OOXML 차트 파트 공통 읽기(dochan.ooxml.charts) 단위 테스트."""
 import pytest
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 import dochan.ooxml.charts as charts_module
 from dochan.ooxml.charts import chart_caption, chart_series, chart_title, xy_series_rows

@@ -2,7 +2,7 @@
 import math
 from bisect import bisect_right
 from dataclasses import dataclass, replace
-from lxml import etree
+from ..utils import safe_xml as etree
 
 from ..conversion import Provenance
 from ..model.document import Paragraph, TextRun
@@ -71,19 +71,20 @@ def _rich_text(value, warnings):
         # RC는 XML rich-text 문자열이며 PDFDocEncoding 문자열과 인코딩이 다르다.
         parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
         root = etree.fromstring(value, parser)
-        if root.getroottree().docinfo.doctype:
-            warnings.append("WARN: PDF 주석 RC의 DTD/엔티티는 허용하지 않음")
-            return ""
         nodes = [node for node in root.iter() if isinstance(node.tag, str)]
-        if len(nodes) > 4096 or any(len(list(n.iterancestors())) > 32 for n in nodes):
+        parents = etree.parent_map(root)
+        if len(nodes) > 4096 or any(len(list(etree.ancestors(n, parents))) > 32 for n in nodes):
             warnings.append("WARN: PDF 주석 RC 구조 한도 초과")
             return ""
         paragraphs = [n for n in nodes if etree.QName(n).localname in ("p", "div")
                       and not any(etree.QName(c).localname in ("p", "div")
-                                  for c in n.iterdescendants() if isinstance(c.tag, str))]
+                                  for c in n.iter() if c is not n and isinstance(c.tag, str))]
         if paragraphs:
-            return "\n".join("".join(n.itertext()).strip() for n in paragraphs).strip()
-        return "".join(root.itertext()).strip()
+            return "\n".join("".join(etree.itertext(n)).strip() for n in paragraphs).strip()
+        return "".join(etree.itertext(root)).strip()
+    except etree.ForbiddenDTD:
+        warnings.append("WARN: PDF 주석 RC의 DTD/엔티티는 허용하지 않음")
+        return ""
     except (ValueError, UnicodeError, etree.XMLSyntaxError):
         warnings.append("WARN: PDF 주석 RC XML 해석 실패")
         return ""

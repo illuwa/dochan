@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import struct
 from typing import Optional
-from lxml import etree as ET
+from ..utils import safe_xml as ET
 
 from ..utils.aes import _decrypt_block, _key_expansion
 

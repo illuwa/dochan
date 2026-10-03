@@ -11,11 +11,29 @@ import posixpath
 import struct
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 
 def xml(data):
-    return etree.fromstring(data, etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True))
+    return etree.fromstring(data, etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True), namespaces=True)
+
+
+def _element_path(node, parents):
+    """Readable namespace-qualified source location with sibling positions."""
+    steps = []
+    while node is not None:
+        name = etree.QName(node)
+        prefix = next((key for key, value in etree.namespace_map(node).items()
+                       if key and value == name.namespace), "")
+        step = prefix + ":" + name.localname if prefix else name.localname
+        parent = parents.get(node)
+        if parent is not None:
+            siblings = [child for child in parent if child.tag == node.tag]
+            if len(siblings) > 1:
+                step += "[%d]" % (siblings.index(node) + 1)
+        steps.append(step)
+        node = parent
+    return "/" + "/".join(reversed(steps))
 
 
 def ooxml_cells(path, resolve_strings=False):
@@ -23,7 +41,7 @@ def ooxml_cells(path, resolve_strings=False):
     with zipfile.ZipFile(path) as archive:
         strings = []
         if resolve_strings and 'xl/sharedStrings.xml' in archive.namelist():
-            strings = [''.join(n.itertext()) for n in xml(archive.read('xl/sharedStrings.xml'))]
+            strings = [''.join(etree.itertext(n)) for n in xml(archive.read('xl/sharedStrings.xml'))]
         workbook = xml(archive.read('xl/workbook.xml'))
         date1904 = any(etree.QName(n).localname == 'workbookPr' and n.get('date1904') in ('1', 'true') for n in workbook.iter())
         rels = xml(archive.read('xl/_rels/workbook.xml.rels'))
@@ -182,6 +200,7 @@ def chart_numbers(path):
                 if 'chart' not in part.lower() or not part.endswith('.xml'):
                     continue
                 root = xml(archive.read(part))
+                parents = etree.parent_map(root)
                 for node in root.iter():
                     if etree.QName(node).localname != 'v' or node.text is None:
                         continue
@@ -189,14 +208,14 @@ def chart_numbers(path):
                         float(node.text)
                     except ValueError:
                         continue
-                    parent = node.getparent()
-                    cache = parent.getparent() if parent is not None else None
+                    parent = parents.get(node)
+                    cache = parents.get(parent)
                     fmt = ''
                     if cache is not None:
                         fmt = next((n.text or '' for n in cache
                                     if etree.QName(n).localname == 'formatCode'), '')
                     result.append({'raw': node.text, 'format': fmt,
-                                   'source': part + ':' + root.getroottree().getpath(node)})
+                                   'source': part + ':' + _element_path(node, parents)})
     return result
 
 

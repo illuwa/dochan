@@ -8,7 +8,7 @@ import re
 import zipfile
 
 import pytest
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan import Dochan, HWPReader
 from dochan.hwpx.parser import HWPXParser

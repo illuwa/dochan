@@ -1,6 +1,6 @@
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 import dochan.ooxml.xlsx as xlsx_module
 from dochan import Dochan
@@ -2972,3 +2972,26 @@ def test_large_xlsx_streaming_does_not_expand_dtd_entities(tmp_path, monkeypatch
     assert "ENTITY_EXPANDED" not in markdown
     assert "localhost" not in markdown
     assert "safe" in markdown and "&" in markdown
+
+
+def test_large_sheet_uses_guarded_pull_parser(tmp_path, monkeypatch):
+    path = tmp_path / 'pull.xlsx'
+    _write_xlsx(path,
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        {'xl/worksheets/sheet1.xml':
+         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+         '<sheetData><row r="1"><c r="A1"><v>42</v></c></row></sheetData></worksheet>'})
+    original = xlsx_module.etree.iterparse
+    calls = []
+
+    def watched(*args, **kwargs):
+        calls.append(kwargs)
+        yield from original(*args, **kwargs)
+
+    monkeypatch.setattr(xlsx_module.etree, 'iterparse', watched)
+    monkeypatch.setattr(xlsx_module, 'MAX_XML_PART_SIZE', 1)
+    doc = XLSXReader().read(str(path))
+    assert '42' in to_markdown(doc)
+    assert calls and calls[0]['clear'] is True

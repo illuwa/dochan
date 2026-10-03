@@ -50,7 +50,7 @@ def test_binary_button_state_matches_docx(kind, value, mark):
 
 
 def test_binary_and_xml_checkbox_have_same_output_contract():
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     from dochan.hwpx.parser import HWPXParser
     element = etree.fromstring(b'<hp:checkBtn xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" caption="Choice" value="CHECKED"/>')
     data = _form(b'tbc+', _set('ButtonSet', _parameter('Caption', 'Choice') + 'Value:int:1 '))

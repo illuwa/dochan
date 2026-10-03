@@ -2,7 +2,7 @@
 from zipfile import ZipFile
 
 import pytest
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.hwpx.charts import parse_chart_xml
 from dochan.ooxml import charts

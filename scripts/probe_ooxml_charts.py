@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.ooxml.charts import normalize_chart, hydrate_chart_references, workbook_chart_resolver
 from dochan.ooxml.package import OOXMLPackage

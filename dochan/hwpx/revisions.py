@@ -167,7 +167,7 @@ class RevisionProjector:
         flows = {root: _Flow()}
         counts = {"paragraph": 0, "run": 0, "marker": 0}
 
-        def walk(element, flow, in_text=False, location="section", blocked=False):
+        def walk(element, flow, in_text=False, location="section", blocked=False, parent=None):
             if not isinstance(element.tag, str):
                 return
             name = element.tag.rsplit("}", 1)[-1]
@@ -190,7 +190,7 @@ class RevisionProjector:
                 in_text = False
                 location += "/" + name
             if element.tag == HP + "p":
-                flow = flows.setdefault(element.getparent(), _Flow())
+                flow = flows.setdefault(parent, _Flow())
                 in_text = False
                 counts["paragraph"] += 1
                 location = f"paragraph#{counts['paragraph']}"
@@ -207,7 +207,6 @@ class RevisionProjector:
                         self._report("header-reference", location + " @" + attr)
             if name in MARKERS:
                 counts["marker"] += 1
-                parent = element.getparent()
                 if parent is None or parent.tag not in MARKER_PARENTS:
                     flow.disabled = True
                     self._report("marker-position", location + "/" + name)
@@ -232,7 +231,7 @@ class RevisionProjector:
             elif element.tag == HP + "compose":
                 flow.add(element, "composeText")
             for child in element:
-                walk(child, flow, in_text, location, blocked)
+                walk(child, flow, in_text, location, blocked, element)
                 if in_text and child.tail:
                     flow.add(child, "tail")
 

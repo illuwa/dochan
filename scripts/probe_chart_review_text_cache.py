@@ -13,7 +13,7 @@ import re
 import sys
 import zipfile
 
-from lxml import etree
+from xml.etree import ElementTree as etree  # nosemgrep: use-defused-xml -- independent gold, declarations rejected before parse
 
 NS = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 FILES = ('NumberFormatTests.xlsx', 'DateFormatTests.xlsx', 'ElapsedFormatTests.xlsx',
@@ -31,7 +31,26 @@ def _shift_formula(formula, shift):
 
 
 def xml(data):
-    return etree.fromstring(data, etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True))
+    # Do not import dochan before snapshot() selects the requested code tree.
+    if len(data) > 100 * 1024 * 1024:
+        raise ValueError("XML size limit exceeded")
+    if data.startswith((b"\xff\xfe\0\0", b"\0\0\xfe\xff")):
+        decoded = data.decode("utf-32")
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        decoded = data.decode("utf-16")
+    else:
+        declaration = re.match(br'\s*<\?xml[^?]*encoding=[\'"]([^\'"]+)', data[:1024])
+        decoded = data.decode(declaration[1].decode("ascii") if declaration else "utf-8-sig")
+    if "<!DOCTYPE" in decoded.upper() or "<!ENTITY" in decoded.upper():
+        raise ValueError("XML declarations forbidden in independent gold")
+    root = etree.fromstring(decoded)  # nosemgrep: use-defused-xml -- bounded independent gold; decoded declarations rejected
+    stack = [(root, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > 256:
+            raise ValueError("XML depth limit exceeded")
+        stack.extend((child, depth + 1) for child in node)
+    return root
 
 
 def snapshot(args):

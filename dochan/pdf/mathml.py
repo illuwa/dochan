@@ -7,7 +7,7 @@ structures raise ValueError so callers can retain the original PDF content.
 import re
 import unicodedata
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 MAX_MATHML_BYTES = 256 * 1024
 MAX_MATHML_NODES = 4096
@@ -136,10 +136,10 @@ def mathml_to_latex(data: bytes) -> str:
                              no_network=True, remove_comments=True, remove_pis=True)
     try:
         root = etree.fromstring(data, parser=parser)
+    except etree.ForbiddenDTD as exc:
+        raise ValueError("MathML DTD is not allowed") from exc
     except (etree.XMLSyntaxError, ValueError) as exc:
         raise ValueError("invalid MathML XML") from exc
-    if root.getroottree().docinfo.doctype:
-        raise ValueError("MathML DTD is not allowed")
     count = 0
     pending = [(root, 1)]
     while pending:

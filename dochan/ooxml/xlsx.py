@@ -1,11 +1,12 @@
 """Native XLSX reader."""
 from datetime import datetime
 import posixpath
+from io import BytesIO
 import re
 import zipfile
 from typing import Dict, List, Optional, Tuple
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 from ..spreadsheet_format import BUILTIN_NUM_FORMATS, SpreadsheetNumberFormatter
 from ..conversion import AssetRef, Provenance
@@ -79,9 +80,23 @@ def _node_text(node) -> str:
     """
     if node is None:
         return ""
-    return (node.text or "") + "".join(
-        child.tail or "" for child in node if child.tag is etree.Entity)
+    return node.text or ""
 
+
+
+def _sheet_rows(stream):
+    options = dict(events=("end",), tag=(f"{{{S_NS}}}row", f"{{{STRICT_S_NS}}}row"),
+                   max_depth=2048, clear=True)
+    try:
+        yield from etree.iterparse(stream, **options)
+    except etree.ForbiddenDTD:
+        # Declarations precede the root, hence no row has been yielded. Only
+        # this exceptional legacy path needs a bounded buffer for sanitizing.
+        stream.seek(0)
+        data = stream.read(etree.MAX_BYTES + 1)
+        if len(data) > etree.MAX_BYTES:
+            raise ValueError("XML size limit exceeded")
+        yield from etree.iterparse(BytesIO(etree.sanitize_dtd(data)), **options)
 
 def _column_index(cell_ref: str) -> int:
     value = 0
@@ -510,17 +525,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
         shared_formulas = {}
         truncation_error = ""
         with package.open_part(sheet_path) as stream:
-            context = etree.iterparse(
-                stream,
-                events=("end",),
-                tag=(f"{{{S_NS}}}row", f"{{{STRICT_S_NS}}}row"),
-                huge_tree=True,
-                recover=True,
-                # 일반 경로(package.read_xml_part)와 같은 계약: 엔티티 확장·DTD 로드·네트워크 금지
-                resolve_entities=False,
-                load_dtd=False,
-                no_network=True,
-            )
+            context = _sheet_rows(stream)
             for _, row_elem in context:
                 row_cells = {}
                 next_col_idx = 0
@@ -605,8 +610,6 @@ class XLSXReader(SpreadsheetNumberFormatter):
                         )
                         return Table()
                 row_elem.clear()
-                while row_elem.getprevious() is not None:
-                    del row_elem.getparent()[0]
 
         if truncation_error and truncation_error not in self._errors:
             self._errors.append(truncation_error)
@@ -651,7 +654,10 @@ class XLSXReader(SpreadsheetNumberFormatter):
         return elements
 
     def _read_vml_drawing_part(self, package: OOXMLPackage, vml_path: str, sheet_name: str) -> List[Paragraph]:
-        root = package.read_xml_part(vml_path, recover=True)
+        try:
+            root = package.read_xml_part(vml_path)
+        except etree.XMLSyntaxError:
+            root = etree.vml_fromstring(etree.sanitize_dtd(package.read_part(vml_path)))
         relationships = self._read_part_relationships(package, vml_path)
         paragraphs = []
         for image_data in root.findall(".//v:imagedata", namespaces=NS):
@@ -743,8 +749,9 @@ class XLSXReader(SpreadsheetNumberFormatter):
 
     def _drawing_texts(self, anchor) -> List[str]:
         texts = []
+        parents = etree.parent_map(anchor)
         for tx_body in anchor.findall(".//xdr:txBody", namespaces=NS):
-            if not self._selected_chart_branch(tx_body):
+            if not self._selected_chart_branch(tx_body, parents):
                 continue
             paragraph_texts = []
             for p_elem in tx_body.findall("a:p", namespaces=NS):
@@ -756,12 +763,12 @@ class XLSXReader(SpreadsheetNumberFormatter):
         return texts
 
     @staticmethod
-    def _selected_chart_branch(node) -> bool:
+    def _selected_chart_branch(node, parents) -> bool:
         """차트를 지원하는 AlternateContent의 비선택 갈래는 설명에도 넣지 않는다."""
         from .charts import MC_NS, _alternate_branch
         branch = node
-        while branch.getparent() is not None:
-            parent = branch.getparent()
+        while parents.get(branch) is not None:
+            parent = parents[branch]
             if parent.tag == "{%s}AlternateContent" % MC_NS:
                 selected = _alternate_branch(
                     parent, lambda item: next(chart_drawing_references(item), None) is not None,
@@ -772,8 +779,9 @@ class XLSXReader(SpreadsheetNumberFormatter):
         return True
 
     def _drawing_image_reference(self, anchor, relationships: Dict[str, str], sheet_name: str) -> str:
+        parents = etree.parent_map(anchor)
         blip = next((item for item in anchor.iterfind(".//a:blip", namespaces=NS)
-                     if self._selected_chart_branch(item)), None)
+                     if self._selected_chart_branch(item, parents)), None)
         if blip is None:
             return ""
         rel_id = _rel_attr(blip, "embed")
@@ -951,6 +959,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             return []
 
     def _chart_series_table(self, chart_root) -> Table:
+        parents = etree.parent_map(chart_root)
         if not hasattr(self, "_chart_series_remaining"):
             self._chart_series_remaining = MAX_CHART_SERIES
             self._chart_points_remaining = MAX_CHART_POINTS
@@ -995,14 +1004,14 @@ class XLSXReader(SpreadsheetNumberFormatter):
         xy = False
         for series in series_elements:
             has_x_values = series.find("c:xVal", namespaces=NS) is not None
-            xy_flags.append(is_xy_series(series))
+            xy_flags.append(is_xy_series(series, parents))
             xy = xy or xy_flags[-1]
             implicit_x.append(not has_x_values and series.find("c:cat", namespaces=NS) is None)
             series_name = self._chart_series_name(series)
-            categories = self._chart_points(series, "c:cat") or self._chart_points(series, "c:xVal")
-            values = self._chart_points(series, "c:val") or self._chart_points(series, "c:yVal")
+            categories = self._chart_points(series, "c:cat", chart_root) or self._chart_points(series, "c:xVal", chart_root)
+            values = self._chart_points(series, "c:val", chart_root) or self._chart_points(series, "c:yVal", chart_root)
             series_items.append((series_name, categories, values))
-            sizes.append(self._chart_points(series, "c:bubbleSize"))
+            sizes.append(self._chart_points(series, "c:bubbleSize", chart_root))
         if not series_items or not any(values for _, _, values in series_items):
             return Table()
 
@@ -1089,7 +1098,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             if node.text
         ).strip()
 
-    def _chart_points(self, series, parent_path: str) -> Dict[int, str]:
+    def _chart_points(self, series, parent_path: str, chart_root=None) -> Dict[int, str]:
         points = {}
         parent = series.find(parent_path, namespaces=NS)
         if parent is None:
@@ -1100,7 +1109,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             for index in sorted(set(index for mapping in level_points for index in mapping)):
                 points[index] = " / ".join(mapping[index] for mapping in reversed(level_points) if mapping.get(index))
             return points
-        format_point = chart_point_formatter(parent)
+        format_point = chart_point_formatter(parent, chart_root)
         for point in parent.findall(".//c:pt", namespaces=NS):
             raw_index = point.get("idx")
             if (

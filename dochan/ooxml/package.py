@@ -1,12 +1,10 @@
 """Safe helpers for Office Open XML ZIP packages."""
 import posixpath
-import re
 import zipfile
 import zlib
-from copy import deepcopy
 from typing import List
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 
 MAX_PART_SIZE = 100 * 1024 * 1024
@@ -19,19 +17,6 @@ MAX_XML_NAMESPACE_BINDINGS = 1000000
 MAX_COMPRESSION_RATIO = 2000
 MAX_ARCHIVE_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 10000
-
-_safe_xml_parser = etree.XMLParser(resolve_entities=False, no_network=True)
-_deep_xml_parser = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
-_recovery_xml_parser = etree.XMLParser(
-    resolve_entities=False,
-    no_network=True,
-    huge_tree=True,
-    recover=True,
-)
-_doctype_with_subset_re = re.compile(br"<!DOCTYPE\b[^[]*\[[\s\S]*?\]\s*>", re.IGNORECASE)
-_doctype_without_subset_re = re.compile(br"<!DOCTYPE\b[^>]*>", re.IGNORECASE)
-_named_entity_ref_re = re.compile(br"&([A-Za-z_][A-Za-z0-9_.:-]*);")
-_xml_predefined_entities = {b"amp", b"lt", b"gt", b"apos", b"quot"}
 
 # ISO/IEC 29500-1 namespace names -> the Part 4 names used by our readers.
 # These are exact URI mappings, not a replacement of user text or ZIP bytes.
@@ -78,20 +63,15 @@ def _transitional_name(name: str) -> str:
 def _normalize_strict_tree(root):
     if root is None:
         return root
-    strict_namespaces = False
-    namespace_bindings = 0
-
-    # start-ns reports local declarations, unlike node.nsmap which repeatedly
-    # materializes all inherited bindings (namespace-count x element-count).
-    for event, node in etree.iterwalk(root, events=("start-ns", "start")):
-        if event == "start-ns":
-            namespace_bindings += 1
-            if namespace_bindings > MAX_XML_NAMESPACE_BINDINGS:
-                raise ValueError("package XML namespace limit exceeded")
-            strict_namespaces = strict_namespaces or node[1] in _STRICT_NAMESPACES
-            continue
+    for node in root.iter():
         if not isinstance(node.tag, str):
             continue
+        node.tag = _transitional_name(node.tag)
+        for key, value in list(node.attrib.items()):
+            mapped = _transitional_name(key)
+            if mapped != key:
+                del node.attrib[key]
+                node.set(mapped, value)
         if node.tag == _RELATIONSHIP_TAG:
             kind = node.get("Type", "")
             if kind.startswith(_STRICT_RELATIONSHIP):
@@ -103,51 +83,12 @@ def _normalize_strict_tree(root):
                               "customProperties": "custom-properties"}.get(suffix, suffix)
                     kind = _TRANSITIONAL_RELATIONSHIP + suffix
                 node.set("Type", kind)
-        elif _transitional_name(node.tag) == _GRAPHIC_DATA_TAG:
+        elif node.tag == _GRAPHIC_DATA_TAG:
             uri = node.get("uri", "")
             if uri in _STRICT_NAMESPACES:
                 node.set("uri", _STRICT_NAMESPACES[uri])
-    if not strict_namespaces:
-        return root
-
-    def copy_element(node, nsmap, parent=None):
-        # Preserve prefix bindings as well as expanded names: mc:Choice Requires
-        # and QName-valued attributes use the original (possibly rebound) prefix.
-        attributes = {_transitional_name(name): value for name, value in node.attrib.items()}
-        tag = _transitional_name(node.tag)
-        if parent is None:
-            result = etree.Element(tag, attrib=attributes, nsmap=nsmap)
-        else:
-            result = etree.SubElement(parent, tag, attrib=attributes, nsmap=nsmap)
-        result.text, result.tail = node.text, node.tail
-        return result
-
-    # Iterative depth-first copying avoids Python recursion on recovered XML.
-    # The same part-size and element limits apply before this transformation.
-    normalized = None
-    stack = []
-    nsmap = {}
-    for event, node in etree.iterwalk(root, events=("start-ns", "start", "end", "comment", "pi")):
-        if event == "start-ns":
-            prefix, uri = node
-            nsmap[prefix or None] = _STRICT_NAMESPACES.get(uri, uri)
-        elif event == "start":
-            if isinstance(node.tag, str):
-                copied = copy_element(node, nsmap, stack[-1] if stack else None)
-            else:
-                # Unresolved entities can produce start/end events too. Keep
-                # them opaque just as resolve_entities=False requested.
-                copied = deepcopy(node)
-                stack[-1].append(copied)
-            if normalized is None:
-                normalized = copied
-            stack.append(copied)
-            nsmap = {}
-        elif event == "end":
-            stack.pop()
-        elif stack:
-            stack[-1].append(deepcopy(node))
-    return normalized
+    etree.map_namespaces(root, _STRICT_NAMESPACES)
+    return root
 
 
 def _validate_part_name(name: str) -> str:
@@ -161,21 +102,8 @@ def _validate_part_name(name: str) -> str:
     return normalized
 
 
-def _neutralize_custom_entities(data: bytes) -> bytes:
-    def replace(match: re.Match[bytes]) -> bytes:
-        if match.group(1) in _xml_predefined_entities:
-            return match.group(0)
-        return b""
-
-    return _named_entity_ref_re.sub(replace, data)
-
-
 def _sanitize_dtd(data: bytes) -> bytes:
-    if b"<!DOCTYPE" not in data.upper():
-        return data
-    data = _doctype_with_subset_re.sub(b"", data)
-    data = _doctype_without_subset_re.sub(b"", data)
-    return _neutralize_custom_entities(data)
+    return etree.sanitize_dtd(data)
 
 
 class OOXMLPackage:
@@ -263,23 +191,18 @@ class OOXMLPackage:
         data = _sanitize_dtd(self.read_part(name))
         if data.count(b"<") > MAX_XML_ELEMENTS:
             raise ValueError(f"package XML element limit exceeded: {_validate_part_name(name)}")
-        if recover:
-            root = etree.fromstring(data, parser=_recovery_xml_parser)
-        else:
-            try:
-                root = etree.fromstring(data, parser=_safe_xml_parser)
-            except etree.XMLSyntaxError as exc:
-                if "Excessive depth" not in str(exc):
-                    raise
-                try:
-                    root = etree.fromstring(data, parser=_deep_xml_parser)
-                except etree.XMLSyntaxError as deep_exc:
-                    if "Excessive depth" not in str(deep_exc):
-                        raise
-                    root = etree.fromstring(data, parser=_recovery_xml_parser)
+        root = etree.fromstring(data, namespaces=True,
+                                max_namespaces=MAX_XML_NAMESPACE_BINDINGS,
+                                max_depth=2048, truncate=True, recover=recover)
         if root is not None and etree.QName(root).namespace in _STRICT_NAMESPACES:
             self._strict_parts.add(_validate_part_name(name))
-        return _normalize_strict_tree(root)
+        # Transitional parts need no rewriting. The exact URI prefix check is
+        # only a fast-path gate; structural names alone are changed below.
+        strict = _STRICT_BASE.encode() in data or b'&#' in data
+        if not strict and b'\0' in data:
+            decoded_names = data.replace(b'\0', b'')
+            strict = _STRICT_BASE.encode() in decoded_names or b'&#' in decoded_names
+        return _normalize_strict_tree(root) if strict else root
 
 
 def detect_ooxml_format(file_path: str) -> str:

@@ -6,7 +6,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from dochan import cfb
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.model.table import flatten_block_texts
 from dochan.office_binary.doc import DOCReader

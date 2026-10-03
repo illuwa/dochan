@@ -11,13 +11,13 @@ from statistics import mean, median
 from time import perf_counter
 from typing import Callable, Dict, Iterable, List, Tuple
 
-from lxml import etree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from dochan.ooxml import package as ooxml_package  # noqa: E402
+from dochan.utils import safe_xml as etree  # noqa: E402
 from scripts.download_public_ooxml_corpus import atomic_write_text  # noqa: E402
 
 OFFICE_FORMATS = ("docx", "pptx", "xlsx")

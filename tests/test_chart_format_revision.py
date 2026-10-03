@@ -5,7 +5,7 @@ from dochan.ooxml import charts
 from dochan.ooxml.xlsx import XLSXReader
 from dochan.ooxml.pptx import PPTXReader
 from dochan.hwpx.charts import parse_chart_xml
-from lxml import etree
+from dochan.utils import safe_xml as etree
 from test_chart_details import root, series, table
 
 

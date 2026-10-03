@@ -348,7 +348,7 @@ def test_layout_textbox_ignores_master_other_style(tmp_path):
 
 
 def resolver_for_test():
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     from dochan.ooxml.pptx_styles import TextStyleResolver
     parser = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
     root = etree.fromstring(('<p:presentation xmlns:p="%s"/>' % P_NS).encode(), parser)
@@ -356,7 +356,7 @@ def resolver_for_test():
 
 
 def test_malformed_list_style_scan_is_cached():
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     resolver, parser = resolver_for_test()
     node = etree.fromstring(('<a:lstStyle xmlns:a="%s">%s</a:lstStyle>' %
                             (A_NS, '<a:lvl9pPr/>' * 1000)).encode(), parser)
@@ -374,8 +374,9 @@ def test_malformed_list_style_scan_is_cached():
                 self.visits += 1
                 yield child
 
-        def getroottree(self):
-            return node.getroottree()
+        def iter(self):
+            yield self
+            yield from self
 
     style = CountedStyle()
     for _ in range(1000):
@@ -384,7 +385,7 @@ def test_malformed_list_style_scan_is_cached():
 
 
 def test_first_list_style_scan_has_node_budget(monkeypatch):
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     import dochan.ooxml.pptx_styles as styles
     monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 20)
     resolver, parser = resolver_for_test()
@@ -395,7 +396,7 @@ def test_first_list_style_scan_has_node_budget(monkeypatch):
 
 
 def test_node_budget_is_per_part(monkeypatch):
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     import dochan.ooxml.pptx_styles as styles
     monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 5)
     resolver, parser = resolver_for_test()
@@ -593,7 +594,7 @@ def test_all_level_styles_outrank_nearer_default_paragraph_style(tmp_path):
 
 
 def test_exhausted_part_does_not_disable_another_part(monkeypatch):
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     import dochan.ooxml.pptx_styles as styles
     monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 20)
     resolver, parser = resolver_for_test()
@@ -606,7 +607,7 @@ def test_exhausted_part_does_not_disable_another_part(monkeypatch):
 
 
 def test_style_budget_is_shared_by_trees_of_same_part(monkeypatch):
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     import dochan.ooxml.pptx_styles as styles
     monkeypatch.setattr(styles, 'MAX_STYLE_NODES', 2)
     resolver, parser = resolver_for_test()
@@ -653,11 +654,12 @@ def alternating_layout_package(tmp_path, slides, shapes=1, padding=0):
 
 @pytest.mark.parametrize('slides', [100, 200])
 def test_alternating_layouts_do_not_retain_content_trees(tmp_path, slides):
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
 
     def roots_in(value):
-        if isinstance(value, etree._Element):
-            return {value.getroottree().getroot()}
+        if isinstance(value, etree.Element):
+            # ET children do not own ancestors; inspect every retained subtree.
+            return set(value.iter())
         if isinstance(value, dict):
             return roots_in(list(value.keys()) + list(value.values()))
         if isinstance(value, (tuple, list)):
@@ -723,7 +725,7 @@ def test_content_tree_released_on_parse_failure(tmp_path, monkeypatch):
 
 def test_node_keys_use_one_index_per_tree_not_getpath():
     # 도형마다 getpath() 로 형제를 훑으면 도형 수의 제곱이 된다. 트리마다 순번 색인을 한 번만 만들어 재사용한다.
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     from dochan.ooxml import pptx_styles
     root = etree.fromstring(b"<r>" + b"<s/>" * 50 + b"</r>")
     resolver = pptx_styles.TextStyleResolver.__new__(pptx_styles.TextStyleResolver)

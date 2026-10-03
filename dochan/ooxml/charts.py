@@ -332,8 +332,8 @@ def _group_axes(group, plot_area, axis_index=None):
     return first, second
 
 
-def is_xy_series(series):
-    group = series.getparent()
+def is_xy_series(series, parents):
+    group = parents.get(series)
     return (group is not None and group.tag in (_C + "scatterChart", _C + "bubbleChart")) or _child(series, "xVal") is not None
 
 
@@ -415,24 +415,27 @@ def format_chart_number(value: str, format_code: str, date_1904=False) -> str:
     return _ChartDisplayValue(formatted, value) if formatted != value else value
 
 
-def chart_point_formatter(parent):
+def chart_point_formatter(parent, root=None):
     """한 데이터 원천의 표시 정책을 한 번만 계산하여 점 수 × 축 수 순회를 피한다."""
     caches = [parent] if parent.tag in (_C + "numCache", _C + "numLit") else [
         node for node in parent.iter() if node.tag in (_C + "numCache", _C + "numLit")]
-    formatters = {cache: _numeric_cache_formatter(cache) for cache in caches}
+    formatters = {}
+    for cache in caches:
+        formatter = _numeric_cache_formatter(cache, root)
+        for point in cache:
+            formatters[point] = formatter
 
     def display(point, value):
-        formatter = formatters.get(point.getparent())
+        formatter = formatters.get(point)
         return formatter(point, value) if formatter is not None else value
 
     return display
 
 
-def _numeric_cache_formatter(cache):
+def _numeric_cache_formatter(cache, root=None):
     cache_format = cache.findtext(_C + "formatCode", "")
-    root = cache
-    while root.getparent() is not None:
-        root = root.getparent()
+    if root is None:
+        root = cache
     explicit_epoch = _child(root, "date1904") is not None
     epoch = _flag(root, "date1904")
 
@@ -681,7 +684,7 @@ def hydrate_chart_references(chart_root, package, chart_path, errors, resolver=N
     import io
     import posixpath
     import zipfile
-    from lxml import etree
+    from ..utils import safe_xml as etree
     from .package import OOXMLPackage
 
     references = []
@@ -797,7 +800,7 @@ def normalize_chart(chart_root, errors):
     계층 범주는 바깥쪽부터 안쪽까지 /로 이어 정보를 보존한다.
     """
     from copy import deepcopy
-    from lxml import etree
+    from ..utils import safe_xml as etree
 
     if chart_root.tag != _CX + "chartSpace":
         chart = _chart(chart_root)

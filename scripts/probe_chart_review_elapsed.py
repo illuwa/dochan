@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from scripts.probe_chart_review_evidence import ooxml_cells
 from scripts.probe_chart_review_outputs import load

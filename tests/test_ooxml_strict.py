@@ -1,7 +1,7 @@
 """Strict 문법을 직접 조립해 기존 OOXML 출력 계약과 비교한다."""
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 import pytest
 
 from dochan.ooxml.docx import DOCXReader
@@ -69,7 +69,7 @@ def test_strict_namespace_qnames_and_bindings(tmp_path, prefix):
         assert package.read_part("part.xml") == source.encode()
     assert root.tag == "{%s}root" % (TRANS + transitional)
     assert root.get("{%s}attr" % (TRANS + transitional)) == "value"
-    assert root.nsmap["x"] == TRANS + transitional
+    assert etree.namespace_map(root)["x"] == TRANS + transitional
     assert root[0].text == " comment "
     assert root[1].tail == "tail"
 
@@ -211,8 +211,8 @@ def test_strict_nested_namespace_rebinding_and_unknown_extension(tmp_path):
     path = _zip(tmp_path / "nested.zip", {"part.xml": source})
     with OOXMLPackage(path) as package:
         root = package.read_xml_part("part.xml")
-    assert root.nsmap["q"] == "urn:unknown"
-    assert root[0][0].nsmap["q"] == TRANS + NAMESPACES["a"][1]
+    assert etree.namespace_map(root)["q"] == "urn:unknown"
+    assert etree.namespace_map(root[0][0])["q"] == TRANS + NAMESPACES["a"][1]
     assert root[0][0].get("Requires") == "q"
     assert root[0][2].tag == "{%s/extension}extension" % (STRICT + NAMESPACES["a"][0])
     assert root[0][2].get("flag") == "25%"
@@ -259,6 +259,15 @@ def test_strict_namespace_work_budget(tmp_path, monkeypatch):
     with OOXMLPackage(path) as package:
         with pytest.raises(ValueError, match="namespace limit"):
             package.read_xml_part("part.xml")
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-16'])
+def test_strict_namespace_character_references_are_normalized(tmp_path, encoding):
+    source = '<root><w:document xmlns:w="http://purl.oclc.org/ooxm&#108;/wordprocessingml/main"><w:body/></w:document></root>'
+    path = _zip(tmp_path / 'reference.zip', {'part.xml': source.encode(encoding)})
+    with OOXMLPackage(path) as package:
+        root = package.read_xml_part('part.xml')
+    assert root[0].tag == '{%s}document' % (TRANS + NAMESPACES['w'][1])
 
 
 def test_strict_docx_chart_and_image_reuse_output_contract(tmp_path):

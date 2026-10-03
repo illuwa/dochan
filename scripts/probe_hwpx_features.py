@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.hwpx.parser import HWPXParser
 from dochan.hwpx.charts import parse_chart_xml

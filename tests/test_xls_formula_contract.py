@@ -81,7 +81,7 @@ def test_xls_shared_formula_arean_resolves_relative_and_absolute_coordinates():
 
 
 def test_xls_formula_empty_cache_uses_xlsx_equals_contract():
-    from lxml import etree
+    from dochan.utils import safe_xml as etree
     from dochan.ooxml.xlsx import XLSXReader
     tokens = b'\x1e\x01\x00\x1e\x02\x00\x03'
     doc = _formula_document(tokens, b'\x03' + b'\0' * 5 + b'\xff\xff')

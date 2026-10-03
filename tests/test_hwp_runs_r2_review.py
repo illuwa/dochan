@@ -2,7 +2,7 @@
 import struct
 import sys
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 import pytest
 
 from dochan.hwpx import parser as hwpx

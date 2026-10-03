@@ -23,7 +23,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dochan import cfb  # noqa: E402
-from lxml import etree  # noqa: E402
+from dochan.utils import safe_xml as etree  # noqa: E402
 
 
 HASH_CHUNK_BYTES = 1024 * 1024
@@ -60,15 +60,13 @@ def _generator_metadata(archive, infos):
         parser = etree.XMLParser(resolve_entities=False, load_dtd=False,
                                  no_network=True, huge_tree=False)
         root = etree.fromstring(data, parser=parser)
-        if root.getroottree().docinfo.doctype:
-            return None, ["invalid_generator_xml"]
         generator = {
             key: root.get(attribute)
             for key, attribute in (("application", "application"), ("app_version", "appVersion"))
             if root.get(attribute) is not None
         }
         return generator or None, []
-    except etree.XMLSyntaxError:
+    except (etree.XMLSyntaxError, etree.ForbiddenDTD):
         return None, ["invalid_generator_xml"]
     except (OSError, EOFError, ValueError, RuntimeError, zipfile.BadZipFile, zlib.error):
         return None, ["unreadable_generator_metadata"]

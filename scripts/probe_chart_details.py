@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import zipfile
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.ooxml.charts import (
     chart_caption, chart_title, hydrate_chart_references, normalize_chart,
@@ -45,7 +45,7 @@ def _inventory(xml):
             'kind': etree.QName(axis).localname,
             'id': _val(axis, 'axId'), 'cross': _val(axis, 'crossAx'),
             'position': _val(axis, 'axPos'),
-            'title': ' '.join(title.itertext()).strip() if title is not None else '',
+            'title': ' '.join(etree.itertext(title)).strip() if title is not None else '',
             'numFmt': dict(axis.find(C + 'numFmt').attrib) if axis.find(C + 'numFmt') is not None else {},
         })
     groups = []
@@ -66,12 +66,13 @@ def _inventory(xml):
 def _raw_table(normal):
     """표시 서식만 제거한 복제본으로 캐시의 원시 값 보존을 검사한다."""
     plain = deepcopy(normal)
+    parents = etree.parent_map(plain)
     for node in list(plain.iter()):
         for attribute in list(node.attrib):
             if attribute.startswith('{urn:dochan:chart-display}'):
                 del node.attrib[attribute]
         if node.tag in (C + 'formatCode', C + 'numFmt'):
-            node.getparent().remove(node)
+            parents[node].remove(node)
     reader = XLSXReader()
     reader._errors = []
     table = reader._chart_series_table(plain)

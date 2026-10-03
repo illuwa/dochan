@@ -3,7 +3,7 @@ import hashlib
 import importlib
 import socket
 # Independent gold uses only SHA-256-pinned XML, never arbitrary document input.
-import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml
+import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml -- pinned gold; declarations rejected before parsing
 import zipfile
 from pathlib import Path
 # Output escaping only; this function does not parse XML.
@@ -284,23 +284,21 @@ def test_external_workbook_is_not_opened_and_only_cached_values_are_used(monkeyp
     '<!ENTITY leak "expanded internal text">',
 ])
 def test_doctype_and_entities_are_rejected_without_resolving(entity, monkeypatch):
-    from lxml import etree
+    from dochan.utils import safe_xml
 
     module = _module()
-    original_parser = etree.XMLParser
+    original_parser = safe_xml.XMLParser
     configurations, resolutions = [], []
 
-    class WatchResolver(etree.Resolver):
-        def resolve(self, url, public_id, context):
-            resolutions.append(url)
-            raise AssertionError("entity resolver must not run")
+    def forbidden_tree(*args, **kwargs):
+        resolutions.append("tree parser reached")
+        raise AssertionError("DTD must be rejected before tree construction")
 
     def watched_parser(*args, **kwargs):
         configurations.append(kwargs)
-        parser = original_parser(*args, **kwargs)
-        parser.resolvers.add(WatchResolver())
-        return parser
+        return original_parser(*args, **kwargs)
 
+    monkeypatch.setattr(safe_xml, "_parse_tree", forbidden_tree)
     monkeypatch.setattr(module.etree, "XMLParser", watched_parser)
     xml = ('<!DOCTYPE c:chartSpace [%s]>' % entity).encode() + _chart(_series())
     xml = xml.replace('판매'.encode(), b'&leak;')
@@ -454,7 +452,9 @@ PUBLIC_CASES = [
 
 def _independent_public_gold(raw, kind):
     """Standard-library XML only; no implementation helpers or dochan output."""
-    tree = ET.fromstring(raw)
+    decoded = raw.decode("utf-8-sig")
+    assert "<!DOCTYPE" not in decoded.upper() and "<!ENTITY" not in decoded.upper()
+    tree = ET.fromstring(decoded)  # nosemgrep: use-defused-xml -- independent gold, decoded declarations rejected above
     assert tree.tag == '{%s}chartSpace' % C
     assert tree.findall('c:chart/c:title/c:tx', NS) == []
     group = tree.find('c:chart/c:plotArea/c:' + kind, NS)

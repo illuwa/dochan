@@ -5,7 +5,7 @@ import hmac
 import io
 import struct
 import zipfile
-from lxml import etree as ET
+from dochan.utils import safe_xml as ET
 
 import pytest
 

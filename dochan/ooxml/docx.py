@@ -9,7 +9,7 @@ import zipfile
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
@@ -228,6 +228,7 @@ class DOCXReader:
 
     def read(self, file_path: str) -> Document:
         doc = Document(source_format="docx")
+        self._parents = {}
         self._numbering_counts = {}
         self._note_reference_numbers = {}
         self._note_reference_order = []
@@ -257,6 +258,7 @@ class DOCXReader:
             with OOXMLPackage(file_path) as package:
                 self._package = package
                 root = package.read_xml_part("word/document.xml")
+                self._register_tree(root)
                 self._document_relationships = self._read_document_relationships(package)
                 self._active_relationships = self._document_relationships
                 self._preload_smartart(package, self._document_relationships)
@@ -282,6 +284,7 @@ class DOCXReader:
             zipfile.BadZipFile,
             etree.XMLSyntaxError,
         ) as exc:
+            self._parents.clear()
             doc.errors.append(f"ERR: DOCX package parse failed: {exc}")
             return doc
 
@@ -290,6 +293,7 @@ class DOCXReader:
         )
         body = root.find("w:body", namespaces=NS)
         if body is None:
+            self._parents.clear()
             doc.errors.append("ERR: DOCX body not found")
             doc.sections.append(section)
             return doc
@@ -315,10 +319,19 @@ class DOCXReader:
         doc.assets = getattr(self, "_assets", [])
         doc.sections.append(section)
         self._release_source_elements(doc)
+        self._parents.clear()
         self._package = None
         self._active_relationships = {}
         self._alt_chunk_data = {}
         return doc
+
+    def _register_tree(self, root):
+        """Register each story once; direct subtree parsing uses the same context."""
+        if not hasattr(self, "_parents"):
+            self._parents = {}
+        if root not in self._parents:
+            self._parents.update(etree.parent_map(root))
+            self._parents[root] = None
 
     def _release_source_elements(self, doc):
         """캡션 결합이 끝나면 모델에 임시로 붙인 XML 참조를 제거한다."""
@@ -345,6 +358,7 @@ class DOCXReader:
     ) -> List[object]:
         if not self._structure_depth_allowed(depth):
             return []
+        self._register_tree(container)
         elements = []
         for child in container:
             if child.tag == f"{{{W_NS}}}p":
@@ -506,13 +520,17 @@ class DOCXReader:
 
         current = source
         while current is not None:
-            sibling = current.getnext() if direction > 0 else current.getprevious()
-            while sibling is not None:
+            parent = self._parents.get(current)
+            if parent is None:
+                return None
+            siblings = list(parent)
+            position = siblings.index(current)
+            following = siblings[position + 1:] if direction > 0 else reversed(siblings[:position])
+            for sibling in following:
                 candidate = edge(sibling)
                 if candidate is not None:
                     return candidate
-                sibling = sibling.getnext() if direction > 0 else sibling.getprevious()
-            current = current.getparent()
+            current = parent
             if current is None or current.tag not in wrappers | {f"{{{MC_NS}}}AlternateContent"}:
                 return None
         return None
@@ -591,6 +609,7 @@ class DOCXReader:
         if not package.exists(path):
             return {}
         root = package.read_xml_part(path)
+        self._register_tree(root)
         notes = {}
         for note_elem in root.findall(f"w:{note_type}", namespaces=NS):
             note_id = _w_attr(note_elem, "id")
@@ -723,6 +742,7 @@ class DOCXReader:
 
     def _read_header_footer(self, package: OOXMLPackage, path: str, hf_type: str) -> HeaderFooter:
         root = package.read_xml_part(path)
+        self._register_tree(root)
         hf = HeaderFooter(type=hf_type)
         paragraph_index_ref = [0]
         previous_relationships = getattr(self, "_active_relationships", {})
@@ -907,7 +927,7 @@ class DOCXReader:
 
     def _inherited_run_style(self, r_elem, r_pr):
         style = replace(getattr(self, "_default_run_style", _RunStyle()))
-        paragraph = next((node for node in r_elem.iterancestors()
+        paragraph = next((node for node in etree.ancestors(r_elem, self._parents)
                           if node.tag == f"{{{W_NS}}}p"), None)
         paragraph_style = ""
         if paragraph is not None:
@@ -1467,6 +1487,7 @@ class DOCXReader:
     def _parse_runs(self, p_elem, depth: int = 0) -> List[TextRun]:
         if not self._structure_depth_allowed(depth):
             return []
+        self._register_tree(p_elem)
         runs = []
         for child in p_elem:
             if child.tag == f"{{{W_NS}}}r":
@@ -1739,7 +1760,7 @@ class DOCXReader:
             if node.tag == f"{{{WP_NS}}}docPr":
                 # 이미지 설명은 _image_reference가 참조의 대체 텍스트로 낸다.
                 # 이미지 없는 도형의 설명은 종전처럼 본문에 남긴다.
-                parent = node.getparent()
+                parent = self._parents.get(node)
                 blip = parent.find(".//a:blip", namespaces=NS) if parent is not None else None
                 rel_id = _r_attr(blip, "embed")
                 if rel_id and (getattr(self, "_active_relationships", {}).get(rel_id) or
@@ -1874,8 +1895,8 @@ class DOCXReader:
             return ""
         context = elem
         doc_pr = context.find(".//wp:docPr", namespaces=NS)
-        while doc_pr is None and context.getparent() is not None:
-            context = context.getparent()
+        while doc_pr is None and self._parents.get(context) is not None:
+            context = self._parents[context]
             doc_pr = context.find("wp:docPr", namespaces=NS)
             if context.tag in {f"{{{W_NS}}}drawing", f"{{{W_NS}}}pict", f"{{{W_NS}}}txbxContent"}:
                 break

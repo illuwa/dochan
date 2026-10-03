@@ -8,7 +8,7 @@ import re
 from decimal import Decimal, InvalidOperation
 import zipfile
 
-from lxml import etree
+from ..utils import safe_xml as etree
 
 P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -74,6 +74,7 @@ class TextStyleResolver:
         self.bytes = 0
         self.nodes = {}
         self.root_paths = {presentation: "ppt/presentation.xml"}
+        self._node_roots = {node: presentation for node in presentation.iter()}
         self._indexes = {}
 
     def warn(self, message):
@@ -100,6 +101,7 @@ class TextStyleResolver:
             root = self.package.read_xml_part(path)
             self.parts[path] = root
             self.root_paths[root] = path
+            self._node_roots.update((node, root) for node in root.iter())
             return root
         except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError):
             self.warn('part could not be read')
@@ -133,6 +135,7 @@ class TextStyleResolver:
 
     def context(self, root, path):
         self.root_paths[root] = path
+        self._node_roots.update((node, root) for node in root.iter())
         if root.tag == '{%s}sld' % P:
             layout_path, layout = self.related_part(path, 'slideLayout')
             _, master = self.related_part(layout_path, 'slideMaster') if layout is not None else ('', None)
@@ -148,10 +151,23 @@ class TextStyleResolver:
         if self.parts.get(path) is not root:
             self.root_paths.pop(root, None)
             self._indexes.pop(root, None)
+            for node in root.iter():
+                self._node_roots.pop(node, None)
+
+    def _root_for(self, node):
+        if not hasattr(self, '_node_roots'):
+            self._node_roots = {}
+        if node not in self._node_roots:
+            for root in self.root_paths:
+                if root not in self._node_roots:
+                    self._node_roots.update((child, root) for child in root.iter())
+            if node not in self._node_roots:
+                self._node_roots.update((child, node) for child in node.iter())
+                self._node_roots[node] = node
+        return self._node_roots[node]
 
     def _node_key(self, node):
-        tree = node.getroottree()
-        root = tree.getroot()
+        root = self._root_for(node)
         path = self.root_paths.get(root)
         # Standalone nodes have no package identity. Package nodes use their
         # structural position, since cNvPr IDs can be missing or duplicated.
@@ -164,12 +180,12 @@ class TextStyleResolver:
             index = {element: position for position, element in enumerate(root.iter())}
             self._indexes[root] = index
         position = index.get(node)
-        return (path, position if position is not None else tree.getpath(node))
+        return (path, position if position is not None else node)
 
     def _take_node(self, node):
         # Cache traversals and charge their work to the owning XML part, so one
         # malformed part cannot disable otherwise valid, unrelated parts.
-        root = node.getroottree().getroot()
+        root = self._root_for(node)
         part = self.root_paths.get(root, root)
         count = self.nodes.get(part, 0)
         if count >= MAX_STYLE_NODES:

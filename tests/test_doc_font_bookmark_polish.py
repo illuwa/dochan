@@ -2,7 +2,7 @@
 import struct
 from types import SimpleNamespace
 
-from lxml import etree
+from dochan.utils import safe_xml as etree
 
 from dochan.model.document import Document, TextRun
 from dochan.office_binary.doc_binary import DocBinary, decode_grpprl

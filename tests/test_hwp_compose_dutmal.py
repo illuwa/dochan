@@ -6,6 +6,7 @@ import pytest
 
 from dochan.hwp.section import SectionParser
 from dochan.hwp.doc_info import DocInfo
+from dochan.hwp.records.para_text import parse_para_text
 from dochan.hwp.records.char_shape import CharShape
 from dochan.hwpx.parser import HWPXParser
 from test_hwp_section_controls import field_end_block, field_start_block, hlk_ctrl_payload, rec
@@ -53,6 +54,53 @@ def test_hwp_compose_and_dutmal_insert_at_control_positions():
 def test_hwp_compose_omits_drawn_border(stored, border, expected):
     data = _hwp(_extended(b'spct'), _compose(stored, border))
     assert _text(SectionParser().parse_stream(data, False)) == expected
+
+
+def test_hwp_compose_old_layout_has_no_border_tail():
+    parser = SectionParser()
+    data = _hwp('앞'.encode('utf-16-le') + _extended(b'spct') +
+                '뒤'.encode('utf-16-le'), b'spct\x02\x00A\x00B\x00')
+    assert _text(parser.parse_stream(data, False)) == '앞AB뒤'
+    assert parser.errors == []
+
+
+def test_hwp_compose_old_layout_rejects_partial_tail():
+    parser = SectionParser()
+    data = _hwp(_extended(b'spct'), b'spct\x01\x00A\x00\x00')
+    assert _text(parser.parse_stream(data, False)) == ''
+    assert any('truncated or invalid' in error for error in parser.errors)
+
+
+@pytest.mark.parametrize('stored,expected', [
+    ('\U000f02ba\U000f02c3', '\U000f02ba\U000f02c3'),
+    ('\U000f02b1', '\U000f02b1'),
+])
+def test_hwp_compose_borderless_pua_is_preserved(stored, expected):
+    data = _hwp(_extended(b'spct'), _compose(stored, 0))
+    assert _text(SectionParser().parse_stream(data, False)) == expected
+
+
+def test_hwp_compose_replaces_lone_surrogate():
+    parser = SectionParser()
+    data = _hwp(_extended(b'spct'), b'spct\x02\x00\x00\xd8A\x00' + bytes(4))
+    assert _text(parser.parse_stream(data, False)) == '\ufffdA'
+    assert parser.errors == []
+
+
+def test_hwp_missing_form_reference_retains_original_warning():
+    parser = SectionParser()
+    parser._form_text_result(parse_para_text(_extended(b'mrof')), [])
+    assert parser.errors == ['WARN: HWP form object reference missing']
+
+
+def test_hwp_revision_control_warning_does_not_claim_preservation():
+    parser = SectionParser(revision_mode='final')
+    parser._warn_revision_controls(
+        {'inline_controls': [(0, 8, b'spct')]},
+        [struct.pack('<III', 0, 8, (0x11 << 24) | 1)],
+    )
+    assert parser.errors == [
+        'ERR: HWP revision partial [control]; inline control projection may differ']
 
 
 def test_hwp_compose_preserves_link_positions():

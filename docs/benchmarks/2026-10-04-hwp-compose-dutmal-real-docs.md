@@ -1,23 +1,25 @@
 # HWP 글자 겹침·덧말과 HWPX 덧말 실물 검증
 
-한컴 「한글문서파일형식 5.0 revision 1.3」 4.3.10.12와 4.3.10.13의 컨트롤 레이아웃을 기준으로 구현했다. 동일 문서의 HWPX `composeText`, `mainText`, `subText`를 본문 문자열의 정답지로 삼았다. 한컴 미리보기 `PrvText`는 겹침 글자와 덧말을 생략하므로, 덧말을 `본말(덧말)`로 평탄화하는 방식은 dochan의 출력 계약이다. 덧말이 비면 본말만 낸다.
+한컴 「한글문서파일형식 5.0 revision 1.3」 4.3.10.12와 4.3.10.13의 컨트롤 구조를 기준으로 읽었다. 동일 원본의 HWPX `composeText`, `mainText`, `subText`를 본문 문자열의 정답지로 삼았다. HWP와 HWPX 공개 짝은 수집 파일명이 아니라 `corpus/hwp-public/SOURCES.json`의 원본 URL로 판별했다. URL의 조회 문자열도 비교하고, 같은 로컬 파일을 가리키는 중복 출처는 한 번만 셌다.
 
 | 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
 |---|---|---|---|---|---|
-| HWP 글자 겹침 `tcps` | `corpus/press-pairs/156783561.hwp`와 `.hwpx`, `corpus/hwp-public/{hwp,hwpx}/sample-compose-basic`, `sample-compose-all-shapes` | 공개 명세 4.3.10.12의 가변 길이 구조, HWPX `composeText`, 같은 문서 PDF의 사각형 안 숫자 | 보도자료의 해당 제목이 두 형식 모두 `### 1 최신 주간농사정보 알려줘`이고, 공개 샘플에서 테두리 글리프를 제외한 본문이 같다. | 보도자료 제목이 정확히 일치했고 두 샘플의 전체 평문도 일치했다. 같은 이름의 공개 짝 전체에서 겹침 문자열 138곳 중 117곳이 일치했다. 15곳은 짝 HWP에 컨트롤이 없었고 6곳은 HWPX 변환마다 전용 글리프를 숫자로 바꾸는 방식이 달랐다. | 대표 실물 통과. 전체 짝의 문자열 동등성은 미완이며 확장 판정은 보류한다. |
-| HWP 덧말 `tdut` | `corpus/hwp-public/{hwp,hwpx}/sample-dutmal-basic` | 공개 명세 4.3.10.13의 본말·덧말 WCHAR 배열과 HWPX 동명 짝 출력 | 두 곳 모두 `본말(덧말)` 형식이며 짝 출력과 같다. | 컨트롤 2곳 중 2곳이 일치하고 전체 평문도 일치했다. 다른 공개 짝 `hwp2hwpx-from_11`에는 HWP `tdut` 컨트롤이 없어 HWPX의 3곳과 직접 대조할 수 없었다. | HWP 컨트롤이 있는 실물 표본 통과. |
-| HWPX 덧말 `dutmal` | `corpus/hwp-public/hwpx/sample-dutmal-basic.hwpx`, `hwp2hwpx-from_11.hwpx` | HWPX 원시 `mainText`·`subText`와 동일 문서 HWP의 `tdut` 2곳 | 본말 뒤에 덧말을 괄호로 붙여 본문 자리에 넣는다. | 2곳에서 HWP 짝과 일치했다. 나머지 HWPX 3곳도 본말·덧말을 출력하지만 짝 HWP에는 `tdut`가 없다. | 구현과 HWP 짝 2곳 검증 통과. |
+| HWP 글자 겹침 `tcps` | `corpus/press-pairs/156783561.hwp`와 `.hwpx`, 공개 `hwp2hwpx-from_5.hwp` ↔ `hwp2hwpx-from_7.hwpx`, `sample-compose-all-shapes`, `mel-001`, `table-vpos-01` | HWPX `composeText`, 공개 명세 4.3.10.12, 보도자료 PDF 텍스트 층 | 겹칠 문자를 인라인 위치에 넣고, 테두리 없는 PUA는 HWPX처럼 보존한다. | 원본 URL로 확인한 공개 짝 50/50곳이 일치했다. 이 가운데 `hwp2hwpx`의 15/15곳, 전체 테두리 샘플의 28/28곳, 테두리 없는 PUA 표본의 6/6곳이 포함된다. 보도자료 제목도 두 형식에서 일치했다. | 단위 테스트와 실물 짝 검증 통과. ✅ 제안. |
+| HWP 덧말 `tdut` | 공개 `hwp2hwpx-from_8.hwp` ↔ `hwp2hwpx-from_11.hwpx`, `sample-dutmal-basic.hwp`와 `.hwpx` | 공개 명세 4.3.10.13의 WCHAR 배열과 HWPX 짝의 본문 | 본말 뒤에 덧말을 괄호로 붙인다. | 원본 URL로 확인한 공개 짝 5/5곳이 일치했다. | 단위 테스트와 실물 짝 검증 통과. ✅ 제안. |
+| HWPX 덧말 `dutmal` | 공개 `hwp2hwpx-from_11.hwpx`, `sample-dutmal-basic.hwpx` | HWPX 원시 `mainText`·`subText`, 동일 원본 HWP의 `tdut` | `본말(덧말)`을 본문 위치에 넣는다. | HWP 짝 5/5곳과 일치했다. | 단위 테스트와 실물 짝 검증 통과. ✅ 제안. |
 
-`sample-compose-all-shapes`의 28개 글자 겹침은 두 형식에서 모두 일치했다. 반면 다른 공개 짝 두 곳에서는 HWPX가 겹침 15곳을 가지고 있어도 HWP에 해당 컨트롤이 없고, 한 곳에서는 HWPX 덧말 3곳에 대응하는 HWP 컨트롤이 없다. 이러한 불일치는 없는 원시 데이터를 만들어 채우지 않았다. `mel-001`과 `table-vpos-01`의 전용 글리프 6곳은 다른 공개 짝의 숫자 변환 규칙과 서로 달라 일치시키지 않았다. 공개 짝 하나는 손상된 ZIP이라 제외했다.
+구형 HWP 5.0.0.6–5.0.3.3 표본의 `tcps`에는 글자 배열 뒤의 테두리·크기 필드가 없다. 공개 51개 파일에서 이 형태가 확인됐고, 합성 테스트에서도 경고 없이 글자를 보존한다. 테두리가 없는 최신 레코드의 전용 PUA 숫자 글리프는 HWPX가 보존하므로 그대로 낸다. 테두리 1의 원문자 숫자를 NFKC로 분해하는 분기는 합성 테스트만 있으며 직접 대조되는 공개 짝은 0건이다. 이 세부 표기는 별도 실물 근거가 생길 때까지 미확인이다. 같은 글리프 계열의 미관측 코드포인트로 숫자 복원 범위를 넓히지 않았다.
 
-코퍼스와 짝 비교는 다음 명령으로 재현한다. 경로는 인자로 전달하고 문서별 출력 전문은 저장하지 않는다.
+한컴 미리보기 `PrvText`는 겹침과 덧말을 생략한다. `본말(덧말)`은 dochan의 평탄화 출력 계약이다. HWPX 변경 추적의 삭제 범위에 든 덧말은 합성 테스트에서 최종본 투영으로 제거되지만, 이 경우의 실물 검증은 아직 없다.
+
+다음 명령은 코퍼스 경로를 인자로 받고 문서별 출력 전문을 저장하지 않는다.
 
 ```bash
-python -m scripts.probe_hwp_compose_pairs corpus/hwp-public/hwp corpus/hwp-public/hwpx
+python -m scripts.probe_hwp_compose_pairs corpus/hwp-public/hwp corpus/hwp-public/hwpx corpus/hwp-public/SOURCES.json
 python -m scripts.compare_hwp_pairs corpus/press-pairs
 python -m scripts.compare_hwp_pairs test_pairs/
 ```
 
-보도자료 91쌍의 평균 토큰 일치율은 수정 전 0.9880, 수정 후 0.9881이었다. 내부 실물 76쌍의 평균 토큰 일치율은 수정 전 0.9997, 수정 후 0.9998이었고 최소 일치율은 0.9927에서 0.9957로 올랐다. 내부 실물의 파일명과 내용은 기록하지 않았다.
+공개 보도자료 91쌍의 평균 토큰 일치율은 부모 커밋에서 0.9880, 수정 후 0.9881이었다(상승 1쌍, 하락 0쌍). 내부 실물 76쌍은 0.9997에서 0.9998로 올랐고(상승 3쌍, 하락 0쌍), 최소값은 0.9927에서 0.9957로 올랐다. 내부 실물의 파일명과 내용은 기록하지 않았다.
 
-공개 코퍼스와 보도자료의 7,533개 파일을 모두 같은 입력으로 두 번 읽어 Markdown SHA-256을 비교했다. 226개 파일의 해시가 바뀌었고, 모두 `tcps`, `tdut`, `dutmal` 가운데 하나를 실제로 담고 있었다. HWP 글자 겹침 210개, HWP 덧말 8개, HWPX 덧말 8개로 분류됐다. 확장자가 `.hwpx`인 공개 파일 3개는 실제 매직 바이트가 OLE/HWP였으므로 HWP 글자 겹침에 분류했다. 출력 전문은 저장하지 않고 해시·문자 수·오류 목록만 저장했으며, 읽기 실패 수는 전후 모두 0개였다.
+부모 커밋 `245f8f0`과 수정본으로 공개 HWP·HWPX·보도자료 7,533개를 각각 읽어 Markdown SHA-256과 `errors` 목록을 함께 비교했다. 277개는 Markdown만 달라졌고, 오류 목록만 달라진 문서와 두 항목이 함께 달라진 문서는 모두 0개였다. 공개 HWP 디렉터리 267개, HWPX 디렉터리 7개, 보도자료 3개의 Markdown이 달라졌다. 읽기 실패는 양쪽 모두 0개였다. 앞선 커밋 `e1b4232`와 수정본을 비교하면 구형 레이아웃 51개에서 빠지던 글자가 복구되며 `WARN: HWP inline control truncated or invalid`도 51개 모두 사라진다. 다른 47개의 Markdown 차이는 테두리 없는 PUA 보존에서 비롯된다. 문서별 Markdown 전문은 저장하지 않았다.

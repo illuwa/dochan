@@ -98,6 +98,16 @@ def test_cross_paragraph_range_is_preserved_and_diagnosed(tmp_path, kind, mode):
     assert texts(document) == ["beforegone-1gone-2\t\ngone-compose", "gone-3after", "untouched"]
 
 
+def test_deleted_dutmal_is_removed_in_final_projection(tmp_path):
+    body = ('<hp:p><hp:run><hp:t>A' + marker('delete') + 'd</hp:t>'
+            '<hp:compose composeText="X"/>'
+            '<hp:dutmal><hp:mainText>M</hp:mainText><hp:subText>S</hp:subText></hp:dutmal>'
+            '<hp:t>e' + marker('delete', True) + 'B</hp:t></hp:run></hp:p>')
+    doc = Dochan(package(tmp_path, body), revision_mode='final').doc
+    assert texts(doc) == ['AB']
+    assert doc.errors == []
+
+
 @pytest.mark.parametrize("scope", ["run", "paragraph", "section"])
 def test_marker_siblings_at_parser_boundaries(tmp_path, scope):
     begin, end = marker("delete"), marker("delete", True)

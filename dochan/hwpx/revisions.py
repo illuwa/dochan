@@ -23,7 +23,7 @@ OBJECTS = {"tbl", "pic", "equation", "rect", "ellipse", "line", "connectLine",
            "curve", "polygon", "arc", "container", "ole", "ctrl"}
 TEXT_TOKENS = {HP + n for n in ("tab", "lineBreak", "fwSpace", "nbSpace")}
 MARKER_PARENTS = {SECTION, HP + "p", HP + "run", HP + "t"}
-FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose",
+FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose", HP + "dutmal",
                 HP + "titleMark", HP + "markpenBegin", HP + "markpenEnd",
                 HP + "hyphen"} | TEXT_TOKENS
 
@@ -347,6 +347,15 @@ class RevisionProjector:
                 flow.add(element, "tag")
             elif element.tag == HP + "compose":
                 flow.add(element, "composeText")
+            elif element.tag == HP + "dutmal":
+                # The two text children form one visible inline unit.
+                if any(child.tag in (HP + "insertBegin", HP + "insertEnd",
+                                     HP + "deleteBegin", HP + "deleteEnd")
+                       for child in element.iter() if child is not element):
+                    flow.disabled = True
+                    self._report("flow-boundary", location + "/dutmal (nested revision)")
+                flow.add(element, "tag")
+                return
             for child in element:
                 walk(child, flow, in_text, location, blocked, element, paragraph)
                 if in_text and child.tail:

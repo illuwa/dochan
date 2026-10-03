@@ -1,11 +1,13 @@
-"""Compare public same-stem HWP/HWPX compose and dutmal control strings.
+"""Compare public source-matched HWP/HWPX compose and dutmal strings.
 
-Usage: python -m scripts.probe_hwp_compose_pairs HWP_DIR HWPX_DIR
+Usage: python -m scripts.probe_hwp_compose_pairs HWP_DIR HWPX_DIR SOURCES_JSON
 """
 
+import json
 import sys
 import zlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 from zipfile import BadZipFile, ZipFile
 
 from dochan.cfb import OleFileIO
@@ -57,19 +59,40 @@ def hwpx_values(path):
     return values
 
 
+def source_pairs(hwp_dir, hwpx_dir, sources_path):
+    """Pair by original source location, including Hancom's conversion folder."""
+    hwp_dir, hwpx_dir = Path(hwp_dir), Path(hwpx_dir)
+    entries = json.loads(Path(sources_path).read_text(encoding='utf-8'))
+    groups = {}
+    for entry in entries:
+        relative = PurePosixPath(entry['path'])
+        if relative.parts[0] not in ('hwp', 'hwpx'):
+            continue
+        directory = hwp_dir if relative.parts[0] == 'hwp' else hwpx_dir
+        path = directory / relative.name
+        if not path.is_file():
+            continue
+        url = urlsplit(entry['url'])
+        url_path = PurePosixPath(url.path)
+        parent = url_path.parent
+        if parent.name == 'hancom-hwp':
+            parent = parent.parent
+        key = (entry['source'], url.netloc, str(parent), url_path.stem, url.query)
+        groups.setdefault(key, {}).setdefault(relative.parts[0], path)
+    return sorted({(group['hwp'], group['hwpx']) for group in groups.values()
+                   if 'hwp' in group and 'hwpx' in group})
+
+
 def main(argv=None):
-    hwp_dir, hwpx_dir = (sys.argv[1:] if argv is None else argv)
-    hwp = {path.stem: path for path in Path(hwp_dir).glob('*.hwp')}
+    hwp_dir, hwpx_dir, sources_path = (sys.argv[1:] if argv is None else argv)
     total = {'compose': 0, 'dutmal': 0}
     exact = {'compose': 0, 'dutmal': 0}
-    for hwpx in sorted(Path(hwpx_dir).glob('*.hwpx')):
-        if hwpx.stem not in hwp:
-            continue
+    for hwp, hwpx in source_pairs(hwp_dir, hwpx_dir, sources_path):
         try:
             answer = hwpx_values(hwpx)
             if not any(answer.values()):
                 continue
-            candidate = hwp_values(hwp[hwpx.stem])
+            candidate = hwp_values(hwp)
         except (OSError, ValueError, BadZipFile) as exc:
             print('%s: 읽기 실패 (%s)' % (hwpx.name, type(exc).__name__))
             continue
@@ -79,8 +102,8 @@ def main(argv=None):
             total[key] += len(answer[key])
             matches = sum(a == b for a, b in zip(answer[key], candidate[key]))
             exact[key] += matches
-            print('%s %s: %d/%d, HWP %d' %
-                  (hwpx.name, key, matches, len(answer[key]), len(candidate[key])))
+            print('%s ↔ %s %s: %d/%d, HWP %d' %
+                  (hwp.name, hwpx.name, key, matches, len(answer[key]), len(candidate[key])))
     print('TOTAL compose %d/%d dutmal %d/%d' %
           (exact['compose'], total['compose'], exact['dutmal'], total['dutmal']))
 

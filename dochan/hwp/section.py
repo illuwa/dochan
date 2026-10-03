@@ -698,7 +698,7 @@ class SectionParser:
                 if index < len(controls) and controls[index][0] < end:
                     self._append_fatal_once(
                         'revision-control',
-                        'ERR: HWP revision partial [control]; unresolved object preserved',
+                        'ERR: HWP revision partial [control]; inline control projection may differ',
                     )
                     return
 
@@ -719,8 +719,12 @@ class SectionParser:
             next_index[cid] = index + 1
             nodes = queues.get(cid, [])
             if index >= len(nodes):
-                self._document_limit_once('inline-' + repr(cid),
-                                          'WARN: HWP inline control record missing')
+                if cid == b'mrof':
+                    self._append_fatal_once('form-reference',
+                                            'WARN: HWP form object reference missing')
+                else:
+                    self._append_fatal_once('inline-' + repr(cid),
+                                            'WARN: HWP inline control record missing')
                 continue
             node = nodes[index]
             if cid == b'mrof':
@@ -766,12 +770,16 @@ class SectionParser:
                 raise ValueError
             first_end = 6 + first_len * 2
             if cid == b'spct':
+                if first_end > len(data):
+                    raise ValueError
+                if first_end == len(data):
+                    return data[6:first_end].decode('utf-16-le', errors='replace')
                 if first_end + 4 > len(data):
                     raise ValueError
                 count = data[first_end + 3]
                 if first_end + 4 + count * 4 > len(data):
                     raise ValueError
-                value = data[6:first_end].decode('utf-16-le')
+                value = data[6:first_end].decode('utf-16-le', errors='replace')
                 # 공개 sample-compose-all-shapes 짝: 테두리 타입별 첫 문자는
                 # HWP에만 저장된 도형 글리프이며 HWPX composeText에는 없다.
                 borders = '\u3000◯●□■△▲☼◇◆▢♲♺♻'
@@ -787,16 +795,16 @@ class SectionParser:
                         and '\u2776' <= value <= '\u277f'):
                     value = str(ord(value) - ord('\u2776') + 1)
                 # 공개 HWP/HWPX 짝에서 관측한 한컴 PUA 숫자 글리프만 복원한다.
-                if len(value) == 1:
+                if border_type != 0 and len(value) == 1:
                     code = ord(value)
                     if 0xf02b1 <= code <= 0xf02b4:
                         return str(code - 0xf02b0)
                     if 0xf02ce <= code <= 0xf02d0:
                         return str(code - 0xf02cd)
-                if (len(value) == 2 and ord(value[0]) == 0xf02ba
+                if (border_type != 0 and len(value) == 2 and ord(value[0]) == 0xf02ba
                         and 0xf02c3 <= ord(value[1]) <= 0xf02c8):
                     return str(ord(value[1]) - 0xf02c3 + 10)
-                if value == '\U000f0289\U000f0293':
+                if border_type != 0 and value == '\U000f0289\U000f0293':
                     return '11'
                 return value
             if first_end + 2 > len(data):
@@ -807,8 +815,8 @@ class SectionParser:
             second_end = first_end + 2 + second_len * 2
             if second_end + 20 > len(data):
                 raise ValueError
-            main = data[6:first_end].decode('utf-16-le')
-            sub = data[first_end + 2:second_end].decode('utf-16-le')
+            main = data[6:first_end].decode('utf-16-le', errors='replace')
+            sub = data[first_end + 2:second_end].decode('utf-16-le', errors='replace')
             return main + ('(' + sub + ')' if sub else '')
         except (ValueError, UnicodeError, struct.error):
             self._document_limit_once('inline-malformed-' + repr(cid),

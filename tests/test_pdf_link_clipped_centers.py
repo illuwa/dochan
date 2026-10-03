@@ -29,6 +29,49 @@ def test_clipped_boundary_touching_unselected_word_stays_deferred():
     assert fragment.link_spans == []
 
 
+def _split(text, start, y=10, space_width=5):
+    return Fragment(start, y, len(text) * 10, 10, text, space_width,
+                    char_offsets=tuple(range(0, len(text) * 10 + 1, 10)))
+
+
+def test_clipped_boundary_across_tj_split_stays_deferred():
+    # [(AB) 0 (C)] TJ: the word continues in the next run.
+    first, second = _split("AB", 0), _split("C", 20)
+    region = _region(1, 19)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [] and second.link_spans == []
+
+
+def test_clipped_left_boundary_across_tj_split_stays_deferred():
+    first, second = _split("A", 0), _split("BC", 10)
+    region = _region(11, 29)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [] and second.link_spans == []
+
+
+def test_clipped_boundary_before_spaced_run_can_attach_url():
+    # A gap wider than half a space is a word boundary, as in line assembly.
+    first, second = _split("AB", 0), _split("C", 24)
+    region = _region(1, 19)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [(0, 2, region.target)]
+    assert second.link_spans == []
+
+
+def test_clipped_boundary_before_run_on_other_line_can_attach_url():
+    first, second = _split("AB", 0), _split("C", 20, y=30)
+    region = _region(1, 19)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [(0, 2, region.target)]
+
+
+def test_clipped_boundary_before_delimiter_run_can_attach_url():
+    first, second = _split("AB", 0), _split(")", 20)
+    region = _region(1, 19)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [(0, 2, region.target)]
+
+
 def test_clipped_boundary_after_open_bracket_can_attach_url():
     fragment = _fragment("<AB>")
     region = _region(11, 39)
@@ -78,3 +121,13 @@ def test_body_link_replaces_annotation_fallback(tmp_path):
     assert len(runs) == 1
     assert runs[0].text == "AB>"
     assert runs[0].provenance.path != "annots"
+
+
+def test_tj_split_word_keeps_annotation_fallback(tmp_path):
+    document = _document(tmp_path,
+                         b"BT /F1 10 Tf 72 720 Td [(exam) 0 (ple and more)] TJ ET",
+                         "93 716 106 734")
+    runs = [run for paragraph in document.find_all("paragraph")
+            for run in paragraph.runs if run.link]
+    assert all(run.provenance.path == "annots" for run in runs)
+    assert "example and more" in "".join(paragraph.text for paragraph in document.find_all("paragraph"))

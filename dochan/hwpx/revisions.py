@@ -26,6 +26,21 @@ FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose",
                 HP + "hyphen"} | TEXT_TOKENS
 
 
+def _collect_relevant(root):
+    relevant = set()
+    for element in root.iter():
+        if isinstance(element.tag, str) and (
+            element.tag.rsplit("}", 1)[-1] in MARKERS
+            or "paraTcId" in element.attrib or "charTcId" in element.attrib
+        ):
+            relevant.add(element)
+            for ancestor in element.iterancestors():
+                if ancestor in relevant:
+                    break
+                relevant.add(ancestor)
+    return relevant
+
+
 def validate_revision_mode(mode):
     if mode not in ("preserve", "final", "original"):
         raise ValueError("revision_mode must be 'preserve', 'final', or 'original'")
@@ -52,8 +67,10 @@ class _Flow:
     range_count: int = 0
     paragraph_ends: list = field(default_factory=list)
     last_closed: dict = field(default_factory=dict)
+    position: int = 0
 
     def add(self, element, attribute):
+        self.position += 1
         if self.opened:
             self.slots.append((element, attribute))
 
@@ -143,6 +160,8 @@ class RevisionProjector:
         self._flush("Contents/header.xml")
 
     def _marker(self, element, flow, location):
+        position = flow.position
+        flow.position += 1
         name = element.tag.rsplit("}", 1)[-1]
         if element.tag != HP + name:
             flow.invalidate_open()
@@ -186,7 +205,7 @@ class RevisionProjector:
             if not paraend_valid:
                 self._report("paraend", location + " (expected paraend=0 or 1)")
             if span is None:
-                if flow.last_closed.get(key) == (tc_id, paraend, len(flow.slots)):
+                if flow.last_closed.get(key) == (tc_id, paraend, position):
                     self._report("duplicate-end", location)
                     return
                 flow.invalidate_open()
@@ -202,7 +221,7 @@ class RevisionProjector:
                 span.valid = False
             span.valid = span.valid and reference_valid and paraend_valid
             flow.spans.append((span, len(flow.slots)))
-            flow.last_closed[key] = (tc_id, paraend, len(flow.slots))
+            flow.last_closed[key] = (tc_id, paraend, flow.position)
             if paraend == "1" and span.valid:
                 paragraph = next((p for p in element.iterancestors()
                                   if p.tag == HP + "p"), None)
@@ -217,23 +236,27 @@ class RevisionProjector:
     def project_section(self, root, part="section"):
         self._section_ranges = 0
         # No edits or extra text allocations for documents without revisions.
-        relevant = set()
-        for e in root.iter():
-            if isinstance(e.tag, str) and (
-                e.tag.rsplit("}", 1)[-1] in MARKERS
-                or "paraTcId" in e.attrib or "charTcId" in e.attrib
-            ):
-                relevant.add(e)
-                relevant.update(e.iterancestors())
+        relevant = _collect_relevant(root)
         if not relevant:
             return
         flows = {root: _Flow()}
         counts = {"paragraph": 0, "run": 0, "marker": 0}
 
+        def count_skipped(element):
+            # Keep diagnostic indices tied to the source, including branches
+            # that require no revision projection.
+            for node in element.iter():
+                if node.tag == HP + "p":
+                    counts["paragraph"] += 1
+                elif node.tag == HP + "run":
+                    counts["run"] += 1
+
         def walk(element, flow, in_text=False, location="section", blocked=False, parent=None):
             if not isinstance(element.tag, str):
                 return
             if element not in relevant and not flow.opened:
+                flow.position += 1
+                count_skipped(element)
                 return
             name = element.tag.rsplit("}", 1)[-1]
             # Isolate a story before visiting *any* of its children. Waiting
@@ -248,6 +271,7 @@ class RevisionProjector:
                     # story cannot close the parent's markers.
                     flow.add(element, "object")
                     if element not in relevant:
+                        count_skipped(element)
                         return
                 elif flow.opened:
                     flow.invalidate_open()
@@ -259,6 +283,7 @@ class RevisionProjector:
                     code = "object" if has_object else "flow-boundary"
                     self._report(code, location + "/" + name + " (text-only projection)")
                     if element not in relevant:
+                        count_skipped(element)
                         return
                 flow = flows.setdefault(element, _Flow())
                 in_text = False
@@ -267,6 +292,7 @@ class RevisionProjector:
                 flow = flows.setdefault(parent, _Flow())
                 in_text = False
                 counts["paragraph"] += 1
+                flow.position += 1
                 location = f"paragraph#{counts['paragraph']}"
             elif element.tag == HP + "run":
                 counts["run"] += 1
@@ -285,7 +311,9 @@ class RevisionProjector:
                         old_heading = self._para_headings.get(old_id)
                         new_heading = self._para_headings.get(new_id)
                         if (old_heading is not None and new_heading is not None
-                                and old_heading != new_heading):
+                                and old_heading != new_heading
+                                and (old_heading[0] != "NONE" or
+                                     new_heading[0] != "NONE")):
                             self._report("formatting-heading", location +
                                          " (outline level may differ by mode)")
             if name in MARKERS:
@@ -381,7 +409,8 @@ class RevisionProjector:
                     if isinstance(node.tag, str) and node.tag.startswith(HP):
                         if node.tag.rsplit("}", 1)[-1] in OBJECTS and not (
                             node.tag == HP + "ctrl" and any(
-                                child.tag in (HP + "colPr", HP + "bookmark",
+                                child.tag in (HP + "colPr", HP + "secPr",
+                                              HP + "bookmark",
                                               HP + "fieldBegin", HP + "fieldEnd",
                                               HP + "pageNum", HP + "pageHiding")
                                 for child in node
@@ -411,8 +440,16 @@ class RevisionProjector:
                 if parent is None or current.getparent() is not parent:
                     continue
                 if not visible[current]:
-                    parent.remove(current)
-                    representative[following] = following
+                    # Content outside the excluded range (bookmarks and
+                    # structural controls) still belongs to this paragraph.
+                    # Keep it while adopting the surviving paragraph's style.
+                    current.attrib.clear()
+                    current.attrib.update(following.attrib)
+                    for child in list(following):
+                        current.append(child)
+                    parent.remove(following)
+                    representative[following] = current
+                    visible[current] = visible[following]
                     continue
                 for child in list(following):
                     current.append(child)

@@ -8,6 +8,7 @@ import pytest
 from lxml import etree
 
 from dochan.hwpx.revisions import RevisionProjector
+from dochan.hwpx import revisions
 from dochan.hwpx.parser import HWPXParser
 
 
@@ -264,15 +265,30 @@ def test_adjacent_duplicate_end_is_informational():
     assert '[duplicate-end]' in errors[0]
 
 
-def test_duplicate_end_does_not_invalidate_other_open_range():
+def test_duplicate_end_across_empty_run_boundary_is_adjacent():
+    body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/></hp:t></hp:run>'
+            '<hp:run charPrIDRef="8"><hp:t>'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>C</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert para_texts(root) == ['AC']
+    assert len(errors) == 1 and '[duplicate-end]' in errors[0]
+    assert errors[0].startswith('WARN:')
+
+
+def test_nonadjacent_end_invalidates_other_open_range():
     body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
             '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>'
             '<hp:insertBegin Id="i" TcId="1"/>'
             '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>C'
             '<hp:insertEnd Id="i" TcId="1" paraend="0"/>D</hp:t></hp:run></hp:p>')
     root, errors = project(body, 'original')
-    assert para_texts(root) == ['ABD']
-    assert any('[duplicate-end]' in error for error in errors)
+    # The intervening insertBegin makes the second deleteEnd nonadjacent.
+    # An unmatched end invalidates the still-open insert range, so its text
+    # must be preserved instead of silently projected.
+    assert para_texts(root) == ['ABCD']
+    assert any('[missing-begin]' in error and error.startswith('ERR:')
+               for error in errors)
 
 
 def test_nonadjacent_or_mismatched_end_stays_partial():
@@ -332,3 +348,99 @@ def test_parashape_heading_change_remains_partial():
     _, errors = project(body, 'final', header)
     assert any('[formatting-heading]' in error and error.startswith('ERR:')
                for error in errors)
+
+
+@pytest.mark.parametrize('between, suffix', [
+    ('XYZ', 'text'),
+    ('</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>XYZ', 'paragraph'),
+    ('</hp:t><hp:pic/><hp:t>', 'object'),
+])
+def test_nonadjacent_duplicate_end_is_partial(between, suffix):
+    body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>' + between +
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>C'
+            '</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert any('[missing-begin]' in error and error.startswith('ERR:')
+               for error in errors), (suffix, errors)
+    assert not any('[duplicate-end]' in error for error in errors)
+    assert 'B' not in ''.join(para_texts(root))
+
+
+def test_wholly_deleted_paragraph_retains_outside_bookmark_and_following_style():
+    body = ('<hp:p styleIDRef="7"><hp:run>'
+            '<hp:ctrl><hp:bookmark name="anchor1"/></hp:ctrl>'
+            '<hp:ctrl><hp:colPr/></hp:ctrl><hp:ctrl><hp:secPr/></hp:ctrl>'
+            '<hp:t><hp:deleteBegin Id="d" TcId="2"/>GONE'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="1"/></hp:t>'
+            '</hp:run></hp:p>'
+            '<hp:p styleIDRef="8" paraPrIDRef="9"><hp:run><hp:t>NEXT</hp:t>'
+            '</hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    paragraphs = list(root.iter(HP + 'p'))
+    assert len(paragraphs) == 1
+    assert paragraphs[0].get('styleIDRef') == '8'
+    assert paragraphs[0].get('paraPrIDRef') == '9'
+    assert [b.get('name') for b in paragraphs[0].iter(HP + 'bookmark')] == ['anchor1']
+    assert len(list(paragraphs[0].iter(HP + 'colPr'))) == 1
+    assert len(list(paragraphs[0].iter(HP + 'secPr'))) == 1
+    assert 'GONE' not in ''.join(paragraphs[0].itertext())
+    assert not errors
+
+
+def test_diagnostic_counts_skipped_paragraphs_and_runs():
+    plain = '<hp:p><hp:run><hp:t>plain</hp:t></hp:run></hp:p>'
+    body = plain * 17 + ('<hp:p><hp:run charTcId="99"><hp:t>tracked'
+                         '</hp:t></hp:run></hp:p>')
+    header = HEADER.replace('</hh:head>',
+                            '<hh:trackChange id="3" type="CharShape"/></hh:head>')
+    _, errors = project(body, 'final', header)
+    assert any('[header-reference]' in error and
+               'paragraph#18/run#18' in error for error in errors), errors
+
+
+def test_none_heading_levels_do_not_trigger_heading_partial():
+    header = HEADER.replace('</hh:head>', (
+        '<hh:paraPr id="7"><hh:heading type="NONE" level="0"/></hh:paraPr>'
+        '<hh:paraPr id="8"><hh:heading type="NONE" level="4"/></hh:paraPr>'
+        '<hh:trackChange id="3" type="ParaShape" parashapeID="7"/>'
+        '</hh:head>'))
+    body = '<hp:p paraPrIDRef="8" paraTcId="3"><hp:run><hp:t>body</hp:t></hp:run></hp:p>'
+    _, errors = project(body, 'final', header)
+    assert any('[formatting]' in error for error in errors)
+    assert not any('[formatting-heading]' in error for error in errors)
+
+
+def test_relevant_scan_reuses_known_ancestors():
+    class Node:
+        ancestor_visits = 0
+
+        def __init__(self, parent=None, marked=False):
+            self.tag = HP + 'run'
+            self.attrib = {'charTcId': '3'} if marked else {}
+            self.parent = parent
+            self.children = []
+            if parent is not None:
+                parent.children.append(self)
+
+        def iter(self):
+            yield self
+            for child in self.children:
+                yield from child.iter()
+
+        def iterancestors(self):
+            parent = self.parent
+            while parent is not None:
+                Node.ancestor_visits += 1
+                yield parent
+                parent = parent.parent
+
+    root = Node()
+    parent = root
+    for _ in range(80):
+        parent = Node(parent)
+    for _ in range(100):
+        Node(parent, marked=True)
+    relevant = revisions._collect_relevant(root)
+    assert len(relevant) == 181
+    assert Node.ancestor_visits <= 180

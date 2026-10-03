@@ -341,7 +341,7 @@ def test_real_complex_document_is_partial(mode):
     assert texts(document)
     assert any("revision" in e and "formatting" in e for e in document.errors)
     assert all("[paraend]" not in e for e in document.errors)
-    assert any("revision" in e and "formatting" in e for e in document.errors)
+    assert any("[duplicate-end]" in e for e in document.errors)
 
 
 def test_real_complex_preserve_leaves_source_xml_unchanged():
@@ -389,3 +389,14 @@ def test_field_end_inside_deleted_range_balances_link(tmp_path):
     runs = [run for p in document.find_all('paragraph') for run in p.runs]
     assert any(run.text == 'LINK' and run.link for run in runs)
     assert any(run.text == 'AFTER' and not run.link for run in runs)
+
+
+def test_bookmark_outside_deleted_paragraph_content_survives_final(tmp_path):
+    body = ('<hp:p styleIDRef="7"><hp:run>'
+            '<hp:ctrl><hp:bookmark name="anchor1"/></hp:ctrl>'
+            '<hp:t>' + marker('delete') + 'GONE' +
+            marker('delete', True, paraend='1') + '</hp:t></hp:run></hp:p>'
+            '<hp:p styleIDRef="8"><hp:run><hp:t>NEXT</hp:t></hp:run></hp:p>')
+    document = Dochan(package(tmp_path, body), revision_mode='final').doc
+    assert document.errors == []
+    assert texts(document) == ['[bookmark: anchor1] NEXT']

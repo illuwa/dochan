@@ -72,6 +72,9 @@ def source_pairs(hwp_dir, hwpx_dir, sources_path):
         path = directory / relative.name
         if not path.is_file():
             continue
+        # 출처 항목이 로컬 파일과 같은 파일인지 크기로 확인한다(같은 이름의 다른 원본 배제).
+        if entry.get('bytes') is not None and entry['bytes'] != path.stat().st_size:
+            continue
         url = urlsplit(entry['url'])
         url_path = PurePosixPath(url.path)
         parent = url_path.parent

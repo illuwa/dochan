@@ -445,6 +445,10 @@ class RevisionProjector:
                         return True
                     if node.tag == HP + "compose" and node.get("composeText"):
                         return True
+                    if node.tag == HP + "dutmal" and any(
+                            (child.text or "").strip() for child in node
+                            if child.tag in (HP + "mainText", HP + "subText")):
+                        return True
                     if node.tag == HP + "t" and node.text:
                         return True
                     pending.extend((child, node) for child in node)

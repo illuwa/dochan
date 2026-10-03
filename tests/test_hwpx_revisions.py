@@ -410,3 +410,17 @@ def test_bookmark_outside_deleted_paragraph_content_survives_final(tmp_path):
     document = Dochan(package(tmp_path, body), revision_mode='final').doc
     assert document.errors == []
     assert texts(document) == ['[bookmark: anchor1] NEXT']
+
+
+@pytest.mark.parametrize("inner", [
+    '<hp:t>X</hp:t>',
+    '<hp:compose composeText="X"/>',
+    '<hp:dutmal><hp:mainText>M</hp:mainText><hp:subText>S</hp:subText></hp:dutmal>',
+])
+def test_visible_inline_paragraph_keeps_style_when_paraend_deleted(tmp_path, inner):
+    """덧말만 있는 문단도 글자·겹침만 있는 문단처럼 자기 스타일을 유지한다."""
+    body = ('<hp:p styleIDRef="7"><hp:run>' + inner + '<hp:t>' + marker('delete') +
+            marker('delete', True, paraend='1') + '</hp:t></hp:run></hp:p>'
+            '<hp:p styleIDRef="8"><hp:run><hp:t>CD</hp:t></hp:run></hp:p>')
+    doc = Dochan(package(tmp_path, body), revision_mode='final').doc
+    assert [paragraph.style_id for paragraph in doc.find_all('paragraph')] == [7]

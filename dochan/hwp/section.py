@@ -710,6 +710,7 @@ class SectionParser:
             queues.setdefault(cid, []).append(node)
         next_index = {}
         insertions = []
+        inserted_kinds = set()
         consumed = set()
         raw_map = text_result['raw_to_text']
         for _start, end, cid in text_result.get('inline_controls', []):
@@ -734,6 +735,7 @@ class SectionParser:
             consumed.add(id(node))
             if value and end < len(raw_map):
                 insertions.append((end, raw_map[end], value))
+                inserted_kinds.add(cid)
 
         if not insertions:
             return text_result, [node for node in ctrl_nodes if id(node) not in consumed]
@@ -742,7 +744,11 @@ class SectionParser:
         for _, _, value in insertions:
             prefix.append(prefix[-1] + len(value))
         if len(text_result['text']) + prefix[-1] > 100 * 1024 * 1024:
-            self._document_limit_once('inline-size', 'WARN: HWP inline output exceeds size limit')
+            if inserted_kinds == {b'mrof'}:
+                # 누름틀만 있으면 이전과 같은 문구·범위를 유지한다(공개 errors 계약).
+                self._append_fatal_once('form-size', 'WARN: HWP form output exceeds size limit')
+            else:
+                self._document_limit_once('inline-size', 'WARN: HWP inline output exceeds size limit')
             return text_result, [node for node in ctrl_nodes if id(node) not in consumed]
         parts = []
         offset = 0

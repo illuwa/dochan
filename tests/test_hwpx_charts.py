@@ -525,3 +525,40 @@ def test_chart_caption_is_emitted_once_on_first_valid_series():
     elements, warnings = _parse(_chart(_series(sources="") + _series("A", 1) + _series("B", 2)))
     assert _warned(warnings, "missing_cache")
     assert [table.caption_text for table in _tables(elements)] == ["Chart type: line", ""]
+
+
+def test_series_without_categories_borrows_group_categories_like_hancom():
+    # 한컴오피스 화면 실측: 첫 계열에만 c:cat 이 없으면 다른 계열의 범주를 축에 쓰고 값은 그대로 그린다.
+    bare = _series("앞", 0, sources='<c:val>%s</c:val>' % _cache([(0, "5"), (1, "6")], numeric=True))
+    elements, warnings = _parse(_chart(bare + _series("뒤", 1)))
+    assert [_rows(table) for table in elements] == [
+        [["범주", "앞"], ["첫째", "5"], ["둘째", "6"]],
+        [["범주", "뒤"], ["첫째", "0"], ["둘째", "2.00"]],
+    ]
+    assert _warned(warnings, "shared_categories")
+
+
+def test_series_without_any_categories_or_x_values_number_points_from_one():
+    # 한컴오피스 화면 실측: 모든 계열에 c:cat 이 없으면 축 이름이 1, 2, 3 … 이다.
+    values = '<c:val>%s</c:val>' % _cache([(0, "5"), (1, "6")], numeric=True)
+    elements, warnings = _parse(_chart(_series(sources=values)))
+    assert _rows(elements[0]) == [["범주", "판매"], ["1", "5"], ["2", "6"]]
+    assert _warned(warnings, "implicit_categories")
+    for kind in ("scatterChart", "bubbleChart"):
+        y_only = '<c:yVal>%s</c:yVal>' % _cache([(0, "5"), (1, "6")], numeric=True)
+        elements, warnings = _parse(_chart(_series(sources=y_only), kind=kind))
+        assert _rows(elements[0]) == [["X", "판매"], ["1", "5"], ["2", "6"]]
+        assert _warned(warnings, "implicit_categories")
+
+
+def test_bubble_size_non_numeric_or_longer_cache_is_explicit():
+    xy = '<c:xVal>%s</c:xVal><c:yVal>%s</c:yVal>' % (
+        _cache([(0, "1")], numeric=True), _cache([(0, "10")], numeric=True))
+    text_size = xy + '<c:bubbleSize>%s</c:bubbleSize>' % _cache([(0, "큼")], literal=True)
+    elements, warnings = _parse(_chart(_series(sources=text_size), kind="bubbleChart"))
+    assert _rows(elements[0]) == [["X", "판매"], ["1", "10"]]
+    assert _warned(warnings, "unsupported_cache")
+    long_size = xy + '<c:bubbleSize>%s</c:bubbleSize>' % _cache([(0, "3"), (1, "4")], numeric=True)
+    elements, warnings = _parse(_chart(_series(sources=long_size), kind="bubbleChart"))
+    assert _rows(elements[0]) == [["X", "판매", "크기"], ["1", "10", "3"], ["", "", "4"]]
+    assert _warned(warnings, "length_mismatch")

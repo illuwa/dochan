@@ -386,11 +386,9 @@ def test_dochan_api_public_documents_match_independent_gold(name, digest, kind, 
 ])
 def test_many_chart_real_documents_account_for_every_reference(name, digest, count, kinds):
     # 분리 원형·거품형·주식형·3차원 표면도 저장 캐시 표로 낸다(이전에는 unsupported_type).
-    unsupported = set()
-    seen = set()
     path = public_path(name)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
-    gold, skipped = [], []
+    gold, seen = [], set()
     with zipfile.ZipFile(path) as z:
         section = ET.fromstring(z.read("Contents/section0.xml"))
         references = [n.get("chartIDRef") for n in section.iter('{%s}chart' % HP)]
@@ -400,15 +398,9 @@ def test_many_chart_real_documents_account_for_every_reference(name, digest, cou
             plot = ET.fromstring(raw).find("c:chart/c:plotArea", NS)
             kind = next(n.tag.split('}')[-1] for n in plot if n.tag.endswith('Chart'))
             seen.add(kind)
-            if kind in unsupported:
-                skipped.append(ref)
-            else:
-                gold.extend(xml_gold(raw, kind))
+            gold.extend(xml_gold(raw, kind))
     doc = Dochan(path, include_assets=False).doc
     tables = [t for t in doc.find_all("table") if t.caption_side == "TOP"]
     assert [(t.rows[0][1].text, rows(t)[1:]) for t in tables] == gold
-    chart_errors = [e for e in doc.errors if '[chart:' in e]
-    assert len(chart_errors) == len(skipped)
-    for ref in skipped:
-        assert any('[chart:unsupported_type]' in e and ref in e for e in chart_errors)
+    assert [e for e in doc.errors if '[chart:' in e] == []
     assert kinds <= seen

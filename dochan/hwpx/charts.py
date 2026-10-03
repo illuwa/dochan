@@ -196,18 +196,31 @@ def _paragraph(text: str) -> Paragraph:
 
 
 def _series_table(series, position: int, scatter: bool, budget: _Budget,
-                  warnings: list[str], bubble: bool = False) -> Optional[Table]:
+                  warnings: list[str], bubble: bool = False,
+                  shared_categories=None) -> Optional[Table]:
     context = "series %d" % (position + 1)
     name = _text(series.find(_C + "tx"), context + " name", budget, warnings)
     if not name:
         name = "계열 %d" % (position + 1)
         _warn(warnings, "missing_name", context + ": generated a series label")
     first, second = ("xVal", "yVal") if scatter else ("cat", "val")
-    left = _source(series.find(_C + first), context + " " + first,
-                   budget, warnings, numeric_only=scatter)
     right = _source(series.find(_C + second), context + " " + second,
                     budget, warnings, numeric_only=True)
-    if left is None or right is None:
+    if right is None:
+        return None
+    left_node = series.find(_C + first)
+    if left_node is None and not scatter and shared_categories is not None:
+        # 한컴오피스는 범주 없는 계열에 같은 그림 영역의 범주 축을 쓴다(화면 실측).
+        _warn(warnings, "shared_categories", context + ": categories taken from another series")
+        left_node = shared_categories
+    if left_node is None:
+        # 범주·X 가 하나도 없으면 한컴오피스 축처럼 1부터 번호를 붙인다(값은 지어내지 않는다).
+        _warn(warnings, "implicit_categories", context + ": numbered points from 1")
+        budget.add_points(right.extent)
+        left = _Cache({index: str(index + 1) for index in range(right.extent)}, right.extent)
+    else:
+        left = _source(left_node, context + " " + first, budget, warnings, numeric_only=scatter)
+    if left is None:
         return None
     caches = [left, right]
     headers = ["X", name] if scatter else ["범주", name]
@@ -289,9 +302,13 @@ def _extract(root, budget: _Budget, warnings: list[str]) -> list[Union[Paragraph
     if not ordered:
         _warn(warnings, "empty_chart", "chart has no series")
     caption = chart_caption(root)
-    for display_position, (_, _, series) in enumerate(sorted(ordered, key=lambda item: item[:2])):
+    ordered.sort(key=lambda item: item[:2])
+    shared_categories = next((series.find(_C + "cat") for _, _, series in ordered
+                              if series.find(_C + "cat") is not None), None)
+    for display_position, (_, _, series) in enumerate(ordered):
         table = _series_table(series, display_position, group.tag in (_SCATTER, _BUBBLE), budget,
-                              warnings, bubble=group.tag == _BUBBLE)
+                              warnings, bubble=group.tag == _BUBBLE,
+                              shared_categories=shared_categories)
         if table is not None:
             if caption:
                 table.caption = [_paragraph(caption)]

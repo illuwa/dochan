@@ -9,6 +9,7 @@ from dochan import cfb
 from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
+from .summary_info import parse_summary_information
 from .xls_hyperlink import parse_hlink
 from .xls_notes import MAX_DRAWING_OBJECTS, MAX_SHEET_NOTE_CHARS, object_header, read_txo_text
 from .xls_chart import parse_chart_substreams
@@ -2363,62 +2364,8 @@ def _score_biff_document(document: Document) -> tuple[int, int, int]:
 
 
 def _parse_summary_information(data: bytes, errors=None) -> Dict[str, str]:
-    """Read title and author from the [MS-OLEPS] SummaryInformation section."""
-    def invalid():
-        if errors is not None:
-            errors.append("WARN: XLS malformed SummaryInformation ignored")
-        return {}
-
-    if len(data) < 48 or data[:2] != b"\xfe\xff":
-        return invalid()
-    section_count = struct.unpack_from("<I", data, 24)[0]
-    if not 1 <= section_count <= 16 or 28 + 20 * section_count > len(data):
-        return invalid()
-    section_offset = struct.unpack_from("<I", data, 44)[0]
-    if section_offset + 8 > len(data):
-        return invalid()
-    section_size, property_count = struct.unpack_from("<II", data, section_offset)
-    if (section_size < 8 or section_offset + section_size > len(data)
-            or property_count > 1024 or 8 + property_count * 8 > section_size):
-        return invalid()
-    end = section_offset + section_size
-    offsets = {}
-    for index in range(property_count):
-        identifier, relative = struct.unpack_from("<II", data, section_offset + 8 + index * 8)
-        if identifier in (1, 2, 4) and 8 + property_count * 8 <= relative <= section_size - 4:
-            offsets[identifier] = section_offset + relative
-    codepage = 1252
-    if 1 in offsets and offsets[1] + 6 <= end:
-        offset = offsets[1]
-        if struct.unpack_from("<H", data, offset)[0] == 2:  # VT_I2 (Type 2바이트 + 패딩 2바이트)
-            codepage = struct.unpack_from("<H", data, offset + 4)[0]
-    result = {}
-    for identifier, key in ((2, "title"), (4, "creator")):
-        offset = offsets.get(identifier)
-        if offset is None or offset + 8 > end:
-            continue
-        value_type = struct.unpack_from("<H", data, offset)[0]
-        count = struct.unpack_from("<I", data, offset + 4)[0]
-        if value_type not in (30, 31) or count > 4096:
-            continue
-        byte_count = count * (2 if value_type == 31 else 1)
-        if offset + 8 + byte_count > end:
-            continue
-        raw = data[offset + 8:offset + 8 + byte_count]
-        if value_type == 31 or codepage == 1200:
-            encoding = "utf-16-le"
-        else:
-            # CODEPAGE 레코드와 같은 매핑(10000·32768 → mac_roman, 32769 → cp1252).
-            encoding = ('mac_roman' if codepage in (10000, 32768)
-                        else 'cp1252' if codepage == 32769 else 'cp%d' % codepage)
-        try:
-            value = raw.decode(encoding, errors="replace")
-        except LookupError:
-            value = raw.decode("cp1252", errors="replace")
-        value = value.split("\x00", 1)[0].strip()  # 첫 NUL 에서 끝난다
-        if value:
-            result[key] = value
-    return result
+    """Preserve the XLS call site while sharing the OLE property-set parser."""
+    return parse_summary_information(data, "XLS", errors, warn_partial=False)
 
 
 def _summary_elements(properties: Dict[str, str]) -> List[Paragraph]:

@@ -78,7 +78,7 @@ def _summary_stream(title, author):
                + b"".join(struct.pack("<II", *entry) for entry in entries)
                + b"".join(values))
     return (b"\xfe\xff\x00\x00" + b"\0" * 20
-            + struct.pack("<I", 1) + b"\0" * 16
+            + struct.pack("<I", 1) + bytes.fromhex("e0859ff2f94f6810ab9108002b27b3d9")
             + struct.pack("<I", 48) + section)
 
 

@@ -18,6 +18,7 @@ from ..utils.bounded_io import (
     validate_file_size,
 )
 from .structure import build_structured_section, is_encrypted_container
+from .summary_info import prepend_summary
 
 SLIDE_CONTAINER = 1006
 NOTES_CONTAINER = 1008
@@ -458,6 +459,7 @@ class PPTReader:
                 if doc.errors:
                     best_document.errors.extend(doc.errors)
                 doc = best_document
+                prepend_summary(ole, doc, "PPT", stream_budget)
                 return doc
 
             if not doc.errors:

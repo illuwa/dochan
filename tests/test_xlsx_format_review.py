@@ -6,7 +6,8 @@ from dochan.ooxml.xlsx import XLSXReader
 
 @pytest.mark.parametrize("value,fmt,expected", [
     ("12.5", '0.0"mm"', "12.5mm"),
-    ("12.5", '0"yy"', "12yy"),
+    # Excel 숫자 표시의 동점은 올림이다. 12yy는 Python의 짝수 반올림 결과였다.
+    ("12.5", '0"yy"', "13yy"),
     ("0.5", '0.0"%"', "0.5%"),
     ("1.25", "[$-412]General", "1.25"),
     ("43831", "[White]yyyy-mm-dd", "2020-01-01"),

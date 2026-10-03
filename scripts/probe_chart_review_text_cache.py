@@ -20,6 +20,14 @@ FILES = ('NumberFormatTests.xlsx', 'DateFormatTests.xlsx', 'ElapsedFormatTests.x
          'FormatChoiceTests.xlsx', 'FormatConditionTests.xlsx', 'GeneralFormatTests.xlsx',
          'TextFormatTests.xlsx', 'NumberFormatApproxTests.xlsx', 'DateFormatNumberTests.xlsx')
 FORMULA = re.compile(r'\s*TEXT\(\s*\$?([A-Z]+)\$?(\d+)\s*,\s*\$?([A-Z]+)\$?(\d+)\s*\)\s*')
+CONCAT_FORMULA = re.compile(
+    r'\s*TEXT\(\s*\$?([A-Z]+)\$?(\d+)\s*,\s*CONCATENATE\(";;;",\s*\$?([A-Z]+)\$?(\d+)\)\s*\)\s*')
+CELL_ROW = re.compile(r'(?<![A-Z0-9_])(\$?[A-Z]+)(\$?)(\d+)')
+
+
+def _shift_formula(formula, shift):
+    return CELL_ROW.sub(lambda match: match.group() if match[2] else
+                        match[1] + str(int(match[3]) + shift), formula)
 
 
 def xml(data):
@@ -44,6 +52,7 @@ def snapshot(args):
             for part in sorted(n for n in archive.namelist()
                                if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')):
                 cells = {}
+                shared_formulas = {}
                 for cell in xml(archive.read(part)).findall('.//s:sheetData/s:row/s:c', NS):
                     kind = cell.get('t', 'n')
                     value = cell.findtext('s:v', None, NS)
@@ -51,25 +60,39 @@ def snapshot(args):
                         value = strings[int(value)]
                     elif kind == 'inlineStr':
                         value = ''.join(n.text or '' for n in cell.iter('{%s}t' % NS['s']))
-                    cells[cell.get('r')] = (kind, value, cell.findtext('s:f', None, NS))
-                for ref, (_, expected, formula) in cells.items():
+                    formula_element = cell.find('s:f', NS)
+                    formula = formula_element.text if formula_element is not None else None
+                    shared = formula_element.get('si') if formula_element is not None else None
+                    ref = cell.get('r')
+                    if shared is not None and formula:
+                        shared_formulas[shared] = (ref, formula)
+                    cells[ref] = (kind, value, formula, shared)
+                for ref, (_, expected, formula, shared) in cells.items():
+                    if not formula and shared in shared_formulas:
+                        master_ref, master_formula = shared_formulas[shared]
+                        formula = _shift_formula(master_formula, int(re.search(r'\d+$', ref)[0]) -
+                                                 int(re.search(r'\d+$', master_ref)[0]))
                     match = FORMULA.fullmatch(formula or '')
+                    concat = CONCAT_FORMULA.fullmatch(formula or '')
+                    match = match or concat
                     if not match or expected is None:
                         continue
                     value_ref, format_ref = match[1] + match[2], match[3] + match[4]
                     value_cell, format_cell = cells.get(value_ref), cells.get(format_ref)
-                    if not value_cell or not format_cell or value_cell[0] != 'n' or value_cell[1] is None or format_cell[1] is None:
+                    if not format_cell or format_cell[1] is None:
                         continue
+                    raw_value = value_cell[1] if value_cell and value_cell[1] is not None else ''
+                    format_string = (';;;' if concat else '') + format_cell[1]
                     reader = XLSXReader()
                     reader._errors = []
                     reader._date_1904 = date1904
                     try:
-                        actual = reader._format_cell_value(value_cell[1], format_cell[1])
+                        actual = reader._format_cell_value(raw_value, format_string)
                     except Exception as error:
                         actual = 'EXCEPTION:' + type(error).__name__
                     rows.append({'file': filename, 'part': part, 'cell': ref, 'formula': formula,
                                  'value_cell': value_ref, 'format_cell': format_ref,
-                                 'raw': value_cell[1], 'format': format_cell[1], 'date1904': date1904,
+                                 'raw': raw_value, 'format': format_string, 'date1904': date1904,
                                  'excel': expected, 'actual': actual})
     args.output.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + '\n')
     print('TEXT cache rows:', len(rows), 'exact:', sum(row['excel'] == row['actual'] for row in rows))

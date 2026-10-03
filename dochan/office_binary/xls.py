@@ -179,16 +179,18 @@ class _NumericString(str):
         return instance
 
 
-def _format_number_with_format(value: float, format_string: str = "", date_1904: bool = False) -> str:
-    return _NumericString(_display_number_with_format(value, format_string, date_1904),
+def _format_number_with_format(value: float, format_string: str = "", date_1904: bool = False,
+                               formatter=None) -> str:
+    return _NumericString(_display_number_with_format(value, format_string, date_1904, formatter),
                           value, format_string)
 
 
-def _display_number_with_format(value: float, format_string: str = "", date_1904: bool = False) -> str:
+def _display_number_with_format(value: float, format_string: str = "", date_1904: bool = False,
+                                formatter=None) -> str:
     raw = _format_number(value)
     if not format_string or format_string.lower() == "general":
         return raw
-    formatter = _number_formatter(date_1904)
+    formatter = formatter if formatter is not None else _number_formatter(date_1904)
     cache = getattr(formatter, "_format_metadata_cache", None)
     if cache is not None and len(cache) >= MAX_NUMBER_FORMAT_CACHE:
         cache.clear()
@@ -397,9 +399,13 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                 formula_warn(doc.errors, 'invalid NAME record')
         elif record_type == 0x0022 and len(record_data) >= 2:  # DATEMODE
             date_1904 = bool(struct.unpack_from("<H", record_data, 0)[0])
-        elif record_type == 0x041E and len(record_data) >= 5:  # FORMAT
+        elif record_type == 0x041E and len(record_data) >= 3:  # FORMAT
             format_index = struct.unpack_from("<H", record_data, 0)[0]
-            formats[format_index] = _read_biff8_label_text(record_data, 2)
+            if 0 < formula_context.biff_version < 0x0600:
+                formats[format_index] = _decode_legacy_name(
+                    record_data[3:3 + record_data[2]], formula_context.codepage)
+            elif len(record_data) >= 5:
+                formats[format_index] = _read_biff8_label_text(record_data, 2)
         elif record_type == 0x0031 and len(record_data) >= 11:  # FONT
             grbit = struct.unpack_from("<H", record_data, 2)[0]
             bls = struct.unpack_from("<H", record_data, 6)[0]
@@ -811,6 +817,9 @@ def _parse_sheet_records(
     internal_supbooks=None,
     formula_context=None,
 ):
+    number_formatter = SpreadsheetNumberFormatter()
+    number_formatter._date_1904 = date_1904
+    number_formatter._errors = sheet.errors
     rich_cache = {} if rich_cache is None else rich_cache
     rich_budget = [MAX_RICH_RUNS, MAX_RICH_BYTES] if rich_budget is None else rich_budget
     def _capture_font(row: int, col: int, xf_index: int) -> None:
@@ -1021,6 +1030,7 @@ def _parse_sheet_records(
                     value,
                     _format_for_xf(xf_index, formats, xf_formats),
                     date_1904=date_1904,
+                    formatter=number_formatter,
                 ),
                 "NUMBER",
             )
@@ -1036,6 +1046,7 @@ def _parse_sheet_records(
                     float(value),
                     _format_for_xf(xf_index, formats, xf_formats),
                     date_1904=date_1904,
+                    formatter=number_formatter,
                 ),
                 "INTEGER",
             )
@@ -1052,6 +1063,7 @@ def _parse_sheet_records(
                     value,
                     _format_for_xf(xf_index, formats, xf_formats),
                     date_1904=date_1904,
+                    formatter=number_formatter,
                 ),
                 "RK",
             )
@@ -1091,6 +1103,7 @@ def _parse_sheet_records(
                         value,
                         _format_for_xf(xf_index, formats, xf_formats),
                         date_1904=date_1904,
+                        formatter=number_formatter,
                     ),
                     "MULRK",
                 )
@@ -1107,7 +1120,8 @@ def _parse_sheet_records(
         elif record_type == 0x0006 and len(record_data) >= 14:  # FORMULA cached number
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
             formatted = _decode_formula_cached_result(
-                record_data, _format_for_xf(xf_index, formats, xf_formats), date_1904)
+                record_data, _format_for_xf(xf_index, formats, xf_formats), date_1904,
+                formatter=number_formatter)
             formula = _decode_formula_tokens(record_data, external_sheets, sheet_names, defined_names,
                                              errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context)
             if not _set_sheet_cell(
@@ -1450,7 +1464,8 @@ def _extract_note_author(record_data: bytes) -> str:
     return raw.decode("utf-16-le" if flags & 0x01 else "cp1252", errors="replace").strip()
 
 
-def _decode_formula_cached_result(record_data: bytes, format_string: str = "", date_1904: bool = False) -> str:
+def _decode_formula_cached_result(record_data: bytes, format_string: str = "", date_1904: bool = False,
+                                  formatter=None) -> str:
     if len(record_data) < 14:
         return ""
     result = record_data[6:14]
@@ -1463,7 +1478,7 @@ def _decode_formula_cached_result(record_data: bytes, format_string: str = "", d
         if result_type == 0x03:
             return ""
     value = struct.unpack_from("<d", record_data, 6)[0]
-    return _format_number_with_format(value, format_string, date_1904)
+    return _format_number_with_format(value, format_string, date_1904, formatter)
 
 
 def _decode_formula_tokens(

@@ -7,11 +7,11 @@ from pathlib import Path
 from dochan import Dochan
 
 
-def scan(roots):
+def scan(roots, suffix="xls"):
     rows = {}
     for root in roots:
         root = Path(root)
-        for path in sorted(root.rglob("*.xls")):
+        for path in sorted(root.rglob("*." + suffix)):
             key = root.name + "/" + str(path.relative_to(root))
             try:
                 document = Dochan(str(path))
@@ -29,9 +29,10 @@ def scan(roots):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("roots", nargs="+", type=Path)
+    parser.add_argument("--suffix", choices=("xls", "xlsx"), default="xls")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    rows = scan(args.roots)
+    rows = scan(args.roots, args.suffix)
     args.output.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
     print("files=%d failures=%d" % (len(rows), sum("failure" in row for row in rows.values())))
 

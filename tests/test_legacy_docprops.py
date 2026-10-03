@@ -124,7 +124,8 @@ def test_encrypted_legacy_document_does_not_emit_plaintext_properties(
     (10006, "mac_greek", "Αθήνα"), (10029, "mac_latin2", "Čas"),
     (10079, "mac_iceland", "Ísland"), (10081, "mac_turkish", "İzmir"),
     (28591, "iso8859_1", "Café"), (28599, "iso8859_9", "İzmir"),
-    (65001, "utf-8", "계획"),
+    (65001, "utf-8", "계획"), (10003, "euc_kr", "계획서"), (20866, "koi8_r", "План"),
+    (51932, "euc_jp", "計画"), (28605, "iso8859_15", "Œuvre €"),
 ])
 def test_summary_information_decodes_additional_valid_codepages(codepage, encoding, title):
     encoded = (title + "\0").encode(encoding)
@@ -152,6 +153,13 @@ def test_unknown_codepage_warns_before_fallback():
     data = _summary().replace(struct.pack("<H", 1252), struct.pack("<H", 65534), 1)
     assert parse_summary_information(data, "DOC", errors)["title"] == "Board"
     assert any("code page" in error for error in errors)
+
+
+def test_unknown_codepage_without_codepage_strings_does_not_warn():
+    errors = []
+    data = _summary(wide=True).replace(struct.pack("<H", 1252), struct.pack("<H", 65534), 1)
+    assert parse_summary_information(data, "DOC", errors)["title"] == "Board"
+    assert errors == []
 
 
 def test_empty_summary_stream_is_ignored_without_warning():
@@ -209,6 +217,43 @@ def test_doc_structure_path_places_properties_after_header(monkeypatch, tmp_path
     assert [type(e).__name__ for e in doc.sections[0].elements] == [
         "HeaderFooter", "Paragraph", "Paragraph", "Paragraph"]
     assert [e.text for e in doc.sections[0].elements[1:]] == ["Board", "Author: Alice", "Body"]
+
+
+def test_doc_text_candidate_path_places_properties_before_body(monkeypatch, tmp_path):
+    from io import BytesIO
+
+    word = bytearray(64)
+    word[:2] = b"\xec\xa5"
+
+    class Ole:
+        def __init__(self, path):
+            pass
+
+        def exists(self, name):
+            return name in ("WordDocument", "0Table", "\x05SummaryInformation")
+
+        def openstream(self, name):
+            return BytesIO({"WordDocument": bytes(word), "0Table": b"table",
+                            "\x05SummaryInformation": _summary()}[name])
+
+        def close(self):
+            pass
+
+    # The native structure is unavailable, so the scored text candidate wins.
+    monkeypatch.setattr("dochan.office_binary.doc.cfb.OleFileIO", Ole)
+    monkeypatch.setattr("dochan.office_binary.doc_structure.parse_structured_doc",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr("dochan.office_binary.doc._extract_piece_table_lines",
+                        lambda word_data, table_data: ["Body"])
+    monkeypatch.setattr("dochan.office_binary.doc.parse_doc_word_stream",
+                        lambda word_data, table_data=None: Document(
+                            source_format="doc",
+                            sections=[Section(elements=[Paragraph(runs=[TextRun("Body")])])]))
+    path = tmp_path / "candidate.doc"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+    doc = DOCReader().read(str(path))
+    assert [e.text for e in doc.sections[0].elements] == ["Board", "Author: Alice", "Body"]
+    assert any("structure unavailable" in error for error in doc.errors)
 
 
 def test_doc_fib_encryption_blocks_plaintext_properties(monkeypatch, tmp_path):

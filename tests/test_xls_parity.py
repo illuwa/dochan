@@ -2,6 +2,7 @@
 import struct
 
 from dochan.office_binary import xls
+from dochan.office_binary.summary_info import parse_summary_information, summary_elements
 from dochan.conversion import Provenance
 from dochan.model.document import Document, Section
 from dochan.model.document import Paragraph, TextRun
@@ -82,15 +83,68 @@ def _summary_stream(title, author):
             + struct.pack("<I", 48) + section)
 
 
+def _xls_summary(data, errors=None):
+    # The XLS reader keeps its quiet policy for partial property sets.
+    return parse_summary_information(data, "XLS", errors, warn_partial=False)
+
+
+def _unknown_codepage_stream():
+    valid = _summary_stream("Budget", "Alice")
+    section = valid[48:]
+    first = struct.unpack_from("<I", section, 12)[0]
+    second = struct.unpack_from("<I", section, 20)[0]
+    values = section[first:]
+    cp_value = struct.pack("<IH", 2, 0) + b"\0\0"
+    table = (struct.pack("<II", 1, 32)
+             + struct.pack("<II", 2, 40)
+             + struct.pack("<II", 4, 40 + second - first))
+    return valid[:48] + struct.pack("<II", 40 + len(values), 3) + table + cp_value + values
+
+
+def _read_xls_with_summary(monkeypatch, tmp_path, summary):
+    from io import BytesIO
+
+    workbook = _workbook(_bof(), _bof() + _label(0, 0, "cell") + _eof())
+
+    class Ole:
+        def __init__(self, path):
+            pass
+
+        def exists(self, name):
+            return name in ("Workbook", "\x05SummaryInformation")
+
+        def openstream(self, name):
+            return BytesIO({"Workbook": workbook, "\x05SummaryInformation": summary}[name])
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("dochan.office_binary.xls.cfb.OleFileIO", Ole)
+    path = tmp_path / "summary.xls"
+    path.write_bytes(b"\xd0\xcf\x11\xe0fake")
+    return xls.XLSReader().read(str(path))
+
+
+def test_xls_reader_prepends_summary_properties(monkeypatch, tmp_path):
+    doc = _read_xls_with_summary(monkeypatch, tmp_path, _summary_stream("Budget", "Alice"))
+    assert to_markdown(doc).startswith("# Budget\n\nAuthor: Alice\n\n")
+
+
+def test_xls_reader_keeps_quiet_on_unknown_summary_codepage(monkeypatch, tmp_path):
+    doc = _read_xls_with_summary(monkeypatch, tmp_path, _unknown_codepage_stream())
+    assert to_markdown(doc).startswith("# Budget\n\nAuthor: Alice\n\n")
+    assert not any("SummaryInformation" in error for error in doc.errors)
+
+
 def test_xls_summary_information_reads_title_and_author_safely():
-    assert xls._parse_summary_information(_summary_stream("Budget", "Alice")) == {
+    assert _xls_summary(_summary_stream("Budget", "Alice")) == {
         "title": "Budget", "creator": "Alice"}
-    assert xls._parse_summary_information(_summary_stream("Budget", "Alice")[:-3]) == {}
+    assert _xls_summary(_summary_stream("Budget", "Alice")[:-3]) == {}
 
 
 def test_xls_summary_information_rejects_wrong_fmtid():
     valid = _summary_stream("Budget", "Alice")
-    assert xls._parse_summary_information(valid[:28] + b"\0" * 16 + valid[44:]) == {}
+    assert _xls_summary(valid[:28] + b"\0" * 16 + valid[44:]) == {}
 
 
 def test_xls_unknown_codepage_keeps_existing_warning_policy():
@@ -108,13 +162,13 @@ def test_xls_unknown_codepage_keeps_existing_warning_policy():
              + struct.pack("<II", 4, 40 + second - first))
     rebuilt = valid[:48] + struct.pack("<II", 40 + len(values), 3) + table + cp_value + values
     errors = []
-    assert xls._parse_summary_information(rebuilt, errors) == {
+    assert _xls_summary(rebuilt, errors) == {
         "title": "Budget", "creator": "Alice"}
     assert errors == []
 
 
 def test_xls_summary_preamble_precedes_meaningful_sheet_heading():
-    elements = xls._summary_elements({"title": "Budget", "creator": "Alice"})
+    elements = summary_elements({"title": "Budget", "creator": "Alice"}, "XLS")
     elements.append(Paragraph(runs=[TextRun("Defined name: Sales = Data!$A$1")],
                               provenance=Provenance(source_format="xls", path="Workbook")))
     section = Section(elements=elements,

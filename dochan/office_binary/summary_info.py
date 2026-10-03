@@ -20,9 +20,14 @@ MAX_STRING_CHARS = 4096
 CODEPAGE_CODECS = {
     10000: "mac_roman", 10006: "mac_greek", 10007: "mac_cyrillic",
     10029: "mac_latin2", 10079: "mac_iceland", 10081: "mac_turkish",
-    1200: "utf-16-le", 20127: "ascii", 32768: "mac_roman",
-    32769: "cp1252", 51949: "euc_kr", 54936: "gb18030",
+    1200: "utf-16-le", 1201: "utf-16-be", 20127: "ascii", 20866: "koi8_r",
+    21866: "koi8_u", 20932: "euc_jp", 51932: "euc_jp", 50220: "iso2022_jp",
+    51936: "gb2312", 28603: "iso8859_13", 28605: "iso8859_15",
+    32768: "mac_roman", 32769: "cp1252", 51949: "euc_kr", 54936: "gb18030",
     65001: "utf-8",
+    # Python has no Mac East Asian codecs; each is built on the listed
+    # national standard, so its common repertoire decodes the same.
+    10001: "shift_jis", 10002: "big5", 10003: "euc_kr", 10008: "gb2312",
 }
 
 
@@ -78,11 +83,10 @@ def parse_summary_information(data: bytes, source_format: str, errors=None,
         encoding = "cp%d" % codepage
     try:
         "".encode(encoding)
+        unknown_codepage = False
     except LookupError:
-        if warn_partial and errors is not None:
-            errors.append("WARN: %s unknown SummaryInformation code page %d; using cp1252" % (
-                source_format, codepage))
         encoding = "cp1252"
+        unknown_codepage = True
     for identifier, key in ((2, "title"), (4, "creator")):
         offset = offsets.get(identifier)
         if offset is None:
@@ -100,6 +104,12 @@ def parse_summary_information(data: bytes, source_format: str, errors=None,
             malformed = True
             continue
         raw = data[offset + 8:offset + 8 + byte_count]
+        if value_type == 30 and unknown_codepage:
+            # Warn only when a code-page string is actually decoded with the fallback.
+            unknown_codepage = False
+            if warn_partial and errors is not None:
+                errors.append("WARN: %s unknown SummaryInformation code page %d; using cp1252" % (
+                    source_format, codepage))
         value = raw.decode("utf-16-le" if value_type == 31 else encoding, errors="replace")
         value = value.split("\x00", 1)[0].strip()
         if value:

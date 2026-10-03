@@ -9,7 +9,7 @@ from dochan import cfb
 from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
-from .summary_info import parse_summary_information, prepend_summary, summary_elements
+from .summary_info import prepend_summary
 from .xls_hyperlink import parse_hlink
 from .xls_notes import MAX_DRAWING_OBJECTS, MAX_SHEET_NOTE_CHARS, object_header, read_txo_text
 from .xls_chart import parse_chart_substreams
@@ -2361,15 +2361,6 @@ def _score_biff_document(document: Document) -> tuple[int, int, int]:
             elif hasattr(element, "runs"):
                 text_elements += 1
     return (section_count, table_cells, text_elements)
-
-
-def _parse_summary_information(data: bytes, errors=None) -> Dict[str, str]:
-    """Preserve the XLS call site while sharing the OLE property-set parser."""
-    return parse_summary_information(data, "XLS", errors, warn_partial=False)
-
-
-def _summary_elements(properties: Dict[str, str]) -> List[Paragraph]:
-    return summary_elements(properties, "XLS")
 
 
 class XLSReader:

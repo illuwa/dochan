@@ -69,3 +69,38 @@ def test_single_large_heading_does_not_upsize_genuinely_small_body():
                  frag("1)", 49.96, 452, 6, 3),
                  frag("1) 이 줄은 각주가 아닌 본문과 비슷한 크기입니다", 40, 100, 9, 4)]
     assert detect(fragments)[0] == []
+
+
+def test_two_line_large_title_does_not_upsize_small_body():
+    """제목이 두 줄로 넘어가도 본문 크기 기준이 커지지 않는다(감수 P2-2)."""
+    fragments = [frag("아주 긴 제목이 먼저 나오고 문서를 소개하면서 다양한 주제를 설명합니다", 40, 700, 15, 0),
+                 frag("두 줄로 넘어간 제목의 둘째 줄도 서른 글자를 넘는 긴 제목 문장입니다", 40, 682, 15, 5),
+                 frag("본문은 실제로 작은 글자로 쓰인 문장이고 더 많은 내용이 있습니다", 40, 500, 9.96, 1),
+                 frag("본문", 40, 450, 9.96, 2),
+                 frag("1)", 49.96, 452, 6, 3),
+                 frag("1) 이 줄은 각주가 아닌 본문과 비슷한 크기입니다", 40, 100, 9, 4)]
+    fragments += [frag("본문은 실제로 작은 글자로 쓰인 문장이고 더 많은 내용이 있습니다", 40, 500 - 12 * k, 9.96, 10 + k)
+                  for k in range(1, 6)]
+    assert detect(fragments)[0] == []
+
+
+def test_split_marker_leaves_no_gap_before_following_word(tmp_path):
+    """두 조각 표지(`1`·`)`)를 소비해도 뒤 낱말 앞에 가짜 공백이 생기지 않는다(감수 P2-1)."""
+    from dochan import Dochan
+    from test_pdf_structure import _build_pdf
+    parts = [b"BT /F1 12 Tf 40 %d Td (More body text here for the page) Tj ET" % (700 - 14 * k) for k in range(6)]
+    parts += [b"BT /F1 12 Tf 40 500 Td (Rate) Tj ET", b"BT /F1 9 Tf 64 502.5 Td (1) Tj ET",
+              b"BT /F1 9 Tf 68.5 502.5 Td (\\051) Tj ET", b"BT /F1 12 Tf 73 500 Td (rose) Tj ET",
+              b"40 115 m 180 115 l S", b"BT /F1 9 Tf 40 100 Td (1\\051 Detail of the note) Tj ET"]
+    content = b"\n".join(parts)
+    objects = {1: "<< /Type /Catalog /Pages 2 0 R >>",
+               2: "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] "
+                  "/Resources << /Font << /F1 5 0 R >> >> >>",
+               3: "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+               4: b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+               5: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 0 /Widths ["
+                  + "500 " * 256 + "] >>"}
+    path = tmp_path / "split-marker.pdf"
+    path.write_bytes(_build_pdf(objects))
+    markdown = Dochan(str(path)).to_markdown()
+    assert "Rate[^1]rose" in markdown

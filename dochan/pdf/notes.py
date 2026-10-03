@@ -22,7 +22,7 @@ MAX_NOTE_GEOMETRY_CHECKS = 200000
 GEOMETRY_TOLERANCE = 1.5
 MIN_BODY_LINE_CHARACTERS = 30
 MAX_BODY_LINE_WEIGHT = 1000
-BODY_SIZE_QUANTILE = 0.85
+BODY_SIZE_QUANTILE = 0.70
 # 두 내부 양성 문서의 구분선은 첫 정의보다 정확히 15pt 위였다.
 MAX_SEPARATOR_GAP = 15.0 + GEOMETRY_TOLERANCE
 # 표 행 괘선이 쌓인 간격으로 보는 거리(한 행 높이 여유). 각주 구분선 위로는 본문이 온다.
@@ -109,6 +109,7 @@ class _Marker:
         self.width = last.x + last.width - first.x
         self.text = "".join(part.text for part in parts)
         self.extra_orders = {part.order for part in parts[1:]}
+        self.first = first
 
 
 def _touching(left, right, size):
@@ -267,6 +268,7 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
         if len(refs) != 1 or counts[match.group(1)] != 1 or refs[0].y <= line.y + body:
             return empty
     notes, consumed, reference_numbers = [], set(), {}
+    accepted_splits = []
     number = first_number
     for index, line, match in definitions:
         following = next((i for i, _ln, _m in definitions if i > index), len(lines))
@@ -317,7 +319,13 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
         marker = references[match.group(1)][0]
         reference_numbers[marker.order] = number
         consumed.update(marker.extra_orders)
+        if marker.extra_orders:
+            accepted_splits.append(marker)
         number += 1
+    # 지운 괄호 조각의 자리를 첫 조각이 덮어야 뒤 낱말 앞에 가짜 공백이 생기지 않는다.
+    # 모든 검증을 통과한 뒤에만 바꾼다.
+    for marker in accepted_splits:
+        marker.first.width = marker.width
     return notes, consumed, reference_numbers, number
 
 

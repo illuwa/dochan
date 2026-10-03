@@ -83,16 +83,25 @@ class EncodingCMap:
         self.supplement = supplement
         self.wmode = wmode
         self.warnings = warnings
-        self._spaces = {}
-        for length in (1, 2, 3, 4):
-            # A codespace is a byte-wise box, not an integer interval (§9.7.6.2).
-            rows = set((lo.to_bytes(length, "big"), hi.to_bytes(length, "big"))
-                       for size, lo, hi in self.codespaces if size == length)
-            first_byte = {}
-            for lo, hi in rows:
-                for byte in range(lo[0], hi[0] + 1):
-                    first_byte.setdefault(byte, []).append((lo, hi))
-            self._spaces[length] = first_byte
+        # A codespace is a byte-wise box, not an integer interval (§9.7.6.2).
+        # usecmap 부모 사슬의 상자를 한 색인으로 합친다. 단계마다 다시 훑으면
+        # 사슬 길이만큼 비용이 곱해진다. 합친 수도 MAX_CODESPACE_RANGES 로 묶는다.
+        boxes = {(size, lo.to_bytes(size, "big"), hi.to_bytes(size, "big"))
+                 for size, lo, hi in self.codespaces}
+        if parent is not None:
+            boxes |= parent._boxes
+        if len(boxes) > MAX_CODESPACE_RANGES:
+            boxes = set(sorted(boxes)[:MAX_CODESPACE_RANGES])
+            if warnings is not None:
+                message = "WARN: Encoding CMap 코드 공간 수 상한(100) 초과 — 일부 범위 생략"
+                if message not in warnings:
+                    warnings.append(message)
+        self._boxes = frozenset(boxes)
+        self._lengths = sorted({size for size, _lo, _hi in self._boxes})
+        self._spaces = {length: {} for length in (1, 2, 3, 4)}
+        for size, lo, hi in sorted(self._boxes):
+            for byte in range(lo[0], hi[0] + 1):
+                self._spaces[size].setdefault(byte, []).append((lo, hi))
         self._ranges = {}
         self._notdef = {}
         for source, target in ((self.cidranges, self._ranges),
@@ -108,10 +117,10 @@ class EncodingCMap:
             if all(lower <= byte <= upper
                    for byte, lower, upper in zip(value, lo, hi)):
                 return True
-        return self.parent._space(length, code) if self.parent else False
+        return False
 
     def has_codespace(self):
-        return bool(self.codespaces or self.parent and self.parent.has_codespace())
+        return bool(self._boxes)
 
     def _prefix(self, length, prefix_length, value):
         """Whether a partial code can still fall in a declared code space."""
@@ -120,13 +129,10 @@ class EncodingCMap:
             if all(lower <= byte <= upper
                    for byte, lower, upper in zip(prefix, lo, hi)):
                 return True
-        return self.parent._prefix(length, prefix_length, value) if self.parent else False
+        return False
 
     def _codespace_lengths(self):
-        lengths = {size for size, _lo, _hi in self.codespaces}
-        if self.parent:
-            lengths.update(self.parent._codespace_lengths())
-        return sorted(lengths)
+        return self._lengths
 
     def _invalid_length(self, raw, pos):
         remaining = len(raw) - pos

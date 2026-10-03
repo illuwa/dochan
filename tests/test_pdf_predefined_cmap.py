@@ -391,3 +391,31 @@ def test_dictionary_cidsysteminfo_strips_surrounding_space():
                        b"1 begincodespacerange <41> <41> endcodespacerange")
     cmap = PDFReader()._encoding_stream_cmap(pdf, stream)
     assert (cmap.registry, cmap.ordering) == ("Adobe", "GB1")
+
+
+def test_usecmap_chain_shares_one_codespace_index():
+    """부모 사슬의 코드 공간은 한 색인으로 합친다. 단계마다 다시 훑으면 비용이 곱해진다(감수 재현)."""
+    parent = None
+    for level in range(9):
+        data = (b"100 begincodespacerange\n" +
+                b"".join(b"<ff%02x%02x00> <ff%02x%02x00>\n" % (level, index, level, index)
+                         for index in range(100)) +
+                b"endcodespacerange")
+        parent = parse_encoding_cmap(data, parent_cmap=parent)
+    start = time.monotonic()
+    chunks = list(parent.iter_codes(b"\xff\xfe" * 10000))
+    assert sum(len(raw) for raw, _cid in chunks) == 20000
+    assert time.monotonic() - start < 3.0
+    assert len(parent._boxes) <= 100
+
+
+def test_usecmap_chain_codespace_total_is_capped_with_warning():
+    warnings = []
+    parent = None
+    for level in range(3):
+        data = (b"100 begincodespacerange\n" +
+                b"".join(b"<%02x%02x> <%02x%02x>\n" % (level, index, level, index) for index in range(100)) +
+                b"endcodespacerange")
+        parent = parse_encoding_cmap(data, warnings, parent_cmap=parent)
+    assert len(parent._boxes) <= 100
+    assert any("코드 공간" in message and "상한" in message for message in warnings)

@@ -546,10 +546,26 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                             zip(edges, edge_inside)) if inside != middle and
                             not _on_boundary(polygon, px, py)]
                         if uncertain:
+                            # A sentence mark just outside the right edge is
+                            # harmless only when the next glyph cannot be a
+                            # continuation of the same token (e.g. "www.").
+                            outside_sentence_end = False
+                            if (allow_clipped_edges and not middle and char in ".,"
+                                    and edge_inside == [True, False] and uncertain == [0]):
+                                if index + 1 < len(frag.text):
+                                    following = [frag.text[index + 1]]
+                                else:
+                                    adjacent = touching(runs[id(frag)], 1)
+                                    following = (None if adjacent is None else
+                                                 [run[0].text[0] for run in adjacent])
+                                outside_sentence_end = following is not None and all(
+                                    c.isspace() or c in _CLOSING_BOUNDARIES for c in following)
                             # A clipped outer edge can still select its whole
                             # glyph by center. Both edges outside, or an edge
                             # inside while its center is outside, is ambiguous.
-                            if (allow_clipped_edges and middle and len(uncertain) == 1
+                            if outside_sentence_end:
+                                pass
+                            elif (allow_clipped_edges and middle and len(uncertain) == 1
                                     and sum(edge_inside) == 1):
                                 clipped_edges.append((index, region_index, uncertain[0]))
                             else:

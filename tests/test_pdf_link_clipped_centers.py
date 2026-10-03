@@ -93,6 +93,37 @@ def test_clipped_boundary_before_sentence_mark_can_attach_url(text):
     assert fragment.link_spans == [(0, 4, region.target)]
 
 
+@pytest.mark.parametrize("text", ["ABC. more", "ABC, more", "ABC."])
+def test_outside_sentence_mark_after_complete_word_can_attach(text):
+    fragment = _split(text, 0)
+    region = _region(0, 31)
+    attach_links([fragment], [region], [], allow_clipped_edges=True)
+    assert fragment.link_spans == [(0, 3, region.target)]
+
+
+@pytest.mark.parametrize("text", ["www.example", "1,000"])
+def test_outside_mark_inside_token_stays_deferred(text):
+    fragment = _split(text, 0)
+    region = _region(0, 31 if text.startswith("www") else 11)
+    attach_links([fragment], [region], [], allow_clipped_edges=True)
+    assert fragment.link_spans == []
+
+
+def test_outside_mark_with_touching_next_run_stays_deferred():
+    first, second = _split("www.", 0), _split("example", 40)
+    region = _region(0, 31)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [] and second.link_spans == []
+
+
+def test_outside_sentence_mark_before_spaced_run_can_attach():
+    first, second = _split("ABC.", 0), _split("more", 44)
+    region = _region(0, 31)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [(0, 3, region.target)]
+    assert second.link_spans == []
+
+
 def test_sentence_mark_followed_by_word_in_touching_run_stays_deferred():
     first, second = _split("www.", 0), _split("example", 40)
     region = _region(1, 29)

@@ -48,9 +48,10 @@ def _raw_txo(payload, records, preserve_lines):
         parts.append(raw.decode("utf-16-le" if width == 2 else "latin1", errors="replace"))
         remaining -= count
     value = "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
-    if not preserve_lines:
-        value = value.replace("\n", " ")
-    return value.strip(), None
+    value = value.strip()
+    if preserve_lines:
+        value = "\n".join(line for line in (part.strip() for part in value.split("\n")) if line)
+    return value, None
 
 
 def scan(path):
@@ -102,7 +103,8 @@ def scan(path):
             if unconsumed is not None:
                 # A malformed TxO cannot consume the next unrelated BIFF record.
                 records = chain((unconsumed,), records)
-            if object_type != 0x0019 and text:
+            if (object_type not in (0x0019, 0x0007)
+                    and not 0x000B <= object_type <= 0x0014 and text):
                 text_count += 1
                 text_hashes.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
     return {"objects": objects, "notes": notes, "text_count": text_count,

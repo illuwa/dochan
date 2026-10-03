@@ -10,9 +10,9 @@ from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
 from .xls_hyperlink import parse_hlink
-from .xls_notes import MAX_NOTE_OBJECTS, MAX_SHEET_NOTE_CHARS, object_header, read_txo_text
+from .xls_notes import MAX_DRAWING_OBJECTS, MAX_SHEET_NOTE_CHARS, object_header, read_txo_text
 from .xls_chart import parse_chart_substreams
-from .xls_drawing import XlsDrawingReader
+from .xls_drawing import XlsDrawingReader, drawing_text_elements
 from .xls_ftab import FUNCTION_NAMES, FIXED_ARGUMENT_COUNTS
 from .xls_formula import BoundedErrors, FormulaContext, FormulaDataError, FormulaName, ExtraReader, warn as formula_warn
 from ..conversion import Provenance
@@ -57,7 +57,7 @@ class _SheetInfo:
     formula_values: Dict[Tuple[int, int], object] = field(default_factory=dict)
     hyperlinks: Dict[Tuple[int, int], str] = field(default_factory=dict)
     comments: Dict[Tuple[int, int], str] = field(default_factory=dict)
-    drawing_objects: List[Tuple[int, int, str]] = field(default_factory=list)
+    drawing_objects: List[Tuple[int, int, str, int]] = field(default_factory=list)
     header: str = ""
     footer: str = ""
     merged_ranges: List[Tuple[int, int, int, int]] = field(default_factory=list)
@@ -553,6 +553,11 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                     text_objects=sheet.drawing_objects, path=sheet_path))
             except Exception as exc:
                 doc.errors.append('WARN: XLS drawing parsing failed: %s' % exc)
+                section.elements.extend(drawing_text_elements(
+                    sheet.drawing_objects, sheet.name, sheet_path))
+        else:
+            section.elements.extend(drawing_text_elements(
+                sheet.drawing_objects, sheet.name, sheet_path))
         doc.sections.append(section)
         doc.errors.extend(sheet.errors)
     if drawing_reader is not None:
@@ -890,9 +895,11 @@ def _parse_sheet_records(
     table_cell_count = 0
     chart_depth = 0
     pending_object = None
+    drawing_object_count = 0
     note_texts = {}
     notes = []
     note_chars = 0
+    drawing_chars = 0
     records = iter(_iter_records(data))
     pending_record = None
     while True:
@@ -900,7 +907,7 @@ def _parse_sheet_records(
         pending_record = None
         if item is None:
             break
-        _, record_type, record_data = item
+        record_offset, record_type, record_data = item
         if record_type == 0x000A and not chart_depth and sheet.offset > 0:
             # [MS-XLS] 2.1.4: the worksheet substream ends at its own EOF.
             # Stale records after it (left by editors) are not cells. The
@@ -923,16 +930,19 @@ def _parse_sheet_records(
             pending_object = None
             header = object_header(record_data)
             if header is not None:
-                if len(sheet.drawing_objects) >= MAX_NOTE_OBJECTS:
+                if header[0] != 0x0019 and drawing_object_count >= MAX_DRAWING_OBJECTS:
                     _append_sheet_error_once(sheet, 'WARN: XLS object count limit exceeded')
                 else:
                     pending_object = len(sheet.drawing_objects)
-                    sheet.drawing_objects.append((header[0], header[1], ""))
+                    sheet.drawing_objects.append((header[0], header[1], "", record_offset))
+                    if header[0] != 0x0019:
+                        drawing_object_count += 1
         elif record_type == 0x01B6 and pending_object is not None:  # TxO
             index = pending_object
             pending_object = None
-            object_type, object_id, _ = sheet.drawing_objects[index]
-            if note_chars >= MAX_SHEET_NOTE_CHARS:
+            object_type, object_id, _, object_offset = sheet.drawing_objects[index]
+            used_chars = note_chars if object_type == 0x0019 else drawing_chars
+            if used_chars >= MAX_SHEET_NOTE_CHARS:
                 _append_sheet_error_once(sheet, 'WARN: XLS TxO text limit exceeded')
             else:
                 text, pending_record, warning = read_txo_text(
@@ -940,13 +950,15 @@ def _parse_sheet_records(
                 if warning:
                     _append_sheet_error_once(sheet, 'WARN: XLS ' + warning)
                 elif text:
-                    if note_chars + len(text) > MAX_SHEET_NOTE_CHARS:
+                    if used_chars + len(text) > MAX_SHEET_NOTE_CHARS:
                         _append_sheet_error_once(sheet, 'WARN: XLS TxO text limit exceeded')
                     else:
-                        sheet.drawing_objects[index] = (object_type, object_id, text)
+                        sheet.drawing_objects[index] = (object_type, object_id, text, object_offset)
                         if object_type == 0x0019:
                             note_texts[object_id] = text
-                        note_chars += len(text)
+                            note_chars += len(text)
+                        else:
+                            drawing_chars += len(text)
         elif record_type == 0x00FD and len(record_data) >= 10:  # LABELSST
             pending_formula_cell = None
             pending_shared_formula_anchor = None

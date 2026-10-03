@@ -19,13 +19,14 @@ def _warn(errors, message):
         errors.append(message)
 
 
-def _drawing_bytes(data, record_kind, limits, errors):
+def _drawing_bytes(data, record_kind, limits, errors, object_offsets=None):
     """Collect one BIFF substream, excluding nested chart substreams."""
     offset, depth, count, total = 0, 0, 0, 0
     chunks = []
     continuing = False
     text_chars, text_runs = 0, 0
     while offset + 4 <= len(data):
+        record_offset = offset
         kind, size = struct.unpack_from('<HH', data, offset)
         offset += 4
         count += 1
@@ -45,6 +46,8 @@ def _drawing_bytes(data, record_kind, limits, errors):
                 break
         if depth <= 1 and record_kind == 0x00EC:
             if kind == 0x005D:  # OBJ is interleaved with the OfficeArt stream.
+                if object_offsets is not None:
+                    object_offsets[record_offset] = total
                 continue
             if kind == 0x01B6:  # TXO text and runs have their own CONTINUEs.
                 if len(payload) >= 14:
@@ -80,6 +83,23 @@ def _cell(row, col):
     return '%s%d' % (letters, row + 1)
 
 
+def drawing_text_elements(text_objects, sheet_name, path, anchors=None, positioned=False):
+    """Emit non-control TxO paragraphs, with optional Obj-offset anchor mapping."""
+    elements = []
+    anchors = anchors or {}
+    for ordinal, (object_type, _, text, object_offset) in enumerate(text_objects):
+        # [MS-XLS] FtCmo: note 0x19 and form controls 0x07, 0x0B..0x14
+        # are not ordinary drawing text in the XLSX output contract.
+        if object_type in (0x0019, 0x0007) or 0x000B <= object_type <= 0x0014 or not text:
+            continue
+        anchor = anchors.get(object_offset)
+        cell = _cell(*anchor) if anchor is not None else None
+        provenance = Provenance(source_format='xls', sheet=sheet_name, cell=cell, path=path)
+        paragraph = Paragraph(runs=[TextRun(text=text)], provenance=provenance)
+        elements.append((anchor, ordinal, paragraph) if positioned else paragraph)
+    return elements
+
+
 class XlsDrawingReader:
     """Read per-sheet images while retaining a workbook-wide asset registry."""
 
@@ -96,7 +116,8 @@ class XlsDrawingReader:
 
     def read_sheet(self, sheet_data: bytes, sheet_name: str,
                    text_objects=None, path: str = '') -> List[object]:
-        data = _drawing_bytes(sheet_data, 0x00EC, self.limits, self.errors)
+        object_offsets = {}
+        data = _drawing_bytes(sheet_data, 0x00EC, self.limits, self.errors, object_offsets)
         records = parse_records(data, limits=self.limits, errors=self.errors)
         shapes = read_shapes(records, errors=self.errors)
         stack = [(shape, None) for shape in reversed(shapes)]
@@ -110,14 +131,15 @@ class XlsDrawingReader:
                     _warn(self.errors, 'truncated client anchor')
                 else:
                     _, col, dx, row, dy, end_col, end_dx, end_row, end_dy = struct.unpack_from('<9H', shape.client_anchor)
-                    if col < 256 and end_col <= 256 and dx <= 1024 and end_dx <= 1024 and dy <= 256 and end_dy <= 256:
+                    if col < 256 and row < 65536 and end_col <= 256:
                         anchor = (row, col)
-                    else:
+                    if dx > 1024 or end_dx > 1024 or dy > 256 or end_dy > 256 or col >= 256 or end_col > 256:
                         _warn(self.errors, 'client anchor out of bounds')
             stack.extend((child, anchor) for child in reversed(shape.children))
-            if shape.record is not None and any(
-                    atom.header.rec_type == 0xF011 for atom in shape.record.children):
-                object_shapes.append(anchor)
+            if shape.record is not None:
+                for atom in shape.record.children:
+                    if atom.header.rec_type == 0xF011:
+                        object_shapes.append((atom.offset + 8 + atom.header.rec_len, anchor))
             if not shape.pib:
                 continue
             if self._placements >= min(self.limits.max_records, 10000):
@@ -158,18 +180,22 @@ class XlsDrawingReader:
         elements = [(position, ordinal, (paragraph, image))
                     for position, ordinal, paragraph, image in positioned]
         if text_objects:
-            # Each OfficeArtClientData terminates the shape associated with the
-            # next Obj. Do not guess anchors if either side is incomplete.
-            aligned = len(object_shapes) == len(text_objects)
-            note_ids = {object_id for object_type, object_id, _ in text_objects
-                        if object_type == 0x0019}
-            for ordinal, (object_type, object_id, text) in enumerate(text_objects):
-                if object_type == 0x0019 or object_id in note_ids or not text:
+            # ClientData is emitted before its Obj. BIFF record offsets map
+            # each Obj to the drawing-byte length seen at that point; this
+            # permits partial pairing when either sequence has extra records.
+            object_shapes.sort(key=lambda item: item[0])
+            anchors = {}
+            candidate = 0
+            for _, _, _, object_offset in text_objects:
+                drawing_offset = object_offsets.get(object_offset)
+                if drawing_offset is None:
                     continue
-                anchor = object_shapes[ordinal] if aligned else None
+                if candidate < len(object_shapes) and object_shapes[candidate][0] <= drawing_offset:
+                    anchors[object_offset] = object_shapes[candidate][1]
+                    candidate += 1
+            for anchor, ordinal, paragraph in drawing_text_elements(
+                    text_objects, sheet_name, path, anchors, positioned=True):
                 position = anchor if anchor is not None else (65536, 256)
-                provenance = Provenance(source_format='xls', sheet=sheet_name, path=path)
-                paragraph = Paragraph(runs=[TextRun(text=text)], provenance=provenance)
-                elements.append((position, ordinal, (paragraph,)))
+                elements.append((position, self._placements + ordinal, (paragraph,)))
         return [element for _, _, group in sorted(elements, key=lambda item: item[:2])
                 for element in group]

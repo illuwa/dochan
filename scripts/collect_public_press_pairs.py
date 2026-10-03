@@ -13,6 +13,7 @@ import json
 import re
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -28,9 +29,17 @@ MAX_ATTACHMENTS = 20
 
 def fetch(url, timeout=30.0, limit=MAX_FILE_BYTES):
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosemgrep: dynamic-urllib-use-detected
-        data = response.read(limit + 1)
-        disposition = response.headers.get("Content-Disposition", "")
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:  # nosemgrep: dynamic-urllib-use-detected
+                data = response.read(limit + 1)
+                disposition = response.headers.get("Content-Disposition", "")
+            break
+        except urllib.error.HTTPError as error:
+            # 서버가 요청을 늦추라고 하면(429·503) 기다렸다가 다시 묻는다.
+            if error.code not in (429, 503) or attempt == 2:
+                raise
+            time.sleep(30 * (attempt + 1))
     if len(data) > limit:
         raise ValueError("file too large")
     return data, disposition
@@ -74,7 +83,9 @@ def pick_group(found):
 
 
 def license_type(page):
-    match = re.search(r"공공누리 제([1-4])유형", page)
+    """본문 아래 공공누리 표시 구역에서만 유형을 읽는다(본문 글 속 언급은 무시)."""
+    block = re.search(r"<!--\s*S:\s*kogl\s*-->(.*?)<!--\s*E:\s*kogl\s*-->", page, re.S)
+    match = re.search(r"공공누리 제([1-4])유형", block.group(1) if block else page)
     return int(match.group(1)) if match else None
 
 
@@ -167,8 +178,16 @@ def recheck(output, delay):
             if path.exists() and previous.get("url") == FILE_URL % file_id:
                 files[kind] = dict(previous, name=name)
                 continue
-            data, _ = fetch(FILE_URL % file_id)
-            time.sleep(delay)
+            try:
+                data, _ = fetch(FILE_URL % file_id)
+            except Exception as error:  # 너무 큰 파일·네트워크 오류는 기록만 하고 넘어간다
+                files[kind] = {"error": type(error).__name__, "url": FILE_URL % file_id}
+                if path.exists():
+                    path.unlink()
+                    changed += 1
+                continue
+            finally:
+                time.sleep(delay)
             if not data.startswith(MAGIC[kind]):
                 files[kind] = {"error": "magic"}
                 continue

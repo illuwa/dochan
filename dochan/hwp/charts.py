@@ -1,4 +1,5 @@
 """HWP GSO OLE chart placement and bounded embedded chart extraction."""
+import copy
 import struct
 from dataclasses import dataclass
 
@@ -90,6 +91,7 @@ def resolve_charts(doc, bin_items, bin_entries, *, existing_cells=0):
     xml_bytes = 0
     cells = existing_cells
     cache = {}
+    parsed = {}
     warned = set()
     too_deep = False
 
@@ -136,25 +138,35 @@ def resolve_charts(doc, bin_items, bin_entries, *, existing_cells=0):
                     warn_once('WARN: HWP chart placement count limit exceeded')
                     continue
                 kind, data = payload
-                if xml_bytes + len(data) > MAX_DOCUMENT_CHART_XML_BYTES:
-                    warn_once('WARN: HWP chart document byte budget exhausted')
-                    continue
-                try:
-                    if kind == 'xml':
-                        elements, warnings = parse_chart_xml(data, display_values=True)
-                    else:
-                        warnings = []
-                        elements = parse_embedded_chart(data, warnings, False,
-                                                        [MAX_DOCUMENT_CHART_CELLS - cells],
-                                                        chart_object=True)
-                except (ValueError, BoundedIOError, TypeError) as exc:
-                    warn_once('WARN: HWP chart payload unreadable (%s)' % type(exc).__name__)
-                    continue
-                for warning in warnings:
-                    warn_once('WARN: HWP %s' % warning.removeprefix('WARN: '))
+                if storage_id not in parsed:
+                    # Parse each storage once and spend its bytes before
+                    # parsing, so empty or failing charts cannot be
+                    # re-parsed per reference.
+                    if xml_bytes + len(data) > MAX_DOCUMENT_CHART_XML_BYTES:
+                        warn_once('WARN: HWP chart document byte budget exhausted')
+                        parsed[storage_id] = []
+                        continue
+                    xml_bytes += len(data)
+                    try:
+                        if kind == 'xml':
+                            elements, warnings = parse_chart_xml(data, display_values=True)
+                        else:
+                            warnings = []
+                            elements = parse_embedded_chart(data, warnings, False,
+                                                            [MAX_DOCUMENT_CHART_CELLS - cells],
+                                                            chart_object=True)
+                    except (ValueError, BoundedIOError, TypeError) as exc:
+                        warn_once('WARN: HWP chart payload unreadable (%s)' % type(exc).__name__)
+                        elements, warnings = [], []
+                    for warning in warnings:
+                        warn_once('WARN: HWP %s' % warning.removeprefix('WARN: '))
+                    parsed[storage_id] = elements
+                    elements = parsed[storage_id]
+                else:
+                    # Each placement gets its own model objects.
+                    elements = copy.deepcopy(parsed[storage_id])
                 if not elements:
                     continue
-                xml_bytes += len(data)
                 output_cells = sum(len(row) for elem in elements if isinstance(elem, Table)
                                    for row in elem.rows)
                 if cells + output_cells > MAX_DOCUMENT_CHART_CELLS:

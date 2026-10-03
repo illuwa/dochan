@@ -888,6 +888,11 @@ def _parse_sheet_records(
         if item is None:
             break
         _, record_type, record_data = item
+        if record_type == 0x000A and not chart_depth and sheet.offset > 0:
+            # [MS-XLS] 2.1.4: the worksheet substream ends at its own EOF.
+            # Stale records after it (left by editors) are not cells. The
+            # offset-0 fallback (no usable BOUNDSHEET) still reads on.
+            break
         if record_type == 0x0809:
             if chart_depth:
                 chart_depth += 1

@@ -2072,3 +2072,17 @@ def test_parse_biff_font_bold_italic_with_index4_quirk():
     assert runs["BoldCell"].bold and not runs["BoldCell"].italic
     assert runs["ItalicCell"].italic and runs["ItalicCell"].underline and not runs["ItalicCell"].bold
     assert not (runs["PlainCell"].bold or runs["PlainCell"].italic)
+
+
+def test_records_after_last_sheet_eof_do_not_overwrite_cells():
+    """[MS-XLS] 2.1.4: 하위 스트림은 EOF 에서 끝난다. 스트림 꼬리의 옛 NUMBER 레코드가 셀을 덮어쓰면 안 된다."""
+    globals_part = _bof()
+    worksheet = _bof() + _label(0, 0, "Period") + _number(1, 0, 201212) + _eof()
+    stale_tail = _number(1, 0, 0)
+    offset = len(globals_part) + len(_boundsheet(0, "Data"))
+    workbook = globals_part + _boundsheet(offset, "Data") + worksheet + stale_tail
+
+    doc = parse_biff_workbook(workbook, "Book")
+
+    table = doc.sections[0].elements[-1]
+    assert table.rows[1][0].text == "201212"

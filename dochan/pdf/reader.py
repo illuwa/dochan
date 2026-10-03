@@ -14,7 +14,8 @@ from ..model.image import Image
 from .content import (MAX_FORM_CACHE_BYTES, ContentTextExtractor, FontInfo,
                       VerticalMetrics, assemble_lines, default_byte_decoder)
 from .cmap import encoding_wmode, parse_tounicode
-from .cid_unicode import CIDDecoder, MAX_FONT_BYTES, adobe_cid, reverse_truetype_cmap
+from .cid_unicode import (CIDDecoder, MAX_FONT_BYTES, adobe_cid, adobe_space_cid,
+                          reverse_truetype_cmap)
 from .images import extract_image_bytes
 from .formulas import FormulaExtractor
 from .objects import PDFName, PDFRef, PDFStream
@@ -771,6 +772,10 @@ class PDFReader:
                       and key[0] == code_bytes and widths.explicit(key[1])]
             if len(spaces) == 1:
                 space_code = spaces[0]
+        elif subtype == "Type0" and str(encoding) == "Identity-H":
+            recovered_space = getattr(getattr(decoder, "__self__", None), "space_code", None)
+            if recovered_space is not None:
+                space_code = recovered_space
         return FontInfo(decode=decoder, widths=widths, code_bytes=code_bytes,
                         bold=bold, italic=italic, wmode=wmode, vertical_metrics=vertical_metrics,
                         link_metrics_reliable=reliable, space_code=space_code)
@@ -905,6 +910,13 @@ class PDFReader:
             return None  # 다른 미리 정의된 CMap은 코드→CID 표가 필요하다.
         descendant = self._cid_descendant(pdf, font)
         system = pdf.resolve(descendant.get("CIDSystemInfo"))
+        descriptor = pdf.resolve(descendant.get("FontDescriptor"))
+        font_stream = (pdf.resolve(descriptor.get("FontFile2"))
+                       if isinstance(descriptor, dict) else None)
+        gid_object = pdf.resolve(descendant.get("CIDToGIDMap"))
+        embedded_identity_gid = (str(pdf.resolve(descendant.get("Subtype"))) == "CIDFontType2"
+                                 and isinstance(font_stream, PDFStream)
+                                 and not isinstance(gid_object, PDFStream))
         if isinstance(system, dict):
             registry = pdf.resolve(system.get("Registry"))
             ordering = pdf.resolve(system.get("Ordering"))
@@ -912,24 +924,44 @@ class PDFReader:
                         and len(registry) <= 32 else str(registry) if isinstance(registry, PDFName) else "")
             ordering = (ordering.decode("ascii", "ignore") if isinstance(ordering, bytes)
                         and len(ordering) <= 32 else str(ordering) if isinstance(ordering, PDFName) else "")
-            if registry == "Adobe" and ordering in ("Japan1", "GB1", "CNS1", "Korea1", "KR"):
-                return CIDDecoder(lambda cid: adobe_cid(ordering, cid), pdf.warnings, name)
+            if (registry == "Adobe" and ordering in ("Japan1", "GB1", "CNS1", "Korea1", "KR")
+                    and not embedded_identity_gid):
+                return CIDDecoder(lambda cid: adobe_cid(ordering, cid), pdf.warnings, name,
+                                  adobe_space_cid(ordering))
         if pdf.resolve(descendant.get("Subtype")) != "CIDFontType2":
             return None
-        descriptor = pdf.resolve(descendant.get("FontDescriptor"))
         if not isinstance(descriptor, dict):
             return None
-        font_stream = pdf.resolve(descriptor.get("FontFile2"))
         if not isinstance(font_stream, PDFStream) or len(font_stream.raw) > MAX_FONT_BYTES:
             return None
-        font_bytes = pdf.decode_stream_bytes(font_stream)
-        if len(font_bytes) > MAX_FONT_BYTES:
-            pdf.warnings.append("WARN: 내장 TrueType 글꼴 크기 한도 초과 — CID 복원 보류")
-            return None
-        reverse = reverse_truetype_cmap(font_bytes)
+        cache = getattr(pdf, "_cid_cmap_cache", None)
+        if cache is None:
+            cache = {}
+            pdf._cid_cmap_cache = cache
+        cache_key = id(font_stream)
+        entry = cache.get(cache_key)
+        if entry is not None and entry[0] is font_stream:
+            reverse = entry[1]
+        else:
+            if len(cache) >= 16:
+                pdf.warnings.append("WARN: 문서 TrueType cmap 스캔 한도 초과 — CID 복원 보류")
+                return None
+            warning_count = len(pdf.warnings)
+            font_bytes = pdf.decode_stream_bytes(font_stream)
+            if not font_bytes:
+                # The existing CID warning covers a corrupt optional font stream;
+                # keep document-wide budget warnings from the decoder.
+                pdf.warnings[warning_count:] = [warning for warning in pdf.warnings[warning_count:]
+                                                if not warning.startswith("WARN: FlateDecode 실패")]
+                cache[cache_key] = (font_stream, {})
+                return None
+            if len(font_bytes) > MAX_FONT_BYTES:
+                pdf.warnings.append("WARN: 내장 TrueType 글꼴 크기 한도 초과 — CID 복원 보류")
+                return None
+            reverse = reverse_truetype_cmap(font_bytes)
+            cache[cache_key] = (font_stream, reverse)
         if not reverse:
             return None
-        gid_object = pdf.resolve(descendant.get("CIDToGIDMap"))
         gid_bytes = None
         if isinstance(gid_object, PDFStream):
             if len(gid_object.raw) > 131072:
@@ -940,9 +972,15 @@ class PDFReader:
         elif gid_object is not None and gid_object != "Identity":
             return None
         if gid_bytes is None:
-            return CIDDecoder(lambda cid: reverse.get(cid, ""), pdf.warnings, name)
+            return CIDDecoder(lambda cid: reverse.get(cid, ""), pdf.warnings, name,
+                              next((gid for gid, value in reverse.items() if value == " "), None))
+        space_gid = next((gid for gid, value in reverse.items() if value == " "), None)
+        space_cid = (next((cid for cid in range(len(gid_bytes) // 2)
+                           if int.from_bytes(gid_bytes[2 * cid:2 * cid + 2], "big") == space_gid), None)
+                     if space_gid is not None else None)
         return CIDDecoder(lambda cid: reverse.get(int.from_bytes(gid_bytes[2 * cid:2 * cid + 2], "big"), "")
-                          if 2 * cid + 2 <= len(gid_bytes) else "", pdf.warnings, name)
+                          if 2 * cid + 2 <= len(gid_bytes) else "", pdf.warnings, name,
+                          space_cid)
 
     def _page_images(self, pdf: PDFFile, resources, page_number: int) -> list:
         """페이지 XObject 이미지에서 바이너리를 추출해 Image 요소로 반환."""

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-10-03
+
+XLS 수식의 메모리 토큰과 BIFF5 셀 참조·공유식을 해석해 공개 XLS 에서 수식 845셀을 더 내고, BIFF5 통합문서의 시트 이름 깨짐을 고쳤다.
+
 ### 추가·수정 (XLS 수식)
 
 - 메모리 토큰(`PtgMemFunc`·`PtgMemArea`·`PtgMemErr`·`PtgMemNoMem`), `PtgElfLel`, BIFF5 셀 참조·공유식을 해석해 공개 XLS 721개에서 수식 845셀을 더 낸다

@@ -945,6 +945,7 @@ class HWPXParser:
         try:
             runs = []
             plain_parts = []
+            images = []
 
             def flush_plain():
                 if plain_parts:
@@ -952,6 +953,19 @@ class HWPXParser:
                         self._text_run_limit()
                     runs.append(TextRun(text=''.join(plain_parts)))
                     plain_parts.clear()
+
+            def flush_flow():
+                nonlocal runs
+                flush_plain()
+                if runs:
+                    para = self._make_paragraph(runs, p_elem)
+                    if para.text.strip():
+                        if len(images) == 1:
+                            para._image_target = images[0]
+                        elements.append(para)
+                    runs = []
+                elements.extend(images)
+                images.clear()
 
             for child in _selected_children(p_elem):
                 tag = _local_tag(child.tag)
@@ -966,13 +980,11 @@ class HWPXParser:
                         flush_plain()
                         if isinstance(item, TextRun):
                             runs.append(item)
+                        elif isinstance(item, Image):
+                            images.append(item)
                         else:
-                            # 표/이미지 등 → 앞 텍스트 먼저 플러시
-                            if runs:
-                                para = self._make_paragraph(runs, p_elem)
-                                if para.text.strip():
-                                    elements.append(para)
-                                runs = []
+                            # 표·수식·도형은 기존 문단 경계를 유지한다.
+                            flush_flow()
                             elements.append(item)
                 elif tag == 'ctrl':
                     ctrl_elem = self._parse_ctrl(child)
@@ -985,22 +997,17 @@ class HWPXParser:
                                 plain_parts.append(ctrl_elem.text)
                             continue
                         flush_plain()
-                        if runs:
-                            para = self._make_paragraph(runs, p_elem)
-                            if para.text.strip():
-                                elements.append(para)
-                            runs = []
+                        if isinstance(ctrl_elem, Image):
+                            images.append(ctrl_elem)
+                            continue
+                        flush_flow()
                         if isinstance(ctrl_elem, list):
                             elements.extend(ctrl_elem)
                         else:
                             elements.append(ctrl_elem)
 
             # 남은 텍스트
-            flush_plain()
-            if runs:
-                para = self._make_paragraph(runs, p_elem)
-                if para.text.strip():
-                    elements.append(para)
+            flush_flow()
         finally:
             self._link_stack = saved_links
             self._field_overflow = saved_overflow

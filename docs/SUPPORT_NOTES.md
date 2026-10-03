@@ -29,6 +29,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 ## 표·캡션
 
+- **이미지 참조·읽기 순서 · HWPX**: 문단 안 그림은 문단 텍스트 뒤에 원래 순서대로 내며 문장을 나누지 않는다. 공개 HWPX 2,046개 중 변경된 209개 모두 문단 안 그림이 있고, 보도자료 HWP·PDF 짝 2개에서 이어진 문장을 확인했다([검증 기록](benchmarks/2026-10-04-hwpx-picture-flow-real-docs.md)).
 - **표 (중첩 텍스트) · PPT·PPTX (—)**: PowerPoint 표 셀은 다른 표를 담는 구조가 없다. 셀 안 여러 문단은 보존한다.
 - **텍스트 · PDF Form XObject**: 페이지가 Form XObject(`Do`)로 그린 글자도 읽는다(행렬·자원 상속·텍스트 상태 상속·BBox 클립·MCID 격리). 공개 pdf.js 983개 중
   Form 글자가 있는 39개에서 PDFium 대비 읽을 수 있는 문자 재현율 95.8%→98.5%. 순환·깊이·반복 호출·Form 바이트(페이지당 16 MiB)·Form 해제 예산(문서당 200 MiB,

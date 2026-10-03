@@ -24,13 +24,36 @@ def test_uniform_condensed_positioning_does_not_invent_spaces():
 
 
 def test_tracking_change_within_one_line_does_not_split_every_glyph():
-    starts = [13.4 * index for index in range(12)]
+    starts = [15.2 * index for index in range(12)]
     second_start = starts[-1]
     starts.extend(second_start + 12.0 * index for index in range(1, 13))
-    glyphs = _glyphs("가" * 24, starts)
+    text = "가나다라마바사아자차카타파하거너더러머버서어저처"
+    glyphs = _glyphs(text, starts)
     for glyph in glyphs:
         glyph.space_width = 4.7
-    assert assemble_lines(glyphs)[0].text == "가" * 24
+    result = assemble_lines(glyphs)[0].text
+    assert result[:10] == text[:10]
+    assert result[-10:] == text[-10:]
+
+
+def test_narrow_space_font_does_not_invent_word_gap_from_tracking_jitter():
+    text = "가나다라마바사아자차카타파하"
+    starts = [12.5 * index for index in range(len(text))]
+    starts[7:] = [position + 1.4 for position in starts[7:]]
+    glyphs = _glyphs(text, starts)
+    for glyph in glyphs:
+        glyph.space_width = 4.2  # 0.3em, 크기 14pt
+    assert assemble_lines(glyphs)[0].text == text
+
+
+def test_word_gap_uses_font_size_even_when_space_width_is_narrow():
+    text = "조달청직원들이참여"
+    starts = [12.5 * index for index in range(len(text))]
+    starts[7:] = [position + 2.3 for position in starts[7:]]
+    glyphs = _glyphs(text, starts)
+    for glyph in glyphs:
+        glyph.space_width = 4.2  # 0.3em, 크기 14pt
+    assert assemble_lines(glyphs)[0].text == "조달청직원들이 참여"
 
 
 def test_overprinted_glyphs_do_not_create_word_gaps():

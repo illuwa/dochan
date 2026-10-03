@@ -871,7 +871,7 @@ class _Line:
                             if index and tracking_gaps else None)
             inferred_word_gap = (tracking_gap is not None and previous is not None
                                  and self._comparable_hangul(previous, f)
-                                 and gap > tracking_gap + max(prev_space, f.space_width) * 0.25)
+                                 and gap > tracking_gap + f.size * 0.15)
             if (prev_end is not None and (gap > threshold or inferred_word_gap)
                     and parts and not parts[-1].endswith(" ")):
                 sep = " "

@@ -35,7 +35,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
   Form 글자가 있는 39개에서 PDFium 대비 읽을 수 있는 문자 재현율 95.8%→98.5%. 순환·깊이·반복 호출·Form 바이트(페이지당 16 MiB)·Form 해제 예산(문서당 200 MiB,
   페이지 본문 예산과 별도)에 상한을 둔다. 주석 외관 스트림(/AP)과 Form 안 이미지는 읽지 않는다([검증 기록](benchmarks/2026-10-02-pdf-forms-fix-real-docs.md)).
 - **텍스트 · PDF CID 폰트**: ToUnicode가 없으면 Identity-H/V와 Adobe의 미리 정의된 CMap에서 코드→CID를 찾고, Adobe CID→Unicode 표 또는 내장 TrueType의 CIDToGIDMap·Unicode cmap을 확인해 복원한다. 표 118의 59개와 `90pv-RKSJ-V`·`KSCpc-EUC-V` 2개를 포함한다. 내장 Encoding CMap 스트림의 코드 공간·CID 범위·본문 `usecmap`과 사전 `/UseCMap` 부모도 읽는다. ToUnicode가 있으면 원래 코드 바이트로 조회하며, 폭은 CID를 기준으로 계산한다. 내장 Unicode cmap이 없는 글꼴은 CIDFont의 Registry·Ordering이 Adobe CID 대응표와 일치하고 해당 CID가 표에 있을 때만 복원한다. 내장 CIDFontType2가 CID를 GID로 직접 쓰고 명시적 CIDToGIDMap 스트림이 없으면 Adobe 표를 적용하지 않는다. Encoding 스트림의 `bfchar`·`bfrange`는 코드→CID 연산자가 아니므로 해석하지 않는다. 제어 문자·사설 영역·비문자 대응은 버리고 변형 선택자는 떼어 내 기본 글자만 내며, 근거가 없는 코드는 경고와 함께 생략한다([기존 검증](benchmarks/2026-10-03-pdf-cid-unicode-real-docs.md), [CMap 검증](benchmarks/2026-10-04-pdf-predefined-cmap-real-docs.md)).
-- **텍스트 · PDF 줄 내부 자간**: 한글 글리프를 글자별 절대 좌표로 그린 줄에서 인근 자간보다 큰 어절 간격을 복원하되, 자간 변경과 겹쳐 인쇄된 글자는 제외한다([검증 기록](benchmarks/2026-10-04-pdf-press-text-loss.md)).
+- **텍스트 · PDF 줄 내부 자간**: 한글 글리프를 글자별 절대 좌표로 그린 줄에서 인근 자간보다 큰 어절 간격을 복원한다. 다른 서식의 이웃 간격이 섞이면 이름·복합어 안에 가짜 공백이 생길 수 있고, 한글과 숫자·문장부호 사이의 공백은 이 규칙으로 복원하지 않는다([검증 기록](benchmarks/2026-10-04-pdf-press-text-loss.md)).
 - **표 (중첩 텍스트) · PDF (⬜)**: 셀 안에 따로 그려진 표와, 부모 셀의 한 변만 공유하는 닫힌 연결형 중첩 표를 복원한다(내부 실물 66개 중 26개 일치,
   중첩 없는 음성 66문서·공개 983개 오탐 0). 여러 변을 공유하는 연결형과 한 성분 안의 복수 후보는 원형대로 둔다.
 - **표 병합 span · PDF**: 1pt 미만 반복 점선으로 그린 경계를 기존 격자 축 안에서 보강한다(내부 병합 span 216→218/235). 페이지 경계에서 잘린 셀의 결합과

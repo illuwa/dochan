@@ -197,13 +197,20 @@ class SpreadsheetNumberFormatter:
             if conditional_integer:
                 return str(Decimal(value).quantize(Decimal(1), rounding=ROUND_HALF_UP))
             if metadata.kind == "time":
-                formatted = self._clock_display(number, section)
+                formatted = (self._normalized_clock(number, clean)
+                             if "h" in clean and self._has_meridiem(clean)
+                             else self._clock_display(number, section))
                 return formatted if formatted is not None else value
             if metadata.kind == "date":
                 has_time = "h" in clean or "s" in clean
                 precision = self._second_precision(clean)
                 if precision is None:
                     return value
+                date_units = re.sub(r"a(?:m)?/p(?:m)?", "", clean)
+                if has_time and "d" in date_units and "y" not in date_units and "m" not in date_units:
+                    shown_day_hour = self._render_day_hour_tokens(number, section)
+                    if shown_day_hour is not None:
+                        return shown_day_hour
                 if has_time:
                     ticks = self._temporal_ticks(number, precision)
                     # Use the rounded integral day for the date; float datetime
@@ -219,7 +226,7 @@ class SpreadsheetNumberFormatter:
                     clock_fmt = "hh:mm:ss" if "s" in clean else "hh:mm"
                     if precision:
                         clock_fmt += "." + "0" * precision
-                    formatted += " " + self._clock_display(number, clock_fmt)
+                    formatted += " " + self._normalized_clock(number, clock_fmt)
                 return formatted
             if metadata.kind == "zero_fill":
                 formatted = self._zero_filled_number(shown, metadata.pattern)
@@ -240,9 +247,11 @@ class SpreadsheetNumberFormatter:
                 # Round there first, then avoid binary multiplication artifacts.
                 with localcontext() as context:
                     context.prec = max(32, len(value) + metadata.decimals + 4)
-                    scaled = Decimal(format(shown, ".15g")) * 100
+                    percent_count = code.count("%")
+                    scaled = Decimal(format(shown, ".15g")) * (100 ** percent_count)
                     scaled = scaled.quantize(Decimal(1).scaleb(-metadata.decimals), rounding=ROUND_HALF_UP)
-                    formatted = f"{scaled:.{metadata.decimals}f}%"
+                    grouping = "," if re.search(r"[0#?],[0#?]", code) else ""
+                    formatted = f"{scaled:{grouping}.{metadata.decimals}f}" + "%" * percent_count
                 formatted = self._apply_literal_affixes(formatted, metadata)
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "decimal":
@@ -387,7 +396,8 @@ class SpreadsheetNumberFormatter:
         lower_fmt = self._format_code_tokens(lower_fmt)
         if "%" in lower_fmt:
             return False
-        return any(token in lower_fmt for token in ("yy", "mm", "dd", "mmm", "h:mm"))
+        lower_fmt = re.sub(r"a(?:m)?/p(?:m)?", "", lower_fmt)
+        return bool(re.search(r"[ydm]", lower_fmt))
 
     def _is_duration_format(self, lower_fmt: str) -> bool:
         clean_fmt = self._format_without_literals(lower_fmt)
@@ -399,6 +409,57 @@ class SpreadsheetNumberFormatter:
         if "h" not in clean_fmt and "s" not in clean_fmt:
             return False
         return not any(token in clean_fmt for token in ("y", "d", "mmm"))
+
+    @staticmethod
+    def _has_meridiem(clean: str) -> bool:
+        return bool(re.search(r"(?i)a(?:m)?/p(?:m)?", clean))
+
+    def _normalized_clock(self, serial: float, fmt: str) -> Optional[str]:
+        """ISO wall clock, rounded once at the format's second precision."""
+        clean = self._format_code_tokens(fmt).lower()
+        precision = self._second_precision(clean)
+        if precision is None:
+            return None
+        ticks = self._temporal_ticks(serial, precision) % (86400 * 10 ** precision)
+        seconds, fraction = divmod(ticks, 10 ** precision)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, second = divmod(remainder, 60)
+        result = f"{hours:02d}:{minutes:02d}"
+        if "s" in clean:
+            result += f":{second:02d}"
+            if precision:
+                result += "." + str(fraction).zfill(precision)
+        return result
+
+    def _render_day_hour_tokens(self, serial: float, fmt: str) -> Optional[str]:
+        """Keep day/hour labels when ISO would imply a year and month not shown."""
+        tokens = re.findall(r'"[^"]*"|\\.|[dDhH]+|[aA](?:[mM])?/[pP](?:[mM])?|.', fmt)
+        meridiem = self._has_meridiem(self._format_code_tokens(fmt))
+        clock = self._temporal_ticks(serial) % 86400
+        hour = clock // 3600
+        day = self._excel_date(math.floor(serial)).day
+        result = []
+        for token in tokens:
+            lower = token.lower()
+            if token.startswith('"'):
+                result.append(token[1:-1])
+            elif token.startswith("\\"):
+                result.append(token[1:])
+            elif re.fullmatch(r"d+", lower):
+                result.append(str(day).zfill(len(token)))
+            elif re.fullmatch(r"h+", lower):
+                shown = hour % 12 or 12 if meridiem else hour
+                result.append(str(shown).zfill(len(token)))
+            elif re.fullmatch(r"a(?:m)?/p(?:m)?", lower):
+                marker = "AM" if hour < 12 else "PM"
+                if len(token) == 3:
+                    marker = marker[0]
+                result.append(marker.lower() if len(token) == 3 and token.islower() else marker)
+            elif token in (" ", "-", "/", ":", ",", "."):
+                result.append(token)
+            else:
+                return None
+        return "".join(result)
 
     def _excel_date(self, serial: float) -> datetime:
         if getattr(self, "_date_1904", False):
@@ -460,9 +521,16 @@ class SpreadsheetNumberFormatter:
                 return None
             kinds = [unit[1] if unit.startswith("[") else unit[0] for unit in units]
             order = "hms"
-            if len(set(kinds)) != len(kinds):
+            if any(kinds.count(kind) > 1 and kind != bracketed[0][1] for kind in set(kinds)):
                 return None
-            indexes = sorted(order.index(kind) for kind in kinds)
+            if kinds.count(bracketed[0][1]) > 1:
+                bracket_index = tokens.index(bracketed[0])
+                for token in tokens[bracket_index + 1:]:
+                    if re.fullmatch(bracketed[0][1] + r"{1,2}", token, re.I):
+                        break
+                    if token == ":":
+                        return None
+            indexes = sorted(order.index(kind) for kind in set(kinds))
             if indexes != list(range(indexes[0], indexes[-1] + 1)):
                 return None
         elif any("[" in unit or len(unit) > 2 for unit in units):
@@ -502,7 +570,8 @@ class SpreadsheetNumberFormatter:
                 continue  # color, condition and locale annotations
             elif re.fullmatch(r"h+|m+|s+", lower):
                 component = seconds // {"h": 3600, "m": 60, "s": 1}[lower[0]]
-                component %= 24 if lower[0] == "h" else 60
+                if not elapsed or lower[0] != bracketed[0][1]:
+                    component %= 24 if lower[0] == "h" else 60
                 result.append(str(component).zfill(len(lower)))
                 previous_unit = lower[0]
             elif re.fullmatch(r"\.0+", token):

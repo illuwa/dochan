@@ -1,10 +1,12 @@
 """Regression inputs for the stdlib XML migration review."""
 from io import BytesIO
+from time import perf_counter
 
 import pytest
 
 from dochan.utils import safe_xml as xml
 from dochan.ooxml.xlsx import _sheet_rows
+from dochan.ooxml.xlsx import XLSXReader
 from dochan.hwpx.parser import HWPXParser
 from dochan.ooxml.docx import DOCXReader, W_NS
 
@@ -152,12 +154,123 @@ def test_caption_neighbor_uses_registered_position():
     assert reader._caption_neighbor(root[2], -1) is root[1]
 
 
-def test_sheet_recovers_row_after_broken_sibling():
+def test_sheet_stops_after_broken_sibling_without_reparsing():
     source = (b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
               b'<sheetData><row r="1"/><bad & broken/><row r="2"/></sheetData></worksheet>')
-    assert [row.get('r') for _, row in _sheet_rows(BytesIO(source))] == ['1', '2']
+    rows = []
+    with pytest.raises(xml.XMLSyntaxError):
+        for _, row in _sheet_rows(BytesIO(source)):
+            rows.append(row.get('r'))
+    assert rows == ['1']
 
 
 def test_sheet_recovery_without_error_position_keeps_syntax_error():
     with pytest.raises(xml.XMLSyntaxError):
         list(_sheet_rows(BytesIO(b'<?xml version="1.0" encoding="ISO-10646-UCS-2"?><r/>')))
+
+
+@pytest.mark.parametrize('tail', [
+    b'', b'<bad & broken/><row r="3"/></sheetData></worksheet>',
+    '<bad>한글</oops></sheetData></worksheet>'.encode('utf-8'),
+])
+def test_sheet_keeps_completed_rows_before_damage(tail):
+    source = (b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+              b'<sheetData><row r="1"/><row r="2"/>' + tail)
+    rows = []
+    with pytest.raises(xml.XMLSyntaxError):
+        for _, row in _sheet_rows(BytesIO(source)):
+            rows.append(row.get('r'))
+    assert rows == ['1', '2']
+
+
+def test_start_tag_byte_and_attribute_limits_precede_expat(monkeypatch):
+    source = b'<r ' + b' '.join(b'a%d="x"' % index for index in range(8000)) + b'/>'
+    calls = []
+    original = xml._prolog_parser
+
+    def watched():
+        calls.append(True)
+        return original()
+
+    monkeypatch.setattr(xml, '_prolog_parser', watched)
+    with pytest.raises(ValueError, match='start tag'):
+        xml.fromstring(source)
+    with pytest.raises(ValueError, match='start tag'):
+        list(xml.iterparse(BytesIO(source)))
+    assert not calls
+
+
+def test_start_tag_attribute_count_is_bounded_independently(monkeypatch):
+    monkeypatch.setattr(xml, 'MAX_START_TAG_ATTRIBUTES', 8)
+    source = b'<r ' + b' '.join(b'a%d="x"' % index for index in range(9)) + b'/>'
+    with pytest.raises(ValueError, match='attribute limit'):
+        xml.fromstring(source)
+    with pytest.raises(ValueError, match='attribute limit'):
+        list(xml.iterparse(BytesIO(source)))
+    assert xml.fromstring(b'<r a="' + b'=' * 20 + b'"/>').get('a') == '=' * 20
+
+
+def test_start_tag_limit_crossing_stream_chunks(monkeypatch):
+    monkeypatch.setattr(xml, 'CHUNK_SIZE', 32)
+    monkeypatch.setattr(xml, 'MAX_START_TAG_BYTES', 48)
+    source = b'<r><a x="' + b'a' * 60 + b'"/></r>'
+    with pytest.raises(ValueError, match='start tag byte limit'):
+        list(xml.iterparse(BytesIO(source)))
+
+
+def test_dtd_comment_brackets_do_not_consume_root():
+    assert xml.sanitize_dtd(b'<!DOCTYPE r [<!-- [ -->]><r/>') == b'<r/>'
+
+
+def test_dtd_long_plain_span_uses_one_delimiter_search(monkeypatch):
+    original = xml._dtd_delimiter
+    calls = []
+
+    class Counted:
+        def search(self, data, position):
+            calls.append(position)
+            return original.search(data, position)
+
+    monkeypatch.setattr(xml, '_dtd_delimiter', Counted())
+    assert xml.sanitize_dtd(b'<!DOCTYPE r [' + b'a' * (1024 * 1024)) == b''
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('hidden', [
+    b'<!-- <v:imagedata id="fake"/> -->',
+    b'<![CDATA[ <v:imagedata id="fake"/> ]]>',
+    b'<?pi <v:imagedata id="fake"/> ?>',
+])
+def test_vml_skips_markup_containers(hidden):
+    source = (b'<xml xmlns:v="urn:schemas-microsoft-com:vml">' + hidden +
+              b'<br><v:imagedata id="real"/></xml>')
+    root = xml.vml_fromstring(source)
+    assert [node.get('id') for node in root.findall('.//{urn:schemas-microsoft-com:vml}imagedata')] == ['real']
+
+
+def test_vml_unmatched_closes_remain_bounded():
+    source = (b'<xml xmlns:v="urn:schemas-microsoft-com:vml">' + b'<a>' * 250 +
+              b'</missing>' * 100_000 + b'<v:imagedata id="real"/></xml>')
+    started = perf_counter()
+    root = xml.vml_fromstring(source)
+    assert root.find('.//{urn:schemas-microsoft-com:vml}imagedata').get('id') == 'real'
+    assert perf_counter() - started < 3
+
+
+def test_xlsx_vml_part_error_does_not_discard_sheet(monkeypatch):
+    reader = XLSXReader()
+    reader._errors = []
+    monkeypatch.setattr(reader, '_read_sheet_relationships', lambda *args, **kwargs: {'rId1': 'xl/drawings/bad.vml'})
+    monkeypatch.setattr(reader, '_read_vml_drawing_part', lambda *args: (_ for _ in ()).throw(ValueError('depth limit')))
+    monkeypatch.setattr(reader, '_record_sheet_embedded_assets', lambda *args: None)
+
+    class Package:
+        def exists(self, path):
+            return True
+
+    root = xml.fromstring(
+        b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        b'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        b'<legacyDrawing r:id="rId1"/></worksheet>')
+    assert reader._read_sheet_drawings(Package(), root, 'xl/worksheets/sheet1.xml', 'Sheet1') == []
+    assert reader._errors == ['ERR: XLSX VML XML parse failed: xl/drawings/bad.vml: depth limit']

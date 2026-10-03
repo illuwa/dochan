@@ -21,9 +21,12 @@ MAX_BYTES = 100 * 1024 * 1024
 MAX_DEPTH = 256
 MAX_NAMESPACE_WORK = 1000000
 CHUNK_SIZE = 1024 * 1024
+MAX_START_TAG_BYTES = 256 * 1024
+MAX_START_TAG_ATTRIBUTES = 1024
 _namespaces = WeakKeyDictionary()
 _declared_uris = WeakKeyDictionary()
 _encoding = re.compile(br'^\s*<\?xml\s[^?]*encoding\s*=\s*[\'"]([^\'"]+)[\'"]', re.I)
+_dtd_delimiter = re.compile(br'[\[\]<>\'\"]')
 _expat_numbers = tuple(int(value) for value in re.findall(r'\d+', expat.EXPAT_VERSION)[:3])
 EXPAT_BELOW_RECOMMENDED = _expat_numbers < (2, 4, 0)
 
@@ -113,16 +116,29 @@ def sanitize_dtd(data):
             continue
         chunks.append(data[cursor:start])
         position = after
-        quote = 0
         subset = 0
         while position < len(data):
+            match = _dtd_delimiter.search(data, position)
+            if match is None:
+                position = len(data)
+                break
+            position = match.start()
             char = data[position]
-            if quote:
-                if char == quote:
-                    quote = 0
-            elif char in (34, 39):
-                quote = char
-            elif char == 91:
+            if data.startswith(b'<!--', position):
+                end = data.find(b'-->', position + 4)
+                if end < 0:
+                    position = len(data)
+                    break
+                position = end + 3
+                continue
+            if char in (34, 39):
+                end = data.find(bytes((char,)), position + 1)
+                if end < 0:
+                    position = len(data)
+                    break
+                position = end + 1
+                continue
+            if char == 91:
                 subset += 1
             elif char == 93 and subset:
                 subset -= 1
@@ -170,6 +186,116 @@ def check_prolog(data):
             raise XMLSyntaxError("Start tag expected, '<' not found, line %d, column %d (<string>, line %d)"
                                  % (line, column, line)) from exc
         raise XMLSyntaxError(str(exc)) from exc
+
+
+class _StartTagGuard:
+    """Bound the tokenizer's work before Expat allocates attribute dictionaries."""
+    def __init__(self):
+        self.pending = b''
+        self.skip_until = b''
+
+    def feed(self, data):
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        data = self.pending + data
+        position = 0
+        while True:
+            if self.skip_until:
+                end = data.find(self.skip_until, position)
+                if end < 0:
+                    self.pending = data[max(position, len(data) - len(self.skip_until) + 1):]
+                    return
+                position = end + len(self.skip_until)
+                self.skip_until = b''
+            start = data.find(b'<', position)
+            if start < 0:
+                self.pending = b''
+                return
+            if start + 1 == len(data):
+                self.pending = data[start:]
+                return
+            if len(data) - start < 9:
+                fragment = data[start:]
+                if any(marker.startswith(fragment) for marker in
+                       (b'<!--', b'<![CDATA[', b'<?')):
+                    self.pending = fragment
+                    return
+            if data.startswith(b'<!--', start):
+                self.skip_until = b'-->'
+                position = start + 4
+                continue
+            if data.startswith(b'<![CDATA[', start):
+                self.skip_until = b']]>'
+                position = start + 9
+                continue
+            if data.startswith(b'<?', start):
+                self.skip_until = b'?>'
+                position = start + 2
+                continue
+            if data[start + 1:start + 2] in (b'!', b'/'):
+                self.skip_until = b'>'
+                position = start + 2
+                continue
+            # A complete delimiter within the budget is the common case.
+            end = data.find(b'>', start + 1)
+            if end < 0:
+                if len(data) - start > MAX_START_TAG_BYTES:
+                    raise ValueError('XML start tag byte limit exceeded')
+                self.pending = data[start:]
+                return
+            token = data[start:end + 1]
+            if token.count(b'"') % 2 or token.count(b"'") % 2:
+                # A '>' inside an attribute value is not a tag delimiter.
+                quote = 0
+                end = start + 1
+                while end < len(data):
+                    char = data[end]
+                    if quote:
+                        if char == quote:
+                            quote = 0
+                    elif char in (34, 39):
+                        quote = char
+                    elif char == 62:
+                        break
+                    end += 1
+                    if end - start > MAX_START_TAG_BYTES:
+                        raise ValueError('XML start tag byte limit exceeded')
+                if end == len(data):
+                    self.pending = data[start:]
+                    return
+                token = data[start:end + 1]
+            if len(token) > MAX_START_TAG_BYTES:
+                raise ValueError('XML start tag byte limit exceeded')
+            if token.count(b'=') > MAX_START_TAG_ATTRIBUTES:
+                quote = 0
+                attributes = 0
+                for char in token:
+                    if quote:
+                        if char == quote:
+                            quote = 0
+                    elif char in (34, 39):
+                        quote = char
+                    elif char == 61:
+                        attributes += 1
+                        if attributes > MAX_START_TAG_ATTRIBUTES:
+                            raise ValueError('XML start tag attribute limit exceeded')
+            position = end + 1
+
+
+def _guard_start_tags(data):
+    if isinstance(data, bytes):
+        if data.startswith((b'\xff\xfe', b'\xfe\xff')):
+            data = data.decode('utf-16')
+        elif data[:2] == b'<\x00':
+            data = data.decode('utf-16-le')
+        elif data[:2] == b'\x00<':
+            data = data.decode('utf-16-be')
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    # A whole part smaller than both budgets cannot contain an oversized tag.
+    if len(data) <= MAX_START_TAG_BYTES and data.count(b'=') <= MAX_START_TAG_ATTRIBUTES:
+        return
+    _StartTagGuard().feed(data)
 
 
 class XMLParser:
@@ -339,6 +465,7 @@ def fromstring(data, parser=None, *, max_bytes=MAX_BYTES, max_depth=None,
     data = _decode(data)
     if namespaces is None:
         namespaces = ('Requires' if isinstance(data, str) else b'Requires') in data
+    _guard_start_tags(data)
     check_prolog(data)
     options = parser or XMLParser(recover=recover)
     depth = options.max_depth if max_depth is None else max_depth
@@ -356,7 +483,8 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
     The stream belongs to the caller. Prolog chunks are quarantined until the
     first element, so even a declaration crossing chunk boundaries is rejected.
     """
-    guard = _prolog_parser()
+    guard = None
+    start_tag_guard = _StartTagGuard()
     pending = []
     total = 0
     parser = _ET.XMLParser(target=_ET.TreeBuilder(insert_comments=True, insert_pis=True))  # nosemgrep: use-defused-xml -- input quarantined until prolog check
@@ -423,6 +551,9 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
                     decoder = codecs.getincrementaldecoder(name)()
         if decoder is not None:
             chunk = decoder.decode(chunk)
+        start_tag_guard.feed(chunk)
+        if first:
+            guard = _prolog_parser()
         if guard is not None:
             pending.append(chunk)
             try:
@@ -484,6 +615,7 @@ def vml_fromstring(data):
     root = Element('xml')
 
     scopes = [({}, '')]
+    open_tags = {}
     count = 0
     namespace_work = 0
     position = 0
@@ -492,6 +624,24 @@ def vml_fromstring(data):
         start = data.find('<', position)
         if start < 0:
             break
+        if data.startswith('<!--', start):
+            end = data.find('-->', start + 4)
+            if end < 0:
+                break
+            position = end + 3
+            continue
+        if data.startswith('<![CDATA[', start):
+            end = data.find(']]>', start + 9)
+            if end < 0:
+                break
+            position = end + 3
+            continue
+        if data.startswith('<?', start):
+            end = data.find('?>', start + 2)
+            if end < 0:
+                break
+            position = end + 2
+            continue
         index = start + 1
         quote = ''
         # A second '<' outside a quoted attribute resynchronizes an
@@ -519,10 +669,12 @@ def vml_fromstring(data):
             continue
         if token[0] == '/':
             tag = token[1:].strip().lower()
-            for scope_index in range(len(scopes) - 1, 0, -1):
-                if scopes[scope_index][1] == tag:
-                    del scopes[scope_index:]
-                    break
+            positions = open_tags.get(tag)
+            if positions:
+                scope_index = positions[-1]
+                for _, removed_tag in scopes[scope_index:]:
+                    open_tags[removed_tag].pop()
+                del scopes[scope_index:]
             continue
         self_closing = token.endswith('/')
         if self_closing:
@@ -588,6 +740,7 @@ def vml_fromstring(data):
                                             for k, value in attrs if not k.startswith('xmlns')})
         if not self_closing and tag not in ('br', 'hr', 'img', 'meta', 'link', 'input'):
             scopes.append((scope, tag))
+            open_tags.setdefault(tag, []).append(len(scopes) - 1)
             if len(scopes) > MAX_DEPTH:
                 raise ValueError('XML depth limit exceeded')
     return root

@@ -1,4 +1,5 @@
 import zipfile
+import pytest
 
 from dochan.utils import safe_xml as etree
 
@@ -40,6 +41,39 @@ def _write_xlsx(
             zf.writestr(name, data)
         for name, data in (extra_parts or {}).items():
             zf.writestr(name, data)
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+def test_damaged_sheet_isolated_and_completed_rows_kept(tmp_path, monkeypatch, streaming):
+    path = tmp_path / "damaged-sheets.xlsx"
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    workbook = (f'<workbook xmlns="{ns}" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="Good" sheetId="1" r:id="rId1"/>'
+                '<sheet name="Broken" sheetId="2" r:id="rId2"/></sheets></workbook>')
+    rels = ('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>')
+    good = f'<worksheet xmlns="{ns}"><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>'
+    broken = (f'<worksheet xmlns="{ns}"><sheetData>'
+              '<row r="1"><c r="A1"><v>11</v></c></row>'
+              '<row r="2"><c r="A2"><v>12</v></c></row>')
+    _write_xlsx(path, workbook, {"xl/worksheets/sheet1.xml": good,
+                                 "xl/worksheets/sheet2.xml": broken},
+                workbook_rels_xml=rels)
+    if streaming:
+        monkeypatch.setattr(xlsx_module, "MAX_XML_PART_SIZE", 1)
+    doc = XLSXReader().read(str(path))
+    assert [section.provenance.sheet for section in doc.sections] == ["Good", "Broken"]
+    assert doc.find_all("table")[0].rows[0][0].text == "7"
+    if streaming:
+        assert doc.find_all("table")[1].rows[0][0].text == "11"
+        assert doc.find_all("table")[1].rows[1][0].text == "12"
+    else:
+        assert len(doc.find_all("table")) == 1
+    assert any(error.startswith("ERR: XLSX sheet XML parse failed: xl/worksheets/sheet2.xml:")
+               for error in doc.errors)
+    assert not any("package parse failed" in error for error in doc.errors)
 
 
 def test_reads_xlsx_shared_strings_as_table(tmp_path):
@@ -1268,7 +1302,8 @@ def test_xlsx_chart_rejects_series_and_point_budgets_before_cell_allocation(
 
 
 def test_xlsx_chart_rejects_unbounded_or_invalid_point_indexes_before_int_conversion():
-    huge_index = "9" * 500_000
+    # Stay below the XML start-tag byte budget while exceeding Python's int limit.
+    huge_index = "9" * 5_000
     series = etree.fromstring(
         f"""
         <c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">

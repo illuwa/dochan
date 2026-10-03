@@ -84,61 +84,23 @@ def _node_text(node) -> str:
 
 
 
-def _sheet_rows(stream):
+def _sheet_rows(stream, errors=None, sheet_path=""):
     options = dict(events=("end",), tag=(f"{{{S_NS}}}row", f"{{{STRICT_S_NS}}}row"),
                    max_depth=2048, clear=True)
-    source = stream
-    emitted = 0
-    retries = 0
-    data = None
-    while True:
-        seen = 0
+    try:
         try:
-            for event, row in etree.iterparse(source, **options):
-                seen += 1
-                if seen > emitted:
-                    emitted += 1
-                    yield event, row
-            return
+            yield from etree.iterparse(stream, **options)
         except etree.ForbiddenDTD:
-            if data is not None:
-                raise
+            # A DTD is rejected in the prolog, before any completed row is emitted.
             stream.seek(0)
             data = stream.read(etree.MAX_BYTES + 1)
             if len(data) > etree.MAX_BYTES:
                 raise ValueError("XML size limit exceeded")
-            data = etree.sanitize_dtd(data)
-        except etree.XMLSyntaxError as exc:
-            if retries >= 4:
-                raise
-            if not hasattr(exc, 'position'):
-                raise
-            if data is None:
-                stream.seek(0)
-                data = stream.read(etree.MAX_BYTES + 1)
-                if len(data) > etree.MAX_BYTES:
-                    raise ValueError("XML size limit exceeded")
-            line, column = exc.position
-            offset = 0
-            for _ in range(line - 1):
-                newline = data.find(b'\n', offset)
-                if newline < 0:
-                    raise
-                offset = newline + 1
-            offset = min(offset + column, len(data))
-            broken = data.rfind(b'<', 0, offset + 1)
-            if broken < 0:
-                raise
-            next_row = re.search(rb'<(?:[A-Za-z_][\w.-]*:)?row(?=[\s/>])',
-                                 data[offset + 1:offset + 1 + 4 * 1024 * 1024])
-            if next_row is None:
-                raise
-            resume = offset + 1 + next_row.start()
-            if resume <= broken:
-                raise
-            data = data[:broken] + b' ' * (resume - broken) + data[resume:]
-            retries += 1
-        source = BytesIO(data)
+            yield from etree.iterparse(BytesIO(etree.sanitize_dtd(data)), **options)
+    except (etree.XMLSyntaxError, ValueError) as exc:
+        if errors is None:
+            raise
+        errors.append(f"ERR: XLSX sheet XML parse failed: {sheet_path}: {exc}")
 
 def _column_index(cell_ref: str) -> int:
     value = 0
@@ -248,15 +210,18 @@ class XLSXReader(SpreadsheetNumberFormatter):
                         if table.rows:
                             section.elements.append(table)
                     else:
-                        sheet_root = package.read_xml_part(sheet_path)
-                        self._strict_iso_dates = package.is_strict_part(sheet_path)
-                        headers, footers = self._read_sheet_headers_footers(sheet_root)
-                        section.elements.extend(headers)
-                        table = self._read_sheet_table(package, sheet_root, sheet_path, sheet_name, shared_strings, styles)
-                        if table.rows:
-                            section.elements.append(table)
-                        section.elements.extend(self._read_sheet_drawings(package, sheet_root, sheet_path, sheet_name))
-                        section.elements.extend(footers)
+                        try:
+                            sheet_root = package.read_xml_part(sheet_path)
+                            self._strict_iso_dates = package.is_strict_part(sheet_path)
+                            headers, footers = self._read_sheet_headers_footers(sheet_root)
+                            section.elements.extend(headers)
+                            table = self._read_sheet_table(package, sheet_root, sheet_path, sheet_name, shared_strings, styles)
+                            if table.rows:
+                                section.elements.append(table)
+                            section.elements.extend(self._read_sheet_drawings(package, sheet_root, sheet_path, sheet_name))
+                            section.elements.extend(footers)
+                        except (etree.XMLSyntaxError, ValueError) as exc:
+                            doc.errors.append(f"ERR: XLSX sheet XML parse failed: {sheet_path}: {exc}")
                 else:
                     doc.errors.append(f"ERR: XLSX sheet part not found: {sheet_path}")
                 if index == 1 and core_elements:
@@ -567,7 +532,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
         shared_formulas = {}
         truncation_error = ""
         with package.open_part(sheet_path) as stream:
-            context = _sheet_rows(stream)
+            context = _sheet_rows(stream, self._errors, sheet_path)
             for _, row_elem in context:
                 row_cells = {}
                 next_col_idx = 0
@@ -681,13 +646,19 @@ class XLSXReader(SpreadsheetNumberFormatter):
             if not drawing_path or drawing_path in seen or not package.exists(drawing_path):
                 continue
             seen.add(drawing_path)
-            elements.extend(self._read_drawing_part(package, drawing_path, sheet_name))
+            try:
+                elements.extend(self._read_drawing_part(package, drawing_path, sheet_name))
+            except (etree.XMLSyntaxError, ValueError) as exc:
+                self._errors.append(f"ERR: XLSX drawing XML parse failed: {drawing_path}: {exc}")
         for legacy_drawing in sheet_root.findall("s:legacyDrawing", namespaces=_namespaces(sheet_root)):
             vml_path = relationships.get(_rel_attr(legacy_drawing, "id"), "")
             if not vml_path or vml_path in seen or not package.exists(vml_path):
                 continue
             seen.add(vml_path)
-            elements.extend(self._read_vml_drawing_part(package, vml_path, sheet_name))
+            try:
+                elements.extend(self._read_vml_drawing_part(package, vml_path, sheet_name))
+            except (etree.XMLSyntaxError, ValueError) as exc:
+                self._errors.append(f"ERR: XLSX VML XML parse failed: {vml_path}: {exc}")
         self._record_sheet_embedded_assets(package, sheet_root, sheet_path, sheet_name)
         pending = getattr(self, "_pending_images", None)
         if pending:

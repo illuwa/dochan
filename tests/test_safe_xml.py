@@ -60,8 +60,8 @@ def test_namespace_scope_rebinding():
 def test_large_token_stream_and_dtd_guard():
     source = b'<r><row value="' + b'x' * (24 * 1024 * 1024) + b'"/></r>'
     started = time.monotonic()
-    rows = list(xml.iterparse(BytesIO(source), events=('end',), tag='row'))
-    assert len(rows[0][1].get('value')) == 24 * 1024 * 1024
+    with pytest.raises(ValueError, match='start tag byte limit'):
+        list(xml.iterparse(BytesIO(source), events=('end',), tag='row'))
     assert time.monotonic() - started < 4
     with pytest.raises(xml.ForbiddenDTD):
         list(xml.iterparse(BytesIO(b'<!DOCTYPE r [<!ENTITY x "boom">]><r>&x;</r>')))

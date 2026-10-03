@@ -1,4 +1,6 @@
 """A link can select complete glyphs by center despite clipped outer edges."""
+import pytest
+
 from dochan.pdf.annotations import LinkRegion, attach_comments, attach_links
 from dochan.pdf.content import Fragment
 from test_pdf_link_review import _document
@@ -70,6 +72,57 @@ def test_clipped_boundary_before_delimiter_run_can_attach_url():
     region = _region(1, 19)
     attach_links([first, second], [region], [], allow_clipped_edges=True)
     assert first.link_spans == [(0, 2, region.target)]
+
+
+@pytest.mark.parametrize("text", ["www.example.com", "3.14", "1,000", "e.g."])
+def test_clipped_boundary_before_mark_inside_token_stays_deferred(text):
+    # The link selects only the part before the first ASCII mark.
+    fragment = _split(text, 0)
+    cut = text.index(next(c for c in text if c in ".,")) * 10
+    region = _region(0, cut - 1)
+    attach_links([fragment], [region], [], allow_clipped_edges=True)
+    assert fragment.link_spans == []
+
+
+@pytest.mark.parametrize("text", ["site. more", "site, more", "site.", "site.)"])
+def test_clipped_boundary_before_sentence_mark_can_attach_url(text):
+    fragment = _split(text, 0)
+    region = _region(1, 39)
+    attach_links([fragment], [region], [], allow_clipped_edges=True)
+    assert fragment.link_spans == [(0, 4, region.target)]
+
+
+def test_sentence_mark_followed_by_word_in_touching_run_stays_deferred():
+    first, second = _split("www.", 0), _split("example", 40)
+    region = _region(1, 29)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == []
+
+
+def test_clipped_boundary_before_fullwidth_colon_can_attach_url():
+    fragment = _split("링크：설명", 0)
+    region = _region(1, 19)
+    attach_links([fragment], [region], [], allow_clipped_edges=True)
+    assert fragment.link_spans == [(0, 2, region.target)]
+
+
+@pytest.mark.parametrize("first_text, second_text, second_x, region", [
+    ("AB", "C", 20, (1, 19)), ("A", "BC", 10, (11, 29))])
+def test_tj_split_without_space_metric_stays_deferred(first_text, second_text, second_x, region):
+    first = _split(first_text, 0, space_width=0)
+    second = _split(second_text, second_x, space_width=0)
+    link = _region(*region)
+    attach_links([first, second], [link], [], allow_clipped_edges=True)
+    assert first.link_spans == [] and second.link_spans == []
+
+
+def test_overlapping_run_continues_the_word():
+    # Line assembly joins overlapping runs, so the output reads "ABC" even
+    # when the overlap exceeds half a space.
+    first, second = _split("AB", 0, space_width=0.5), _split("C", 19.6, space_width=0.5)
+    region = _region(1, 19.5)
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [] and second.link_spans == []
 
 
 def test_clipped_boundary_after_open_bracket_can_attach_url():

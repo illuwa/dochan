@@ -377,9 +377,12 @@ def attach_links(fragments, regions, warnings, allow_clipped_edges=False):
 # A clipped link edge may stop at these neighbours without splitting a word.
 # Apostrophes, slashes, hyphens and similar joiners continue the word.
 _OPENING_BOUNDARIES = "([{<\"\u201c\u00ab\u300c\u300e\uff08\u3010\u300a\u3008"
-_CLOSING_BOUNDARIES = (")]}>,.;:!?\"\u201d\u00bb"
+_CLOSING_BOUNDARIES = (")]}>\"\u201d\u00bb"
                        "\uff0c\u3002\uff1b\uff1a\uff01\uff1f\u3001"
                        "\u300d\u300f\uff09\u3011\u300b\u3009")
+# ASCII sentence marks also occur inside tokens (www.example.com, 3.14, 1,000);
+# they end a word only before whitespace, a closing boundary or line end.
+_SENTENCE_MARKS = ",.;:!?"
 
 
 def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
@@ -423,14 +426,47 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
     bounds.sort()
     lower_edges = [bound[0] for bound in bounds]
     # Runs whose end glyphs can continue a word across a Tj/TJ split.
-    runs = []
+    runs = {}
     for frag in fragments:
         direction = math.hypot(frag.dir_x, frag.dir_y)
         up = math.hypot(frag.up_x, frag.up_y)
         if (frag.text and frag.size and direction and up and
                 len(frag.char_offsets) == len(frag.text) + 1):
-            runs.append((frag, frag.dir_x / direction, frag.dir_y / direction,
-                         frag.up_x / up, frag.up_y / up))
+            runs[id(frag)] = (frag, frag.dir_x / direction, frag.dir_y / direction,
+                              frag.up_x / up, frag.up_y / up)
+
+    def touching(run, side):
+        """Runs that line assembly joins to `run` before (0) or after (1) it.
+
+        Line assembly joins runs whose gap is at most half a space, and any
+        overlap. Order, not distance alone, picks the side, so the previous
+        glyph of a one-glyph-per-Tj line is not taken as the next one.
+        Returns None when the geometry check budget is exhausted.
+        """
+        nonlocal checks
+        frag, ux, uy, vx, vy = run
+        start, end = frag.char_offsets[0], frag.char_offsets[-1]
+        found = []
+        for other_run in runs.values():
+            other, ox, oy = other_run[:3]
+            checks += 1
+            if checks > 2000000:
+                return None
+            if other is frag or ux * ox + uy * oy < 0.999:
+                continue
+            ax, ay = other.x - frag.x, other.y - frag.y
+            if abs(ax * vx + ay * vy) > 0.3 * min(frag.size, other.size):
+                continue
+            base = ax * ux + ay * uy
+            other_start = base + other.char_offsets[0]
+            other_end = base + other.char_offsets[-1]
+            limit = (max(frag.space_width, other.space_width) * 0.5
+                     or 0.125 * min(frag.size, other.size))
+            if (side == 1 and start < other_start <= end + limit or
+                    side == 0 and other_start < start and other_end >= start - limit):
+                found.append(other_run)
+        return found
+
     for frag in fragments:
         if frag.link_geometry_reliable and len(frag.char_offsets) == len(frag.text) + 1:
             continue
@@ -523,45 +559,46 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                 matched.update(hits)
         for char_index, region_index, side in clipped_edges:
             neighbor = char_index - 1 if side == 0 else char_index + 1
-            delimiters = _OPENING_BOUNDARIES if side == 0 else _CLOSING_BOUNDARIES
             if 0 <= neighbor < len(targets):
-                neighbors = [(frag.text[neighbor], region_index in targets[neighbor][1])]
+                neighbors = [(runs[id(frag)], neighbor, region_index in targets[neighbor][1])]
             else:
                 # The word can continue in another run on this baseline (a TJ
-                # split or a separate Tj). Line assembly joins runs whose gap
-                # is at most half a space; such a touching glyph gets the same
-                # test. A wider gap, or a run starting elsewhere on the line
-                # (one glyph per Tj), is not this edge's neighbour.
+                # split or a separate Tj); its touching glyph gets the same test.
+                adjacent = touching(runs[id(frag)], side)
+                if adjacent is None:
+                    warnings.append("WARN: PDF 링크 기하 검사 한도 초과 — 본문 연결 생략")
+                    return
                 neighbors = []
-                edge = frag.char_offsets[0] if side == 0 else frag.char_offsets[-1]
-                ex, ey = frag.x + ux * edge, frag.y + uy * edge
-                for other, ox, oy, ovx, ovy in runs:
-                    checks += 1
-                    if checks > 2000000:
-                        warnings.append("WARN: PDF 링크 기하 검사 한도 초과 — 본문 연결 생략")
-                        return
-                    if other is frag or ux * ox + uy * oy < 0.999:
-                        continue
-                    far = other.char_offsets[-1] if side == 0 else other.char_offsets[0]
-                    dx, dy = other.x + ox * far - ex, other.y + oy * far - ey
-                    gap = -(dx * ux + dy * uy) if side == 0 else dx * ux + dy * uy
-                    limit = max(frag.space_width, other.space_width) * 0.5
-                    if (abs(dx * vx + dy * vy) > 0.3 * min(frag.size, other.size)
-                            or abs(gap) > limit):
-                        continue
-                    glyph = -1 if side == 0 else 0
-                    first, last = (other.char_offsets[-2:] if side == 0
-                                   else other.char_offsets[:2])
-                    distance = (first + last) / 2
+                for run in adjacent:
+                    other, ox, oy, ovx, ovy = run
+                    glyph = len(other.text) - 1 if side == 0 else 0
+                    distance = (other.char_offsets[glyph] + other.char_offsets[glyph + 1]) / 2
                     cx = other.x + ox * distance + ovx * other.size * 0.5
                     cy = other.y + oy * distance + ovy * other.size * 0.5
                     checks += len(regions[region_index].polygons)
-                    inside = any(_contains(polygon, cx, cy)
-                                 for polygon in regions[region_index].polygons)
-                    neighbors.append((other.text[glyph], inside))
-            if any(inside or not (char.isspace() or char in delimiters)
-                   for char, inside in neighbors):
-                ambiguous.add(region_index)
+                    neighbors.append((run, glyph, any(
+                        _contains(polygon, cx, cy) for polygon in regions[region_index].polygons)))
+            for run, glyph, inside in neighbors:
+                char = run[0].text[glyph]
+                if side == 0:
+                    boundary = char.isspace() or char in _OPENING_BOUNDARIES
+                elif char.isspace() or char in _CLOSING_BOUNDARIES:
+                    boundary = True
+                elif char in _SENTENCE_MARKS:
+                    if glyph + 1 < len(run[0].text):
+                        following = [run[0].text[glyph + 1]]
+                    else:
+                        after = touching(run, 1)
+                        if after is None:
+                            warnings.append("WARN: PDF 링크 기하 검사 한도 초과 — 본문 연결 생략")
+                            return
+                        following = [item[0].text[0] for item in after]
+                    boundary = all(c.isspace() or c in _CLOSING_BOUNDARIES for c in following)
+                else:
+                    boundary = False
+                if inside or not boundary:
+                    ambiguous.add(region_index)
+                    break
         start = 0
         while start < len(targets):
             end = start + 1

@@ -84,7 +84,7 @@ def test_unchanged_document_is_identical(tmp_path, read_document, mode):
 
 
 @pytest.mark.parametrize("kind, mode", [("delete", "final"), ("insert", "original")])
-def test_ranges_cross_runs_and_paragraphs_without_leaking(tmp_path, kind, mode):
+def test_cross_paragraph_range_is_preserved_and_diagnosed(tmp_path, kind, mode):
     body = (
         '<hp:p><hp:run><hp:t>before' + marker(kind) + 'gone-1</hp:t></hp:run>'
         '<hp:run><hp:t>gone-2</hp:t><hp:tab/><hp:lineBreak/>'
@@ -93,8 +93,9 @@ def test_ranges_cross_runs_and_paragraphs_without_leaking(tmp_path, kind, mode):
         + paragraph("untouched")
     )
     document = Dochan(package(tmp_path, body), revision_mode=mode).doc
-    assert document.errors == []
-    assert texts(document) == ["before", "after", "untouched"]
+    assert any("[cross-paragraph]" in error and error.startswith("ERR:")
+               for error in document.errors)
+    assert texts(document) == ["beforegone-1gone-2\t\ngone-compose", "gone-3after", "untouched"]
 
 
 @pytest.mark.parametrize("scope", ["run", "paragraph", "section"])
@@ -208,8 +209,7 @@ def test_sibling_flows_cannot_pair_markers(container, kind, mode):
 
 @pytest.mark.parametrize("kind, mode", [("delete", "final"), ("insert", "original")])
 def test_valid_ranges_in_cell_and_note_stay_independent(tmp_path, kind, mode):
-    inner = (paragraph(marker(kind) + "gone-1")
-             + paragraph("gone-2" + marker(kind, True) + "INNER"))
+    inner = paragraph(marker(kind) + "gone-1gone-2" + marker(kind, True) + "INNER")
     cell = '<hp:tbl><hp:tr><hp:tc><hp:subList>' + inner + '</hp:subList></hp:tc></hp:tr></hp:tbl>'
     note = '<hp:ctrl><hp:footNote><hp:subList>' + inner + '</hp:subList></hp:footNote></hp:ctrl>'
     body = ('<hp:p><hp:run>' + cell + note + '</hp:run></hp:p>'
@@ -340,8 +340,8 @@ def test_real_complex_document_is_partial(mode):
     assert document.sections
     assert texts(document)
     assert any("revision" in e and "formatting" in e for e in document.errors)
-    assert any("revision" in e and "paraend" in e for e in document.errors)
-    assert any("revision" in e and "missing-begin" in e for e in document.errors)
+    assert all("[paraend]" not in e for e in document.errors)
+    assert any("revision" in e and "formatting" in e for e in document.errors)
 
 
 def test_real_complex_preserve_leaves_source_xml_unchanged():
@@ -362,3 +362,30 @@ def test_real_complex_preserve_leaves_source_xml_unchanged():
             assert etree.tostring(root) == before, name
     assert errors
     assert all(e.startswith("WARN:") for e in errors)
+
+
+def test_suppressed_table_does_not_leak_through_body_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr("dochan.hwpx.parser.MAX_DOCUMENT_BODY_NODES", 1)
+    table = ('<hp:tbl><hp:tr><hp:tc><hp:subList><hp:p><hp:run>'
+             '<hp:t>SECRET</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>')
+    body = (paragraph('first') + '<hp:p><hp:run><hp:t>A' + marker('delete') +
+            '</hp:t>' + table + '<hp:t>' + marker('delete', True) +
+            'B</hp:t></hp:run></hp:p>')
+    document = HWPXParser().parse(package(tmp_path, body), revision_mode='final')
+    assert 'SECRET' not in ''.join(texts(document))
+    assert 'AB' in ''.join(texts(document))
+
+
+def test_field_end_inside_deleted_range_balances_link(tmp_path):
+    begin = ('<hp:ctrl><hp:fieldBegin type="HYPERLINK" id="7">'
+             '<hp:parameters><hp:stringParam name="Path">https://example.test/</hp:stringParam>'
+             '</hp:parameters></hp:fieldBegin></hp:ctrl>')
+    end = '<hp:ctrl><hp:fieldEnd beginIDRef="7"/></hp:ctrl>'
+    body = ('<hp:p><hp:run><hp:t>A</hp:t>' + begin + '<hp:t>LINK' +
+            marker('delete') + 'X</hp:t>' + end + '<hp:t>' +
+            marker('delete', True) + 'AFTER</hp:t></hp:run></hp:p>')
+    document = HWPXParser().parse(package(tmp_path, body), revision_mode='final')
+    assert document.errors == []
+    runs = [run for p in document.find_all('paragraph') for run in p.runs]
+    assert any(run.text == 'LINK' and run.link for run in runs)
+    assert any(run.text == 'AFTER' and not run.link for run in runs)

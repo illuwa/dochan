@@ -314,7 +314,7 @@ def test_partial_revision_cli_severity_and_output(tmp_path, problem, flags, succ
 
 @pytest.mark.parametrize("flags, success", [
     ([], True), (["--revision-mode", "preserve"], True),
-    (["--revision-mode", "final"], False), (["--revision-mode", "original"], False),
+    (["--revision-mode", "final"], True), (["--revision-mode", "original"], True),
 ])
 def test_public_complex_revision_cli_preserves_or_fails_explicitly(flags, success):
     source = public_sample(
@@ -325,11 +325,12 @@ def test_public_complex_revision_cli_preserves_or_fails_explicitly(flags, succes
     assert result.returncode == (0 if success else 1), result.stderr
     if success:
         reader = Dochan(source)
-        assert result.stdout == reader.to_plain_text() + "\n"
+        selected_mode = flags[-1] if flags and flags[-1] in ("final", "original") else "preserve"
+        assert result.stdout == Dochan(source, revision_mode=selected_mode).to_plain_text() + "\n"
         paragraphs = reader.find_all("paragraph")
         assert len(paragraphs) == 3654
         assert sum(len(p.text) for p in paragraphs) == 102740
-        assert "WARN: HWPX revision partial" in result.stderr
+        assert "WARN: HWPX revision info" in result.stderr
         assert "ERR:" not in result.stderr
     else:
         assert result.stdout == ""

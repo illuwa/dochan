@@ -2,7 +2,6 @@
 
 import collections
 import hashlib
-import os
 from pathlib import Path
 
 import pytest
@@ -213,10 +212,9 @@ def test_deeply_nested_markers_are_bounded():
 
 
 def test_public_revision_documents_when_corpus_is_supplied():
-    corpus = os.environ.get('DOCHAN_PUBLIC_HWPX_CORPUS')
-    if not corpus:
-        pytest.skip('Set DOCHAN_PUBLIC_HWPX_CORPUS to run public document validation')
-    root = Path(corpus)
+    root = Path(__file__).resolve().parents[1] / 'corpus/hwp-public/hwpx'
+    if not root.is_dir():
+        pytest.skip('Optional real corpus fixture is not installed')
     r1 = root / 'hwpxlib-ChangeTrack.hwpx'
     r2 = root / 'admrul-관세조사-운영-훈령.hwpx'
     assert r1.exists() and r2.exists()
@@ -234,9 +232,103 @@ def test_public_revision_documents_when_corpus_is_supplied():
     for mode in expected:
         doc = parser.parse(r2, include_assets=False, revision_mode=mode)
         output[mode] = [p.text for p in doc.find_all('paragraph')]
-        assert all('[missing-begin]' in e or '[formatting]' in e for e in doc.errors)
+        assert all('[duplicate-end]' in e or '[formatting]' in e for e in doc.errors)
     preserve_hash = hashlib.sha256('\n'.join(output['preserve']).encode()).hexdigest()
     assert preserve_hash == 'ec5863b402309f855b9307f06c606c1a7f969bc94d7e5855453a22d3bf7deff8'
     baseline = collections.Counter(''.join(output['preserve']))
     for mode in ('final', 'original'):
         assert not collections.Counter(''.join(output[mode])) - baseline
+
+
+@pytest.mark.parametrize('kind, mode', [('delete', 'final'), ('insert', 'original')])
+def test_suppressed_object_has_no_children(kind, mode):
+    tc = '2' if kind == 'delete' else '1'
+    body = ('<hp:p><hp:run><hp:t>A<hp:%sBegin Id="x" TcId="%s"/>'
+            '</hp:t><hp:tbl><hp:tr><hp:tc><hp:subList><hp:p><hp:run>'
+            '<hp:t>SECRET</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>'
+            '<hp:t><hp:%sEnd Id="x" TcId="%s" paraend="0"/>B</hp:t>'
+            '</hp:run></hp:p>') % (kind, tc, kind, tc)
+    root, errors = project(body, mode)
+    assert para_texts(root) == ['AB']
+    assert 'SECRET' not in ''.join(root.itertext())
+    assert not errors
+
+
+def test_adjacent_duplicate_end_is_informational():
+    body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>C</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert para_texts(root) == ['AC']
+    assert len(errors) == 1 and errors[0].startswith('WARN:')
+    assert '[duplicate-end]' in errors[0]
+
+
+def test_duplicate_end_does_not_invalidate_other_open_range():
+    body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>'
+            '<hp:insertBegin Id="i" TcId="1"/>'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>C'
+            '<hp:insertEnd Id="i" TcId="1" paraend="0"/>D</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'original')
+    assert para_texts(root) == ['ABD']
+    assert any('[duplicate-end]' in error for error in errors)
+
+
+def test_nonadjacent_or_mismatched_end_stays_partial():
+    body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>C'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="1"/>D</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert para_texts(root) == ['ACD']
+    assert any('[missing-begin]' in error and error.startswith('ERR:')
+               for error in errors)
+
+
+def test_whitespace_prefix_survives_paragraph_end_merge():
+    body = ('<hp:p><hp:run><hp:t>   <hp:insertBegin Id="i" TcId="1"/>'
+            '<hp:insertEnd Id="i" TcId="1" paraend="1"/></hp:t></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:t>X</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'original')
+    assert para_texts(root) == ['   X']
+    assert not errors
+
+
+def test_structural_ctrl_does_not_keep_deleted_heading():
+    body = ('<hp:p styleIDRef="7"><hp:run><hp:ctrl><hp:colPr/></hp:ctrl>'
+            '<hp:t><hp:deleteBegin Id="d" TcId="2"/>TITLE'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="1"/></hp:t></hp:run></hp:p>'
+            '<hp:p styleIDRef="8"><hp:run><hp:t>body</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert para_texts(root) == ['body']
+    assert next(root.iter(HP + 'p')).get('styleIDRef') == '8'
+    assert not errors
+
+
+def test_formatting_occurrences_count_actual_references():
+    header = HEADER.replace('</hh:head>', '<hh:trackChange id="3" type="CharShape"/></hh:head>')
+    body = '<hp:p><hp:run charTcId="3"><hp:t>A</hp:t></hp:run><hp:run charTcId="3"><hp:t>B</hp:t></hp:run></hp:p>'
+    _, errors = project(body, 'final', header)
+    assert len(errors) == 1
+    assert 'occurrences=3' in errors[0]
+
+
+def test_markpen_and_hyphen_do_not_break_range():
+    body = ('<hp:p><hp:run><hp:t>A<hp:deleteBegin Id="d" TcId="2"/>B'
+            '<hp:markpenBegin/>C<hp:markpenEnd/><hp:hyphen/>D'
+            '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>E</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert para_texts(root) == ['AE']
+    assert not errors
+
+
+def test_parashape_heading_change_remains_partial():
+    header = HEADER.replace('</hh:head>', (
+        '<hh:paraPr id="7"><hh:heading type="OUTLINE" level="0"/></hh:paraPr>'
+        '<hh:paraPr id="8"><hh:heading type="NONE" level="0"/></hh:paraPr>'
+        '<hh:trackChange id="3" type="ParaShape" parashapeID="7"/>'
+        '</hh:head>'))
+    body = '<hp:p paraPrIDRef="8" paraTcId="3"><hp:run><hp:t>body</hp:t></hp:run></hp:p>'
+    _, errors = project(body, 'final', header)
+    assert any('[formatting-heading]' in error and error.startswith('ERR:')
+               for error in errors)

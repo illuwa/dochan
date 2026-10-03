@@ -676,7 +676,8 @@ class HWPXParser:
             self._revisions.project_section(root, part_name)
         finally:
             for node in chart_nodes:
-                node.tag = '{%s}chart' % NS['hp']
+                if node.tag == '{%s}ole' % NS['hp']:
+                    node.tag = '{%s}chart' % NS['hp']
         self._chart_seen.clear()
 
         self._limit_body_nodes(root)

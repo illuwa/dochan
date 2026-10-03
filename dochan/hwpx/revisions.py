@@ -22,7 +22,8 @@ OBJECTS = {"tbl", "pic", "equation", "rect", "ellipse", "line", "connectLine",
 TEXT_TOKENS = {HP + n for n in ("tab", "lineBreak", "fwSpace", "nbSpace")}
 MARKER_PARENTS = {SECTION, HP + "p", HP + "run", HP + "t"}
 FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose",
-                HP + "titleMark"} | TEXT_TOKENS
+                HP + "titleMark", HP + "markpenBegin", HP + "markpenEnd",
+                HP + "hyphen"} | TEXT_TOKENS
 
 
 def validate_revision_mode(mode):
@@ -36,6 +37,7 @@ class _Range:
     tc_id: str
     start: int
     location: str
+    paragraph: object = None
     valid: bool = True
 
 
@@ -49,6 +51,7 @@ class _Flow:
     disabled: bool = False
     range_count: int = 0
     paragraph_ends: list = field(default_factory=list)
+    last_closed: dict = field(default_factory=dict)
 
     def add(self, element, attribute):
         if self.opened:
@@ -67,15 +70,14 @@ class RevisionProjector:
         self.errors = errors
         self.mode = mode
         self.changes = {}
+        self._para_headings = {}
+        self._old_para_shapes = {}
         self._problems = {}
-        self._formatting_reported = False
+        self._formatting_count = 0
+        self._formatting_error_index = None
         self._section_ranges = 0
 
     def _report(self, code, location):
-        if code == "formatting":
-            if self._formatting_reported:
-                return
-            self._formatting_reported = True
         # Bound diagnostics by category, not by the number of hostile markers.
         if code not in self._problems:
             self._problems[code] = [0, location]
@@ -83,20 +85,40 @@ class RevisionProjector:
 
     def _flush(self, part):
         for code, (count, location) in self._problems.items():
-            severity = "WARN" if self.mode == "preserve" or code == "formatting" else "ERR"
-            label = "info" if code == "formatting" else "partial"
+            if code == "formatting":
+                self._formatting_count += count
+                if self._formatting_error_index is not None:
+                    old = self.errors[self._formatting_error_index]
+                    prefix, suffix = old.split("occurrences=", 1)
+                    _, suffix = suffix.split(";", 1)
+                    self.errors[self._formatting_error_index] = (
+                        f"{prefix}occurrences={self._formatting_count};{suffix}"
+                    )
+                    continue
+            informational = code in ("formatting", "duplicate-end")
+            severity = "WARN" if self.mode == "preserve" or informational else "ERR"
+            label = "info" if informational else "partial"
             outcome = ("text projection unchanged" if code == "formatting"
+                       else "adjacent duplicate ignored" if code == "duplicate-end"
                        else "unresolved content preserved")
             self.errors.append(
                 f"{severity}: HWPX revision {label} [{code}] {part}: {location}; "
                 f"occurrences={count}; revision_mode={self.mode}; {outcome}"
             )
+            if code == "formatting":
+                self._formatting_error_index = len(self.errors) - 1
         self._problems.clear()
 
     def read_header(self, root):
         for element in root.iter():
             if not isinstance(element.tag, str):
                 continue
+            if element.tag == HH + "paraPr" and element.get("id") is not None:
+                heading = element.find(HH + "heading")
+                if heading is not None:
+                    self._para_headings[element.get("id")] = (
+                        heading.get("type"), heading.get("level")
+                    )
             if element.tag.rsplit("}", 1)[-1] != "trackChange":
                 continue
             if element.tag != HH + "trackChange":
@@ -113,6 +135,8 @@ class RevisionProjector:
             else:
                 self.changes[identity] = kind
             if kind in ("ParaShape", "CharShape"):
+                if kind == "ParaShape":
+                    self._old_para_shapes[identity] = element.get("parashapeID")
                 self._report("formatting", kind + " does not change text projection")
             elif kind not in ("Insert", "Delete"):
                 self._report("unsupported-type", "trackChange@type")
@@ -135,6 +159,7 @@ class RevisionProjector:
         if not reference_valid:
             self._report("header-reference", location + " @TcId/type")
         if name.endswith("Begin"):
+            flow.last_closed.pop(key, None)
             self._section_ranges += 1
             if key in flow.opened:
                 flow.disabled = True
@@ -147,8 +172,10 @@ class RevisionProjector:
                 self._report("range-limit", location)
                 return
             flow.range_count += 1
+            paragraph = next((p for p in element.iterancestors()
+                              if p.tag == HP + "p"), None)
             flow.opened[key] = _Range(kind, tc_id, len(flow.slots), location,
-                                      reference_valid)
+                                      paragraph, reference_valid)
         else:
             span = flow.opened.pop(key, None)
             # OWPML (KS X 6101:2011) hp:insertEnd/deleteEnd @paraend.
@@ -159,14 +186,23 @@ class RevisionProjector:
             if not paraend_valid:
                 self._report("paraend", location + " (expected paraend=0 or 1)")
             if span is None:
+                if flow.last_closed.get(key) == (tc_id, paraend, len(flow.slots)):
+                    self._report("duplicate-end", location)
+                    return
                 flow.invalidate_open()
                 self._report("missing-begin", location)
                 return
             if span.tc_id != tc_id:
                 self._report("reference-mismatch", location + " begin/end @TcId")
                 span.valid = False
+            paragraph = next((p for p in element.iterancestors()
+                              if p.tag == HP + "p"), None)
+            if span.paragraph is not paragraph:
+                self._report("cross-paragraph", location)
+                span.valid = False
             span.valid = span.valid and reference_valid and paraend_valid
             flow.spans.append((span, len(flow.slots)))
+            flow.last_closed[key] = (tc_id, paraend, len(flow.slots))
             if paraend == "1" and span.valid:
                 paragraph = next((p for p in element.iterancestors()
                                   if p.tag == HP + "p"), None)
@@ -181,18 +217,23 @@ class RevisionProjector:
     def project_section(self, root, part="section"):
         self._section_ranges = 0
         # No edits or extra text allocations for documents without revisions.
-        if not any(
-            isinstance(e.tag, str) and (
+        relevant = set()
+        for e in root.iter():
+            if isinstance(e.tag, str) and (
                 e.tag.rsplit("}", 1)[-1] in MARKERS
                 or "paraTcId" in e.attrib or "charTcId" in e.attrib
-            ) for e in root.iter()
-        ):
+            ):
+                relevant.add(e)
+                relevant.update(e.iterancestors())
+        if not relevant:
             return
         flows = {root: _Flow()}
         counts = {"paragraph": 0, "run": 0, "marker": 0}
 
         def walk(element, flow, in_text=False, location="section", blocked=False, parent=None):
             if not isinstance(element.tag, str):
+                return
+            if element not in relevant and not flow.opened:
                 return
             name = element.tag.rsplit("}", 1)[-1]
             # Isolate a story before visiting *any* of its children. Waiting
@@ -206,6 +247,8 @@ class RevisionProjector:
                     # object is one position in its parent's range; its own text
                     # story cannot close the parent's markers.
                     flow.add(element, "object")
+                    if element not in relevant:
+                        return
                 elif flow.opened:
                     flow.invalidate_open()
                     # Alternate/unknown wrappers may contain an object: keep
@@ -215,6 +258,8 @@ class RevisionProjector:
                                      for e in element.iter())
                     code = "object" if has_object else "flow-boundary"
                     self._report(code, location + "/" + name + " (text-only projection)")
+                    if element not in relevant:
+                        return
                 flow = flows.setdefault(element, _Flow())
                 in_text = False
                 location += "/" + name
@@ -234,6 +279,15 @@ class RevisionProjector:
                     expected = "ParaShape" if attr == "paraTcId" else "CharShape"
                     if self.changes.get(element.get(attr)) != expected:
                         self._report("header-reference", location + " @" + attr)
+                    if attr == "paraTcId" and element.tag == HP + "p":
+                        old_id = self._old_para_shapes.get(element.get(attr))
+                        new_id = element.get("paraPrIDRef")
+                        old_heading = self._para_headings.get(old_id)
+                        new_heading = self._para_headings.get(new_id)
+                        if (old_heading is not None and new_heading is not None
+                                and old_heading != new_heading):
+                            self._report("formatting-heading", location +
+                                         " (outline level may differ by mode)")
             if name in MARKERS:
                 counts["marker"] += 1
                 if parent is None or parent.tag not in MARKER_PARENTS:
@@ -283,9 +337,20 @@ class RevisionProjector:
                 active += difference[index]
                 if active:
                     if attribute == "object":
-                        # Keep the XML node so its tail, which can contain
-                        # following visible text in mixed content, survives.
+                        # A field boundary changes parser state even when its
+                        # own range is excluded. Preserve it to keep its mate
+                        # balanced outside the range.
+                        if (element.tag == HP + "ctrl" and any(
+                            child.tag in (HP + "fieldBegin", HP + "fieldEnd")
+                            for child in element
+                        )):
+                            continue
+                        # clear() removes children which the body-budget and
+                        # chart-discovery paths would otherwise parse again.
+                        tail = element.tail
+                        element.clear()
                         element.tag = HP + "revisionSuppressed"
+                        element.tail = tail
                     elif attribute == "tag":
                         # Keep the element and its tail in place. The parser
                         # ignores this empty token rather than losing its tail.
@@ -307,14 +372,27 @@ class RevisionProjector:
                 pending = [paragraph]
                 while pending:
                     node = pending.pop()
-                    if node is not paragraph and node.tail and node.tail.strip():
+                    if (node is not paragraph and node.tail and
+                            node.getparent() is not None and
+                            node.getparent().tag == HP + "t"):
                         return True
                     if node.tag == HP + "revisionSuppressed":
                         continue
                     if isinstance(node.tag, str) and node.tag.startswith(HP):
-                        if node.tag.rsplit("}", 1)[-1] in OBJECTS:
+                        if node.tag.rsplit("}", 1)[-1] in OBJECTS and not (
+                            node.tag == HP + "ctrl" and any(
+                                child.tag in (HP + "colPr", HP + "bookmark",
+                                              HP + "fieldBegin", HP + "fieldEnd",
+                                              HP + "pageNum", HP + "pageHiding")
+                                for child in node
+                            )
+                        ):
                             return True
-                    if node.text and node.text.strip():
+                    if node.tag in TEXT_TOKENS:
+                        return True
+                    if node.tag == HP + "compose" and node.get("composeText"):
+                        return True
+                    if node.tag == HP + "t" and node.text:
                         return True
                     pending.extend(node)
                 return False

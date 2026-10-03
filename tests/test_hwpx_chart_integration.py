@@ -72,6 +72,38 @@ def warned(doc, code):
     return any(f"[chart:{code}]" in error for error in doc.errors)
 
 
+@pytest.mark.parametrize("kind, mode", [("delete", "final"), ("insert", "original")])
+def test_revision_suppresses_direct_chart_without_resurrection(tmp_path, kind, mode):
+    tc = "2" if kind == "delete" else "1"
+    body = paragraph(
+        f'<hp:t>A<hp:{kind}Begin Id="x" TcId="{tc}"/></hp:t>'
+        + reference() +
+        f'<hp:t><hp:{kind}End Id="x" TcId="{tc}" paraend="0"/>B</hp:t>'
+    )
+    header = ('<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">'
+              '<hh:trackChange id="1" type="Insert"/>'
+              '<hh:trackChange id="2" type="Delete"/></hh:head>')
+    doc = Dochan(package(tmp_path, [body], header=header),
+                 include_assets=False, revision_mode=mode).doc
+    assert [p.text for p in doc.find_all('paragraph')] == ['AB']
+    assert doc.find_all('table') == []
+    assert doc.errors == []
+
+
+def test_revision_suppressed_table_does_not_report_nested_chart(tmp_path):
+    table = ('<hp:tbl><hp:tr><hp:tc><hp:subList><hp:p><hp:run>'
+             + reference() + '</hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>')
+    body = paragraph('<hp:t>A<hp:deleteBegin Id="d" TcId="2"/></hp:t>'
+                     + table + '<hp:t><hp:deleteEnd Id="d" TcId="2" paraend="0"/>B</hp:t>')
+    header = ('<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">'
+              '<hh:trackChange id="2" type="Delete"/></hh:head>')
+    doc = Dochan(package(tmp_path, [body], header=header),
+                 include_assets=False, revision_mode='final').doc
+    assert [p.text for p in doc.find_all('paragraph')] == ['AB']
+    assert doc.find_all('table') == []
+    assert doc.errors == []
+
+
 @pytest.mark.parametrize("wrapped", [False, True])
 def test_body_order_title_and_switch_select_one_branch(tmp_path, wrapped):
     node = switch(reference()) if wrapped else reference()

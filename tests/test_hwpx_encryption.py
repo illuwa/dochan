@@ -37,7 +37,7 @@ def _encrypt(key, iv, data):
     return bytes(result)
 
 
-def _package(path, *, password='private-password', change=None, with_image=False):
+def _package(path, *, password='private-password', change=None, with_image=False, only=None):
     parts = {
         'Contents/header.xml': b'<head/>',
         'Contents/section0.xml': SECTION,
@@ -56,6 +56,9 @@ def _package(path, *, password='private-password', change=None, with_image=False
     with zipfile.ZipFile(path, 'w') as zf:
         zf.writestr('mimetype', 'application/hwp+zip')
         for name, plain in parts.items():
+            if only is not None and name not in only:
+                zf.writestr(name, plain)
+                continue
             compressor = zlib.compressobj(wbits=-15)
             compressed = compressor.compress(plain) + compressor.flush()
             compressed += b'\0' * (-len(compressed) % 16)
@@ -78,6 +81,8 @@ def _package(path, *, password='private-password', change=None, with_image=False
                 attrs['initialisation-vector'] = _b64(iv[:8])
             if change == 'large-spin' and name.endswith('header.xml'):
                 attrs['iteration-count'] = '1000001'
+            if change == 'zero-spin' and name.endswith('header.xml'):
+                attrs['iteration-count'] = '0'
             if change == 'cipher' and name.endswith('header.xml'):
                 attrs['algorithm-name'] = 'other-cipher'
             if change == 'checksum' and name.endswith('header.xml'):
@@ -376,3 +381,31 @@ def test_encrypted_aes_budget_is_bounded(tmp_path):
     with pytest.raises(ValueError, match='AES 작업량 상한 초과'):
         decrypt_part(ciphertext, metadata['Contents/header.xml'], 'private-password',
                      1024, [1000000], aes_budget=aes_budget)
+
+
+def test_wrong_password_is_rejected_even_when_only_images_are_encrypted(tmp_path):
+    """필수 파트가 평문이어도 틀린 암호는 조용히 통과하지 않는다(감수 P3-2)."""
+    path = _package(tmp_path / 'image-only.hwpx', with_image=True, only={'BinData/image1.png'})
+    doc = Dochan(str(path), password='wrong-password')
+    assert any('암호가 틀리거나' in error for error in doc.errors)
+    assert Dochan(str(path), password='private-password').errors == []
+
+
+def test_zero_iteration_count_is_unsupported_not_work_limit(tmp_path):
+    doc = Dochan(str(_package(tmp_path / 'zero.hwpx', change='zero-spin')), password='private-password')
+    assert any('지원하지 않는 HWPX 암호화' in error for error in doc.errors)
+    assert not any('작업량' in error for error in doc.errors)
+
+
+def test_image_over_aes_budget_has_specific_warning(tmp_path, monkeypatch):
+    import dochan.hwpx.crypto as crypto
+    path = _package(tmp_path / 'budget.hwpx', with_image=True)
+    with zipfile.ZipFile(path) as zf:
+        sizes = {info.filename: info.file_size for info in zf.infolist()
+                 if info.filename != 'mimetype' and not info.filename.startswith('META-INF')}
+        # 본문 두 파트 + 암호 확인용으로 먼저 읽는 가장 작은 암호화 파트
+        needed = sizes['Contents/header.xml'] + sizes['Contents/section0.xml'] + min(sizes.values())
+    monkeypatch.setattr(crypto, 'MAX_AES_BYTES', needed)
+    doc = Dochan(str(path), password='private-password')
+    assert any('BinData/image1.png' in error and 'AES 작업량' in error for error in doc.errors)
+    assert not any('복호화 실패' in error for error in doc.errors)

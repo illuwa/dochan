@@ -104,7 +104,9 @@ def read_encryption_manifest(data, names, limits):
         except ValueError:
             raise _unsupported()
         limit = limits(name)
-        if count < 1 or count > MAX_SPIN_COUNT:
+        if count < 1:
+            raise _unsupported()
+        if count > MAX_SPIN_COUNT:
             raise _work_limit()
         if size < 0 or size > limit:
             raise _unsupported()

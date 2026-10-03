@@ -276,6 +276,12 @@ class HWPXParser:
                                 'ERR: 지원하지 않는 HWPX 암호화 또는 손상된 암호화 데이터')
                         if self._encrypted_parts and password is None:
                             raise HWPXCryptoError('ERR: 암호화된 HWPX 문서 — 암호가 필요함')
+                        if self._encrypted_parts:
+                            # 본문이 평문이고 그림만 암호화된 문서에서도 틀린 암호를 조용히
+                            # 넘기지 않도록, 가장 작은 암호화 파트로 암호를 먼저 확인한다.
+                            probe = min(self._encrypted_parts,
+                                        key=lambda name: (zf.getinfo(name).file_size, name))
+                            self._read_zip_part(zf, probe, self._encrypted_limit(probe))
 
                 # content.hpf 를 한 번만 읽어 섹션 목록과 바이너리 매핑을 함께 얻는다
                 self._read_content_hpf(zf)
@@ -1555,8 +1561,11 @@ class HWPXParser:
                 continue
             try:
                 data = self._read_zip_part(zf, zip_name, MAX_FILE_SIZE)
-            except HWPXCryptoError:
-                self.errors.append(f"이미지 {zip_name} 복호화 실패")
+            except HWPXCryptoError as e:
+                if 'AES 작업량' in str(e):
+                    self.errors.append(f"WARN: 이미지 {zip_name} 생략 — 암호 해제 AES 작업량 상한 초과")
+                else:
+                    self.errors.append(f"이미지 {zip_name} 복호화 실패")
                 continue
             except Exception:
                 continue

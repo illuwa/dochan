@@ -135,3 +135,12 @@ def test_revision_projection_keeps_or_removes_note_atomically(tmp_path, mode, pr
     assert len(elements) == (2 if present else 1)
     assert elements[0].text == ('앞[1]뒤' if present else '앞뒤')
     assert [note.number for note in doc.find_all('note')] == ([1] if present else [])
+
+
+def test_textbox_note_stays_before_outer_suffix(tmp_path):
+    """글상자 문단이 텍스트 뒤에 이미 둔 각주는 바깥 문단에서 다시 미루지 않는다(감수 P3)."""
+    textbox = ('<hp:rect><hp:drawText><hp:subList>%s</hp:subList>'
+               '</hp:drawText></hp:rect>') % _paragraph('<hp:t>상자 앞</hp:t>' + _note('상자 주석') + '<hp:t>상자 뒤</hp:t>')
+    elements = _document(tmp_path, _paragraph('<hp:t>밖 앞</hp:t>' + textbox + '<hp:t>밖 뒤</hp:t>')).sections[0].elements
+    kinds = [(type(item).__name__, getattr(item, 'text', '')) for item in elements]
+    assert kinds[1:3] == [('Paragraph', '상자 앞[1]상자 뒤'), ('Footnote', '상자 주석')]

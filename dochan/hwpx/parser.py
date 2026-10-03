@@ -196,7 +196,7 @@ class HWPXParser:
         self._section_parents = None
         self._chart_cache = {}  # Immutable XML bytes/counts only; never shared models.
         self._chart_seen = set()
-        # 중첩 글상자 문단이 텍스트 뒤에 이미 배치한 그림(id). 모델에 표지를 남기지 않는다.
+        # 중첩 글상자 문단이 텍스트 뒤에 이미 배치한 그림·각주(id). 모델에 표지를 남기지 않는다.
         self._placed_pictures = set()
         self._chart_count = 0
         self._chart_bytes = 0
@@ -971,8 +971,7 @@ class HWPXParser:
                         elements.append(para)
                         # 중첩 글상자 문단에서 이미 텍스트 뒤에 배치한 그림은
                         # 바깥 문단의 대기 목록에 다시 넣지 않는다.
-                        self._placed_pictures.update(
-                            id(item) for item in deferred if isinstance(item, Image))
+                        self._placed_pictures.update(id(item) for item in deferred)
                     runs = []
                 elements.extend(deferred)
                 deferred.clear()
@@ -997,7 +996,11 @@ class HWPXParser:
                             else:
                                 deferred.append(item)
                         elif isinstance(item, Footnote) and item.type in ('footnote', 'endnote'):
-                            deferred.append(item)
+                            if id(item) in self._placed_pictures:
+                                flush_flow()
+                                elements.append(item)
+                            else:
+                                deferred.append(item)
                         else:
                             # 표·수식·도형은 기존 문단 경계를 유지한다.
                             flush_flow()

@@ -100,7 +100,11 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
                  and not _BLOCK_MARKER.match(line.text))
         if joins:
             block = blocks[-1]
-            sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '
+            # 앞 줄 끝에 공백 글리프가 실제로 있으면 원문도 띄어 썼다. 없을 때만 통계로 판정한다.
+            if getattr(previous, "trailing_space", False):
+                sep = ' '
+            else:
+                sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '
             if JOIN_OBSERVER is not None:
                 # 직전 '줄' 원문을 넘긴다 — 병합 블록을 넘기면 앞선 예측 구분자가 라벨 문맥에 섞인다
                 try:

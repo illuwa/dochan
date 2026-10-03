@@ -857,7 +857,10 @@ class _Line:
                                           tuple(fragment_runs)))
             prev_end = start + f.width
             prev_space = f.space_width
-        self.text = "".join(parts).strip()
+        joined = "".join(parts)
+        # 줄 끝에 실제로 그려진 공백 글리프는 원문의 띄어쓰기다(줄 병합이 쓴다).
+        self.trailing_space = bool(joined.strip()) and joined[-1:].isspace()
+        self.text = joined.strip()
 
     def _append_run(self, text: str, bold: bool, italic: bool, link: str = "") -> None:
         if not text:

@@ -69,7 +69,9 @@ class SpreadsheetNumberFormatter:
             sections = self._format_sections(selected)
             position = 1 if number < 0 and len(sections) > 1 else 2 if number == 0 and len(sections) > 2 else 0
             section = sections[position]
-            if self._has_unterminated_quote(section):
+            if (self._has_unterminated_quote(section)
+                    and re.search(r"[Ee][+-]", self._format_without_literals(section))):
+                # Only the scientific renderer cannot place an unclosed literal.
                 return value
             shown = abs(number) if number < 0 and position == 1 else number
             if not section or section == '""':
@@ -538,9 +540,10 @@ class SpreadsheetNumberFormatter:
                    if is_format and token in "0#?.,"]
         if not numeric:
             return None
-        prefix = "".join(token for token, is_format in before[:numeric[0]] if not is_format)
-        suffix = "".join(token for token, is_format in before[numeric[-1] + 1:]
-                         if not is_format or token == "%")
+        prefix = "".join(self._scientific_literal(token, is_format)
+                         for token, is_format in before[:numeric[0]])
+        suffix = "".join(self._scientific_literal(token, is_format, percent=True)
+                         for token, is_format in before[numeric[-1] + 1:])
         exp_slots = [index for index, (token, is_format) in enumerate(after)
                      if is_format and token in "0#?"]
         if not exp_slots:
@@ -554,11 +557,20 @@ class SpreadsheetNumberFormatter:
         exp_prefix = "".join(token for token, is_format in after[:exp_slots[0]] if not is_format)
         exp_suffix = "".join(token for token, is_format in after[exp_slots[-1] + 1:]
                              if not is_format or token == "%")
-        currency = self._currency_symbol(section)
-        if currency and ("$" in section[:marker.start()] or "[$" in section[:marker.start()]):
-            prefix = currency + prefix
         return (sign + prefix + mantissa_text + suffix + marker[0][0] + exp_prefix +
                 exp_sign + exp_text + exp_suffix)
+
+    @staticmethod
+    def _scientific_literal(token: str, is_format: bool, percent: bool = False) -> str:
+        """Text a non-digit token keeps in place around a scientific mantissa."""
+        if not is_format:
+            return token
+        if token == "$" or (percent and token == "%"):
+            return token
+        if token.startswith("[$"):
+            # [$€-2] shows its symbol; a locale-only [$-412] shows nothing.
+            return token[2:-1].split("-", 1)[0]
+        return ""
 
     @staticmethod
     def _continued_fraction(value: float, limit: int) -> Fraction:

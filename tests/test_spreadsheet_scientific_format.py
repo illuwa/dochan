@@ -71,3 +71,24 @@ def test_scientific_marker_scans_long_literal_linearly():
 ])
 def test_scientific_mixed_slots_and_currency(value, fmt, expected):
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
+
+
+@pytest.mark.parametrize("value, fmt, expected", [
+    ("-1234.5", "$#,##0.00E+00;($#,##0.00E+00)", "($1,234.50E+00)"),
+    ("1234.5", '"USD "$0.00E+00', "USD $1.23E+03"),
+    ("1234.5", "0.00$E+00", "1.23$E+03"),
+    ("1234.5", "[$€-2] 0.00E+00", "€ 1.23E+03"),
+    ("1234.5", "[$-412]0.00E+00", "1.23E+03"),
+])
+def test_scientific_currency_stays_where_the_format_puts_it(value, fmt, expected):
+    """규칙 추론: 통화 기호는 서식 안의 자기 자리에 남는다."""
+    assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
+
+
+@pytest.mark.parametrize("value, fmt, expected", [
+    ("45000", 'yyyy-mm-dd"', "2023-03-15"),
+    ("1234.5", '#,##0" won', "1,235 won"),
+])
+def test_unterminated_quote_outside_scientific_keeps_previous_display(value, fmt, expected):
+    """닫히지 않은 따옴표의 원시 값 폴백은 과학 표기 구역에만 쓴다."""
+    assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected

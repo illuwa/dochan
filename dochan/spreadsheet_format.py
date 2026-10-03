@@ -142,8 +142,7 @@ class SpreadsheetNumberFormatter:
                 formatted = self._apply_literal_affixes(formatted, metadata)
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "scientific":
-                formatted = self._scientific_number(shown, section, metadata.decimals)
-                formatted = self._apply_literal_affixes(formatted, metadata)
+                formatted = self._scientific_number(shown, section)
                 return "-" + formatted if auto_minus else formatted
             if metadata.kind == "percent":
                 # Excel stores double values and rounds ties away from zero.
@@ -245,6 +244,8 @@ class SpreadsheetNumberFormatter:
             metadata = _FormatMetadata(kind="time")
         elif self._is_date_format(lower_fmt):
             metadata = _FormatMetadata(kind="date")
+        elif self._is_scientific_format(fmt):
+            metadata = _FormatMetadata(kind="scientific")
         elif self._is_zero_fill_format(fmt):
             literal_prefix, literal_suffix = self._literal_affixes(fmt)
             metadata = _FormatMetadata(
@@ -263,14 +264,6 @@ class SpreadsheetNumberFormatter:
                 literal_suffix=literal_suffix,
                 denominator_limit=self._fraction_denominator_limit(fmt),
                 fixed_denominator=fixed_denominator,
-            )
-        elif self._is_scientific_format(fmt):
-            literal_prefix, literal_suffix = self._literal_affixes(fmt)
-            metadata = _FormatMetadata(
-                kind="scientific",
-                decimals=self._scientific_decimal_places(fmt),
-                literal_prefix=literal_prefix,
-                literal_suffix=literal_suffix,
             )
         elif "%" in clean_fmt:
             literal_prefix, literal_suffix = self._literal_affixes(fmt)
@@ -460,12 +453,18 @@ class SpreadsheetNumberFormatter:
             decimal = Decimal(format(number, ".15g"))
             return decimal.quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
 
-    def _scientific_number(self, number: float, section: str, decimals: int) -> str:
-        code = self._format_code_tokens(section)
-        exponent_digits = re.search(r"([Ee])[+-](0+)", code)
-        width = len(exponent_digits[2]) if exponent_digits else 2
-        mantissa_code = re.split(r"[Ee][+-]", code, maxsplit=1)[0]
-        integer_slots = max(1, sum(char in "0#?" for char in mantissa_code.split(".", 1)[0]))
+    def _scientific_number(self, number: float, section: str) -> str:
+        marker = self._scientific_marker(section)
+        if marker is None:
+            return str(number)
+        before = self._format_literal_tokens(section[:marker.start()])
+        after = self._format_literal_tokens(section[marker.end():])
+        integer_code, dot, fractional_code = "".join(
+            token for token, is_format in before if is_format and token in "0#?.,"
+        ).partition(".")
+        integer_slots = max(1, sum(char in "0#?" for char in integer_code))
+        fraction_slots = "".join(char for char in fractional_code if char in "0#?")
+        decimals = len(fraction_slots)
         if not number:
             exponent, mantissa = 0, Decimal(0)
         else:
@@ -476,8 +475,58 @@ class SpreadsheetNumberFormatter:
                 mantissa /= 10 ** integer_slots
                 exponent += integer_slots
         sign = "-" if number < 0 else ""
-        letter = exponent_digits[1] if exponent_digits else "E"
-        return f"{sign}{mantissa:.{decimals}f}{letter}{'+' if exponent >= 0 else '-'}{abs(exponent):0{width}d}"
+        integer, _, fraction = f"{mantissa:.{decimals}f}".partition(".")
+        slots = "".join(char for char in integer_code if char in "0#?")
+        padded = []
+        digit_index = len(integer) - 1
+        for slot in reversed(slots):
+            if digit_index >= 0:
+                padded.append(integer[digit_index])
+                digit_index -= 1
+            else:
+                padded.append("0" if slot == "0" else " " if slot == "?" else "")
+        slot_text = "".join(reversed(padded))
+        if not number and len(slots) > 1:
+            slot_text = "0" * len(slots)
+        shown_integer = integer[:digit_index + 1] + slot_text
+        if "," in integer_code.rstrip(","):
+            if "?" in slots and number:
+                slot_text = "".join(char if char else " " for char in reversed(padded))
+                shown_integer = integer[:digit_index + 1] + slot_text
+            groups = []
+            while shown_integer:
+                groups.insert(0, shown_integer[-3:])
+                shown_integer = shown_integer[:-3]
+            while groups and not groups[0].strip() and "?" not in slots:
+                groups.pop(0)
+            shown_integer = "".join(
+                group + ("," if groups[index + 1].strip() and group.strip() else " ")
+                for index, group in enumerate(groups[:-1])
+            ) + (groups[-1] if groups else "")
+        shown_fraction = list(fraction)
+        for index in range(len(fraction_slots) - 1, -1, -1):
+            if fraction_slots[index] == "0" or shown_fraction[index] != "0":
+                break
+            shown_fraction[index] = " " if fraction_slots[index] == "?" else ""
+        mantissa_text = shown_integer + ("." + "".join(shown_fraction) if dot else "")
+        numeric = [index for index, (token, is_format) in enumerate(before)
+                   if is_format and token in "0#?.,"]
+        prefix = "".join(token for token, is_format in before[:numeric[0]] if not is_format)
+        suffix = "".join(token for token, is_format in before[numeric[-1] + 1:]
+                         if not is_format or token == "%")
+        exp_slots = [index for index, (token, is_format) in enumerate(after)
+                     if is_format and token in "0#?"]
+        exp_code = "".join(after[index][0] for index in exp_slots)
+        exp_digits = str(abs(exponent))
+        exp_width = max(exp_code.count("0"), len(exp_digits))
+        exp_text = exp_digits.zfill(exp_width)
+        exp_text = exp_text.rjust(max(exp_code.count("?"), len(exp_text)))
+        exp_sign = "-" if exponent < 0 else "+" if marker[0][1] == "+" else ""
+        exp_prefix = "".join(token for token, is_format in after[:exp_slots[0]] if not is_format)
+        exp_suffix = "".join(token for token, is_format in after[exp_slots[-1] + 1:]
+                             if not is_format or token == "%")
+        return (sign + prefix + mantissa_text + suffix + marker[0][0] + exp_prefix +
+                exp_sign + exp_text + exp_suffix)
 
     @staticmethod
     def _continued_fraction(value: float, limit: int) -> Fraction:
@@ -625,16 +674,17 @@ class SpreadsheetNumberFormatter:
         return int(match.group()[1:]) if match else 0
 
     def _is_scientific_format(self, fmt: str) -> bool:
-        clean_fmt = self._format_without_literals(fmt)
-        first_section = self._format_sections(clean_fmt)[0]
-        return bool(re.search(r"[0#?](?:\.[0#?]+)?E[+-]0+", first_section, flags=re.IGNORECASE))
+        return self._scientific_marker(self._format_sections(fmt)[0]) is not None
 
-    def _scientific_decimal_places(self, fmt: str) -> int:
-        clean_fmt = self._format_without_literals(fmt)
-        first_section = self._format_sections(clean_fmt)[0]
-        mantissa = re.split(r"E[+-]", first_section, maxsplit=1, flags=re.IGNORECASE)[0]
-        match = re.search(r"\.([0#?]+)", mantissa)
-        return len(match.group(1)) if match else 0
+    @staticmethod
+    def _scientific_marker(section: str):
+        masked = re.sub(r'"[^"]*"|[\\_*].|\[[^\]]*\]',
+                        lambda match: " " * len(match[0]), section)
+        for marker in re.finditer(r"[Ee][+-]", masked):
+            if (re.search(r"[0#?]", masked[:marker.start()])
+                    and re.search(r"[0#?]", masked[marker.end():])):
+                return marker
+        return None
 
     def _currency_symbol(self, fmt: str) -> str:
         clean_fmt = self._format_without_literals(fmt)

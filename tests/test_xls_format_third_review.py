@@ -43,11 +43,11 @@ def test_negative_accounting_section_keeps_alignment_space():
 @pytest.mark.parametrize("value, fmt, expected", [
     ("1234567", "#,.#,", "1.2"),
     ("-1234567", "#,.#,", "-1.2"),
-    ("123456.789", "|#,e-#|", "123456.789"),
-    ("123456.789", "|#%e-#|", "123456.789"),
+    ("123456.789", "|#,e-#|", "|1e5|"),
+    ("123456.789", "|#%e-#|", "|1%e5|"),
 ])
-def test_scaling_commas_and_unsupported_exponent(value, fmt, expected):
-    """Excel 저장값: NumberFormatTests A93·A97. 지수 폴백은 지원 범위 결정."""
+def test_scaling_commas_and_scientific_sections(value, fmt, expected):
+    """NumberFormatTests.xlsx A93·A97 및 NumberFormatApproxTests.xlsx A2·A4의 Excel 저장값."""
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
 
 

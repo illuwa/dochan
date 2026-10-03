@@ -90,6 +90,19 @@ def parse_parameter_text(text):
     return parse(units, 0)
 
 
+_MNEMONIC = re.compile(r'&(&?)')
+
+
+def caption_display(caption):
+    """Show a button/check/radio caption as Hancom Office does.
+
+    Captions use the Windows mnemonic convention, confirmed on screen with
+    Hancom Office HWP: '&&' shows one '&'; a lone '&' marks the access key
+    and is hidden, including a trailing one. Edit/combo text is literal.
+    """
+    return _MNEMONIC.sub(lambda match: match.group(1), caption)
+
+
 def form_text(data):
     """Return the stored caption/current text of the five supported forms."""
     if len(data) < 14:
@@ -116,6 +129,8 @@ def form_text(data):
         return ''
     value = values.get(key, '')
     value = value if isinstance(value, str) else ''
+    if group == 'ButtonSet':
+        value = caption_display(value)
     if kind in (b'tbc+', b'tbr+'):
         marker = '[x]' if values.get('Value') == 1 else '[ ]'
         return marker + value

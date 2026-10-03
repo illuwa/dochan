@@ -27,6 +27,7 @@ from ..model.image import Image
 from ..model.header_footer import HeaderFooter, Footnote
 from ..model.style import FaceName, ParaShape, StyleEntry
 from ..hwp.records.char_shape import CharShape
+from ..hwp.forms import caption_display
 from ..hwp.records.ctrl_header import field_command_to_url
 from . import charts
 from .revisions import RevisionProjector, validate_revision_mode
@@ -1133,12 +1134,12 @@ class HWPXParser:
         return results
 
     def _parse_form_run(self, elem, context=None):
-        """Read the current displayed value, never command/name or option lists."""
+        """Read the current displayed value, never command/name or the other list options."""
         if elem.tag not in {'{' + NS['hp'] + '}' + tag for tag in FORM_TAGS}:
             return None
         tag = _local_tag(elem.tag)
         if tag in ('btn', 'checkBtn', 'radioBtn'):
-            text = elem.get('caption', '')
+            text = caption_display(elem.get('caption', ''))
             if tag in ('checkBtn', 'radioBtn'):
                 marker = '[x]' if elem.get('value') == 'CHECKED' else '[ ]'
                 text = marker + text
@@ -1148,12 +1149,10 @@ class HWPXParser:
             text_elem = elem.find('hp:text', namespaces=NS)
             text = ''.join(text_elem.itertext()) if text_elem is not None else ''
         else:
-            text = elem.get('selectedValue', '')
-            if text:
-                for item in elem.findall('hp:listItem', namespaces=NS):
-                    if item.get('value') == text:
-                        text = item.get('displayText') or text
-                        break
+            # 한컴오피스는 selectedValue·displayText 와 관계없이 첫 listItem 의 value 를 콤보 상자에
+            # 표시한다(통제 표본 실측). HWP 의 ComboBoxSet Text 가 이 자리에 저장된다.
+            first = elem.find('hp:listItem', namespaces=NS)
+            text = first.get('value', '') if first is not None else ''
         if not text:
             return None
         context = context or TextRun(link=self._current_link())

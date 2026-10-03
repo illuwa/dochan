@@ -26,8 +26,8 @@ def test_hwpx_form_display_text_keeps_inline_order(tmp_path, wrapped):
         '<hp:btn caption="실행" command="DO_NOT_OUTPUT"/>',
         '<hp:checkBtn caption="동의" value="CHECKED"/>',
         '<hp:radioBtn caption="선택" value="UNCHECKED"/>',
-        '<hp:comboBox selectedValue="second"><hp:listItem value="first" displayText="비선택"/>'
-        '<hp:listItem value="second" displayText="선택값"/></hp:comboBox>',
+        '<hp:comboBox selectedValue=""><hp:listItem value="선택값" displayText=""/>'
+        '<hp:listItem value="비선택" displayText="표시글"/></hp:comboBox>',
         '<hp:edit><hp:text>입력 내용</hp:text></hp:edit>',
     ]
     if wrapped:
@@ -37,16 +37,23 @@ def test_hwpx_form_display_text_keeps_inline_order(tmp_path, wrapped):
     assert doc.errors == []
     assert [p.text for p in doc.sections[0].elements] == ["앞실행[x]동의[ ]선택선택값입력 내용뒤"]
     assert "DO_NOT_OUTPUT" not in to_markdown(doc)
-    assert "비선택" not in to_markdown(doc)
+    assert "비선택" not in to_markdown(doc) and "표시글" not in to_markdown(doc)
 
 
+# 한컴오피스 HWP(Mac) 화면 실측(form-01.hwpx 의 XML 만 바꾼 통제 표본 6개): 콤보 상자는 selectedValue 와
+# displayText 에 관계없이 첫 listItem 의 value 를 표시하고, 항목이 없으면 컨트롤 이름을 자리표시자로 보인다.
+# 한컴은 HWP 의 ComboBoxSet Text 를 HWPX 첫 listItem value 로 저장한다(공개 form-01 짝).
 @pytest.mark.parametrize("selected,items,expected", [
-    ("", '<hp:listItem value="one" displayText="선택 안내"/>', ""),
-    ("free text", '<hp:listItem value="one" displayText="후보"/>', "free text"),
-    ("one", '<hp:listItem value="one" displayText=""/>', "one"),
+    ("", '<hp:listItem value="첫째값" displayText=""/><hp:listItem value="둘째값" displayText=""/>', "첫째값"),
+    ("둘째값", '<hp:listItem value="첫째값" displayText=""/><hp:listItem value="둘째값" displayText=""/>', "첫째값"),
+    ("", '<hp:listItem value="저장값" displayText="보이는글"/>', "저장값"),
+    ("저장값2", '<hp:listItem value="저장값1" displayText="보이는글1"/>'
+                '<hp:listItem value="저장값2" displayText="보이는글2"/>', "저장값1"),
+    ("목록밖", '<hp:listItem value="첫째값" displayText=""/>', "첫째값"),
+    ("", '', ""),
 ])
-def test_hwpx_combo_only_emits_current_value(tmp_path, selected, items, expected):
-    body = '<hp:p><hp:run><hp:t>앞</hp:t><hp:comboBox selectedValue="%s">%s</hp:comboBox><hp:t>뒤</hp:t></hp:run></hp:p>' % (selected, items)
+def test_hwpx_combo_shows_first_list_value_like_hancom(tmp_path, selected, items, expected):
+    body = '<hp:p><hp:run><hp:t>앞</hp:t><hp:comboBox name="ComboBox1" selectedValue="%s">%s</hp:comboBox><hp:t>뒤</hp:t></hp:run></hp:p>' % (selected, items)
     doc = HWPXParser().parse(package(tmp_path, body))
     assert doc.sections[0].elements[0].text == "앞" + expected + "뒤"
 
@@ -109,3 +116,19 @@ def test_hwpx_check_and_radio_preserve_state(tmp_path, tag, value, marker, capti
     body = '<hp:p><hp:run><hp:%s caption="%s" value="%s"/></hp:run></hp:p>' % (tag, caption, value)
     doc = HWPXParser().parse(package(tmp_path, body))
     assert doc.sections[0].elements[0].text == marker + caption
+
+
+@pytest.mark.parametrize("raw,shown", [
+    ("가&amp;나 A&amp;&amp;B 끝&amp;", "가나 A&B 끝"),
+    ("&amp;첫 중&amp;&amp;&amp;간", "첫 중&간"),
+    ("R&amp;&amp;D &amp;&amp;&amp;&amp;", "R&D &&"),
+])
+def test_hwpx_button_captions_hide_mnemonic_ampersands_like_hancom(tmp_path, raw, shown):
+    # 한컴오피스 화면 실측(form-01.hwpx 캡션만 바꾼 통제 표본). 입력 상자 글은 캡션이 아니라 그대로다.
+    body = ('<hp:p><hp:run><hp:btn caption="%s"/></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:checkBtn caption="%s" value="CHECKED"/></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:radioBtn caption="%s"/></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:edit><hp:text>%s</hp:text></hp:edit></hp:run></hp:p>') % (raw, raw, raw, raw)
+    doc = HWPXParser().parse(package(tmp_path, body))
+    literal = raw.replace("&amp;", "&")
+    assert [p.text for p in doc.sections[0].elements] == [shown, "[x]" + shown, "[ ]" + shown, literal]

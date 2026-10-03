@@ -189,3 +189,19 @@ def test_section_parser_malformed_form_warns_and_preserves_adjacent_text():
     section = parser._tree_to_section(tree)
     assert [p.text for p in section.elements] == ['AB']
     assert any('form' in error.lower() for error in parser.errors)
+
+
+# 한컴오피스 HWP(Mac) 화면 실측: 단추·선택 상자·라디오 캡션은 윈도 단축키 표기처럼 '&&' 를 '&' 로,
+# 단독 '&'(단축키 표시)와 끝의 '&' 는 숨긴다. 공개 form-002 의 "IP R&&D연계" 가 "IP R&D연계" 로 보인다.
+@pytest.mark.parametrize('raw,shown', [
+    ('가&나 A&&B 끝&', '가나 A&B 끝'),
+    ('&첫 중&&&간', '첫 중&간'),
+    ('R&&D &&&&', 'R&D &&'),
+])
+def test_button_captions_hide_mnemonic_ampersands_like_hancom(raw, shown):
+    for kind in (b'tbp+', b'tbc+', b'tbr+'):
+        contents = _set('ButtonSet', _parameter('Caption', raw))
+        prefix = '[ ]' if kind != b'tbp+' else ''
+        assert form_text(_form(kind, contents)) == prefix + shown
+    # 콤보 상자·입력 상자의 글은 캡션이 아니므로 그대로다.
+    assert form_text(_form(b'tde+', _set('EditSet', _parameter('Text', raw)))) == raw

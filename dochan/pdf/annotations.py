@@ -558,8 +558,12 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                                     adjacent = touching(runs[id(frag)], 1)
                                     following = (None if adjacent is None else
                                                  [run[0].text[0] for run in adjacent])
-                                outside_sentence_end = following is not None and all(
-                                    c.isspace() or c in _CLOSING_BOUNDARIES for c in following)
+                                # 줄 끝(맞닿은 다음 글자 없음)은 사각형이 하나인 주석에서만
+                                # 단어 끝으로 본다. 여러 줄 주석은 URL 이 점에서 줄바꿈됐을 수 있다.
+                                outside_sentence_end = (
+                                    following is not None
+                                    and all(c.isspace() or c in _CLOSING_BOUNDARIES for c in following)
+                                    and (bool(following) or len(region.polygons) == 1))
                             # A clipped outer edge can still select its whole
                             # glyph by center. Both edges outside, or an edge
                             # inside while its center is outside, is ambiguous.

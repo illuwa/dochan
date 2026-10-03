@@ -272,3 +272,22 @@ def test_exhausted_neighbour_budget_warns_with_multi_rect_links(monkeypatch):
         attach_links(copies, regions, warnings, allow_clipped_edges=True)
         if len(_linked(copies, "clip")) < 27:
             assert any("이웃 글자 검사 한도" in warning for warning in warnings), limit
+
+
+def test_line_end_mark_in_multi_rect_link_stays_deferred():
+    """줄바꿈된 URL(`see www.` / `example.com`) 의 줄 끝 점은 단어 끝이 아닐 수 있다(감수 P3)."""
+    first = _split("www.", 0, y=30)
+    second = _split("example", 0, y=10)
+    region = LinkRegion("https://www.example.com", [
+        [(0, 29), (31, 29), (31, 42), (0, 42)],
+        [(0, 9), (70, 9), (70, 22), (0, 22)],
+    ])
+    attach_links([first, second], [region], [], allow_clipped_edges=True)
+    assert first.link_spans == [] and second.link_spans == []
+
+
+def test_outside_mark_before_closing_delimiter_can_attach():
+    fragment = _split("site.)", 0)
+    region = _region(0, 41)
+    attach_links([fragment], [region], [], allow_clipped_edges=True)
+    assert fragment.link_spans == [(0, 4, region.target)]

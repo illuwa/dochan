@@ -20,6 +20,9 @@ MAX_NOTE_MARKERS = 1000
 MAX_NOTES_PER_PAGE = 100
 MAX_NOTE_GEOMETRY_CHECKS = 200000
 GEOMETRY_TOLERANCE = 1.5
+MIN_BODY_LINE_CHARACTERS = 30
+MAX_BODY_LINE_WEIGHT = 1000
+BODY_SIZE_QUANTILE = 0.85
 # 두 내부 양성 문서의 구분선은 첫 정의보다 정확히 15pt 위였다.
 MAX_SEPARATOR_GAP = 15.0 + GEOMETRY_TOLERANCE
 # 표 행 괘선이 쌓인 간격으로 보는 거리(한 행 높이 여유). 각주 구분선 위로는 본문이 온다.
@@ -189,9 +192,34 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
                       if frag.y > bottom + (top - bottom) * 0.25]
     if not body_fragments:
         return empty
-    sizes = Counter(round(frag.size, 3) for frag in body_fragments)
-    body = sizes.most_common(1)[0][0]
     lines = assemble_lines(horizontal)
+    # 짧은 차트 라벨과 표 셀은 조각 수가 많아도 본문 글자 크기를 대표하지
+    # 않는다. 긴 줄의 문자량으로 크기 분포를 만들고, 작은 표/차트 글자가
+    # 다수인 쪽에서도 본문 쪽의 상위 분위값을 쓴다. 긴 줄이 부족하면
+    # 기존 조각 최빈값을 유지해 희소 페이지의 판정을 바꾸지 않는다.
+    line_sizes = Counter()
+    line_counts = Counter()
+    for line in lines:
+        if line.y > bottom + (top - bottom) * 0.25:
+            if len(line.text.strip()) >= MIN_BODY_LINE_CHARACTERS:
+                weight = min(sum(not char.isspace() for char in line.text), MAX_BODY_LINE_WEIGHT)
+                size = round(line.size, 3)
+                line_sizes[size] += weight
+                line_counts[size] += 1
+    # 제목 한 줄만 큰 글씨인 작은 본문에서는 제목 크기를 본문으로 보지 않는다.
+    line_sizes = {size: weight for size, weight in line_sizes.items()
+                  if line_counts[size] >= 2}
+    if line_sizes:
+        threshold = sum(line_sizes.values()) * BODY_SIZE_QUANTILE
+        cumulative = 0
+        for size, weight in sorted(line_sizes.items()):
+            cumulative += weight
+            if cumulative >= threshold:
+                body = size
+                break
+    else:
+        sizes = Counter(round(frag.size, 3) for frag in body_fragments)
+        body = sizes.most_common(1)[0][0]
     definitions = [(index, line, _DEFINITION.match(line.text))
                    for index, line in enumerate(lines)
                    if bottom <= line.y <= bottom + (top - bottom) * 0.25
@@ -226,7 +254,10 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
             return empty
         nearby = [host for host in nearby
                   if 0.15 * host.size <= frag.y - host.y <= 0.3 * host.size
-                  and -0.1 * host.size <= frag.x - host.x - host.width <= 0.5 * host.size]
+                  # PDF 글리프 폭과 다음 조각 시작점의 반올림 차이는 기존
+                  # 기하 허용오차 안에서만 받아들인다. 더 깊은 겹침은 거부한다.
+                  and -max(0.1 * host.size, GEOMETRY_TOLERANCE)
+                  <= frag.x - host.x - host.width <= 0.5 * host.size]
         if len(nearby) == 1:
             references.setdefault(match.group(1), []).append(frag)
     counts = Counter(match.group(1) for _index, _line, match in definitions)

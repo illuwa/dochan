@@ -343,7 +343,7 @@ def attach_comments(fragments, regions, warnings):
         return
     copies = [replace(frag, link_spans=[]) for frag in fragments]
     geometry_warnings = []
-    attach_links(copies, regions, geometry_warnings)
+    attach_links(copies, regions, geometry_warnings, allow_clipped_edges=False)
     warnings.extend(w.replace("링크", "주석") for w in geometry_warnings)
     endings = {}
     for original, selected in zip(fragments, copies):
@@ -357,7 +357,7 @@ def attach_comments(fragments, regions, warnings):
         frag.comment_markers.append((last, int(target)))
 
 
-def attach_links(fragments, regions, warnings):
+def attach_links(fragments, regions, warnings, allow_clipped_edges=False):
     """글리프 중앙점이 주석 사각형에 있는 문자만 링크로 만든다."""
     # Identical annotations do not change geometry. Keep every annotation in
     # the input (and benchmark denominator), but spend the bounded work once.
@@ -367,14 +367,14 @@ def attach_links(fragments, regions, warnings):
         key = (region.target, tuple(tuple(polygon) for polygon in region.polygons))
         unique.setdefault(key, region)
         groups.setdefault(key, []).append(region)
-    _attach_unique_links(fragments, list(unique.values()), warnings)
+    _attach_unique_links(fragments, list(unique.values()), warnings, allow_clipped_edges)
     for key, original in unique.items():
         if original.matched:
             for region in groups[key]:
                 region.matched = True
 
 
-def _attach_unique_links(fragments, regions, warnings):
+def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
     checks = 0
     spans = []
     matched = set()
@@ -438,6 +438,7 @@ def _attach_unique_links(fragments, regions, warnings):
         up = math.hypot(frag.up_x, frag.up_y)
         if not direction or not up:
             continue
+        clipped_edges = []
         ux, uy = frag.dir_x / direction, frag.dir_y / direction
         vx, vy = frag.up_x / up, frag.up_y / up
         # Broad phase: all tested character points lie on this baseline-parallel
@@ -478,9 +479,19 @@ def _attach_unique_links(fragments, regions, warnings):
                         edges = [(frag.x + ux * d + vx * frag.size * 0.5,
                                   frag.y + uy * d + vy * frag.size * 0.5)
                                  for d in (first, last)]
-                        if any(_contains(polygon, px, py) != middle and
-                               not _on_boundary(polygon, px, py) for px, py in edges):
-                            ambiguous.add(region_index)
+                        edge_inside = [_contains(polygon, px, py) for px, py in edges]
+                        uncertain = [side for side, ((px, py), inside) in enumerate(
+                            zip(edges, edge_inside)) if inside != middle and
+                            not _on_boundary(polygon, px, py)]
+                        if uncertain:
+                            # A clipped outer edge can still select its whole
+                            # glyph by center. Both edges outside, or an edge
+                            # inside while its center is outside, is ambiguous.
+                            if (allow_clipped_edges and middle and len(uncertain) == 1
+                                    and sum(edge_inside) == 1):
+                                clipped_edges.append((index, region_index, uncertain[0]))
+                            else:
+                                ambiguous.add(region_index)
                     if middle:
                         hits.append(region_index)
                         break
@@ -493,6 +504,14 @@ def _attach_unique_links(fragments, regions, warnings):
             targets.append((target, tuple(hits)))
             if target and not char.isspace():
                 matched.update(hits)
+        for char_index, region_index, side in clipped_edges:
+            neighbor = char_index - 1 if side == 0 else char_index + 1
+            delimiters = "([{<" if side == 0 else ")]} >"
+            if (0 <= neighbor < len(targets) and
+                    (region_index in targets[neighbor][1] or
+                     not (frag.text[neighbor].isspace() or
+                          frag.text[neighbor] in delimiters))):
+                ambiguous.add(region_index)
         start = 0
         while start < len(targets):
             end = start + 1

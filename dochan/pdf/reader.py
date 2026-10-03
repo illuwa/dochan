@@ -204,7 +204,8 @@ class PDFReader:
                     self._configure_form_extractor(extractor, pdf, resources, font_cache)
                     page_content = extractor.extract_page(b"\n".join(content_parts))
                     pdf.warnings.extend(page_content.warnings)
-                    attach_links(page_content.fragments, regions, pdf.warnings)
+                    attach_links(page_content.fragments, regions, pdf.warnings,
+                                 allow_clipped_edges=True)
                     note_mcids = set()
                     try:
                         notes, consumed_notes, references, next_note_number = detect_notes(

@@ -122,7 +122,7 @@ def verify(path, text_tables=False):
                                                         track_char_positions=True)
             reader._configure_form_extractor(extractor, pdf, resources, cache)
             fragments = extractor.extract_fragments(b"\n".join(reader._page_content_parts(pdf, native_page)))
-            attach_links(fragments, regions, [])
+            attach_links(fragments, regions, [], allow_clipped_edges=True)
             selected = []
             selected_by_target = {}
             for fragment in fragments:

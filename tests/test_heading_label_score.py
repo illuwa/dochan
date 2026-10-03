@@ -48,3 +48,13 @@ def test_external_heading_score_skips_mismatches_and_reports_errors():
     assert [(row['version'], row['kind'], row['text']) for row in result['errors']] == [
         ('baseline', 'FN', '□ 제목'), ('current', 'FP', '□ 목록'),
         ('baseline', 'FN', '□ 제목'), ('current', 'FN', '□ 제목')]
+
+
+def test_external_heading_score_compares_prefix_with_collapsed_whitespace():
+    # 판독 목록은 공백을 접어 만든다. 원문에 겹친 공백·줄바꿈이 있어도 같은 문단이다.
+    labels = validate_labels([{'doc': 'a.hwpx', 'i': 0, 't': '□ 세부 프로그램(안) ※ 행사', 'label': 'H'}])
+    snapshot = {'a.hwpx': {'0': {'path': 's0.elements0',
+                                 'text': '□  세부 프로그램(안)\n   ※ 행사 전체 공개', 'level': 3}}}
+    result = evaluate(labels, snapshot, snapshot)
+    assert result['skipped'] == 0
+    assert result['formats']['.hwpx']['current']['TP'] == 1

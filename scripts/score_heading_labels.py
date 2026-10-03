@@ -20,6 +20,11 @@ _MAX_LABELS = 100_000
 _MAX_ERROR_TEXT = 1_000
 
 
+def _squash(text):
+    """라벨 접두어는 공백을 접어 비교한다(판독 목록은 공백을 정규화해 만든다)."""
+    return ' '.join(text.split())
+
+
 def validate_labels(rows):
     """외부 JSON의 필수 필드와 파일명·인덱스 범위를 검사한다."""
     if not isinstance(rows, list) or len(rows) > _MAX_LABELS:
@@ -94,7 +99,7 @@ def evaluate(labels, baseline, current):
               or not _TOP_LEVEL.fullmatch(new['path'])
               or old['path'] != new['path']):
             reason = '최상위 문단 경로 불일치'
-        elif not old['text'].startswith(prefix) or not new['text'].startswith(prefix):
+        elif not all(_squash(item['text']).startswith(_squash(prefix)) for item in (old, new)):
             reason = '텍스트 접두어 불일치'
         if reason:
             skipped_rows.append({'doc': filename, 'i': index, 'reason': reason})

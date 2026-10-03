@@ -283,3 +283,43 @@ def test_short_link_edge_does_not_magnify_rounding_allowance():
         [(0, 0), (11, 0), (11, 0.1), (0.1, 0.1)]])
     attach_links([fragment], [region], [])
     assert fragment.link_spans == []
+
+
+def _per_page_form_pdf(tmp_path, pages, form_padding, first_drawing=0):
+    """Each page draws its own Form; optionally page 1 also draws a large text-free Form."""
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [%s] /Count %d >>" % (
+            " ".join("%d 0 R" % (100 + i) for i in range(pages)), pages),
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    if first_drawing:
+        objects[21] = _stream(b"0 0 m 1 1 l S " * (first_drawing // 14), "/Subtype /Form")
+    for i in range(pages):
+        drawing = " /D 21 0 R" if first_drawing and i == 0 else ""
+        objects[100 + i] = (
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 20 0 R >> "
+            "/XObject << /F %d 0 R%s >> >> /Contents %d 0 R >>" % (300 + i, drawing, 200 + i))
+        objects[200 + i] = _stream(b"/D Do /F Do" if drawing else b"/F Do")
+        objects[300 + i] = _stream(b" " * form_padding + b"BT /F1 10 Tf 40 500 Td (P%d) Tj ET" % (i + 1),
+                                   "/Subtype /Form")
+    path = tmp_path / "per-page.pdf"
+    path.write_bytes(_build_pdf(objects))
+    return PDFReader().read(str(path))
+
+
+def test_distinct_forms_across_many_pages_all_keep_text(tmp_path, monkeypatch):
+    # 3차 감수 P2: Form 바이트 상한은 페이지 단위다. 문서 전체 합계로 걸면 뒤 페이지 Form 글자가 빠진다.
+    from dochan.pdf import reader
+    monkeypatch.setattr(reader, "MAX_FORM_CACHE_BYTES", 64 * 1024)
+    doc = _per_page_form_pdf(tmp_path, 12, 16 * 1024)
+    assert [[e.text for e in section.elements if hasattr(e, "text")]
+            for section in doc.sections] == [["P%d" % (i + 1)] for i in range(12)]
+
+
+def test_large_drawing_form_on_first_page_does_not_starve_later_pages(tmp_path, monkeypatch):
+    from dochan.pdf import reader
+    monkeypatch.setattr(reader, "MAX_FORM_CACHE_BYTES", 64 * 1024)
+    doc = _per_page_form_pdf(tmp_path, 6, 8 * 1024, first_drawing=62 * 1024)
+    assert [[e.text for e in section.elements if hasattr(e, "text")]
+            for section in doc.sections][1:] == [["P%d" % (i + 1)] for i in range(1, 6)]

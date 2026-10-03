@@ -558,10 +558,12 @@ class PDFReader:
         """Attach Form lookup with document-wide decode and font caches."""
         extractor.resources = resources
         loaded_forms = {}
+        # Form 바이트 상한은 페이지 단위다. 분석 결과·거부 목록·글꼴 캐시만 문서 단위로 둔다
+        # (문서 전체 누적으로 걸면 서로 다른 Form 을 많이 쓰는 문서의 뒤 페이지 글자가 빠진다).
+        page_forms = {"bytes": 0, "seen": set()}
         state = getattr(pdf, "_form_cache_state", None)
         if state is None:
-            state = {"stream_info": {}, "rejected_streams": {},
-                     "cached_bytes": 0, "font_infos": {}}
+            state = {"stream_info": {}, "rejected_streams": {}, "font_infos": {}}
             pdf._form_cache_state = state
         stream_info = state["stream_info"]
         rejected_streams = state["rejected_streams"]
@@ -595,10 +597,9 @@ class PDFReader:
             info = stream_info.get(id(stream))
             if info is None or info[0] is not stream:
                 data = pdf.decode_stream_bytes(stream)
-                if (len(data) > MAX_FORM_CACHE_BYTES or
-                        state["cached_bytes"] + len(data) > MAX_FORM_CACHE_BYTES):
-                    # The document decode cache retains this stream so a later
-                    # page cannot charge its bytes to the decode budget again.
+                if len(data) > MAX_FORM_CACHE_BYTES:
+                    # 단독으로 상한을 넘는 Form 만 문서 단위로 거부한다. 디코드 결과는 문서 캐시에 남아
+                    # 다른 페이지가 해제 예산을 다시 쓰지 않는다.
                     warning = "WARN: PDF Form 디코드 캐시 한도 — 해당 Form 건너뜀"
                     if warning not in pdf.warnings:
                         pdf.warnings.append(warning)
@@ -608,9 +609,18 @@ class PDFReader:
                 op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
                 info = (stream, data, op_count, has_text_or_form)
                 stream_info[id(stream)] = info
-                state["cached_bytes"] += len(data)
             else:
                 _, data, op_count, has_text_or_form = info
+            if id(stream) not in page_forms["seen"]:
+                if page_forms["bytes"] + len(data) > MAX_FORM_CACHE_BYTES:
+                    # 이 페이지에서만 건너뛴다(다른 페이지에서는 다시 쓸 수 있다).
+                    warning = "WARN: PDF Form 디코드 캐시 한도 — 해당 Form 건너뜀"
+                    if warning not in pdf.warnings:
+                        pdf.warnings.append(warning)
+                    loaded_forms[cache_key] = None
+                    return None
+                page_forms["seen"].add(id(stream))
+                page_forms["bytes"] += len(data)
             if not has_text_or_form:
                 loaded_forms[cache_key] = None
                 return None

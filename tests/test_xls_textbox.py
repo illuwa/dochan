@@ -158,6 +158,27 @@ def test_xls_partial_client_data_mismatch_keeps_known_anchors():
     assert [p.provenance.cell for p in _paragraphs(doc)] == ["B3", "B9", None]
 
 
+def test_xls_unpaired_client_data_does_not_shift_later_anchors():
+    # Excel writes each shape in its own MsoDrawing followed by its Obj. A
+    # damaged first Obj (no ftCmo) leaves its ClientData unpaired; later Obj
+    # records must still take the ClientData that ends right before them.
+    rows = [5, 10, 15, 20]
+    parts = [_shape(1025 + i, row, 1) for i, row in enumerate(rows)]
+    group = _art(0xF004, _art(0xF00A, struct.pack("<II", 1024, 5), version=2), version=15)
+    size = len(group) + sum(len(part) for part in parts)
+    container = struct.pack("<HHI", 15, 0xF003, size)
+    head = struct.pack("<HHI", 15, 0xF002, len(container) + size)
+    damaged = _record(0x005D, struct.pack("<HHHH", 0x0099, 18, 6, 1) + b"\0" * 14)
+    body = [_record(0x00EC, head + container + group + parts[0]), damaged, _txo("lost")]
+    for index, row in enumerate(rows[1:], start=1):
+        body += [_record(0x00EC, parts[index]), _obj(6, index + 1), _txo("row%d" % (row + 1))]
+    doc = parse_biff_workbook(_workbook(_sheet(*body)))
+    cells = {p.text: p.provenance.cell for p in _paragraphs(doc)}
+    assert cells["row11"] == "B11"
+    assert cells["row16"] == "B16"
+    assert cells["row21"] == "B21"
+
+
 def test_xls_drawing_failure_keeps_decoded_text():
     with patch("dochan.office_binary.xls.XlsDrawingReader", side_effect=ValueError("broken")):
         doc = parse_biff_workbook(_workbook(_sheet(_obj(6, 1), _txo("Kept"))))

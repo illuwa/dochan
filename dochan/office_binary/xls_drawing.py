@@ -131,7 +131,7 @@ class XlsDrawingReader:
                     _warn(self.errors, 'truncated client anchor')
                 else:
                     _, col, dx, row, dy, end_col, end_dx, end_row, end_dy = struct.unpack_from('<9H', shape.client_anchor)
-                    if col < 256 and row < 65536 and end_col <= 256:
+                    if col < 256 and end_col <= 256:
                         anchor = (row, col)
                     if dx > 1024 or end_dx > 1024 or dy > 256 or end_dy > 256 or col >= 256 or end_col > 256:
                         _warn(self.errors, 'client anchor out of bounds')
@@ -181,18 +181,32 @@ class XlsDrawingReader:
                     for position, ordinal, paragraph, image in positioned]
         if text_objects:
             # ClientData is emitted before its Obj. BIFF record offsets map
-            # each Obj to the drawing-byte length seen at that point; this
-            # permits partial pairing when either sequence has extra records.
+            # each Obj to the drawing-byte length seen at that point. Obj
+            # records at one drawing offset pair with the ClientData that end
+            # after the previous group, counted from the last one, so an
+            # unpaired ClientData (damaged or missing Obj) cannot shift later
+            # anchors.
             object_shapes.sort(key=lambda item: item[0])
-            anchors = {}
-            candidate = 0
+            groups = []
             for _, _, _, object_offset in text_objects:
                 drawing_offset = object_offsets.get(object_offset)
                 if drawing_offset is None:
                     continue
-                if candidate < len(object_shapes) and object_shapes[candidate][0] <= drawing_offset:
-                    anchors[object_offset] = object_shapes[candidate][1]
-                    candidate += 1
+                if groups and groups[-1][0] == drawing_offset:
+                    groups[-1][1].append(object_offset)
+                else:
+                    groups.append((drawing_offset, [object_offset]))
+            anchors = {}
+            cursor = 0
+            for drawing_offset, offsets in groups:
+                window = []
+                while cursor < len(object_shapes) and object_shapes[cursor][0] <= drawing_offset:
+                    window.append(object_shapes[cursor][1])
+                    cursor += 1
+                if len(window) > len(offsets):
+                    window = window[len(window) - len(offsets):]
+                for object_offset, anchor in zip(offsets, window):
+                    anchors[object_offset] = anchor
             for anchor, ordinal, paragraph in drawing_text_elements(
                     text_objects, sheet_name, path, anchors, positioned=True):
                 position = anchor if anchor is not None else (65536, 256)

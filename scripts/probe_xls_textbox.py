@@ -23,7 +23,7 @@ def _raw_object_header(payload):
     return kind, object_id
 
 
-def _raw_txo(payload, records, preserve_lines):
+def _raw_txo(payload, records, normalize_lines):
     """Decode the observed BIFF8 character segments without the product helper."""
     if len(payload) < 14:
         return "", None
@@ -49,7 +49,7 @@ def _raw_txo(payload, records, preserve_lines):
         remaining -= count
     value = "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
     value = value.strip()
-    if preserve_lines:
+    if normalize_lines:
         value = "\n".join(line for line in (part.strip() for part in value.split("\n")) if line)
     return value, None
 
@@ -99,7 +99,7 @@ def scan(path):
         elif kind == 0x01B6 and pending is not None:
             object_type, _ = pending
             pending = None
-            text, unconsumed = _raw_txo(payload, records, preserve_lines=object_type != 0x0019)
+            text, unconsumed = _raw_txo(payload, records, normalize_lines=object_type != 0x0019)
             if unconsumed is not None:
                 # A malformed TxO cannot consume the next unrelated BIFF record.
                 records = chain((unconsumed,), records)

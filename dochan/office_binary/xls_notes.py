@@ -17,7 +17,7 @@ def object_header(payload):
     return object_type, object_id
 
 
-def read_txo_text(payload, records, preserve_lines=True):
+def read_txo_text(payload, records, normalize_lines=False):
     """Read cchText characters; the next Continue belongs to formatting after that.
 
     Notes retain line breaks; drawing text follows XLSX paragraph normalization.
@@ -53,6 +53,6 @@ def read_txo_text(payload, records, preserve_lines=True):
     # 줄바꿈은 XLSX 메모·XLS 셀처럼 \n 으로 보존한다(Markdown 렌더러가 표 안에서 공백으로 바꾼다).
     text = bytes(encoded).decode("utf-16-le", errors="replace")
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if preserve_lines:
+    if normalize_lines:
         text = "\n".join(line for line in (part.strip() for part in text.split("\n")) if line)
     return text, None, None

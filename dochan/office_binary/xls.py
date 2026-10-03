@@ -946,7 +946,7 @@ def _parse_sheet_records(
                 _append_sheet_error_once(sheet, 'WARN: XLS TxO text limit exceeded')
             else:
                 text, pending_record, warning = read_txo_text(
-                    record_data, records, preserve_lines=object_type != 0x0019)
+                    record_data, records, normalize_lines=object_type != 0x0019)
                 if warning:
                     _append_sheet_error_once(sheet, 'WARN: XLS ' + warning)
                 elif text:

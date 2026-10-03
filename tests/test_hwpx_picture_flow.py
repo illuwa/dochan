@@ -173,3 +173,13 @@ def test_picture_caption_and_ctrl_wrapper_stay_with_image(tmp_path):
     assert elements[1].caption_text == "그림 설명"
     assert elements[1].caption_side == "TOP"
     assert "*그림 설명*" in to_markdown(doc)
+
+
+def test_placed_picture_marker_does_not_leak_into_model(tmp_path):
+    """글상자 그림 배치 표지는 파서 안에만 있고 반환 모델에 남지 않는다."""
+    box = ('<hp:rect><hp:drawText><hp:subList><hp:p><hp:run>'
+           '<hp:t>상자 앞</hp:t>%s<hp:t>상자 뒤</hp:t>'
+           '</hp:run></hp:p></hp:subList></hp:drawText></hp:rect>') % _pic()
+    body = '<hp:p><hp:run><hp:t>밖 앞</hp:t>%s<hp:t>밖 뒤</hp:t></hp:run></hp:p>' % box
+    images = [item for item in _document(tmp_path, body).sections[0].elements if isinstance(item, Image)]
+    assert images and all(not hasattr(image, '_paragraph_picture_placed') for image in images)

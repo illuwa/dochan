@@ -196,6 +196,8 @@ class HWPXParser:
         self._section_parents = None
         self._chart_cache = {}  # Immutable XML bytes/counts only; never shared models.
         self._chart_seen = set()
+        # 중첩 글상자 문단이 텍스트 뒤에 이미 배치한 그림(id). 모델에 표지를 남기지 않는다.
+        self._placed_pictures = set()
         self._chart_count = 0
         self._chart_bytes = 0
         self._chart_series = 0
@@ -335,6 +337,7 @@ class HWPXParser:
             self._section_parents = None
             self._chart_cache.clear()
             self._chart_seen.clear()
+            self._placed_pictures.clear()
             self._password = None
             self._crypto_keys.clear()
 
@@ -968,8 +971,7 @@ class HWPXParser:
                         elements.append(para)
                         # 중첩 글상자 문단에서 이미 텍스트 뒤에 배치한 그림은
                         # 바깥 문단의 대기 목록에 다시 넣지 않는다.
-                        for image in images:
-                            image._paragraph_picture_placed = True
+                        self._placed_pictures.update(id(image) for image in images)
                     runs = []
                 elements.extend(images)
                 images.clear()
@@ -988,7 +990,7 @@ class HWPXParser:
                         if isinstance(item, TextRun):
                             runs.append(item)
                         elif isinstance(item, Image):
-                            if getattr(item, '_paragraph_picture_placed', False):
+                            if id(item) in self._placed_pictures:
                                 flush_flow()
                                 elements.append(item)
                             else:

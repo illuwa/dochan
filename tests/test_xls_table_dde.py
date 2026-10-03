@@ -88,12 +88,11 @@ def test_dde_name_may_have_bounded_cached_link_data():
     assert texts(doc) == ['42 (=IDT|IMKB!Rate_Date)']
 
 
-def test_ole_name_without_verified_link_display_keeps_cache():
+def test_f_ole_std_document_name_is_dde():
     globals_ = dde_supbook('MTX', 'DATA') + dde_name('StdDocumentName', 0x7fea)
     globals_ += xti((0, 0xfffe, 0xfffe))
     doc = workbook(globals_, formula(namex()))
-    assert texts(doc) == ['42']
-    assert any('OLE' in error for error in doc.errors)
+    assert texts(doc) == ['42 (=MTX|DATA!StdDocumentName)']
 
 
 def test_unknown_elf_subtoken_keeps_cache():

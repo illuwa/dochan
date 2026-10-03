@@ -218,6 +218,7 @@ class FormulaContext:
         self.names = []
         self.current_book = None
         self.sheet_name_bytes = 0
+        self.dde_text_bytes = 0
 
     def add_deleted_label(self, data, errors):
         # [MS-XLS] Lel / PtgElfLel: ilel 2..2048 indexes this array at ilel-2.
@@ -258,6 +259,7 @@ class FormulaContext:
                 book.kind = 'addin'
             else:
                 reader.offset = 2
+                start = reader.offset
                 path = reader.string()  # virtPath is not formula display text.
                 # [MS-XLS] SupBook: these special virtPath values do not
                 # represent external books. Keep their XTI indices nonetheless.
@@ -273,6 +275,14 @@ class FormulaContext:
                 # sheet list and exactly one service/topic separator.
                 if (count == 0 and path[:1] not in ('\x01', '\x02', '\x04', '\x05')
                         and path.count('\x03') == 1):
+                    if len(path) > 0xff:
+                        raise FormulaDataError('DDE path length exceeds 255 characters')
+                    self.dde_text_bytes += reader.offset - start
+                    if self.dde_text_bytes > MAX_LINK_TEXT_BYTES:
+                        raise FormulaDataError('DDE link text byte limit exceeded')
+                    if any(ord(char) < 32 or ord(char) == 127 or char in '"*/:<>?\\'
+                           for char in path if char != '\x03'):
+                        raise FormulaDataError('invalid DDE path characters')
                     book.kind = 'dde'
                     book.service, book.topic = path.split('\x03')
                     return
@@ -299,19 +309,22 @@ class FormulaContext:
         book.names.append(value)
         try:
             reader = ExtraReader(data)
-            flags, scope, _ = reader.unpack('<HHH')
+            flags, scope, storage_hi = reader.unpack('<HHH')
             if book.kind == 'dde':
+                start = reader.offset
                 label = reader.string(short=True)
+                self.dde_text_bytes += reader.offset - start
+                if self.dde_text_bytes > MAX_LINK_TEXT_BYTES:
+                    raise FormulaDataError('DDE link text byte limit exceeded')
                 value.flags = flags
-                # fOle (0x0008), fOleLink (0x0010), and fIcon (0x8000)
-                # carry different object semantics. Keep their cached cells
-                # until a formula-level display can be verified.
-                if flags & 0x8018:
+                # fOle marks the StdDocumentName DDE entry; fOleLink marks OLE.
+                if flags & 0x8010:
                     raise FormulaDataError('unsupported OLE external name')
-                if (scope or not label
-                        or any(char in label for char in '\r\n!|')
+                if (scope or storage_hi or not label
+                        or any(ord(char) < 32 or ord(char) == 127 for char in label)
                         or not book.service or not book.topic
-                        or any(char in book.service + book.topic for char in '\r\n!|')):
+                        or any(ord(char) < 32 or ord(char) == 127
+                               for char in book.service + book.topic)):
                     raise FormulaDataError('invalid DDE external name')
                 value.dde_item = label
                 return
@@ -356,7 +369,12 @@ class FormulaContext:
             item = book.names[name_index - 1].dde_item
             if not item:
                 raise FormulaDataError('unresolved DDE/OLE external name')
-            return FormulaName(book.service + '|' + book.topic + '!' + item)
+            def display_component(value):
+                return (value if re.fullmatch(r'[A-Za-z0-9_.]+', value)
+                        else "'" + value.replace("'", "''") + "'")
+            return FormulaName(display_component(book.service) + '|'
+                               + display_component(book.topic)
+                               + '!' + display_component(item))
         names = self.names if book.kind == 'internal' else book.names
         if not 1 <= name_index <= len(names) or not names[name_index - 1].name:
             raise FormulaDataError('unresolved NameX index')

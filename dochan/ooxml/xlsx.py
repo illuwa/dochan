@@ -1519,6 +1519,8 @@ class XLSXReader(SpreadsheetNumberFormatter):
     def _with_formula(self, text: str, cell_elem, shared_formulas: Dict[str, Tuple[str, str]], formula=None) -> str:
         formula_text = _node_text(formula)
         if not formula_text and formula is not None and formula.get("t", "") == "dataTable":
+            deleted_first = formula.get('del1') in ('1', 'true')
+            deleted_second = formula.get('del2') in ('1', 'true')
             def input_ref(attribute):
                 match = re.fullmatch(r'\$?([A-Z]{1,3})\$?([1-9][0-9]{0,6})',
                                      formula.get(attribute, ''))
@@ -1532,10 +1534,11 @@ class XLSXReader(SpreadsheetNumberFormatter):
                 return '$%s$%s' % match.groups()
 
             first = input_ref('r1')
-            if first:
+            if first and not deleted_first:
                 if formula.get('dt2D') in ('1', 'true'):
                     second = input_ref('r2')
-                    formula_text = 'TABLE(%s,%s)' % (first, second) if second else ''
+                    formula_text = ('TABLE(%s,%s)' % (first, second)
+                                    if second and not deleted_second else '')
                 elif formula.get('dtr') in ('1', 'true'):
                     formula_text = 'TABLE(%s,)' % first
                 else:

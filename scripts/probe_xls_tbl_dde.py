@@ -4,9 +4,31 @@ from collections import Counter
 import json
 from pathlib import Path
 import re
+import struct
 
+from dochan import cfb
+from dochan.office_binary.xls import _iter_records
+from dochan.utils.bounded_io import MAX_OLE_STREAM_SIZE, read_ole_stream
 from scripts.probe_xls_formula_pairs import split_formula
 from scripts.probe_xls_tokens import inspect_file, public_paths
+
+
+_DDE_FORMULA = re.compile(
+    r"[A-Za-z0-9_.]+\|(?:'(?:[^']|'')*'|[A-Za-z0-9_.]+)!"
+    r"(?:'(?:[^']|'')*'|[A-Za-z0-9_.]+)")
+
+
+def raw_table_cells(path):
+    with cfb.OleFileIO(str(path)) as ole:
+        stream = 'Workbook' if ole.exists('Workbook') else 'Book'
+        data = read_ole_stream(ole, stream, max_bytes=MAX_OLE_STREAM_SIZE)
+    count = 0
+    for _, kind, payload in _iter_records(data):
+        if (kind == 6 and len(payload) >= 27
+                and struct.unpack_from('<H', payload, 20)[0] == 5
+                and payload[22] == 2):
+            count += 1
+    return count
 
 
 def probe(root):
@@ -33,13 +55,18 @@ def probe(root):
             _, expression = split_formula(display)
             if expression.startswith('TABLE('):
                 table_count += 1
-            if re.fullmatch(r'[^"\s()]+\|[^"\s()]+![^"\s()]+', expression):
+            if _DDE_FORMULA.fullmatch(expression):
                 dde_count += 1
                 dde.add(expression)
-        if table_count or dde_count or any(item['tokens'].startswith('02')
-                                            for item in result['omitted']):
+        try:
+            raw_tables = raw_table_cells(path)
+        except (cfb.CFBError, ValueError, OSError):
+            raw_tables = 0
+            totals['raw_table_unreadable_files'] += 1
+        if table_count or dde_count or raw_tables:
             targeted[relative] = {
                 'table_cells': table_count, 'dde_cells': dde_count,
+                'raw_table_cells': raw_tables,
                 'omitted': len(result['omitted']),
                 'markdown_sha256': result['markdown_sha256'],
                 'json_sha256': result['json_sha256'],

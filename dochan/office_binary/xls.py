@@ -858,6 +858,7 @@ def _parse_sheet_records(
     shared_formula_extras: Dict[Tuple[int, int], bytes] = {}
     array_formulas = {}
     table_formulas = {}
+    table_ranges = {}
     table_cells = {}
     table_cell_count = 0
     chart_depth = 0
@@ -1129,12 +1130,20 @@ def _parse_sheet_records(
             if len(record_data) >= 27 and struct.unpack_from('<H', record_data, 20)[0] == 5 \
                     and record_data[22] == 0x02:
                 table_anchor = struct.unpack_from('<HH', record_data, 23)
-                if table_cell_count < MAX_BIFF_DENSE_CELLS:
+                if table_anchor in table_formulas:
+                    first_row, last_row, first_col, last_col = table_ranges[table_anchor]
+                    if not (first_row <= row <= last_row and first_col <= col <= last_col):
+                        _append_sheet_error_once(sheet, 'WARN: XLS PtgTbl cell outside range of TABLE')
+                        formula = ''
+                    else:
+                        formula = table_formulas[table_anchor]
+                elif table_cell_count < MAX_BIFF_DENSE_CELLS:
                     table_cells.setdefault(table_anchor, []).append((row, col))
                     table_cell_count += 1
+                    formula = ''
                 else:
                     _append_sheet_error_once(sheet, 'WARN: XLS TABLE formula cell limit exceeded')
-                formula = table_formulas.get(table_anchor, '')
+                    formula = ''
             else:
                 formula = _decode_formula_tokens(record_data, external_sheets, sheet_names, defined_names,
                                                  errors=sheet.errors, internal_supbooks=internal_supbooks,
@@ -1152,7 +1161,8 @@ def _parse_sheet_records(
             sheet.formula_values[(row, col)] = formatted or None
             formula_anchor = _formula_exp_anchor(record_data)
             if formula_anchor:
-                shared_formula_cells.setdefault(formula_anchor, []).append((row, col))
+                if formula_anchor not in array_formulas:
+                    shared_formula_cells.setdefault(formula_anchor, []).append((row, col))
                 pending_shared_formula_anchor = formula_anchor
                 if formula_anchor in array_formulas:
                     formula = array_formulas[formula_anchor]
@@ -1183,37 +1193,55 @@ def _parse_sheet_records(
             pending_formula_cell = (row, col)
             pending_formula_text = formula
         elif record_type == 0x0236:  # TABLE for a PtgTbl data-table range.
+            anchor = None
             try:
+                if len(record_data) < 6:
+                    raise ValueError('truncated TABLE record')
+                first_row, _, first_col, _ = struct.unpack_from('<HHBB', record_data)
+                anchor = first_row, first_col
+                if len(record_data) != 16:
+                    raise ValueError('TABLE record length must be 16 bytes')
+                if anchor in table_formulas:
+                    _append_sheet_error_once(sheet, 'WARN: XLS duplicate TABLE at %s ignored' %
+                                             _cell_ref(*anchor))
+                    continue
                 first_row, last_row, first_col, last_col, flags, row_in, row_col, col_in, col_col = \
                     struct.unpack('<HHBBH4H', record_data)
-                anchor = first_row, first_col
                 if not _valid_biff_range(first_row, last_row, first_col, last_col):
                     raise ValueError('invalid range')
                 if not table_cells.get(anchor):
                     raise ValueError('missing PtgTbl anchor')
-                if any(not (first_row <= row <= last_row and first_col <= col <= last_col)
-                       for row, col in table_cells[anchor]):
-                    raise ValueError('PtgTbl cell outside range')
-                if row_in >= 65536 or row_col >= 256:
+                if flags & 0x0010 or (flags & 0x0008 and flags & 0x0020):
+                    raise ValueError('deleted input')
+                if row_col >= 256:
                     raise ValueError('invalid first input')
                 first = _formula_cell_ref(row_in, row_col, False, False)
                 if flags & 0x0008:  # Two input cells.
-                    if col_in >= 65536 or col_col >= 256:
+                    if col_col >= 256:
                         raise ValueError('invalid second input')
                     second = _formula_cell_ref(col_in, col_col, False, False)
                     formula = 'TABLE(%s,%s)' % (first, second)
-                elif flags & 0x0004 and not flags & 0x0002:
+                elif flags & 0x0004:
                     formula = 'TABLE(%s,)' % first
                 else:
                     formula = 'TABLE(,%s)' % first
                 table_formulas[anchor] = formula
-                for cell in table_cells[anchor]:
+                table_ranges[anchor] = (first_row, last_row, first_col, last_col)
+                cells = table_cells.pop(anchor)
+                for cell in cells:
+                    if not (first_row <= cell[0] <= last_row and first_col <= cell[1] <= last_col):
+                        _append_sheet_error_once(sheet, 'WARN: XLS PtgTbl cell outside range of TABLE')
+                        continue
                     cached = sheet.formula_values.get(cell) or ''
                     _set_sheet_cell(sheet, cell[0], cell[1], _with_formula_text(cached, formula), 'TABLE formula')
-                if pending_formula_cell in table_cells[anchor]:
+                if (pending_formula_cell in cells and
+                        first_row <= pending_formula_cell[0] <= last_row and
+                        first_col <= pending_formula_cell[1] <= last_col):
                     pending_formula_text = formula
             except (ValueError, struct.error) as exc:
-                _append_sheet_error_once(sheet, 'WARN: XLS invalid TABLE formula: ' + str(exc))
+                location = _cell_ref(*anchor) if anchor is not None else 'unknown cell'
+                _append_sheet_error_once(sheet, 'WARN: XLS invalid TABLE at %s: %s' %
+                                         (location, exc))
         elif record_type in (0x0207, 0x0007) and pending_formula_cell is not None:  # STRING formula result
             if record_type == 0x0207:
                 segments = [record_data]
@@ -1244,15 +1272,20 @@ def _parse_sheet_records(
                 _append_sheet_error_once(sheet, 'WARN: XLS invalid or truncated ARRAY formula')
                 continue
             anchor = (first_row, first_col)
+            if anchor in array_formulas:
+                _append_sheet_error_once(sheet, 'WARN: XLS duplicate ARRAY at %s ignored' %
+                                         _cell_ref(*anchor))
+                continue
             formula = _decode_formula_token_stream(
                 record_data[14:14 + size], extra_data=record_data[14 + size:], external_sheets=external_sheets,
                 sheet_names=sheet_names, defined_names=defined_names,
                 errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context)
             array_formulas[anchor] = formula
-            for cell in shared_formula_cells.get(anchor, []):
+            cells = shared_formula_cells.pop(anchor, [])
+            for cell in cells:
                 cached = sheet.formula_values.get(cell) or ''
                 _set_sheet_cell(sheet, cell[0], cell[1], _with_formula_text(cached, formula), 'ARRAY formula')
-            if pending_formula_cell in shared_formula_cells.get(anchor, []):
+            if pending_formula_cell in cells:
                 pending_formula_text = formula
         elif record_type == 0x04BC and pending_shared_formula_anchor is not None:  # SHRFMLA
             tokens, extra_data = _shared_formula_data(record_data)

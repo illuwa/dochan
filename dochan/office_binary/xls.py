@@ -296,10 +296,20 @@ def _read_formula_string_result_text(record_type: int, data: bytes) -> str:
     return _read_biff8_label_text(data)
 
 
-def _read_boundsheet_name(data: bytes) -> str:
-    if len(data) < 8:
+def _decode_legacy_name(raw: bytes, codepage: str) -> str:
+    try:
+        return raw.decode(codepage, errors='replace')
+    except LookupError:
+        return raw.decode('cp1252', errors='replace')
+
+
+def _read_boundsheet_name(data: bytes, biff_version: int = 0x0600,
+                          codepage: str = 'cp1252') -> str:
+    if len(data) < (7 if biff_version == 0x0500 else 8):
         return "Sheet"
     name_len = data[6]
+    if biff_version == 0x0500:
+        return _decode_legacy_name(data[7:7 + name_len], codepage)
     flags = data[7]
     raw = data[8:]
     if flags & 0x01:
@@ -369,7 +379,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
     for _, record_type, record_data in records:
         if record_type == 0x0042 and len(record_data) >= 2:  # CODEPAGE
             codepage = struct.unpack_from('<H', record_data)[0]
-            formula_context.codepage = ('mac_roman' if codepage == 10000
+            formula_context.codepage = ('mac_roman' if codepage in (10000, 32768)
+                                        else 'cp1252' if codepage == 32769
                                         else 'utf-16-le' if codepage == 1200
                                         else 'cp%d' % codepage)
             break
@@ -380,7 +391,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
             sheet_offset = struct.unpack_from("<I", record_data, 0)[0]
             sheets.append(
                 _SheetInfo(
-                    name=_read_boundsheet_name(record_data),
+                    name=_read_boundsheet_name(record_data, formula_context.biff_version,
+                                               formula_context.codepage),
                     offset=sheet_offset,
                     visibility=_read_boundsheet_visibility(record_data),
                 )
@@ -400,7 +412,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
         elif record_type == 0x01B9 and formula_context.biff_version == 0x0600:  # Lel
             formula_context.add_deleted_label(record_data, doc.errors)
         elif record_type == 0x0018:  # NAME indices include malformed entries.
-            defined_name = _read_name_record(record_data)
+            defined_name = _read_name_record(record_data, formula_context.biff_version,
+                                             formula_context.codepage)
             defined_name_records.append(defined_name)
             if not defined_name.name:
                 formula_warn(doc.errors, 'invalid NAME record')
@@ -557,7 +570,8 @@ def _parse_externsheet(record_data: bytes) -> List[Tuple[int, int]]:
     return refs
 
 
-def _read_name_record(record_data: bytes) -> _DefinedName:
+def _read_name_record(record_data: bytes, biff_version: int = 0x0600,
+                      codepage: str = 'cp1252') -> _DefinedName:
     if len(record_data) < 15:
         return _DefinedName("")
     scope = struct.unpack_from("<H", record_data, 8)[0]
@@ -567,13 +581,18 @@ def _read_name_record(record_data: bytes) -> _DefinedName:
     offset = 14
     if offset >= len(record_data):
         return _DefinedName("")
-    flags = record_data[offset]
-    offset += 1
+    flags = 0
+    if biff_version != 0x0500:
+        flags = record_data[offset]
+        offset += 1
     byte_count = name_length * (2 if flags & 0x01 else 1)
     if offset + byte_count > len(record_data):
         return _DefinedName("")
     raw = record_data[offset:offset + byte_count]
-    name = raw.decode("utf-16-le" if flags & 0x01 else "cp1252", errors="replace")
+    encoding = ('utf-16-le' if flags & 0x01 else
+                codepage if biff_version == 0x0500 else 'cp1252')
+    name = (_decode_legacy_name(raw, encoding) if biff_version == 0x0500
+            else raw.decode(encoding, errors="replace"))
     if struct.unpack_from('<H', record_data)[0] & 0x20:  # Lbl.fBuiltin.
         builtin_names = (
             'Consolidate_Area', 'Auto_Open', 'Auto_Close', 'Extract', 'Database',
@@ -1633,7 +1652,7 @@ def _decode_formula_token_stream(
                 return ""
             if token == 0x26:
                 try:
-                    extra.memory()
+                    extra.memory(legacy=legacy)
                 except FormulaDataError as exc:
                     warn("memory token: " + str(exc))
                     return ""
@@ -1678,7 +1697,8 @@ def _decode_formula_token_stream(
             size = tokens[offset]
             offset += 1
             try:
-                value = bytes(tokens[offset:offset + size]).decode(formula_context.codepage)
+                value = bytes(tokens[offset:offset + size]).decode(formula_context.codepage,
+                                                                    errors='replace')
             except (LookupError, UnicodeDecodeError):
                 warn("invalid BIFF5 string codepage data; expression omitted")
                 return ""
@@ -1686,6 +1706,8 @@ def _decode_formula_token_stream(
             offset += size
             continue
         if token == 0x01:  # PtgExp is resolved by the shared/array formula owner.
+            if frames:
+                warn("PtgExp inside memory expression; expression omitted")
             return ""
         if token == 0x16:  # PtgMissArg occupies one function argument.
             stack.append("")

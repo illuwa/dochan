@@ -193,3 +193,74 @@ def test_biff5_codepage_record_reaches_string_formula():
     doc = parse_biff_workbook(bof + record(0x42, struct.pack('<H', 949))
                               + formula(b'\x17' + bytes([len(data)]) + data) + record(10))
     assert texts(doc) == ['42 (=\"한글\")']
+
+
+def test_biff5_memarea_consumes_six_byte_ranges():
+    tokens = bytes.fromhex('2600000000090024000000240100011019100000')
+    extra = bytes.fromhex('0100000001000001')
+    errors = []
+    assert _decode_formula_token_stream(tokens, extra_data=extra,
+                                        formula_context=legacy_context(), errors=errors) == 'SUM($A$1,$B$2)'
+    assert not errors
+
+
+@pytest.mark.parametrize('codepage,raw,expected', [
+    (32768, b'\x80', 'Ä'),
+    (32769, b'\x80', '€'),
+    (32769, b'\x81', '\ufffd'),
+])
+def test_biff5_legacy_codepages_and_invalid_bytes_keep_formula(codepage, raw, expected):
+    bof = record(0x809, struct.pack('<HH', 0x500, 0x10))
+    doc = parse_biff_workbook(bof + record(0x42, struct.pack('<H', codepage))
+                              + formula(b'\x17\x01' + raw) + record(10))
+    assert texts(doc) == ['42 (=\"' + expected + '\")']
+    assert not doc.errors
+
+
+def test_ptgexp_inside_memory_frame_warns_and_keeps_cache():
+    errors = []
+    assert _decode_formula_token_stream(b'\x29\x05\x00\x01\0\0\0\0', errors=errors) == ''
+    assert any('PtgExp' in error for error in errors)
+
+
+def test_biff5_boundsheet_and_name_use_legacy_byte_strings():
+    bof = record(0x809, struct.pack('<HH', 0x500, 0x05))
+    sheet_bof = record(0x809, struct.pack('<HH', 0x500, 0x10))
+    name_bytes = b'Revenue'
+    name_header = struct.pack('<HBBHHH4B', 0, 0, len(name_bytes), 3, 0, 0, 0, 0, 0, 0)
+    defined_name = record(0x18, name_header + name_bytes + int_token(7))
+    sheet = sheet_bof + formula(int_token(2)) + record(10)
+    sheet_name = b'Feuil1'
+    bound_size = 4 + 7 + len(sheet_name)
+    bound = record(0x85, struct.pack('<IBBB', len(bof) + len(defined_name) + bound_size,
+                                    0, 0, len(sheet_name)) + sheet_name)
+    doc = parse_biff_workbook(bof + defined_name + bound + sheet)
+    assert [section.provenance.sheet for section in doc.sections] == ['Feuil1']
+    assert doc.sections[0].elements[0].text == 'Defined name: Revenue = 7'
+    assert texts(doc) == ['42 (=2)']
+    assert not doc.errors
+
+
+def test_biff8_compressed_name_ignores_workbook_codepage_1200():
+    bof = record(0x809, struct.pack('<HH', 0x600, 0x05))
+    label = b'Revenue'
+    header = struct.pack('<HBBHHH4B', 0, 0, len(label), 3, 0, 0, 0, 0, 0, 0)
+    defined_name = record(0x18, header + b'\0' + label + int_token(7))
+    doc = parse_biff_workbook(bof + record(0x42, struct.pack('<H', 1200))
+                              + defined_name + record(10))
+    assert doc.sections[0].elements[0].text == 'Defined name: Revenue = 7'
+
+
+def test_biff5_unknown_codepage_does_not_abort_sheet_and_name():
+    bof = record(0x809, struct.pack('<HH', 0x500, 0x05))
+    header = struct.pack('<HBBHHH4B', 0, 0, 3, 3, 0, 0, 0, 0, 0, 0)
+    defined_name = record(0x18, header + b'Foo' + int_token(7))
+    sheet = record(0x809, struct.pack('<HH', 0x500, 0x10)) + formula(int_token(2)) + record(10)
+    name = b'Data'
+    bound_size = 4 + 7 + len(name)
+    globals_ = bof + record(0x42, struct.pack('<H', 65000)) + defined_name
+    bound = record(0x85, struct.pack('<IBBB', len(globals_) + bound_size, 0, 0,
+                                    len(name)) + name)
+    doc = parse_biff_workbook(globals_ + bound + sheet)
+    assert doc.sections[0].provenance.sheet == 'Data'
+    assert doc.sections[0].elements[0].text == 'Defined name: Foo = 7'

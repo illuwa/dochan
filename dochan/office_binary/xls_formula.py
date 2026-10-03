@@ -170,16 +170,20 @@ class ExtraReader:
         return '{' + ';'.join(','.join(values[i:i + columns])
                               for i in range(0, len(values), columns)) + '}'
 
-    def memory(self):
+    def memory(self, legacy=False):
         """Consume PtgExtraMem in RgbExtra order without materializing ranges.
 
         [MS-XLS] 2.5.198.61: a count followed by that many Ref8U values.
         This is evaluation metadata, not another formula operand.
         """
         count, = self.unpack('<H')
-        raw = self.take(count * 8)
-        for offset in range(0, len(raw), 8):
-            first_row, last_row, first_col, last_col = struct.unpack_from('<4H', raw, offset)
+        width = 6 if legacy else 8
+        raw = self.take(count * width)
+        for offset in range(0, len(raw), width):
+            if legacy:
+                first_row, last_row, first_col, last_col = struct.unpack_from('<HHBB', raw, offset)
+            else:
+                first_row, last_row, first_col, last_col = struct.unpack_from('<4H', raw, offset)
             if first_row > last_row or not 0 <= first_col <= last_col <= 255:
                 raise FormulaDataError('invalid memory reference range')
 

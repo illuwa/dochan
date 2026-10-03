@@ -5,11 +5,11 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from lxml import etree
 
 from dochan.hwpx.revisions import RevisionProjector
 from dochan.hwpx import revisions
 from dochan.hwpx.parser import HWPXParser
+from dochan.utils import safe_xml as etree
 
 
 HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
@@ -411,7 +411,7 @@ def test_none_heading_levels_do_not_trigger_heading_partial():
     assert not any('[formatting-heading]' in error for error in errors)
 
 
-def test_relevant_scan_reuses_known_ancestors():
+def test_relevant_scan_reuses_known_ancestors(monkeypatch):
     class Node:
         ancestor_visits = 0
 
@@ -428,12 +428,18 @@ def test_relevant_scan_reuses_known_ancestors():
             for child in self.children:
                 yield from child.iter()
 
-        def iterancestors(self):
-            parent = self.parent
-            while parent is not None:
+        def __iter__(self):
+            return iter(self.children)
+
+    class CountingParents(dict):
+        def get(self, node, default=None):
+            if node in self:
                 Node.ancestor_visits += 1
-                yield parent
-                parent = parent.parent
+            return super().get(node, default)
+
+    original_parent_map = revisions.parent_map
+    monkeypatch.setattr(revisions, 'parent_map',
+                        lambda root: CountingParents(original_parent_map(root)))
 
     root = Node()
     parent = root

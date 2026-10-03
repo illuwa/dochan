@@ -7,6 +7,8 @@ their content and produce diagnostics, including in the default preserve mode.
 
 from dataclasses import dataclass, field
 
+from ..utils.safe_xml import parent_map
+
 
 PARAGRAPH_NS = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 HEAD_NS = "http://www.hancom.co.kr/hwpml/2011/head"
@@ -26,7 +28,7 @@ FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose",
                 HP + "hyphen"} | TEXT_TOKENS
 
 
-def _collect_relevant(root):
+def _collect_relevant(root, parents=None):
     relevant = set()
     for element in root.iter():
         if isinstance(element.tag, str) and (
@@ -34,10 +36,16 @@ def _collect_relevant(root):
             or "paraTcId" in element.attrib or "charTcId" in element.attrib
         ):
             relevant.add(element)
-            for ancestor in element.iterancestors():
-                if ancestor in relevant:
-                    break
-                relevant.add(ancestor)
+    if not relevant:
+        return relevant
+    links = parent_map(root)
+    if parents is not None:
+        parents.update(links)
+    for element in tuple(relevant):
+        ancestor = links.get(element)
+        while ancestor is not None and ancestor not in relevant:
+            relevant.add(ancestor)
+            ancestor = links.get(ancestor)
     return relevant
 
 
@@ -159,7 +167,7 @@ class RevisionProjector:
                 self._report("unsupported-type", "trackChange@type")
         self._flush("Contents/header.xml")
 
-    def _marker(self, element, flow, location):
+    def _marker(self, element, flow, location, paragraph):
         position = flow.position
         flow.position += 1
         name = element.tag.rsplit("}", 1)[-1]
@@ -191,8 +199,6 @@ class RevisionProjector:
                 self._report("range-limit", location)
                 return
             flow.range_count += 1
-            paragraph = next((p for p in element.iterancestors()
-                              if p.tag == HP + "p"), None)
             flow.opened[key] = _Range(kind, tc_id, len(flow.slots), location,
                                       paragraph, reference_valid)
         else:
@@ -214,8 +220,6 @@ class RevisionProjector:
             if span.tc_id != tc_id:
                 self._report("reference-mismatch", location + " begin/end @TcId")
                 span.valid = False
-            paragraph = next((p for p in element.iterancestors()
-                              if p.tag == HP + "p"), None)
             if span.paragraph is not paragraph:
                 self._report("cross-paragraph", location)
                 span.valid = False
@@ -223,8 +227,6 @@ class RevisionProjector:
             flow.spans.append((span, len(flow.slots)))
             flow.last_closed[key] = (tc_id, paraend, flow.position)
             if paraend == "1" and span.valid:
-                paragraph = next((p for p in element.iterancestors()
-                                  if p.tag == HP + "p"), None)
                 if paragraph is None:
                     self._report("paraend-boundary", location)
                 else:
@@ -236,7 +238,8 @@ class RevisionProjector:
     def project_section(self, root, part="section"):
         self._section_ranges = 0
         # No edits or extra text allocations for documents without revisions.
-        relevant = _collect_relevant(root)
+        parents = {}
+        relevant = _collect_relevant(root, parents)
         if not relevant:
             return
         flows = {root: _Flow()}
@@ -251,7 +254,8 @@ class RevisionProjector:
                 elif node.tag == HP + "run":
                     counts["run"] += 1
 
-        def walk(element, flow, in_text=False, location="section", blocked=False, parent=None):
+        def walk(element, flow, in_text=False, location="section", blocked=False,
+                 parent=None, paragraph=None):
             if not isinstance(element.tag, str):
                 return
             if element not in relevant and not flow.opened:
@@ -290,6 +294,7 @@ class RevisionProjector:
                 location += "/" + name
             if element.tag == HP + "p":
                 flow = flows.setdefault(parent, _Flow())
+                paragraph = element
                 in_text = False
                 counts["paragraph"] += 1
                 flow.position += 1
@@ -321,7 +326,8 @@ class RevisionProjector:
                 if parent is None or parent.tag not in MARKER_PARENTS:
                     flow.disabled = True
                     self._report("marker-position", location + "/" + name)
-                self._marker(element, flow, location + f"/{name}#{counts['marker']}")
+                self._marker(element, flow, location + f"/{name}#{counts['marker']}",
+                             paragraph)
                 if not in_text and element.tail and element.tail.strip():
                     flow.disabled = True
                     self._report("marker-tail", location + " (text outside hp:t)")
@@ -342,11 +348,20 @@ class RevisionProjector:
             elif element.tag == HP + "compose":
                 flow.add(element, "composeText")
             for child in element:
-                walk(child, flow, in_text, location, blocked, element)
+                walk(child, flow, in_text, location, blocked, element, paragraph)
                 if in_text and child.tail:
                     flow.add(child, "tail")
 
         walk(root, flows[root])
+        paragraph_ends = {paragraph for flow in flows.values()
+                          for _, paragraph in flow.paragraph_ends}
+        following_paragraph = {}
+        for parent in {parents[p] for p in paragraph_ends if p in parents}:
+            previous = None
+            for child in parent:
+                if previous in paragraph_ends:
+                    following_paragraph[previous] = child
+                previous = child
         excluded = {"final": "Delete", "original": "Insert"}.get(self.mode)
         for flow in flows.values():
             for span in flow.opened.values():
@@ -391,18 +406,15 @@ class RevisionProjector:
             # joins the next sibling's runs to the surviving paragraph.
             # Its properties remain the anchor unless it has no content.
             representative = {}
-            following_paragraph = {paragraph: paragraph.getnext()
-                                   for _, paragraph in flow.paragraph_ends}
-            candidates = set(following_paragraph)
+            candidates = {paragraph for _, paragraph in flow.paragraph_ends}
             candidates.update(p for p in following_paragraph.values() if p is not None)
 
             def has_visible_content(paragraph):
-                pending = [paragraph]
+                pending = [(paragraph, None)]
                 while pending:
-                    node = pending.pop()
+                    node, parent = pending.pop()
                     if (node is not paragraph and node.tail and
-                            node.getparent() is not None and
-                            node.getparent().tag == HP + "t"):
+                            parent is not None and parent.tag == HP + "t"):
                         return True
                     if node.tag == HP + "revisionSuppressed":
                         continue
@@ -423,7 +435,7 @@ class RevisionProjector:
                         return True
                     if node.tag == HP + "t" and node.text:
                         return True
-                    pending.extend(node)
+                    pending.extend((child, node) for child in node)
                 return False
 
             visible = {}
@@ -433,11 +445,11 @@ class RevisionProjector:
                 if span.kind != excluded:
                     continue
                 current = representative.get(paragraph, paragraph)
-                following = following_paragraph[paragraph]
+                following = following_paragraph.get(paragraph)
                 if following is None or following.tag != HP + "p":
                     continue
-                parent = following.getparent()
-                if parent is None or current.getparent() is not parent:
+                parent = parents.get(following)
+                if parent is None or parents.get(current) is not parent:
                     continue
                 if not visible[current]:
                     # Content outside the excluded range (bookmarks and
@@ -447,13 +459,17 @@ class RevisionProjector:
                     current.attrib.update(following.attrib)
                     for child in list(following):
                         current.append(child)
+                        parents[child] = current
                     parent.remove(following)
+                    parents.pop(following, None)
                     representative[following] = current
                     visible[current] = visible[following]
                     continue
                 for child in list(following):
                     current.append(child)
+                    parents[child] = current
                 parent.remove(following)
+                parents.pop(following, None)
                 representative[following] = current
                 visible[current] = visible[current] or visible[following]
         self._flush(part)

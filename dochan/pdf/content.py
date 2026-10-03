@@ -147,6 +147,8 @@ class Fragment:
     comment_markers: list = field(default_factory=list)
     mcids: tuple = ()
     artifact: bool = False
+    # 렌더 모드 3·7(보이지 않는 글자)로 그린 조각. 줄 끝 공백 신호에만 쓴다.
+    invisible: bool = False
 
 
 def writing_direction(frag: Fragment) -> str:
@@ -361,6 +363,8 @@ class ContentTextExtractor:
         tlm = (1, 0, 0, 1, 0, 0)  # 텍스트 라인 행렬
         font, fs, tc, tw, th, tl = (_initial_text_state if _initial_text_state is not None
                                     else (None, 0.0, 0.0, 0.0, 1.0, 0.0))
+        # 텍스트 렌더 모드(ISO 32000-1 9.3.6). 3·7 은 보이지 않는 글자(OCR 텍스트층 등)다.
+        tr = 0
         n = len(content)
         while True:
             lexer.skip_whitespace()
@@ -408,14 +412,14 @@ class ContentTextExtractor:
                     self._marked_stack.pop()
             elif op == b"q":
                 if len(stack) < 256:
-                    stack.append((ctm, font, fs, tc, tw, th, tl))
+                    stack.append((ctm, font, fs, tc, tw, th, tl, tr))
                 else:
                     overflow += 1
             elif op == b"Q":
                 if overflow:
                     overflow -= 1
                 elif stack:
-                    ctm, font, fs, tc, tw, th, tl = stack.pop()
+                    ctm, font, fs, tc, tw, th, tl, tr = stack.pop()
             elif op == b"cm" and len(operands) >= 6:
                 ctm = _matmul(tuple(_num(o) for o in operands[-6:]), ctm)
             elif op == b"Do" and operands and isinstance(operands[-1], PDFName):
@@ -519,6 +523,8 @@ class ContentTextExtractor:
                 th = float(operands[-1]) / 100.0
             elif op == b"TL" and operands and isinstance(operands[-1], (int, float)):
                 tl = float(operands[-1])
+            elif op == b"Tr" and operands and isinstance(operands[-1], int):
+                tr = operands[-1]
             elif op == b"Td" and len(operands) >= 2:
                 tx = _num(operands[-2])
                 ty = _num(operands[-1])
@@ -538,7 +544,10 @@ class ContentTextExtractor:
                 tm = tlm
             elif op == b"Tj":
                 if operands and isinstance(operands[-1], bytes):
+                    shown = len(frags)
                     tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
+                    if tr in (3, 7):
+                        _mark_invisible(frags, shown)
             elif op in (b"'", b'"'):
                 tlm = _matmul((1, 0, 0, 1, 0, -tl), tlm)
                 tm = tlm
@@ -546,9 +555,13 @@ class ContentTextExtractor:
                     tw = _num(operands[-3])
                     tc = _num(operands[-2])
                 if operands and isinstance(operands[-1], bytes):
+                    shown = len(frags)
                     tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
+                    if tr in (3, 7):
+                        _mark_invisible(frags, shown)
             elif op == b"TJ":
                 if operands and isinstance(operands[-1], list):
+                    shown = len(frags)
                     for item in operands[-1]:
                         if isinstance(item, bytes):
                             tm = self._show(item, tm, font, fs, tc, tw, th, frags, ctm)
@@ -557,6 +570,8 @@ class ContentTextExtractor:
                             adj = -item / 1000.0 * fs * (1.0 if vertical else th)
                             tm = _matmul((1, 0, 0, 1, 0 if vertical else adj,
                                           adj if vertical else 0), tm)
+                    if tr in (3, 7):
+                        _mark_invisible(frags, shown)
             elif op == b"BI":
                 lexer.pos = self._skip_inline_image(content, lexer.pos)
             else:
@@ -760,6 +775,11 @@ class ContentTextExtractor:
         return [_Line(_in_writing_order(row)) for row in rows]
 
 
+def _mark_invisible(frags, start):
+    for fragment in frags[start:]:
+        fragment.invisible = True
+
+
 def assemble_lines(fragments: List[Fragment]) -> List["_Line"]:
     """조각 목록을 같은 기준선끼리 묶어 줄로 만든다 (표 셀·본문 공통 공개 진입점)."""
     return ContentTextExtractor()._assemble_lines(fragments)
@@ -858,8 +878,11 @@ class _Line:
             prev_end = start + f.width
             prev_space = f.space_width
         joined = "".join(parts)
-        # 줄 끝에 실제로 그려진 공백 글리프는 원문의 띄어쓰기다(줄 병합이 쓴다).
-        self.trailing_space = bool(joined.strip()) and joined[-1:].isspace()
+        # 앞 단어와 같은 텍스트 그리기 명령 안에서 줄 끝에 그려진 공백 글리프(줄 병합이 쓴다).
+        # 한컴 PDF 에서는 원문의 띄어쓰기였다(공개·내부 짝 측정). 공백만 따로 그린 조각은 앞에서 버려진다.
+        # 보이지 않는 글자(OCR 텍스트층)는 단어마다 공백을 붙여 그리므로 신호로 쓰지 않는다.
+        self.trailing_space = (bool(joined.strip()) and joined[-1:].isspace()
+                               and not frags[-1].invisible)
         self.text = joined.strip()
 
     def _append_run(self, text: str, bold: bool, italic: bool, link: str = "") -> None:

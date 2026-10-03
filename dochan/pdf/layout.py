@@ -100,7 +100,7 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
                  and not _BLOCK_MARKER.match(line.text))
         if joins:
             block = blocks[-1]
-            # 앞 줄 끝에 공백 글리프가 실제로 있으면 원문도 띄어 썼다. 없을 때만 통계로 판정한다.
+            # 앞 줄 끝에 보이는 공백 글리프가 있으면 공백으로 잇는다(한컴 PDF 실측: 원문 띄어쓰기). 없을 때만 통계로 판정한다.
             if getattr(previous, "trailing_space", False):
                 sep = ' '
             else:

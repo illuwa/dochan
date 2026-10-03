@@ -253,13 +253,13 @@ class DocInfoParser:
                     entry.rel_path = data[i:i + path_len * 2].decode('utf-16-le', errors='replace').rstrip('\x00')
                     i += path_len * 2
 
-        elif entry.type == 1:  # EMBEDDING
+        elif entry.type in (1, 2):  # EMBEDDING or STORAGE
             # BinData ID
             if i + 2 <= len(data):
                 entry.bin_data_id = struct.unpack_from("<H", data, i)[0]
                 i += 2
-            # 확장자
-            if i + 2 <= len(data):
+            # STORAGE points to BINxxxx.OLE and has no extension field.
+            if entry.type == 1 and i + 2 <= len(data):
                 ext_len = struct.unpack_from("<H", data, i)[0]
                 i += 2
                 if ext_len > 0 and i + ext_len * 2 <= len(data):

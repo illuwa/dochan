@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 MAX_BINDATA_ITEM_SIZE = MAX_OLE_STREAM_SIZE
 MAX_BINDATA_TOTAL_SIZE = MAX_OLE_DOCUMENT_SIZE
-MAX_CHART_OLE_ITEMS = 256
+MAX_EMBEDDED_OLE_ITEMS = 256
 
 
 @dataclass
@@ -60,6 +60,7 @@ def extract_bin_data(
     extracted_budget = ByteBudget(total_limit)
     oversized = []
     ole_count = 0
+    bounded_ole_skipped = 0
 
     for entry in ole.listdir():
         if len(entry) >= 2 and entry[0] == 'BinData':
@@ -77,8 +78,8 @@ def extract_bin_data(
                 ext = storage_name.split('.')[-1] if '.' in storage_name else ""
                 if ext.lower() == 'ole':
                     ole_count += 1
-                    if ole_count > MAX_CHART_OLE_ITEMS:
-                        if ole_count == MAX_CHART_OLE_ITEMS + 1 and warnings is not None:
+                    if ole_count > MAX_EMBEDDED_OLE_ITEMS:
+                        if ole_count == MAX_EMBEDDED_OLE_ITEMS + 1 and warnings is not None:
                             warnings.append('WARN: HWP embedded OLE item count limit exceeded')
                         continue
 
@@ -120,16 +121,18 @@ def extract_bin_data(
                     extension=ext.lower(),
                 )
 
-            except BoundedIOError as exc:
+            except BoundedIOError:
                 if storage_name.lower().endswith('.ole') and warnings is not None:
-                    warnings.append('WARN: HWP chart BinData stream limit exceeded (%s)' %
-                                  type(exc).__name__)
+                    bounded_ole_skipped += 1
                     continue
                 raise
             except (ValueError, struct.error, UnicodeDecodeError, OSError, zlib.error) as e:
                 logger.warning("BinData 항목 '%s' 파싱 실패: %s", storage_name, e)
                 continue
 
+    if bounded_ole_skipped and warnings is not None:
+        warnings.append('WARN: HWP embedded OLE %d stream(s) exceeded size or budget limit' %
+                        bounded_ole_skipped)
     if oversized and warnings is not None:
         shown = ", ".join(oversized[:3]) + (" …" if len(oversized) > 3 else "")
         warnings.append(f"WARN: HWP 그림 {len(oversized)}개가 크기 상한을 넘어 생략됨: {shown}")

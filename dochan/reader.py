@@ -458,7 +458,6 @@ class Dochan:
                     warnings=self.doc.errors,
                 )
                 link_images_to_bin_data(self.doc, bin_items, doc_info.bin_data_entries)
-                resolve_charts(self.doc, bin_items, doc_info.bin_data_entries)
             except ResourceLimitError as e:
                 # Body text is already parsed within its budgets; only the
                 # images are dropped when their combined size runs out.
@@ -467,6 +466,17 @@ class Dochan:
                 raise
             except Exception as e:
                 self.doc.errors.append(f"WARN: BinData 연결 실패: {e}")
+            finally:
+                # Resolve markers even if image extraction failed; unresolved
+                # markers must never escape into JSON as unknown objects.
+                try:
+                    resolve_charts(self.doc, locals().get('bin_items', {}),
+                                   doc_info.bin_data_entries,
+                                   existing_cells=section_parser._document_cells)
+                except Exception as e:
+                    self.doc.errors.append(f"WARN: HWP chart extraction failed: {type(e).__name__}")
+                    from .hwp.charts import discard_chart_references
+                    discard_chart_references(self.doc)
 
         except BoundedIOError as e:
             self.doc = Document(source_format="hwp")

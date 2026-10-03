@@ -1072,7 +1072,7 @@ class SectionParser:
                 if sub['record'].tag_id == HWPTAG_PARA_HEADER:
                     cap_paras.extend(
                         e for e in self._parse_paragraph_group(sub)
-                        if hasattr(e, 'runs'))
+                        if hasattr(e, 'runs') or isinstance(e, ChartReference))
         if not cap_paras:
             return None
         return cap_paras, side
@@ -1165,6 +1165,8 @@ class SectionParser:
                             info['paragraphs'].append(e)
                     elif isinstance(e, Image):
                         # 셀 안 이미지도 유지 (HWPX 와 동일 — BinData 연결 대상)
+                        info['paragraphs'].append(e)
+                    elif isinstance(e, ChartReference):
                         info['paragraphs'].append(e)
 
         return info
@@ -1291,7 +1293,7 @@ class SectionParser:
         self._chart_count += 1
         if self._chart_count > MAX_CHARTS:
             if self._chart_count == MAX_CHARTS + 1:
-                self.errors.append('WARN: HWP chart placement count limit exceeded')
+                self.errors.append('WARN: HWP chart/OLE control count limit exceeded')
             return None
         if len(data) < 14:
             self.errors.append('WARN: HWP chart OLE control truncated')

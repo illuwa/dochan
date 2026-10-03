@@ -1,7 +1,7 @@
-"""Compare embedded HWP chart caches with HWPX output and independent XML values.
+"""Independently check HWP chart OLE references against output and HWPX.
 
 Usage: python -m scripts.verify_hwp_charts HWP_DIR HWPX_DIR [--internal DIR]
-The internal directory is summarized without disclosing filenames or content.
+Uses olefile only in this optional development probe, never in dochan runtime.
 """
 import argparse
 from collections import Counter
@@ -9,81 +9,150 @@ from pathlib import Path
 import struct
 import unicodedata
 import zlib
-import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml -- independent gold; declarations rejected before parsing
+import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml -- independent oracle; declarations rejected before parsing
 
-from dochan import Dochan, cfb
-from dochan.hwp.header import FileHeader
-from dochan.hwp.section import SectionParser
+import olefile
+
+from dochan import Dochan
 from dochan.model.table import Table
-from dochan.utils.bounded_io import read_ole_stream
-from dochan.utils.safe_decompress import safe_zlib_decompress
 
 
 C = '{http://schemas.openxmlformats.org/drawingml/2006/chart}'
 A = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+HANCOM_CHART_CLSID = '5A721580-5AF0-11CE-8384-0020AF2337F2'
+EXCEL_CHART_CLSID = '00020821-0000-0000-C000-000000000046'
+MAX_PROBE_BYTES = 16 * 1024 * 1024
 TYPE_NAMES = {
     'pieChart': 'pie', 'pie3DChart': '3-D pie', 'lineChart': 'line',
     'scatterChart': 'scatter', 'stockChart': 'stock', 'radarChart': 'radar',
 }
 
 
+def _inflate(data):
+    obj = zlib.decompressobj(-15)
+    result = obj.decompress(data, MAX_PROBE_BYTES + 1)
+    if len(result) > MAX_PROBE_BYTES or not obj.eof:
+        raise ValueError('probe inflation limit or incomplete stream')
+    return result
+
+
+def _records(data):
+    offset = 0
+    while offset + 4 <= len(data):
+        header = struct.unpack_from('<I', data, offset)[0]
+        offset += 4
+        tag = header & 0x3ff
+        level = (header >> 10) & 0x3ff
+        size = header >> 20
+        if size == 0xfff:
+            if offset + 4 > len(data):
+                raise ValueError('truncated record length')
+            size = struct.unpack_from('<I', data, offset)[0]
+            offset += 4
+        if offset + size > len(data):
+            raise ValueError('truncated record data')
+        yield tag, level, data[offset:offset + size]
+        offset += size
+
+
 def _embedded_xml(path):
-    result = []
-    contents_only = 0
-    unreadable = 0
-    with cfb.OleFileIO(str(path)) as outer:
-        ole_paths = [parts for parts in outer.listdir()
+    """Read slot -> storage mapping and occurrence order without dochan parsers."""
+    xmls = []
+    kinds = Counter()
+    with olefile.OleFileIO(str(path)) as outer:
+        paths = outer.listdir(streams=True, storages=False)
+        ole_paths = {int(parts[1].split('.')[0][3:], 16): parts for parts in paths
                      if len(parts) == 2 and parts[0] == 'BinData'
-                     and parts[1].upper().endswith('.OLE')]
+                     and parts[1].upper().endswith('.OLE')
+                     and parts[1][:3].upper() == 'BIN'}
         if not ole_paths:
-            return result, contents_only, unreadable
-        header = FileHeader.parse(read_ole_stream(outer, 'FileHeader', max_bytes=256))
-        referenced = set()
-        for parts in outer.listdir():
-            if len(parts) != 2 or parts[0] != header.body_storage or not parts[1].startswith('Section'):
+            return xmls, kinds
+        flags = struct.unpack_from('<I', outer.openstream('FileHeader').read(), 36)[0]
+        compressed = bool(flags & 1)
+
+        def read(parts):
+            raw = outer.openstream(parts).read()
+            return _inflate(raw) if compressed else raw
+
+        entries = []
+        for tag, _, data in _records(read('DocInfo')):
+            if tag == 18 and len(data) >= 2:
+                kind = struct.unpack_from('<H', data)[0] & 15
+                storage = struct.unpack_from('<H', data, 2)[0] if kind in (1, 2) and len(data) >= 4 else 0
+                entries.append((kind, storage))
+        refs = []
+        for parts in sorted(paths):
+            if len(parts) != 2 or parts[0] not in ('BodyText', 'ViewText') or not parts[1].startswith('Section'):
                 continue
-            body = read_ole_stream(outer, '/'.join(parts))
-            if header.is_compressed:
-                body = safe_zlib_decompress(body)
-            for record in SectionParser()._read_all_records(body):
-                if record.tag_id == 84 and len(record.data) >= 14:
-                    referenced.add(struct.unpack_from('<H', record.data, 12)[0])
-        for parts in ole_paths:
-            try:
-                storage_id = int(parts[1].split('.')[0][3:], 16)
-            except ValueError:
+            for tag, _, data in _records(read(parts)):
+                if tag == 84 and len(data) >= 14:
+                    refs.append(struct.unpack_from('<H', data, 12)[0])
+        parsed = {}
+        for slot in refs:
+            if not 0 < slot <= len(entries):
+                kinds['missing_reference'] += 1
                 continue
-            if storage_id not in referenced:
+            kind, storage = entries[slot - 1]
+            if kind != 2 or storage not in ole_paths:
                 continue
-            try:
-                raw = read_ole_stream(outer, '/'.join(parts))
-                if header.is_compressed:
-                    raw = safe_zlib_decompress(raw)
-                if len(raw) < 4 or struct.unpack_from('<I', raw)[0] != len(raw) - 4:
-                    unreadable += 1
-                    continue
-                with cfb.OleFileIO(raw[4:], strict_recovery=True) as inner:
-                    if inner.exists('OOXMLChartContents'):
-                        result.append(read_ole_stream(inner, 'OOXMLChartContents', max_bytes=4 * 1024 * 1024))
-                    elif inner.exists('Contents'):
-                        contents_only += 1
-            except (cfb.CFBError, ValueError, OSError, zlib.error):
-                unreadable += 1
-    return result, contents_only, unreadable
+            if storage not in parsed:
+                try:
+                    raw = read(ole_paths[storage])
+                    if len(raw) < 4 or struct.unpack_from('<I', raw)[0] != len(raw) - 4:
+                        raise ValueError('OLE length mismatch')
+                    with olefile.OleFileIO(raw[4:]) as inner:
+                        clsid = str(inner.root.clsid).upper()
+                        if inner.exists('OOXMLChartContents'):
+                            parsed[storage] = ('ooxml', inner.openstream('OOXMLChartContents').read())
+                        elif clsid == HANCOM_CHART_CLSID:
+                            parsed[storage] = ('hancom_legacy', None)
+                        elif clsid == EXCEL_CHART_CLSID:
+                            parsed[storage] = ('excel', None)
+                        else:
+                            parsed[storage] = ('other', None)
+                except (OSError, ValueError):
+                    parsed[storage] = ('unreadable', None)
+            label, xml = parsed[storage]
+            kinds[label] += 1
+            if xml is not None:
+                xmls.append(xml)
+    return xmls, kinds
+
+
+def _points(series, axis):
+    node = series.find(C + axis)
+    if node is None:
+        return None
+    for path in (C + 'numRef/' + C + 'numCache', C + 'strRef/' + C + 'strCache',
+                 C + 'numLit', C + 'strLit'):
+        cache = node.find(path)
+        if cache is not None:
+            break
+    else:
+        return None
+    count = cache.find(C + 'ptCount')
+    size = int(count.get('val')) if count is not None else 0
+    if size > 50000:
+        raise ValueError('point count limit')
+    values = [''] * size
+    for point in cache.findall(C + 'pt'):
+        index = int(point.get('idx'))
+        value = point.find(C + 'v')
+        if 0 <= index < size and value is not None:
+            values[index] = value.text or ''
+    return values
 
 
 def _xml_values(data):
     upper = data.upper()
-    if b'<!DOCTYPE' in upper or b'<!ENTITY' in upper:
-        raise ValueError('XML declaration forbidden')
+    if b'<!DOCTYPE' in upper or b'<!ENTITY' in upper or len(data) > MAX_PROBE_BYTES:
+        raise ValueError('XML declaration or size forbidden')
     root = ET.fromstring(data)
     if root.tag != C + 'chartSpace':
         raise ValueError('chartSpace missing')
     chart = root.find(C + 'chart')
     if chart is None:
         raise ValueError('chart missing')
-    values = Counter()
-    names = []
     title_node = chart.find(C + 'title/' + C + 'tx')
     title = ''
     if title_node is not None:
@@ -108,47 +177,58 @@ def _xml_values(data):
             kind = 'bar of pie' if subtype is not None and subtype.get('val') == 'bar' else 'pie of pie'
         else:
             kind = TYPE_NAMES.get(name, '')
-    for series in chart.findall('.//' + C + 'ser'):
-        source_name = series.find(C + 'tx')
-        if source_name is not None:
-            direct_name = source_name.find(C + 'v')
-            if direct_name is None:
-                direct_name = source_name.find('.//' + C + 'pt/' + C + 'v')
-            if direct_name is not None and direct_name.text:
-                names.append(direct_name.text.strip())
-        for axis in ('cat', 'val', 'xVal', 'yVal', 'bubbleSize'):
-            node = series.find(C + axis)
-            if node is None:
-                continue
-            for point in node.findall('.//' + C + 'pt'):
-                value = point.find(C + 'v')
-                if value is not None and value.text is not None:
-                    values[value.text] += 1
-    return values, title, kind, names
+    series = []
+    for item in chart.findall('.//' + C + 'ser'):
+        values = _points(item, 'val') or _points(item, 'yVal')
+        if values is not None:
+            series.append((_points(item, 'cat') or _points(item, 'xVal'), values))
+    return title, kind, series
 
 
 def _chart_groups(doc):
-    groups = []
+    """Yield chart groups and local before/after anchors in reading order."""
+    results = []
+
+    def visit(blocks, depth=0):
+        if depth > 32:
+            return
+        i = 0
+        while i < len(blocks):
+            block = blocks[i]
+            if isinstance(block, Table) and (block.caption_text or '').startswith('Chart type:'):
+                tables = [block]
+                end = i + 1
+                while end < len(blocks) and isinstance(blocks[end], Table) and not blocks[end].caption:
+                    tables.append(blocks[end])
+                    end += 1
+                before = i - 1
+                title = ''
+                if before >= 0 and getattr(blocks[before], 'heading_level', 0) == 3:
+                    title = blocks[before].text
+                    before -= 1
+                prev = getattr(blocks[before], 'text', '')[-30:] if before >= 0 else '<start>'
+                nxt = getattr(blocks[end], 'text', '')[:30] if end < len(blocks) else '<end>'
+                results.append((title, tables, (prev, nxt)))
+                i = end
+                continue
+            if isinstance(block, Table):
+                for row in block.rows:
+                    for cell in row:
+                        visit(cell.paragraphs, depth + 1)
+                visit(block.caption, depth + 1)
+            elif hasattr(block, 'paragraphs'):
+                visit(block.paragraphs, depth + 1)
+            elif hasattr(block, 'caption'):
+                visit(block.caption, depth + 1)
+            i += 1
+
     for section in doc.sections:
-        current = None
-        previous = None
-        for block in section.elements:
-            if isinstance(block, Table) and block.caption_text.startswith('Chart type:'):
-                current = [block]
-                title = previous.text if getattr(previous, 'heading_level', 0) == 3 else ''
-                groups.append((title, current))
-            elif isinstance(block, Table) and current is not None and not block.caption:
-                current.append(block)
-            elif isinstance(block, Table):
-                current = None
-            elif getattr(block, 'heading_level', 0) != 3:
-                current = None
-            previous = block
-    return groups
+        visit(section.elements)
+    return results
 
 
 def _signature(group):
-    title, tables = group
+    title, tables, _ = group
     return (title, [(table.caption_text, [[cell.text for cell in row] for row in table.rows])
                     for table in tables])
 
@@ -160,56 +240,63 @@ def verify(hwp_dir, hwpx_dir, private=False):
     failures = []
     for path in sorted(Path(hwp_dir).glob('*.hwp')):
         try:
-            xmls, binary_count, unreadable = _embedded_xml(path)
-            if not xmls and not binary_count and not unreadable:
+            xmls, kinds = _embedded_xml(path)
+            if not kinds:
                 continue
             stats['ole_documents'] += 1
-            stats['xml_charts'] += len(xmls)
-            stats['contents_only_streams'] += binary_count
-            stats['unreadable_ole_streams'] += unreadable
+            stats.update(kinds)
+            if kinds['ooxml'] or kinds['excel'] or kinds['hancom_legacy']:
+                stats['chart_documents'] += 1
+            for label in ('ooxml', 'excel', 'hancom_legacy'):
+                if kinds[label]:
+                    stats[label + '_documents'] += 1
             if not xmls:
                 continue
-            reader = Dochan(str(path))
-            groups = _chart_groups(reader.doc)
+            groups = _chart_groups(Dochan(str(path)).doc)
             if len(groups) != len(xmls):
                 stats['placement_mismatch'] += 1
-                failures.append((path.name, 'placement'))
+                failures.append((path.name, 'placement count'))
                 continue
             for data, group in zip(xmls, groups):
-                gold, title, kind, names = _xml_values(data)
-                actual_title, tables = group
-                output = Counter(cell.text for table in tables for row in table.rows for cell in row)
-                if any(output[value] < count for value, count in gold.items()):
-                    stats['xml_value_mismatch'] += 1
-                    failures.append((path.name, 'independent XML values'))
+                title, kind, series = _xml_values(data)
+                actual_title, tables, _ = group
+                if len(series) != len(tables):
+                    failures.append((path.name, 'series count'))
+                    continue
+                ordered = True
+                for (cats, vals), table in zip(series, tables):
+                    rows = [[cell.text for cell in row] for row in table.rows[1:]]
+                    if [row[-1] for row in rows] != vals or (cats is not None and [row[0] for row in rows] != cats):
+                        ordered = False
+                if ordered:
+                    stats['ordered_charts_match'] += 1
                 else:
-                    stats['xml_values_match'] += 1
+                    failures.append((path.name, 'ordered values'))
                 if title:
                     stats['explicit_titles'] += 1
                     if title == actual_title:
                         stats['explicit_titles_match'] += 1
                     else:
-                        failures.append((path.name, 'independent XML title'))
+                        failures.append((path.name, 'title'))
                 if kind:
                     stats['known_kinds'] += 1
                     if tables[0].caption_text.startswith('Chart type: ' + kind):
                         stats['known_kinds_match'] += 1
                     else:
-                        failures.append((path.name, 'independent XML kind'))
-                stats['explicit_series_names'] += len(names)
-                for name in names:
-                    if any(name in cell for cell in output):
-                        stats['explicit_series_names_match'] += 1
-                    else:
-                        failures.append((path.name, 'independent XML series name'))
-            partner = hwpx.get(unicodedata.normalize('NFC', path.stem))
+                        failures.append((path.name, 'kind'))
+            stem = unicodedata.normalize('NFC', path.stem)
+            partner = hwpx.get(stem) or hwpx.get(stem.removeprefix('rhwp-'))
             if partner is not None:
                 stats['paired_documents'] += 1
                 answer = _chart_groups(Dochan(str(partner)).doc)
                 if [_signature(group) for group in groups] == [_signature(group) for group in answer]:
                     stats['paired_exact'] += 1
                 else:
-                    failures.append((path.name, 'HWPX chart tables'))
+                    failures.append((path.name, 'HWPX tables'))
+                if [group[2] for group in groups] == [group[2] for group in answer]:
+                    stats['paired_anchors_exact'] += 1
+                else:
+                    failures.append((path.name, 'HWPX anchors'))
         except Exception as exc:
             stats['exceptions'] += 1
             failures.append((path.name, type(exc).__name__))

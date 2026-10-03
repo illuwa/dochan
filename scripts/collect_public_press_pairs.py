@@ -12,6 +12,7 @@ import html
 import json
 import re
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -22,6 +23,7 @@ FILE_URL = BASE + "/common/download.do?fileId=%s&tblKey=GMN"
 USER_AGENT = "Mozilla/5.0 (Macintosh) dochan-corpus-collector"
 MAGIC = {"pdf": b"%PDF", "hwpx": b"PK\x03\x04", "hwp": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"}
 MAX_FILE_BYTES = 12 * 1024 * 1024
+MAX_ATTACHMENTS = 20
 
 
 def fetch(url, timeout=30.0, limit=MAX_FILE_BYTES):
@@ -35,15 +37,40 @@ def fetch(url, timeout=30.0, limit=MAX_FILE_BYTES):
 
 
 def attachments(page):
-    """보도자료 본문에서 (fileId, 파일 이름) 쌍을 읽는다."""
-    text = html.unescape(page)
-    found = []
-    for match in re.finditer(r"fileId=(\d+)", text):
-        window = re.sub(r"<[^>]+>", " ", text[match.end():match.end() + 600])
-        name = re.search(r"([^\s\"'<>][^\"'<>\n]{0,160}?\.(hwpx|hwp|pdf))\b", window)
-        if name and match.group(1) not in {item[0] for item in found}:
-            found.append((match.group(1), name.group(1).strip(), name.group(2).lower()))
-    return found
+    """보도자료 본문에 걸린 첨부 fileId 를 순서대로 읽는다."""
+    seen = []
+    for file_id in re.findall(r"fileId=(\d+)", html.unescape(page)):
+        if file_id not in seen:
+            seen.append(file_id)
+    return seen
+
+
+def probe(file_id, timeout=30.0):
+    """첨부의 실제 파일 이름(Content-Disposition)과 앞 16바이트만 읽는다."""
+    request = urllib.request.Request(FILE_URL % file_id, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosemgrep: dynamic-urllib-use-detected
+        head = response.read(16)
+        disposition = response.headers.get("Content-Disposition", "")
+    match = re.search(r'filename="?([^";]+)', disposition)
+    name = match.group(1) if match else ""
+    try:
+        name = name.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return unicodedata.normalize("NFC", name.strip()), head
+
+
+def pick_group(found):
+    """같은 이름(확장자 제외)의 PDF 와 HWPX·HWP 를 한 묶음으로 고른다. 이름이 다른 첨부는 다른 문서다."""
+    groups = {}
+    for file_id, name, head in found:
+        stem, _, ext = name.rpartition(".")
+        kind = ext.lower()
+        if kind in MAGIC and head.startswith(MAGIC[kind]):
+            groups.setdefault(stem, {}).setdefault(kind, (file_id, name))
+    usable = [group for group in groups.values() if "pdf" in group and ({"hwpx", "hwp"} & set(group))]
+    usable.sort(key=lambda group: -len(group))
+    return usable[0] if usable else None
 
 
 def license_type(page):
@@ -66,12 +93,22 @@ def collect(output, pages, max_bytes, delay):
                 continue
             page = fetch(VIEW_URL % news_id)[0].decode("utf-8", "replace")
             time.sleep(delay)
-            files = attachments(page)
-            kinds = {kind: (file_id, name) for file_id, name, kind in files}
             entry = {"license": license_type(page), "files": {}}
             title = re.search(r"<title>(.*?)</title>", page, re.S)
             entry["title"] = html.unescape(title.group(1)).strip() if title else ""
-            if entry["license"] != 1 or "pdf" not in kinds or not ({"hwpx", "hwp"} & set(kinds)):
+            kinds = None
+            if entry["license"] == 1:
+                found = []
+                for file_id in attachments(page)[:MAX_ATTACHMENTS]:
+                    try:
+                        name, head = probe(file_id)
+                    except Exception:  # 네트워크 오류는 그 첨부만 건너뛴다
+                        continue
+                    finally:
+                        time.sleep(delay)
+                    found.append((file_id, name, head))
+                kinds = pick_group(found)
+            if not kinds:
                 entry["skipped"] = True
                 manifest[news_id] = entry
                 continue
@@ -97,6 +134,55 @@ def collect(output, pages, max_bytes, delay):
     return manifest, total
 
 
+def recheck(output, delay):
+    """이미 받은 보도자료의 짝을 실제 파일 이름으로 다시 고르고, 다른 첨부였던 것만 새로 받는다."""
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    changed = 0
+    for news_id, entry in manifest.items():
+        if entry.get("skipped") or entry.get("rechecked"):
+            continue
+        page = fetch(VIEW_URL % news_id)[0].decode("utf-8", "replace")
+        time.sleep(delay)
+        found = []
+        for file_id in attachments(page)[:MAX_ATTACHMENTS]:
+            try:
+                name, head = probe(file_id)
+            except Exception:  # 네트워크 오류는 그 첨부만 건너뛴다
+                continue
+            finally:
+                time.sleep(delay)
+            found.append((file_id, name, head))
+        kinds = pick_group(found) or {}
+        files = {}
+        for kind in ("hwp", "hwpx", "pdf"):
+            path = output / ("%s.%s" % (news_id, kind))
+            if kind not in kinds:
+                if path.exists():
+                    path.unlink()
+                    changed += 1
+                continue
+            file_id, name = kinds[kind]
+            previous = entry["files"].get(kind, {})
+            if path.exists() and previous.get("url") == FILE_URL % file_id:
+                files[kind] = dict(previous, name=name)
+                continue
+            data, _ = fetch(FILE_URL % file_id)
+            time.sleep(delay)
+            if not data.startswith(MAGIC[kind]):
+                files[kind] = {"error": "magic"}
+                continue
+            path.write_bytes(data)
+            changed += 1
+            files[kind] = {"name": name, "url": FILE_URL % file_id, "bytes": len(data)}
+        entry["files"] = files
+        entry["rechecked"] = True
+        if not kinds:
+            entry["skipped"] = True
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    return manifest, changed
+
+
 def page_range(text):
     start, _, end = text.partition("-")
     return range(int(start), int(end or start) + 1)
@@ -108,7 +194,12 @@ def main():
     parser.add_argument("--pages", type=page_range, default=page_range("1-10"))
     parser.add_argument("--max-bytes", type=int, default=1_000_000_000)
     parser.add_argument("--delay", type=float, default=1.0)
+    parser.add_argument("--recheck", action="store_true", help="받아 둔 짝을 실제 파일 이름으로 다시 고른다")
     args = parser.parse_args()
+    if args.recheck:
+        _manifest, changed = recheck(args.output, args.delay)
+        print("rechecked, files changed %d" % changed)
+        return
     manifest, total = collect(args.output, args.pages, args.max_bytes, args.delay)
     kept = [key for key, value in manifest.items() if not value.get("skipped")]
     print("releases %d, kept %d, bytes %d" % (len(manifest), len(kept), total))

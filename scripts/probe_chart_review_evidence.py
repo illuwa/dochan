@@ -97,8 +97,26 @@ def xls_cells(path):
     with olefile.OleFileIO(str(path)) as archive:
         stream = 'Workbook' if archive.exists('Workbook') else 'Book'
         data = archive.openstream(stream).read()
+    from dochan.office_binary.xls import _decode_legacy_name
     sheets, formats, xfs = [], {}, []
+    biff_version, codepage = 0x0600, 'cp1252'
     for _, kind, payload in records(data):
+        if kind == 0x809 and len(payload) >= 2 and not sheets:
+            biff_version = struct.unpack_from('<H', payload)[0]
+        elif kind == 0x42 and len(payload) >= 2:
+            value = struct.unpack_from('<H', payload)[0]
+            codepage = ('mac_roman' if value in (10000, 32768) else 'cp1252' if value == 32769
+                        else 'utf-16-le' if value == 1200 else 'cp%d' % value)
+        if kind == 0x41e and 0 < biff_version < 0x0600 and len(payload) >= 3:
+            # BIFF5 FORMAT 은 바이트 길이 + 코드페이지 문자열이다(리더 xls.py 와 같은 해석).
+            formats[struct.unpack_from('<H', payload)[0]] = _decode_legacy_name(
+                payload[3:3 + payload[2]], codepage)
+            continue
+        if kind == 0x85 and 0 < biff_version < 0x0600 and len(payload) >= 7:
+            # BIFF5 BOUNDSHEET 이름도 바이트 길이 + 코드페이지 문자열이다.
+            sheets.append((_decode_legacy_name(payload[7:7 + payload[6]], codepage),
+                           struct.unpack_from('<I', payload)[0]))
+            continue
         if kind == 0x85 and len(payload) >= 8:
             start = struct.unpack_from('<I', payload)[0]
             size, flags = payload[6:8]

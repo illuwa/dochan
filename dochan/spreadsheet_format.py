@@ -87,14 +87,8 @@ class SpreadsheetNumberFormatter:
             clean = code.lower()
             if metadata.kind != "scientific" and re.search(r"[Ee][+-][0#?]", code):
                 return value
-            auto_minus = (number < 0 and position == 1 and
-                          re.search(r"\[(?:Red|Blue|Green|Yellow|White|Black|Cyan|Magenta|Color\d+)\]",
-                                    section, re.I) is not None and
-                          not any((any(char in token for char in "-()") or
-                                   (re.search(r"[A-Za-z]", token) is not None and
-                                    not (metadata.kind == "scientific" and token.lower() == "e")))
-                                  for token, is_format in self._format_literal_tokens(section)
-                                  if not is_format))
+            auto_minus = (number < 0 and position == 1
+                          and self._is_color_only_negative_section(sections[0], section))
             if number == 0 and position == 2 and "0" not in clean and any(
                     char in clean for char in "#?"):
                 return "".join(" " if token == "?" else "" if is_format else token
@@ -535,6 +529,26 @@ class SpreadsheetNumberFormatter:
         match = re.search(r"[0#?],*\.([0#?]+)", self._format_code_tokens(fmt))
         return len(match[1]) - len(match[1].rstrip("#?")) if match else 0
 
+    _BRACKET = re.compile(r"\[[^\]]*\]")
+    # 조건([<0]), 지역·통화([$-412], [$€-2]), 경과 시간([h], [mm], [ss])이 아닌 대괄호는 색 표기다(지역화된 색 이름 포함).
+    _COLOR = re.compile(r"\[(?![$<>=])(?![hHmMsS]+\])[^\]]+\]")
+
+    def _is_color_only_negative_section(self, positive: str, negative: str) -> bool:
+        """Markdown 에는 색이 없으므로, 색만 다른 음수 구역은 부호를 잃지 않게 - 를 붙인다(계약).
+
+        대괄호 토큰을 지운 뒤 음수 구역의 리터럴이 모두 양수 구역에도 있으면 색만 다른 구역이다.
+        음수 구역에만 있는 리터럴(▲·△·U+2212·괄호·" CR")은 작성자의 부호 표기이므로 붙이지 않는다.
+        """
+        if not self._COLOR.search(negative):
+            return False
+
+        def literals(section: str) -> List[str]:
+            return [token for token, is_format in self._format_literal_tokens(self._BRACKET.sub("", section))
+                    if not is_format and token.strip()]
+
+        positive_literals = literals(positive)
+        return all(token in positive_literals for token in literals(negative))
+
     def _render_general_section(self, section: str, value: str,
                                 number: float, position: int) -> str:
         masked = re.sub(r'"[^"]*"|[\\_*].|\[[^\]]*\]',
@@ -547,6 +561,9 @@ class SpreadsheetNumberFormatter:
         suffix = "".join(token for token, is_format in
                          self._format_literal_tokens(section[match.end():]) if not is_format)
         formatted = value.lstrip("-") if number < 0 and position == 1 and prefix.strip() else value
+        if number < 0 and position == 0 and prefix.strip():
+            # 한 구역 서식의 음수는 리터럴 앞에 부호가 온다(NumberFormatTests A22 Excel 저장값).
+            return "-" + prefix + value.lstrip("-") + suffix
         return prefix + formatted + suffix
 
     def _uses_thousands_separator(self, fmt: str) -> bool:

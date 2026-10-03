@@ -92,10 +92,6 @@ class SpreadsheetNumberFormatter:
                 return literal
             metadata = self._format_metadata(section)
             clean = code.lower()
-            if metadata.kind == "" and re.fullmatch(r"# \?[- ]*/[- ]*\?+", section):
-                # Keep the pre-token-renderer display for these unsupported
-                # separator forms rather than returning the raw value.
-                return self._fraction_number(shown, 10 ** section.rsplit("/", 1)[1].count("?") - 1)
             if metadata.kind != "scientific" and re.search(r"[Ee][+-][0#?]", code):
                 return value
             auto_minus = (number < 0 and position == 1
@@ -684,21 +680,30 @@ class SpreadsheetNumberFormatter:
 
     def _fraction_section(self, number: float, section: str,
                           metadata: _FormatMetadata) -> Optional[str]:
+        def prior():
+            # The display before token rendering: selected fraction plus the
+            # format's literal prefix and suffix.
+            return self._apply_literal_affixes(self._fraction_number(
+                number, metadata.denominator_limit, metadata.fixed_denominator), metadata)
+
         if re.fullmatch(r"0+/0+", section):
             # A slash between zero-fill slots is literal, not a denominator.
             return self._zero_filled_number(number, section)
-        if re.match(r"(?:\[[^]]+\])*[#,0.]+\s+\?+/(?:[0#?]+|[1-9]\d*)$", section) and (
-                "," in section or "." in section):
-            return self._fraction_number(number, metadata.denominator_limit,
-                                         metadata.fixed_denominator)
+        if section in ("#,##0 ?/?", "0.0 ?/?"):
+            # Retain the existing compact Markdown display for these plain
+            # formats; decorated formats render their grouping tokens.
+            return prior()
+        if "%" in self._format_code_tokens(section) or re.match(
+                r"(?:\[[^]]+\])*[#,0.]+\s+\?+/(?:[0#?]+|[1-9]\d*)$", section
+        ) and "." in section:
+            return prior()
         if re.fullmatch(r"[0#?]+/[0#?]+", section) and not metadata.fixed_denominator:
             # No public cache covers improper fractions for bare slot patterns.
             return self._fraction_number(number, metadata.denominator_limit)
         if re.fullmatch(r"#(?:\\? | )\?+/(?:[0#?]+|[1-9]\d*)", section):
             # The existing Markdown display contract omits alignment spaces
             # from the common built-in and public fraction-table patterns.
-            return self._fraction_number(number, metadata.denominator_limit,
-                                         metadata.fixed_denominator)
+            return prior()
         tokens = self._fraction_tokens(section)
         slashes = [i for i, (_, kind) in enumerate(tokens) if kind == "slash"]
         if len(slashes) != 1:
@@ -716,6 +721,14 @@ class SpreadsheetNumberFormatter:
         pad = bool(whole_positions) and any(
             kind == "pad" for _, kind in tokens[whole_positions[0]:numerator_start])
         mixed = bool(whole_positions) and not pad
+        if not mixed and (metadata.fixed_denominator or not any(
+                kind == "pad" for _, kind in tokens[:slash])):
+            # Bare and fixed-denominator improper fractions have no direct
+            # Excel cache evidence. Preserve the prior mixed-number display.
+            return prior()
+        if any(text not in ("=",) for text, kind in tokens[numerator_end + 1:slash]
+               if kind == "literal"):
+            return prior()
         # The old fraction selector is the numerical contract: the continued
         # fraction and fixed-denominator rounding must remain unchanged.
         selected = self._fraction_number(number, metadata.denominator_limit,
@@ -741,6 +754,12 @@ class SpreadsheetNumberFormatter:
             show_zero = not numerator and (not fraction_visible or any(
                 text == "?" for text, kind in whole_tokens if kind == "slot"))
             whole_digits = str(whole) if whole or show_zero else ""
+            grouping = any(text == "," and kind == "literal" for text, kind in whole_tokens)
+            if grouping:
+                whole_tokens = [(text, kind) for text, kind in whole_tokens
+                                if not (text == "," and kind == "literal")]
+                if whole_digits:
+                    whole_digits = format(int(whole_digits), ",")
             whole_text = self._fraction_slots(whole_tokens, whole_digits)
             boundary = "".join(text for text, _ in tokens[last_whole + 1:numerator_start])
             if not any(char.isdigit() for char in whole_text):
@@ -771,6 +790,11 @@ class SpreadsheetNumberFormatter:
                                if kind == "slot" or text.isdigit())
         denominator_pattern = denominator_tokens[:last_denominator + 1]
         suffix = "".join(text for text, _ in denominator_tokens[last_denominator + 1:])
+        if not metadata.fixed_denominator and any(
+                kind == "literal" and text not in ("=",) for text, kind in
+               denominator_pattern[:next((i for i, (_, kind) in enumerate(denominator_pattern)
+                                         if kind == "slot"), len(denominator_pattern))]):
+            return prior()
         if not mixed:
             numerator += whole * denominator
             if pad and whole_positions:
@@ -797,6 +821,14 @@ class SpreadsheetNumberFormatter:
                 text == "?" and kind == "slot" for text, kind in denominator_pattern):
             leading = len(denominator_text) - len(denominator_text.lstrip(" "))
             denominator_text = denominator_text.lstrip(" ") + " " * leading
+        # A token arrangement may drop or duplicate a numeric component.
+        # Keep the selected fraction's value before returning that layout.
+        shown = (whole + Fraction(numerator, denominator) if mixed else
+                 Fraction(numerator, denominator))
+        tolerance = (1 / (2 * metadata.fixed_denominator) + 1e-9
+                     if metadata.fixed_denominator else 1)
+        if abs(float(shown) - abs(number)) > tolerance:
+            return prior()
         return (sign + prefix + whole_text + boundary + numerator_text + between + "/" +
                 denominator_text + suffix)
 
@@ -881,7 +913,7 @@ class SpreadsheetNumberFormatter:
     def _is_fraction_format(self, fmt: str) -> bool:
         clean_fmt = self._format_without_literals(fmt)
         first_section = self._format_sections(clean_fmt)[0]
-        return bool(re.search(r"[0#?]=*/=*(?:[0#?]+|[1-9]\d*)", first_section))
+        return bool(re.search(r"[0#?][ =:-]*/[ =:-]*(?:[0#?]+|[1-9]\d*)", first_section))
 
     def _fraction_denominator_limit(self, fmt: str) -> int:
         clean_fmt = self._format_without_literals(fmt)

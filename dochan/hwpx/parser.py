@@ -614,6 +614,8 @@ class HWPXParser:
             'italic': False,
             'underline': False,
             'strikeout': False,
+            'superscript': False,
+            'subscript': False,
             'size_pt': 10.0,
         }
         height = elem.get('height')
@@ -631,6 +633,11 @@ class HWPXParser:
                 cs['bold'] = True
             elif ctag == 'italic':
                 cs['italic'] = True
+            elif ctag == 'supscript':
+                # OWPML 은 위 첨자를 <hh:supscript/> 로 적는다(HWP 글자 모양 속성 비트 15 와 같은 뜻).
+                cs['superscript'] = True
+            elif ctag == 'subscript':
+                cs['subscript'] = True
             elif ctag == 'underline':
                 cs['underline'] = child.get('type', 'NONE') != 'NONE'
             elif ctag == 'strikeout':
@@ -648,6 +655,8 @@ class HWPXParser:
         entry.italic = cs['italic']
         entry.underline_type = 1 if cs['underline'] else 0
         entry.strikeout = 1 if cs['strikeout'] else 0
+        entry.superscript = cs['superscript']
+        entry.subscript = cs['subscript']
         self._char_shape_entries.append(entry)
 
     def _collect_para_pr(self, elem):
@@ -1101,6 +1110,8 @@ class HWPXParser:
         italic = False
         underline = False
         strikeout = False
+        superscript = False
+        subscript = False
 
         # CharShape lookup from charPrIDRef
         cs = self._char_shapes_by_id.get(_int_attr(run_elem, 'charPrIDRef', -1))
@@ -1110,6 +1121,8 @@ class HWPXParser:
             font_size_pt = cs['size_pt']
             underline = cs['underline']
             strikeout = cs['strikeout']
+            superscript = cs.get('superscript', False)
+            subscript = cs.get('subscript', False)
 
         def append_text(text):
             # 비어 있는 조각은 예약 여부를 검사할 때 다시 순회하지 않는다.
@@ -1129,6 +1142,7 @@ class HWPXParser:
                     bold=bold, italic=italic,
                     font_size_pt=font_size_pt,
                     underline=underline, strikeout=strikeout,
+                    superscript=superscript, subscript=subscript,
                     link=self._current_link(),
                 ))
 

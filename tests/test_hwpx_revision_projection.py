@@ -2,6 +2,7 @@
 
 import collections
 import hashlib
+import time
 from pathlib import Path
 
 import pytest
@@ -192,6 +193,34 @@ def test_ten_thousand_paragraph_end_merges_are_linear():
     root, errors = project(''.join(paragraphs), 'final')
     assert para_texts(root) == ['x' * 10000 + 'z']
     assert not errors
+
+
+def test_many_table_cell_flows_merge_linearly():
+    # Each cell is its own flow; merge candidates must come from that flow
+    # only, not from every paragraph in the section.
+    cell = ('<hp:tc><hp:subList><hp:p><hp:run><hp:t>a<hp:deleteBegin Id="1" TcId="2"/>b'
+            '<hp:deleteEnd Id="1" TcId="2" paraend="1"/></hp:t></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:t>c</hp:t></hp:run></hp:p></hp:subList></hp:tc>')
+    body = '<hp:p><hp:run><hp:tbl><hp:tr>' + cell * 4000 + '</hp:tr></hp:tbl></hp:run></hp:p>'
+    started = time.perf_counter()
+    root, errors = project(body, 'final')
+    assert time.perf_counter() - started < 5.0
+    assert para_texts(root)[1:4] == ['ac', 'ac', 'ac']
+    assert not errors
+
+
+def test_suppressed_object_children_do_not_keep_stale_parents():
+    def mark(kind, identity, end=False, paraend='0'):
+        return '<hp:delete%s Id="%s" TcId="2"%s/>' % (
+            'End' if end else 'Begin', identity, ' paraend="%s"' % paraend if end else '')
+    body = ('<hp:p><hp:run><hp:t>KEEP-BEFORE</hp:t></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:t>A' + mark('delete', 'o') + '</hp:t><hp:rect>'
+            '<hp:p><hp:run><hp:t>x' + mark('delete', 'r') + 'y' + mark('delete', 'r', True, '1')
+            + '</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>z</hp:t></hp:run></hp:p>'
+            '</hp:rect><hp:t>' + mark('delete', 'o', True) + 'B</hp:t></hp:run></hp:p>'
+            '<hp:p><hp:run><hp:t>KEEP-AFTER</hp:t></hp:run></hp:p>')
+    root, errors = project(body, 'final')
+    assert para_texts(root) == ['KEEP-BEFORE', 'AB', 'KEEP-AFTER']
 
 
 def test_hundred_thousand_ranges_are_bounded():

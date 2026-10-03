@@ -31,7 +31,8 @@ HWPXParser().parse(file_path, *, include_assets=True, revision_mode="preserve")
 
 2011 paragraph/head QName과 대소문자를 구별한다. begin/end의 `(종류, Id)`와
 `TcId`, header `trackChange@id/type`을 확인한다. `Id`와 `TcId`가 달라도 정상적으로
-연결한다. 범위 상태는 run·동일 본문 흐름의 문단을 넘어서 유지하며, 섹션마다 종료한다.
+연결한다. 범위 상태는 같은 문단 안의 run 을 넘어 유지하며, 섹션마다 종료한다. 시작과 끝이
+서로 다른 문단에 있는 범위는 `cross-paragraph` 로 진단하고 원문을 보존한다(2026-10-03 갱신).
 표 셀·각주·머리글·바닥글·캡션·그리기 텍스트·메모와 미지원 컨테이너는
 진입 시점부터 별도의 흐름이다. 첫 문단보다 앞선 마커도 바깥 본문에 유입되지 않는다.
 `hp:p/run/t`와 지원하는 텍스트 토큰만 흐름을 공유한다. 마커의 직접 부모로
@@ -44,12 +45,15 @@ HWPXParser().parse(file_path, *, include_assets=True, revision_mode="preserve")
 게시하거나 기존 파일을 덮어쓰지 않는다. 유형·파트별로 발생 횟수와
 첫 문단/run/marker 위치를 집계하여 진단이 문서 길이에 비례해 늘지 않도록 한다.
 
-- 겹침·교차·중첩 범위, 중복 시작, 시작/끝 누락, Id 누락.
+- 중복 시작, 시작/끝 누락, Id 누락, 시작과 끝이 다른 문단에 있는 범위(`cross-paragraph`).
+  겹침·교차·중첩 범위는 종류별 제외 위치의 합집합으로 투영한다(2026-10-03 갱신).
 - header 참조 누락·종류 불일치·중복, begin/end TcId 불일치.
-- `paraend`가 `0`이 아닌 경우(누락·잘못된 값·`1` 포함).
-- ParaShape/CharShape, `paraTcId`/`charTcId` 서식 변경과 미지원 이벤트 종류.
+- `paraend` 누락·잘못된 값. `paraend="1"` 은 문단 끝을 범위에 포함해 다음 문단과 합친다(2026-10-03 갱신).
+- 미지원 이벤트 종류. ParaShape/CharShape·`paraTcId`/`charTcId` 서식 변경은 텍스트를 바꾸지 않아
+  `info` 진단(final/original 에서도 `WARN:`)으로 모으며, 합쳐지는 문단의 개요 수준이 다르면 부분 지원 오류다.
 - 미지원 namespace, 내용이 있는 빈 마커, `hp:t` 밖의 marker tail,
-  변경 범위 안의 개체·컨트롤, 변경 마커가 있는 switch 분기.
+  변경 마커가 있는 switch 분기, 개체를 감싼 알 수 없는 래퍼. 변경 범위 안의 표·그림 등 개체는
+  하나의 위치로 투영한다(2026-10-03 갱신).
 - 미지원 마커 위치와 알 수 없는 컨테이너를 가로지르는 범위(`flow-boundary`).
   switch 내부의 투영 보류는 격리된 하위 흐름에도 적용한다.
 - 동시에 열린 범위가 128개를 넘는 경우.

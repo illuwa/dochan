@@ -23,8 +23,15 @@
 
 공개 `corpus/hwp-public/hwpx`의 HWPX 1,675개를 이식 전 커밋 `7119a5d`와 이식본의 기본 리더로 읽었다. Markdown 전체 해시와 문자 수가 1,675/1,675개에서 같았다. 두 JSONL 결과의 SHA-256은 모두 `60e42889f876e7bb089e139fa4a3fecdbeb5d8c5d7b92e48495ab8f22a7d21d6`이다. 기본 리더를 사용했으므로 `include_assets=False`로 패키지 식별에서 제외되는 세 파일도 같은 조건으로 비교되었다. 파일별 출력 전문은 저장하지 않았다.
 
-`python -m scripts.block_lxml pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp`는 4,712개 통과, 31개 건너뜀, 16개 예상 실패였고 lxml import 시도는 0회였다. `ruff check dochan scripts tests`도 통과했다. 기존 README의 HWPX 변경 추적 ✅ 판정을 유지할 근거이며, 새 체크를 추가하는 작업은 아니다.
+`python -m scripts.block_lxml pytest tests/ -q -p no:cacheprovider --basetemp=.codex-work/pytest-tmp`는 4,712개 통과, 31개 건너뜀, 16개 예상 실패였고 lxml import 시도는 0회였다. `ruff check dochan scripts tests`도 통과했다. README 의 `변경 추적` 행은 HWP·HWPX 모두 ⬜ 이며, 이 이식은 그 판정을 바꾸지 않는다.
 
 ## 재현
 
 `scripts/probe_hwpx_revision_port.py`에 `--source-root`, `--corpus`, `--output`을 지정한다. 네 변경 추적 표본은 `--tracked`를 추가하면 세 모드를 측정하고, 전체 코퍼스는 옵션 없이 기본 Markdown을 측정한다. 기준 소스 루트는 각각 `31a9fa5`와 `7119a5d`의 소스다. 결과 파일은 작업용 디렉터리에 보관하고 코퍼스 원본을 복사하지 않는다.
+
+## 감수 후속(2026-10-03)
+
+감수에서 표 셀처럼 흐름이 많은 섹션의 처리 시간이 제곱으로 늘어나는 문제가 나왔다. 문단 병합 후보를 섹션 전체가 아니라 그 흐름의
+문단 끝에서만 모으도록 고쳤다. 셀 4,000개 섹션은 수정 전 약 61초, 수정 후 0.1초 미만이다(`test_many_table_cell_flows_merge_linearly`).
+억제한 개체의 직속 자식이 부모 맵에 남아 병합 중 예외로 섹션 전체가 사라지던 경우도 `clear()` 전에 부모 정보를 지워 고쳤다
+(`test_suppressed_object_children_do_not_keep_stale_parents`). 두 수정 뒤에도 공개 4문서 × 3모드 출력은 이식본과 같다.

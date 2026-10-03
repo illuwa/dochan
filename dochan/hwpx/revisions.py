@@ -391,6 +391,8 @@ class RevisionProjector:
                         # clear() removes children which the body-budget and
                         # chart-discovery paths would otherwise parse again.
                         tail = element.tail
+                        for child in element:
+                            parents.pop(child, None)
                         element.clear()
                         element.tag = HP + "revisionSuppressed"
                         element.tail = tail
@@ -407,7 +409,8 @@ class RevisionProjector:
             # Its properties remain the anchor unless it has no content.
             representative = {}
             candidates = {paragraph for _, paragraph in flow.paragraph_ends}
-            candidates.update(p for p in following_paragraph.values() if p is not None)
+            candidates.update(following_paragraph[p] for _, p in flow.paragraph_ends
+                              if following_paragraph.get(p) is not None)
 
             def has_visible_content(paragraph):
                 pending = [(paragraph, None)]

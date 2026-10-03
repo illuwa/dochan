@@ -12,6 +12,7 @@ hwp/section.py — 섹션 파서 (트리 구축 + 컨트롤 식별)
 """
 
 import struct
+import unicodedata
 import zlib
 from bisect import bisect_right
 from dataclasses import dataclass, replace as _dc_replace
@@ -702,7 +703,7 @@ class SectionParser:
                     return
 
     def _form_text_result(self, text_result, ctrl_nodes):
-        """양식 표시값만 삽입한다. 누름틀 Direction은 본문이 아니다."""
+        """인라인 양식·겹침·덧말을 원시 WCHAR 경계에 삽입한다."""
         queues = {}
         for node in ctrl_nodes:
             cid = parse_ctrl_id(node['record'].data)
@@ -712,16 +713,20 @@ class SectionParser:
         consumed = set()
         raw_map = text_result['raw_to_text']
         for _start, end, cid in text_result.get('inline_controls', []):
-            if cid != b'mrof':
+            if cid not in (b'mrof', b'spct', b'tudt'):
                 continue
             index = next_index.get(cid, 0)
             next_index[cid] = index + 1
             nodes = queues.get(cid, [])
             if index >= len(nodes):
-                self._append_fatal_once('form-reference', 'WARN: HWP form object reference missing')
+                self._document_limit_once('inline-' + repr(cid),
+                                          'WARN: HWP inline control record missing')
                 continue
             node = nodes[index]
-            value = self._form_node_text(node)
+            if cid == b'mrof':
+                value = self._form_node_text(node)
+            else:
+                value = self._compose_dutmal_text(node['record'].data, cid)
             consumed.add(id(node))
             if value and end < len(raw_map):
                 insertions.append((end, raw_map[end], value))
@@ -733,7 +738,7 @@ class SectionParser:
         for _, _, value in insertions:
             prefix.append(prefix[-1] + len(value))
         if len(text_result['text']) + prefix[-1] > 100 * 1024 * 1024:
-            self._append_fatal_once('form-size', 'WARN: HWP form output exceeds size limit')
+            self._document_limit_once('inline-size', 'WARN: HWP inline output exceeds size limit')
             return text_result, [node for node in ctrl_nodes if id(node) not in consumed]
         parts = []
         offset = 0
@@ -750,6 +755,65 @@ class SectionParser:
                                  for pos, kind, cid in text_result.get('field_raw_marks', [])
                                  if pos < len(raw_map)]
         return result, [node for node in ctrl_nodes if id(node) not in consumed]
+
+    def _compose_dutmal_text(self, data, cid):
+        """한컴 HWP 5.0 4.3.10.12/13의 가변 길이 CTRL_HEADER 본문."""
+        try:
+            if len(data) < 6 or data[:4] != cid:
+                raise ValueError
+            first_len = struct.unpack_from('<H', data, 4)[0]
+            if first_len > 4096:
+                raise ValueError
+            first_end = 6 + first_len * 2
+            if cid == b'spct':
+                if first_end + 4 > len(data):
+                    raise ValueError
+                count = data[first_end + 3]
+                if first_end + 4 + count * 4 > len(data):
+                    raise ValueError
+                value = data[6:first_end].decode('utf-16-le')
+                # 공개 sample-compose-all-shapes 짝: 테두리 타입별 첫 문자는
+                # HWP에만 저장된 도형 글리프이며 HWPX composeText에는 없다.
+                borders = '\u3000◯●□■△▲☼◇◆▢♲♺♻'
+                border_type = data[first_end]
+                if border_type < len(borders) and value.startswith(borders[border_type]):
+                    value = value[1:]
+                # 원형 테두리 안의 숫자만 HWPX의 표시 숫자로 분해한다.
+                # 테두리 없는 원문자 숫자는 HWPX에서도 원문자 그대로다.
+                if (border_type == 1 and len(value) == 1
+                        and '\u2460' <= value <= '\u2473'):
+                    value = unicodedata.normalize('NFKC', value)
+                if (border_type == 2 and len(value) == 1
+                        and '\u2776' <= value <= '\u277f'):
+                    value = str(ord(value) - ord('\u2776') + 1)
+                # 공개 HWP/HWPX 짝에서 관측한 한컴 PUA 숫자 글리프만 복원한다.
+                if len(value) == 1:
+                    code = ord(value)
+                    if 0xf02b1 <= code <= 0xf02b4:
+                        return str(code - 0xf02b0)
+                    if 0xf02ce <= code <= 0xf02d0:
+                        return str(code - 0xf02cd)
+                if (len(value) == 2 and ord(value[0]) == 0xf02ba
+                        and 0xf02c3 <= ord(value[1]) <= 0xf02c8):
+                    return str(ord(value[1]) - 0xf02c3 + 10)
+                if value == '\U000f0289\U000f0293':
+                    return '11'
+                return value
+            if first_end + 2 > len(data):
+                raise ValueError
+            second_len = struct.unpack_from('<H', data, first_end)[0]
+            if second_len > 4096:
+                raise ValueError
+            second_end = first_end + 2 + second_len * 2
+            if second_end + 20 > len(data):
+                raise ValueError
+            main = data[6:first_end].decode('utf-16-le')
+            sub = data[first_end + 2:second_end].decode('utf-16-le')
+            return main + ('(' + sub + ')' if sub else '')
+        except (ValueError, UnicodeError, struct.error):
+            self._document_limit_once('inline-malformed-' + repr(cid),
+                                      'WARN: HWP inline control truncated or invalid')
+            return ''
 
     def _form_node_text(self, node):
         for child in node['children']:

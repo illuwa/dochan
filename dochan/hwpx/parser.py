@@ -843,6 +843,8 @@ class HWPXParser:
                     self._body_tail.write(run.text)
             elif tag == 'compose':
                 self._body_tail.write(node.get('composeText', '') or '')
+            elif tag == 'dutmal':
+                self._body_tail.write(_dutmal_text(node))
             elif tag in ('tab', 'lineBreak'):
                 self._body_tail.write('\t' if tag == 'tab' else '\n')
             elif tag == 'equation':
@@ -1159,6 +1161,8 @@ class HWPXParser:
             elif tag == 'compose':
                 # 글자 겹치기 — 표시 문자는 composeText 속성에 있다
                 append_text(child.get('composeText', '') or '')
+            elif tag == 'dutmal':
+                append_text(_dutmal_text(child))
             elif tag in FORM_TAGS:
                 flush()
                 form = self._parse_form_run(child, TextRun(
@@ -1681,6 +1685,19 @@ def _find_child(parent, name: str):
                 if _local_tag(sub.tag) == name:
                     return sub
     return None
+
+
+def _dutmal_text(node) -> str:
+    """덧말 본말과 주석을 기존 본문 문자열 계약으로 평탄화한다."""
+    main = ''
+    sub = ''
+    for child in _selected_children(node):
+        tag = _local_tag(child.tag)
+        if tag == 'mainText':
+            main = ''.join(child.itertext())
+        elif tag == 'subText':
+            sub = ''.join(child.itertext())
+    return main + ('(' + sub + ')' if sub else '')
 
 
 def _text_of_t(t_elem) -> str:

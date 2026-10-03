@@ -7,12 +7,26 @@
 import argparse
 import hashlib
 import json
+import random
 import re
 import subprocess
 import sys
 import unicodedata
 from collections import Counter
 from pathlib import Path
+
+
+def _marker_type(text):
+    text = text.lstrip()
+    if text.startswith(('□', '■')):
+        return 'square'
+    if re.match(r'(?:\d+(?:-\d+)?|[가-하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)]', text):
+        return 'number'
+    if text.startswith(('<', '〈', '[', '【')):
+        return 'bracket'
+    if text and unicodedata.category(text[0]) == 'Co':
+        return 'pua'
+    return 'other'
 
 
 def _digest(value):
@@ -44,7 +58,13 @@ def inspect(path, root):
     from dochan import Dochan
 
     options = {'include_assets': False} if path.suffix.lower() == '.hwpx' else {}
-    doc = Dochan(str(path), **options).doc
+    try:
+        doc = Dochan(str(path), **options).doc
+    except TypeError as exc:
+        # 오래된 기준 리비전에는 include_assets 인자가 없다.
+        if 'include_assets' not in str(exc):
+            raise
+        doc = Dochan(str(path)).doc
     from dochan.output.markdown import to_markdown
 
     paragraphs = list(_paragraphs(doc))
@@ -100,6 +120,9 @@ def compare(args):
     pair_levels = {}
     changed_examples = []
     nonheading_examples = []
+    promoted_sample = []
+    marker_counts = Counter()
+    rng = random.Random(20261004)
     try:
         for index, line in enumerate(child.stdout, 1):
             before = json.loads(line)
@@ -153,6 +176,21 @@ def compare(args):
                 stem = unicodedata.normalize('NFC', path.stem)
                 row = pair_levels.setdefault(stem, {})
                 row[extension] = (before['body'], after['body'])
+            if not args.private:
+                for (old_text, old_level), (new_text, new_level) in zip(
+                        before['body'], after['body']):
+                    if old_text != new_text or old_level or not new_level:
+                        continue
+                    marker_counts[_marker_type(new_text)] += 1
+                    seen = sum(marker_counts.values())
+                    sample = {'file': before['file'], 'text': new_text[:40],
+                              'level': new_level}
+                    if len(promoted_sample) < 60:
+                        promoted_sample.append(sample)
+                    else:
+                        slot = rng.randrange(seen)
+                        if slot < 60:
+                            promoted_sample[slot] = sample
             if index % 500 == 0:
                 print('compare %d' % index, file=sys.stderr, flush=True)
     finally:
@@ -180,8 +218,12 @@ def compare(args):
               'files': stats['files'], 'exceptions': stats['exceptions'],
               'formats': {key: dict(value) for key, value in by_ext.items()},
               'pairs': dict(pair_stats), 'changed_examples': changed_examples,
-              'nonheading_examples': nonheading_examples}
+              'nonheading_examples': nonheading_examples,
+              'promoted_markers': dict(marker_counts)}
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.sample_output and not args.private:
+        args.sample_output.write_text(
+            json.dumps(promoted_sample, ensure_ascii=False, indent=2), encoding='utf-8')
     if child.returncode:
         raise SystemExit(child.returncode)
 
@@ -198,6 +240,7 @@ def main():
     comparison.add_argument('--baseline', type=Path, required=True)
     comparison.add_argument('--pairs', action='store_true')
     comparison.add_argument('--private', action='store_true')
+    comparison.add_argument('--sample-output', type=Path)
     comparison.set_defaults(func=compare)
     args = parser.parse_args()
     args.func(args)

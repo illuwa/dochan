@@ -6,14 +6,32 @@
 
 import argparse
 import json
+import re
+import sys
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from scripts.probe_heading_relative import _paragraphs
 
 
-def score(corpus, labels_path, overrides_path):
+def _marker_type(text):
+    text = text.lstrip()
+    if text.startswith(('□', '■')):
+        return 'square'
+    if re.match(r'(?:\d+(?:-\d+)?|[가-하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)]', text):
+        return 'number'
+    if text.startswith(('<', '〈', '[', '【')):
+        return 'bracket'
+    if text and unicodedata.category(text[0]) == 'Co':
+        return 'pua'
+    return ''
+
+
+def score(corpus, labels_path, overrides_path, details=None):
     from dochan import Dochan
+    if details is not None:
+        from dochan.utils.heading_font import body_font_size, first_visible_font_size
 
     labels = json.loads(labels_path.read_text(encoding='utf-8'))
     overrides = (json.loads(overrides_path.read_text(encoding='utf-8'))
@@ -25,8 +43,17 @@ def score(corpus, labels_path, overrides_path):
     for filename, rows in by_file.items():
         path = corpus / filename
         options = {'include_assets': False} if path.suffix.lower() == '.hwpx' else {}
-        doc = Dochan(str(path), **options).doc
+        try:
+            doc = Dochan(str(path), **options).doc
+        except TypeError as exc:
+            if 'include_assets' not in str(exc):
+                raise
+            doc = Dochan(str(path)).doc
         paragraphs = list(_paragraphs(doc))
+        if details is not None:
+            top = [para for key, para in paragraphs
+                   if re.fullmatch(r's\d+\.elements\d+', key)]
+            body_size = body_font_size(top, doc=doc)
         for row in rows:
             index = row['i']
             if index >= len(paragraphs):
@@ -35,6 +62,26 @@ def score(corpus, labels_path, overrides_path):
             if text != row['t']:
                 raise ValueError('라벨 문단 텍스트 불일치: ' + filename)
             expected = overrides.get('%s#%d' % (filename, row['idx']), row['auto']) == 'H'
+            if details is not None and expected and not paragraphs[index][1].heading_level:
+                para = paragraphs[index][1]
+                visible = [run for run in para.runs if run.text.strip()]
+                nonspace = sum(len(''.join(run.text.split())) for run in visible)
+                bold = sum(len(''.join(run.text.split())) for run in visible if run.bold)
+                style = (doc.styles[para.style_id].name
+                         if 0 <= para.style_id < len(doc.styles) else '')
+                shape = (doc.para_shapes[para.para_shape_id]
+                         if 0 <= para.para_shape_id < len(doc.para_shapes) else None)
+                details.append({
+                    'file': filename, 'index': index, 'text': para.text[:100],
+                    'path': paragraphs[index][0],
+                    'first_size': first_visible_font_size(para.runs),
+                    'body_size': body_size,
+                    'bold_fraction': round(bold / nonspace, 3) if nonspace else 0,
+                    'marker': _marker_type(para.text),
+                    'style': style,
+                    'outline_type': getattr(shape, 'heading_type', None),
+                    'pdf_size': row.get('pdf_sz'), 'pdf_font': row.get('font'),
+                })
             for version, predicted in (
                 ('parent', bool(row['b'])),
                 ('commit', bool(row['a'])),
@@ -61,8 +108,17 @@ def main():
     parser.add_argument('corpus', type=Path)
     parser.add_argument('labels', type=Path)
     parser.add_argument('--overrides', type=Path)
+    parser.add_argument('--source-root', type=Path,
+                        default=Path(__file__).resolve().parents[1])
+    parser.add_argument('--details-output', type=Path)
     args = parser.parse_args()
-    print(json.dumps(score(args.corpus, args.labels, args.overrides),
+    sys.path.insert(0, str(args.source_root.resolve()))
+    details = [] if args.details_output else None
+    result = score(args.corpus, args.labels, args.overrides, details=details)
+    if args.details_output:
+        args.details_output.write_text(json.dumps(details, ensure_ascii=False, indent=2),
+                                       encoding='utf-8')
+    print(json.dumps(result,
                      ensure_ascii=False, indent=2))
 
 

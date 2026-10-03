@@ -31,7 +31,7 @@ from ..hwp.forms import caption_display
 from ..hwp.records.ctrl_header import field_command_to_url
 from . import charts
 from .revisions import RevisionProjector, validate_revision_mode
-from .crypto import (HWPXCryptoError, MAX_MANIFEST_SIZE, MAX_SPIN_COUNT, decrypt_part,
+from .crypto import (AESBudget, HWPXCryptoError, MAX_MANIFEST_SIZE, MAX_SPIN_COUNT, decrypt_part,
                      read_encryption_manifest)
 from ..constants import MAX_OUTLINE_HEADING_LEVEL
 
@@ -204,9 +204,9 @@ class HWPXParser:
         self._chart_document_cells = 0  # Actual table cells + grid fillers + charts.
         self._password = None
         self._encrypted_parts = {}
-        self._encrypted_cache = {}
-        self._verified_parts = set()
         self._crypto_budget = [MAX_SPIN_COUNT]
+        self._crypto_keys = {}
+        self._aes_budget = AESBudget()
 
     def parse(self, file_path: Union[str, os.PathLike[str], BinaryIO], *, include_assets: bool = True,
               revision_mode: str = "preserve", password: Optional[str] = None) -> Document:
@@ -256,8 +256,12 @@ class HWPXParser:
 
                 manifest_name = self._part_name_map.get('META-INF/manifest.xml')
                 if manifest_name:
-                    manifest = self._read_zip_part(zf, manifest_name, MAX_MANIFEST_SIZE)
-                    if b'encryption-data' in manifest:
+                    try:
+                        manifest = self._read_zip_part(zf, manifest_name, MAX_MANIFEST_SIZE)
+                    except Exception:
+                        self.errors.append('META-INF/manifest.xml 읽기 실패')
+                        manifest = None
+                    if manifest is not None and b'encryption-data' in manifest:
                         self._encrypted_parts = read_encryption_manifest(
                             manifest, self._part_name_map, self._encrypted_limit)
                         if any(self._part_name_map[name] != name
@@ -272,12 +276,6 @@ class HWPXParser:
                                 'ERR: 지원하지 않는 HWPX 암호화 또는 손상된 암호화 데이터')
                         if self._encrypted_parts and password is None:
                             raise HWPXCryptoError('ERR: 암호화된 HWPX 문서 — 암호가 필요함')
-                        if self._encrypted_parts:
-                            first = next((name for name in ('Contents/header.xml', 'header.xml')
-                                          if name in self._encrypted_parts),
-                                         next(iter(self._encrypted_parts)))
-                            self._encrypted_cache[first] = self._read_zip_part(
-                                zf, first, self._encrypted_limit(first))
 
                 # content.hpf 를 한 번만 읽어 섹션 목록과 바이너리 매핑을 함께 얻는다
                 self._read_content_hpf(zf)
@@ -318,12 +316,6 @@ class HWPXParser:
                 if include_assets:
                     self._load_image_data(zf, doc)
 
-                # Preview/settings and unreferenced BinData are still part of
-                # the authenticated encrypted package.
-                for name in self._encrypted_parts:
-                    if name not in self._verified_parts:
-                        self._read_zip_part(zf, name, self._encrypted_limit(name))
-
         except zipfile.BadZipFile:
             self.errors.append("ERR: 유효하지 않은 HWPX 파일")
         except HWPXCryptoError as e:
@@ -337,6 +329,8 @@ class HWPXParser:
             self._section_parents = None
             self._chart_cache.clear()
             self._chart_seen.clear()
+            self._password = None
+            self._crypto_keys.clear()
 
         # HWP 경로(reader.py)와 대칭이 되도록 서식 목록을 문서에 실어준다
         doc.char_shapes = self._char_shape_entries
@@ -351,21 +345,21 @@ class HWPXParser:
 
     def _read_zip_part(self, zf: zipfile.ZipFile, name: str, max_size: int) -> bytes:
         """zip 파트를 크기·압축률 상한 안에서만 읽는다."""
-        if name in self._encrypted_cache:
-            return self._encrypted_cache[name]
         info = zf.getinfo(name)
         encrypted = name in self._encrypted_parts
         if info.file_size > max_size + (16 if encrypted else 0):
             raise ValueError(
                 f"{name} size exceeds limit: {info.file_size} > {max_size}"
             )
+        if encrypted and info.file_size > self._aes_budget.remaining:
+            raise HWPXCryptoError('ERR: 암호화된 HWPX 문서 — AES 작업량 상한 초과')
         if _compression_ratio_exceeded(info.file_size, info.compress_size):
             raise ValueError(f"{name} compression ratio exceeds limit")
         data = zf.read(name)
         if encrypted:
             plain = decrypt_part(data, self._encrypted_parts[name], self._password,
-                                 max_size, self._crypto_budget)
-            self._verified_parts.add(name)
+                                 max_size, self._crypto_budget, self._crypto_keys,
+                                 self._aes_budget)
             return plain
         return data
 
@@ -446,7 +440,8 @@ class HWPXParser:
                 self._chart_cache[actual] = (data, series, points)
             data, series, points = self._chart_cache[actual]
         except HWPXCryptoError:
-            raise
+            self._chart_error("part_read", label + ": encrypted chart part failed validation")
+            return []
         except Exception:
             # ZIP codecs have different exception classes (zlib/LZMA/CRC,
             # encryption, unsupported methods). Isolate a damaged chart part
@@ -1561,7 +1556,8 @@ class HWPXParser:
             try:
                 data = self._read_zip_part(zf, zip_name, MAX_FILE_SIZE)
             except HWPXCryptoError:
-                raise
+                self.errors.append(f"이미지 {zip_name} 복호화 실패")
+                continue
             except Exception:
                 continue
             cache[zip_name] = data

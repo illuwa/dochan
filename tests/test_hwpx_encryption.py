@@ -37,12 +37,17 @@ def _encrypt(key, iv, data):
     return bytes(result)
 
 
-def _package(path, *, password='private-password', change=None):
+def _package(path, *, password='private-password', change=None, with_image=False):
     parts = {
         'Contents/header.xml': b'<head/>',
         'Contents/section0.xml': SECTION,
         'Preview/PrvText.txt': b'Encrypted body',
     }
+    if with_image:
+        parts['Contents/section0.xml'] = SECTION.replace(
+            b'</hp:run>', b'<hp:pic><hp:img binaryItemIDRef="image1"/>'
+            b'</hp:pic></hp:run>')
+        parts['BinData/image1.png'] = b'\x89PNG\r\n\x1a\nimage data'
     entries = []
     salt = bytes(range(16))
     iv = bytes(range(16, 32))
@@ -78,6 +83,8 @@ def _package(path, *, password='private-password', change=None):
             if change == 'checksum' and name.endswith('header.xml'):
                 attrs['checksum'] = _b64(bytes(32))
             if change == 'checksum-preview' and name.endswith('PrvText.txt'):
+                attrs['checksum'] = _b64(bytes(32))
+            if change == 'checksum-image' and name.endswith('image1.png'):
                 attrs['checksum'] = _b64(bytes(32))
             entries.append(
                 '<odf:file-entry full-path="%s" size="%s"><odf:encryption-data '
@@ -115,7 +122,10 @@ def test_hwpx_open_password_rejects_missing_or_wrong(tmp_path, password):
 def test_hwpx_open_password_rejects_invalid_encryption(tmp_path, damage):
     doc = Dochan(str(_package(tmp_path / 'encrypted.hwpx', change=damage)),
                  password='private-password').doc
-    assert any(error.startswith('ERR: 지원하지 않는 HWPX 암호화') for error in doc.errors)
+    if damage == 'large-spin':
+        assert any('암호 반복 작업량 상한 초과' in error for error in doc.errors)
+    else:
+        assert any(error.startswith('ERR: 지원하지 않는 HWPX 암호화') for error in doc.errors)
     assert all('파싱 실패' not in error for error in doc.errors)
 
 
@@ -125,10 +135,11 @@ def test_hwpx_open_password_rejects_checksum_mismatch(tmp_path):
     assert any(error.startswith('ERR: 암호화된 HWPX 문서') for error in doc.errors)
 
 
-def test_hwpx_open_password_checks_unreferenced_encrypted_parts(tmp_path):
+def test_hwpx_open_password_skips_unreferenced_encrypted_parts(tmp_path):
     doc = Dochan(str(_package(tmp_path / 'encrypted.hwpx', change='checksum-preview')),
                  password='private-password').doc
-    assert any(error.startswith('ERR: 암호화된 HWPX 문서') for error in doc.errors)
+    assert 'Encrypted body' in to_markdown(doc)
+    assert not [error for error in doc.errors if error.startswith('ERR:')]
 
 
 def test_hwpx_encrypted_part_respects_decompression_limit(tmp_path):
@@ -202,3 +213,166 @@ def test_public_distribution_hwpx_requires_password(name):
         pytest.skip('public press corpus is unavailable')
     doc = Dochan(str(path)).doc
     assert doc.errors == ['ERR: 암호화된 HWPX 문서 — 암호가 필요함']
+
+
+@pytest.mark.parametrize('damage', ['oversize', 'crc'])
+def test_unencrypted_manifest_damage_preserves_body(tmp_path, damage):
+    path = tmp_path / 'plain.hwpx'
+    manifest = b'<manifest>' + b'x' * (1024 * 1024 if damage == 'oversize' else 0) + b'</manifest>'
+    with zipfile.ZipFile(path, 'w') as zf:
+        zf.writestr('mimetype', 'application/hwp+zip')
+        zf.writestr('Contents/header.xml', b'<head/>')
+        zf.writestr('Contents/section0.xml', SECTION)
+        zf.writestr('META-INF/manifest.xml', manifest)
+    if damage == 'crc':
+        raw = bytearray(path.read_bytes())
+        offset = raw.index(b'<manifest>')
+        raw[offset + 1] ^= 1
+        path.write_bytes(raw)
+    doc = Dochan(str(path)).doc
+    assert 'Encrypted body' in to_markdown(doc)
+    assert not [error for error in doc.errors if error.startswith('ERR:')]
+
+
+def test_wrong_password_stops_before_large_ciphertext(tmp_path, monkeypatch):
+    path = _package(tmp_path / 'large.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        items = {name: zf.read(name) for name in zf.namelist()}
+    items['Contents/header.xml'] = bytes(2 * 1024 * 1024)
+    with zipfile.ZipFile(path, 'w') as zf:
+        for name, data in items.items():
+            zf.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
+    import dochan.hwpx.crypto as crypto
+    original = crypto._aes
+    decrypted = [0]
+
+    def counted(key, data, iv=None, **kwargs):
+        decrypted[0] += len(data)
+        return original(key, data, iv, **kwargs)
+
+    monkeypatch.setattr(crypto, '_aes', counted)
+    doc = Dochan(str(path), password='wrong').doc
+    assert any('암호가 틀리거나' in error for error in doc.errors)
+    assert decrypted[0] <= 65536
+
+
+def test_prefixed_manifest_attributes_and_forbidden_paths(tmp_path):
+    path = _package(tmp_path / 'prefixed.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        items = {name: zf.read(name) for name in zf.namelist()}
+    manifest = items['META-INF/manifest.xml'].decode()
+    for attr in ('full-path', 'size', 'checksum-type', 'checksum',
+                 'algorithm-name', 'initialisation-vector', 'key-derivation-name',
+                 'key-size', 'iteration-count', 'salt', 'start-key-generation-name'):
+        manifest = manifest.replace(' ' + attr + '=', ' odf:' + attr + '=')
+    items['META-INF/manifest.xml'] = manifest.encode()
+    with zipfile.ZipFile(path, 'w') as zf:
+        for name, data in items.items():
+            zf.writestr(name, data)
+    assert 'Encrypted body' in to_markdown(Dochan(str(path), password='private-password').doc)
+    for forbidden in ('mimetype', 'META-INF/manifest.xml'):
+        with zipfile.ZipFile(path) as zf:
+            data = zf.read('META-INF/manifest.xml')
+            names = set(zf.namelist())
+        with pytest.raises(ValueError, match='지원하지 않는 HWPX 암호화'):
+            read_encryption_manifest(data.replace(b'Contents/header.xml', forbidden.encode(), 1),
+                                     names, HWPXParser._encrypted_limit)
+
+
+def test_unused_preview_checksum_is_warning_and_password_cleared(tmp_path):
+    parser = HWPXParser()
+    doc = parser.parse(str(_package(tmp_path / 'preview.hwpx', change='checksum-preview')),
+                       password='private-password')
+    assert 'Encrypted body' in to_markdown(doc)
+    assert not [error for error in doc.errors if error.startswith('ERR:')]
+    assert parser._password is None
+    assert not hasattr(parser, '_encrypted_cache')
+
+
+def test_optional_encrypted_image_failure_is_warning(tmp_path):
+    path = _package(tmp_path / 'image.hwpx', change='checksum-image', with_image=True)
+    doc = Dochan(str(path), password='private-password').doc
+    assert 'Encrypted body' in to_markdown(doc)
+    assert not [error for error in doc.errors if error.startswith('ERR:')]
+    assert any('이미지' in error and '복호화 실패' in error for error in doc.errors)
+    without_assets = Dochan(str(path), password='private-password', include_assets=False).doc
+    assert 'Encrypted body' in to_markdown(without_assets)
+    assert not any('복호화 실패' in error for error in without_assets.errors)
+
+
+def test_repeated_part_respects_requested_limit(tmp_path):
+    parser = HWPXParser()
+    path = _package(tmp_path / 'cache.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        parser._password = 'private-password'
+        parser._encrypted_parts = read_encryption_manifest(
+            zf.read('META-INF/manifest.xml'), set(zf.namelist()), parser._encrypted_limit)
+        assert parser._read_zip_part(zf, 'Contents/header.xml', 1024)
+        with pytest.raises(ValueError):
+            parser._read_zip_part(zf, 'Contents/header.xml', 1)
+
+
+def test_repeated_key_derivation_is_counted_once(tmp_path):
+    path = _package(tmp_path / 'keys.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        metadata = read_encryption_manifest(zf.read('META-INF/manifest.xml'),
+                                            set(zf.namelist()), HWPXParser._encrypted_limit)
+        ciphertext = zf.read('Contents/header.xml')
+    budget = [1024]
+    cache = {}
+    for _ in range(4):
+        assert decrypt_part(ciphertext, metadata['Contents/header.xml'],
+                            'private-password', 1024, budget, cache) == b'<head/>'
+    assert budget == [0]
+    assert len(cache) == 1
+
+
+def test_many_encrypted_parts_share_one_key_budget(tmp_path):
+    path = _package(tmp_path / 'many.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        items = {name: zf.read(name) for name in zf.namelist()}
+    manifest = items['META-INF/manifest.xml']
+    start = manifest.index(b'<odf:file-entry full-path="Preview/PrvText.txt"')
+    end = manifest.index(b'</odf:file-entry>', start) + len(b'</odf:file-entry>')
+    template = manifest[start:end]
+    extra = {}
+    entries = []
+    for index in range(990):
+        name = 'BinData/unused%04d.bin' % index
+        extra[name] = items['Preview/PrvText.txt']
+        entries.append(template.replace(b'Preview/PrvText.txt', name.encode()))
+    items['META-INF/manifest.xml'] = manifest.replace(
+        b'</odf:manifest>', b''.join(entries) + b'</odf:manifest>')
+    with zipfile.ZipFile(path, 'w') as zf:
+        for name, data in list(items.items()) + list(extra.items()):
+            zf.writestr(name, data)
+    doc = Dochan(str(path), password='private-password').doc
+    assert 'Encrypted body' in to_markdown(doc)
+    assert not [error for error in doc.errors if error.startswith('ERR:')]
+
+
+def test_manifest_preflights_distinct_key_work(tmp_path):
+    path = _package(tmp_path / 'work.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        manifest = zf.read('META-INF/manifest.xml')
+        names = set(zf.namelist())
+    same = manifest.replace(b'iteration-count="1024"', b'iteration-count="1000000"')
+    assert len(read_encryption_manifest(same, names, HWPXParser._encrypted_limit)) == 3
+    distinct = same.replace(b'salt="AAECAwQFBgcICQoLDA0ODw=="',
+                            b'salt="AQEBAQEBAQEBAQEBAQEBAQ=="', 1)
+    with pytest.raises(ValueError, match='암호 반복 작업량 상한 초과'):
+        read_encryption_manifest(distinct, names, HWPXParser._encrypted_limit)
+
+
+def test_encrypted_aes_budget_is_bounded(tmp_path):
+    path = _package(tmp_path / 'budget.hwpx')
+    with zipfile.ZipFile(path) as zf:
+        metadata = read_encryption_manifest(zf.read('META-INF/manifest.xml'),
+                                            set(zf.namelist()), HWPXParser._encrypted_limit)
+        ciphertext = zf.read('Contents/header.xml')
+    from dochan.hwpx.crypto import AESBudget
+    aes_budget = AESBudget()
+    aes_budget.remaining = 0
+    with pytest.raises(ValueError, match='AES 작업량 상한 초과'):
+        decrypt_part(ciphertext, metadata['Contents/header.xml'], 'private-password',
+                     1024, [1000000], aes_budget=aes_budget)

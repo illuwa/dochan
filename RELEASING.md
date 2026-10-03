@@ -1,5 +1,21 @@
 # Releasing dochan
 
+## Versioning policy
+
+dochan follows [Semantic Versioning](https://semver.org/). The public surface is the Python API (`Dochan`, readers, the
+document model), the CLI, and the JSON output schema. Markdown/plain-text rendering is treated as content, not schema.
+
+- **MAJOR** (`2.0.0`): an incompatible change to that surface — removing or renaming API/CLI options or JSON fields,
+  changing a default so existing callers get different structure, or dropping a supported Python version.
+- **MINOR** (`1.14.0`): backward-compatible new capability — a new format or element, a README `Supported Elements`
+  cell newly marked ✅, a new option or field (additive only).
+- **PATCH** (`1.13.1`): backward-compatible fixes only — bug and security fixes, output corrections, performance,
+  documentation. No new capability.
+
+Cadence: bundle reviewed work into one release instead of releasing after every merge. A regular release goes out at
+most once per day, and its version is the highest level any bundled change needs. Security fixes may ship at once as a
+PATCH release.
+
 ## Stable release checklist
 
 1. Set the intended release version and update it in every source location:

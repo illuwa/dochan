@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 추가 (HWPX 열기 암호)
+
+- 열기 암호로 보호된 HWPX 를 `password=`(CLI `--password-stdin`·`DOCHAN_PASSWORD`)로 읽는다. 매니페스트의 AES-256-CBC·PBKDF2-HMAC-SHA1(SHA-256 시작 키)·해제 후 sha256-1k 검사를
+  따르며, 한컴오피스가 만든 공개 표본 1개의 암호화 파트 6/6 이 독립 복호화와 같다. 전에는 `header.xml 파싱 실패` 같은 오해를 부르는 오류만 냈다. 암호가 없거나 틀리면 명확한 오류,
+  배포용 HWPX(키 도출 방식 비공개, 공개 보도자료 2개)는 암호 필요 오류다. 틀린 암호는 앞 1 KiB 검사로 바로 멈추고, 키 유도 100만 회·AES 16 MiB·파트 수 상한을 둔다.
+  암호화되지 않은 공개 HWPX 2,055개의 출력은 바뀌지 않았다. README `암호화 문서 · HWPX` 를 각주 8 과 함께 ✅ 로 고쳤다(전에는 "—").
+
 ### 추가 (PDF 미리 정의된 CMap·내장 CMap 스트림)
 
 - 동아시아 Type0 글꼴의 비 Identity 인코딩을 읽는다. ISO 32000-1 표 118 의 미리 정의된 CMap 59개(+`90pv-RKSJ-V`·`KSCpc-EUC-V`)를 Adobe `cmap-resources`(BSD-3)에서

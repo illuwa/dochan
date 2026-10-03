@@ -6,6 +6,7 @@
 """
 from dataclasses import dataclass, field, replace
 import math
+import statistics
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .objects import DELIMITERS, WHITESPACE, PDFLexer, PDFName, PDFSyntaxError
@@ -804,6 +805,41 @@ class _Line:
 
     trailing_space = False
 
+    @staticmethod
+    def _comparable_hangul(left: Fragment, right: Fragment) -> bool:
+        """같은 크기의 한글 단일 글리프만 자간 기준 표본으로 쓴다."""
+        return (len(left.text) == len(right.text) == 1
+                and '가' <= left.text <= '힣' and '가' <= right.text <= '힣'
+                and left.size > 0 and abs(left.size - right.size) <= left.size * 0.02
+                and left.width > 0 and abs(left.width - right.width) <= left.width * 0.02)
+
+    @classmethod
+    def _hangul_tracking_gaps(cls, frags: List[Fragment]) -> List[Optional[float]]:
+        """절대 좌표 글자의 인근 자간을 추정해 줄 안의 자간 변경을 보존한다."""
+        if not frags or writing_direction(frags[0]) != 'ltr':
+            return []
+        gaps = [(along(right) - along(left) - left.width
+                 if cls._comparable_hangul(left, right) else None)
+                for left, right in zip(frags, frags[1:])]
+        comparable = sum(gap is not None for gap in gaps)
+        if comparable < 6:
+            return []
+        # 같은 글자가 겹쳐 그려진 텍스트 층에서는 자간 표본 대부분이 중복 인쇄다.
+        overprinted = sum(left.text == right.text for left, right, gap in
+                          zip(frags, frags[1:], gaps) if gap is not None)
+        if overprinted * 2 >= comparable:
+            return []
+        references = []
+        for index, gap in enumerate(gaps):
+            if gap is None:
+                references.append(None)
+                continue
+            nearby = [value for at, value in enumerate(
+                gaps[max(0, index - 4):index + 5], start=max(0, index - 4))
+                if at != index and value is not None]
+            references.append(statistics.median(nearby) if len(nearby) >= 3 else None)
+        return references
+
     def __init__(self, frags: List[Fragment]):
         self.fragment_orders = tuple(f.order for f in frags)
         self.order = min(f.order for f in frags)
@@ -824,12 +860,20 @@ class _Line:
         self.runs: List[Tuple[str, bool, bool]] = []
         prev_end: Optional[float] = None
         prev_space: float = 0.0
-        for f in frags:
+        tracking_gaps = self._hangul_tracking_gaps(frags)
+        previous = None
+        for index, f in enumerate(frags):
             start = along(f)
             gap = (start - prev_end) if prev_end is not None else 0.0
             threshold = max(prev_space, f.space_width) * 0.5
             sep = ""
-            if prev_end is not None and gap > threshold and parts and not parts[-1].endswith(" "):
+            tracking_gap = (tracking_gaps[index - 1]
+                            if index and tracking_gaps else None)
+            inferred_word_gap = (tracking_gap is not None and previous is not None
+                                 and self._comparable_hangul(previous, f)
+                                 and gap > tracking_gap + max(prev_space, f.space_width) * 0.25)
+            if (prev_end is not None and (gap > threshold or inferred_word_gap)
+                    and parts and not parts[-1].endswith(" ")):
                 sep = " "
             if sep:
                 parts.append(sep)
@@ -879,6 +923,7 @@ class _Line:
                                           tuple(fragment_runs)))
             prev_end = start + f.width
             prev_space = f.space_width
+            previous = f
         joined = "".join(parts)
         # 앞 단어와 같은 텍스트 그리기 명령 안에서 줄 끝에 그려진 공백 글리프(줄 병합이 쓴다).
         # 한컴 PDF 에서는 원문의 띄어쓰기였다(공개·내부 짝 측정). 공백만 따로 그린 조각은 앞에서 버려진다.

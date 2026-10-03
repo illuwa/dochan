@@ -40,6 +40,14 @@ def _encode(source):
                                                    separators=(",", ":")).encode("utf-8"), 9)).decode("ascii"))
 
 
+def _copyright(path):
+    for raw in path.read_bytes().splitlines():
+        line = raw.decode("ascii", "replace")
+        if line.startswith("%%Copyright: Copyright"):
+            return line[len("%%Copyright: "):].strip()
+    raise ValueError("저작권 줄 없음: %s" % path.name)
+
+
 def generate(source_dir, output):
     for name, expected in SOURCE_SHA256.items():
         actual = hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
@@ -50,7 +58,11 @@ def generate(source_dir, output):
              "Source: https://github.com/adobe-type-tools/mapping-resources-pdf/tree/master/pdf2unicode",
              "Modified: CID mappings are parsed and compressed into this module.",
              "The original CMap files are not distributed with dochan.",
-             "", license_text.rstrip(), '"""', "TABLES = {"]
+             ""]
+    for ordering in ORDERINGS:
+        name = "Adobe-" + ordering + "-UCS2"
+        lines.append("%s: %s" % (name, _copyright(source_dir / name)))
+    lines += ["", license_text.rstrip(), '"""', "TABLES = {"]
     hashes = {}
     for ordering in ORDERINGS:
         path = source_dir / ("Adobe-" + ordering + "-UCS2")

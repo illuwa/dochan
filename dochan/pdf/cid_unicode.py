@@ -17,7 +17,11 @@ MAX_CMAP_ENTRIES = 100_000
 
 def _usable(value):
     return bool(value) and all(unicodedata.category(ch) not in ("Cc", "Co", "Cs")
-                               for ch in value)
+                               and not _noncharacter(ord(ch)) for ch in value)
+
+
+def _noncharacter(code):
+    return 0xfdd0 <= code <= 0xfdef or code & 0xfffe == 0xfffe
 
 
 @lru_cache(maxsize=5)
@@ -36,8 +40,8 @@ def adobe_cid(ordering, cid):
     if value is None and cid * 4 + 4 <= len(numbers):
         scalar = int.from_bytes(numbers[cid * 4:cid * 4 + 4], "big")
         value = chr(scalar) if scalar else ""
-    if value and any(_variation_selector(ord(ch)) for ch in value):
-        return ""
+    if value:
+        value = "".join(ch for ch in value if not _variation_selector(ord(ch)))
     return value if _usable(value) else ""
 
 

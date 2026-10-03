@@ -149,9 +149,18 @@ def test_shared_gid_prefers_canonical_character():
     assert reverse_truetype_cmap(_sfnt_subtable(subtable))[3] == "一"
 
 
-def test_adobe_variation_selector_not_emitted():
-    assert adobe_cid("Japan1", 230) == ""
-    assert adobe_cid("Japan1", 1133) == ""
+def test_adobe_variation_selector_stripped_to_base_character():
+    assert adobe_cid("Japan1", 230) == "0"
+    assert adobe_cid("Japan1", 632) == "0"
+    assert adobe_cid("Japan1", 1133) == "\u9022"
+
+
+def test_noncharacters_are_not_usable():
+    from dochan.pdf.cid_unicode import _usable
+    assert not _usable("\ufdd0")
+    assert not _usable("\U0001fffe")
+    assert not _usable("\uffff")
+    assert _usable("\u9022")
 
 
 def test_adobe_cid_with_newer_unicode_scalar_is_stable():

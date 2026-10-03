@@ -19,7 +19,8 @@ Source: https://github.com/adobe-type-tools/mapping-resources-pdf/tree/master/pd
 Modified: scripts/generate_pdf_cid2unicode.py extracts mappings, excludes
 U+FFFD replacement characters, and compresses the CID tables into
 dochan/pdf/cid_unicode_data.py. Runtime filtering excludes control,
-surrogate, private-use, and variation-selector mappings.
+surrogate, private-use, and noncharacter mappings and strips variation
+selectors, keeping the base character.
 The original CMap files are not distributed with dochan.
 SHA-256 Adobe-CNS1-UCS2: 8375afd535e153a7e3bcf448be93e5012b26229547a20d52520e46e3c386351f
 SHA-256 Adobe-GB1-UCS2: 368b40ec05568faf323cfbbddf23c60d566bbc88e366981eb6541b026381a3b8

@@ -3,6 +3,12 @@ Source: https://github.com/adobe-type-tools/mapping-resources-pdf/tree/master/pd
 Modified: CID mappings are parsed and compressed into this module.
 The original CMap files are not distributed with dochan.
 
+Adobe-CNS1-UCS2: Copyright 1990-2020 Adobe. All rights reserved.
+Adobe-GB1-UCS2: Copyright 1990-2020 Adobe. All rights reserved.
+Adobe-Japan1-UCS2: Copyright 1990-2023 Adobe. All rights reserved.
+Adobe-KR-UCS2: Copyright 1990-2020 Adobe. All rights reserved.
+Adobe-Korea1-UCS2: Copyright 1990-2019 Adobe. All rights reserved.
+
 Copyright 1990-2019 Adobe. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without

@@ -1,17 +1,22 @@
 """HWP/HWPX의 개요 정보 없는 문단에 쓰는 공통 글꼴 제목 규칙."""
 
+import re
 from collections import Counter
 
 
 MAX_FONT_HEADING_PARAGRAPHS = 200_000
 MAX_FONT_HEADING_LENGTH = 120
 _BODY_EXCLUDED_PREFIXES = ('※', '*', '주:', '(단위')
-_NONHEADING_STYLE_LABELS = ('표', '그림', '차례', '목차', '양식')
+# 표·그림 캡션과 차례 항목 스타일은 이름에 '제목'이 있어도 제목이 아니다.
+# 표지(표지 제목)·별표(별표제목)·양식(양식제목)·차례 쪽 제목(차례 제목)은 실제 제목이라 남긴다.
+_NONHEADING_STYLE = re.compile(
+    r'(?<![별대])표\s*제목|통계표|도표|표안|그림|캡션|(?:차례|목차)\D{0,6}\d|(?:차례|목차)\s*(?:개요|\()')
+_OUTLINE_STYLE = re.compile(r'(?:개요|outline|heading)\s*(\d+)')
 
 
 def is_nonheading_style_name(name):
-    """캡션·차례·양식 스타일 이름인지 확인한다."""
-    return any(label in (name or '') for label in _NONHEADING_STYLE_LABELS)
+    """캡션·차례 항목 스타일 이름인지 확인한다."""
+    return bool(_NONHEADING_STYLE.search(name or ''))
 
 
 def heading_level_from_style_name(name):
@@ -21,11 +26,12 @@ def heading_level_from_style_name(name):
     # 명시적 개요와 글꼴 폴백은 호출자가 별도로 판정한다.
     if is_nonheading_style_name(name):
         return 0
-    if '개요' in name or 'outline' in name or 'heading' in name:
-        for level in range(1, 7):
-            if str(level) in name:
-                return level
-        return 1
+    outline = _OUTLINE_STYLE.search(name)
+    if outline:
+        # 번호 그대로 돌려준다 — 호출자가 4 이상을 '명시된 본문'으로 처리한다(글꼴 폴백 없음).
+        # '사업개요' 처럼 번호 없는 이름은 개요 스타일이 아니다.
+        level = int(outline.group(1))
+        return level if level >= 1 else 0
     if name.startswith(('부제목', 'subtitle')):
         return 2
     if '제목' in name or 'title' in name:
@@ -82,7 +88,9 @@ def body_font_size(paragraphs, doc=None):
 def relative_heading_level(runs, body_size):
     """본문 크기보다 뚜렷이 큰 첫 글자 런만 H1~H3로 판정한다."""
     size = first_visible_font_size(runs)
-    if len(''.join(run.text for run in runs).strip()) > MAX_FONT_HEADING_LENGTH:
+    text = ''.join(run.text for run in runs).strip()
+    if len(text) > MAX_FONT_HEADING_LENGTH or text.startswith(_BODY_EXCLUDED_PREFIXES):
+        # 주석(※·*·주:)·단위 줄은 글꼴이 커도 제목이 아니다.
         return 0
     if body_size <= 0 or size <= 0:
         return 0

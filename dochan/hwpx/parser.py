@@ -927,8 +927,9 @@ class HWPXParser:
             # (a) 스타일 이름이 "개요 N" / "Outline N" / "Heading N"
             level = 0
             if not is_nonheading_style_name(style['name']):
-                level = _heading_level_from_style_name(style['name']) or \
-                    _heading_level_from_style_name(style['eng_name'])
+                # 영문 이름은 쓰지 않는다: 이름만 바꾼 기본 스타일(예: 한글 '통계표 데이터' + 영문 'Outline 2')을
+                # 제목으로 올리고, HWP 리더도 영문 이름을 읽지 않는다.
+                level = _heading_level_from_style_name(style['name'])
             if level:
                 return level if level <= MAX_OUTLINE_HEADING_LEVEL else 0
 

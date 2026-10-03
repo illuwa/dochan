@@ -73,7 +73,7 @@ def test_hwpx_title_named_style_matches_hwp(tmp_path):
 
 @pytest.mark.parametrize('name', (
     '표제목', '표 제목', '통계표 제목', '그림제목', '박스제목/표제목',
-    '차례(소제목)', '목차 제목', '양식제목',
+    '차례(소제목)', '목차 제목2', '차례 개요 1', '통계표 데이터',
 ))
 def test_caption_contents_form_style_is_not_named_heading_in_both_readers(tmp_path, name):
     from dochan.model.style import StyleEntry
@@ -171,3 +171,22 @@ def test_hwp_bookmark_marker_keeps_paragraph_font_size():
     assert para.runs[0].text == '[bookmark: 표지] '
     assert para.runs[0].font_size_pt == 18
     assert para.heading_level == 2
+
+
+
+@pytest.mark.parametrize('name, level', (
+    ('표지 제목', 1), ('별표제목', 1), ('양식제목', 1), ('차례 제목', 1), ('목차,발간사 제목', 1),
+    ('개요 2', 2), ('개요 7', 7), ('개요 10', 10), ('사업개요', 0), ('□ 사업개요', 0),
+))
+def test_cover_appendix_form_titles_stay_and_outline_number_is_exact(name, level):
+    """표지·별표·양식 제목과 차례 쪽 제목은 실제 제목이다. 개요 번호는 그대로 돌려주고 4 이상은 호출자가 본문으로 둔다(감수)."""
+    assert heading_level_from_style_name(name) == level
+
+
+def test_outline_seven_named_style_is_body_in_both_readers(tmp_path):
+    from dochan.model.style import StyleEntry
+    from test_hwp_styles import _paragraph as hwp_paragraph
+    from test_hwpx_heading_priority import _heading_document
+
+    assert hwp_paragraph(DocInfo(styles=[StyleEntry(name='개요 7')])).heading_level == 0
+    assert _heading_document(tmp_path, 'NONE', 0, '개요 7', 0).heading_level == 0

@@ -7,11 +7,11 @@
 
 ## 런타임과 선택 의존성
 
-선언 기준은 `pyproject.toml`이다. 새로운 런타임 의존성은 추가하지 않았다.
+선언 기준은 `pyproject.toml`이다. 1.14.0 부터 런타임 의존성은 없다.
 
 | 구분 | 프로젝트와 선언 | 쓰임 | 확인한 고지와 범위 |
 | --- | --- | --- | --- |
-| 필수 | [lxml](https://lxml.de/), `>=4.9`이다. | XML을 읽는다. | 설치된 6.1.1의 주 라이선스는 BSD-3-Clause다. `LICENSES.txt`에는 ElementTree 유래 부분, 테스트 도구, Schematron 자원 등의 별도 고지가 있다. 번들 배포 시 libxml2·libxslt 등 실제 wheel의 고지도 확인해야 한다. |
+| 필수 | 없음(1.14.0 부터). 1.13.0 까지는 [lxml](https://lxml.de/) `>=4.9`(BSD-3-Clause)였다. | XML 은 표준 라이브러리 expat·ElementTree 위의 `dochan/utils/safe_xml.py` 로 읽는다. | 표준 라이브러리만 쓴다. |
 | OCR 선택 | [pytesseract](https://github.com/madmaze/pytesseract), `>=0.3; python_version >= '3.10'`이다. | 사용자가 설치한 Tesseract를 호출한다. | 설치된 0.3.13의 고지는 Apache-2.0이다. Tesseract 실행파일은 dochan 소스에 포함하지 않는다. |
 | OCR 선택 | [Pillow](https://github.com/python-pillow/Pillow), `>=12.3; python_version >= '3.10'`이다. | OCR 입력 이미지를 처리한다. | 검증 인터프리터의 11.3.0 메타데이터는 MIT-CMU다. 이 버전은 현재 OCR extra의 최소 버전보다 낮으므로 12.3 배포물의 전체 고지 검증을 대신하지 않는다. 이미지 코덱 고지도 배포물에 따라 별도로 확인한다. |
 

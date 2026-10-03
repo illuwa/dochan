@@ -16,7 +16,7 @@ python -m pytest tests/test_pdf_reader.py -q   # 단일 파일
   패키지를 모두 잡는다. 따라서 `PYTHONPATH=.` 를 붙일 필요가 없다.
 - 그냥 `pytest tests/` 로 실행하면 (a) site-packages 에 설치된 dochan 이 레포
   소스를 가리거나, (b) 벤치마크 테스트가 `No module named 'scripts'` 로 실패한다.
-- pytest 와 의존성(lxml, pyyaml, Pillow, pytesseract)은 Python 3.9 환경에
+- pytest 와 테스트 의존성(pyyaml, Pillow, pytesseract)은 Python 3.9 환경에
 만 설치돼 있다. `pytest`(=Xcode python3.9)를 쓰고, homebrew `python3`(3.14, pytest
   없음)를 쓰지 말 것.
 - OLE 컨테이너는 자체 `dochan/cfb.py`로 읽는다. `olefile`은 로컬 비교 검증용이며
@@ -58,7 +58,7 @@ python -m pytest tests/test_pdf_reader.py -q   # 단일 파일
 - 사용자가 요청할 때만 커밋/푸시한다. main 에 직접 커밋 전 확인.
 - 사전 커밋 보안 게이트(secaudit)는 워크트리 전체를 스캔한다. 출력 요약 도구가 실패를 숨길 수 있으니 커밋 후
   `git log` 로 실제 커밋을 확인한다. subprocess 목록 인자 호출은 `# nosemgrep: dangerous-subprocess-use-audit`,
-  XML 은 lxml `XMLParser(resolve_entities=False, load_dtd=False, no_network=True)` 를 쓴다.
+  XML 은 lxml 이 아니라 `dochan.utils.safe_xml`(DOCTYPE·엔티티 사전 거부, 깊이·요소 상한)을 쓴다. 런타임 의존성을 추가하지 않는다.
 - CI 는 Python 3.9–3.13 에 Pillow 없이 돈다(`ruff check dochan scripts tests` 포함). Pillow 는 테스트에서 선택적으로만 쓴다.
 - 커밋 메시지는 한국어 conventional commits. 자동 생성되는 `.secaudit/` 는 커밋 금지.
 - 코어는 MIT/permissive 만. 외부 변환 엔진·AGPL/GPL 의존성 추가 금지 (native-only).

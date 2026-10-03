@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 변경 (런타임 의존성 — lxml 제거)
+
+- XML 을 lxml 대신 표준 라이브러리(expat·ElementTree) 위의 자체 안전 파서 `dochan/utils/safe_xml.py` 로 읽는다. 런타임 의존성이 없어졌다.
+  DOCTYPE·엔티티 사전 거부, 깊이·요소·네임스페이스 상한, 1MiB 청크 스트리밍, 손상 시트·VML·관계 파트의 파트 단위 오류 격리를 넣었다.
+  공개 실물 5,420개 중 5,419개 출력이 lxml 판과 같고 1개(손상 시트가 있는 XLSX)는 정상 시트를 살려 개선됐다. 속도는 lxml 대비 DOCX +14~20%,
+  PPTX +6~12%, HWPX +4~7%. Opus 보안 감수 5회와 codex 리뷰 4회를 거쳤다(docs/benchmarks/2026-10-02-stdlib-xml-fix-real-docs.md).
+
 ### 수정 (XLS·XLSX 숫자 서식)
 
 - XLS 숫자 셀도 XLSX 와 같은 공용 서식기로 Excel 표시를 낸다(전에는 XLS 전용 간이 서식). 분수(고정 분모), 동점 올림, 내장 서식, BIFF5 서식 문자열, 음수·0 구역,

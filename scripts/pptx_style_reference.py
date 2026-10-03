@@ -2,12 +2,11 @@
 
 import zipfile
 import posixpath
-from lxml import etree
+from dochan.utils import safe_xml
 
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
-PARSER = etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
 
 
 def rels(z, part):
@@ -15,7 +14,7 @@ def rels(z, part):
     rp = posixpath.join(d, "_rels", f + ".rels")
     out = {}
     if rp in z.namelist():
-        for r in etree.fromstring(z.read(rp), PARSER):
+        for r in safe_xml.fromstring(z.read(rp)):
             if r.get("TargetMode") == "External":
                 continue
             out[r.get("Id")] = (
@@ -86,17 +85,17 @@ def pptx_paragraphs(path):
 
 
 def _paragraphs(z):
-    pres = etree.fromstring(z.read("ppt/presentation.xml"), PARSER)
+    pres = safe_xml.fromstring(z.read("ppt/presentation.xml"))
     prels = rels(z, "ppt/presentation.xml")
     deflt = pres.find(P + "defaultTextStyle")
     slides = [prels[s.get(R + "id")][1] for s in pres.find(P + "sldIdLst")]
     result = []
     for n, sl in enumerate(slides, 1):
-        st = etree.fromstring(z.read(sl), PARSER)
+        st = safe_xml.fromstring(z.read(sl))
         lay = [t for k, t in rels(z, sl).values() if k == "slideLayout"][0]
-        lt = etree.fromstring(z.read(lay), PARSER)
+        lt = safe_xml.fromstring(z.read(lay))
         mas = [t for k, t in rels(z, lay).values() if k == "slideMaster"][0]
-        mt = etree.fromstring(z.read(mas), PARSER)
+        mt = safe_xml.fromstring(z.read(mas))
         tx = mt.find(P + "txStyles")
         for sp in st.iter(P + "sp"):
             body = sp.find(P + "txBody")

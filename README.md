@@ -317,7 +317,8 @@ dochan/
 dochan은 신뢰할 수 없는 문서도 안전하게 처리합니다:
 
 - **Zip Bomb 방어**: raw zlib 출력 200MB(HWP 본문은 문서당 누적 200MB, 손상 스트림은 실제 해제한 양만 차감), OOXML/HWPX XML part 32MB, 일반 part 100MB, archive 합계 512MB 상한
-- **XXE 차단**: XML 외부 엔티티 해석 비활성화
+- **XXE·엔티티 증폭 차단**: 모든 XML 을 표준 라이브러리 위 자체 안전 파서로 읽는다. DOCTYPE·엔티티 선언은 파싱 전에 거부하고(Python 3.9 의
+  expat 2.2.8 처럼 증폭 방어가 없는 판에서도 같은 동작), 깊이·요소 수·네임스페이스 선언에 상한을 둔다. 손상된 시트·VML 파트는 그 파트에만 오류를 남긴다
 - **Path Traversal 방지**: 배치 처리 시 경로 탈출 차단
 - **메모리 제한**: HWP 레코드 섹션당 100만·문서당 130만·DocInfo 20만 개(넘으면 그때까지 읽은 본문을 보존하고 오류를 남김), HWP·HWPX 문서당 서식 런 524,288·150,000개와 HWPX 문단·각주 150,000개(넘으면 이후 본문을 서식·하이퍼링크 없이 보존하고 WARN 1회), HWP·HWPX·DOCX·XLSX·XLS·PDF 문서당 표 셀 20만 개, HWP·DOCX 일반 구조 깊이 64, HWP·DOCX 표 깊이 32, PPTX 그룹 깊이 64 상한. PDF 는 페이지 콘텐츠 합계 64MB, 괘선 2만 개, 괘선 교차 검사 200만 회, 스트림 해제 200MB 추가 상한
 - **입력 검증**: FileHeader/스트림명/OOXML 패키지명/바이너리 바운드 체크
@@ -349,9 +350,10 @@ dochan은 다음 프로젝트와 자료를 기반으로 개발되었습니다:
 - [OWPML (KS X 6101:2011)](https://www.kssn.net/) — HWPX 국가 표준
 
 **오픈소스**
-- [lxml](https://lxml.de/) — XML 파싱 (BSD)
 - [pdfplumber](https://github.com/jsvine/pdfplumber) — 품질 검증용 PDF 추출 (MIT)
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) — 이미지 텍스트 추출 (Apache 2.0)
+
+XML 은 1.14.0 부터 lxml 대신 표준 라이브러리 `xml.parsers.expat`·`ElementTree` 위의 자체 안전 파서(`dochan/utils/safe_xml.py`)로 읽어 런타임 의존성이 없다(1.13.0 까지는 lxml, BSD).
 
 **선행 연구** (공개 HWP 파서 프로젝트. dochan 의 구현 근거는 한컴 공개 명세와 실물 바이트 관찰이며, 이 프로젝트들의 코드는 쓰지 않는다. 과거 참고 이력은 [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) 에 기록)
 - [hwplib](https://github.com/neolord0/hwplib) (Java)

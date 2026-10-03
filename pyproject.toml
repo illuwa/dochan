@@ -23,9 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Text Processing :: Markup",
 ]
-dependencies = [
-    "lxml>=4.9",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov", "ruff==0.16.2"]

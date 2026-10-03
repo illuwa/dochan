@@ -170,6 +170,19 @@ class ExtraReader:
         return '{' + ';'.join(','.join(values[i:i + columns])
                               for i in range(0, len(values), columns)) + '}'
 
+    def memory(self):
+        """Consume PtgExtraMem in RgbExtra order without materializing ranges.
+
+        [MS-XLS] 2.5.198.61: a count followed by that many Ref8U values.
+        This is evaluation metadata, not another formula operand.
+        """
+        count, = self.unpack('<H')
+        raw = self.take(count * 8)
+        for offset in range(0, len(raw), 8):
+            first_row, last_row, first_col, last_col = struct.unpack_from('<4H', raw, offset)
+            if first_row > last_row or not 0 <= first_col <= last_col <= 255:
+                raise FormulaDataError('invalid memory reference range')
+
 
 @dataclass
 class ExternalName:
@@ -187,6 +200,9 @@ class SupBook:
 
 class FormulaContext:
     def __init__(self):
+        self.biff_version = 0x0600
+        self.codepage = 'cp1252'
+        self.deleted_labels = []
         self.books = []  # type: List[SupBook]
         self.external_count = 0
         self.xtis = []
@@ -194,6 +210,28 @@ class FormulaContext:
         self.names = []
         self.current_book = None
         self.sheet_name_bytes = 0
+
+    def add_deleted_label(self, data, errors):
+        # [MS-XLS] Lel / PtgElfLel: ilel 2..2048 indexes this array at ilel-2.
+        if len(self.deleted_labels) >= 2047:
+            warn(errors, 'Lel count limit exceeded')
+            return
+        self.deleted_labels.append('')  # Malformed entries still own an index.
+        try:
+            label = ExtraReader(data).string()
+            if not label or len(label) >= 252:
+                raise FormulaDataError('invalid label length')
+            self.deleted_labels[-1] = label
+        except FormulaDataError as exc:
+            warn(errors, 'invalid Lel: ' + str(exc))
+
+    def deleted_label(self, index, quoted):
+        if not 2 <= index <= 2048 or index - 2 >= len(self.deleted_labels):
+            raise FormulaDataError('unresolved PtgElfLel index')
+        label = self.deleted_labels[index - 2]
+        if not label:
+            raise FormulaDataError('unresolved PtgElfLel label')
+        return "'" + label.replace("'", "''") + "'" if quoted else label
 
     def add_supbook(self, data, errors):
         self.current_book = None

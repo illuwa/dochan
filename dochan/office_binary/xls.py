@@ -363,6 +363,16 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
     date_1904 = False
 
     records = list(_iter_records(data))
+    # Workbook BOF, not the stream name, distinguishes BIFF5/7 from BIFF8.
+    if records and records[0][1] == 0x0809 and len(records[0][2]) >= 2:
+        formula_context.biff_version = struct.unpack_from('<H', records[0][2])[0]
+    for _, record_type, record_data in records:
+        if record_type == 0x0042 and len(record_data) >= 2:  # CODEPAGE
+            codepage = struct.unpack_from('<H', record_data)[0]
+            formula_context.codepage = ('mac_roman' if codepage == 10000
+                                        else 'utf-16-le' if codepage == 1200
+                                        else 'cp%d' % codepage)
+            break
     index = 0
     while index < len(records):
         offset, record_type, record_data = records[index]
@@ -387,6 +397,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
             formula_context.add_supbook(record_data, doc.errors)
         elif record_type == 0x0023:  # EXTERNNAME belongs to the preceding SupBook.
             formula_context.add_externname(record_data, doc.errors)
+        elif record_type == 0x01B9 and formula_context.biff_version == 0x0600:  # Lel
+            formula_context.add_deleted_label(record_data, doc.errors)
         elif record_type == 0x0018:  # NAME indices include malformed entries.
             defined_name = _read_name_record(record_data)
             defined_name_records.append(defined_name)
@@ -1572,17 +1584,114 @@ def _decode_formula_token_stream(
         warn(str(exc))
         return ""
     offset = 0
-    while offset < len(tokens):
+    # A memory token prefixes an independently evaluated reference expression.
+    # Keep explicit byte/stack boundaries rather than recursing into untrusted
+    # input. Its cached range data shares the enclosing RgbExtra cursor.
+    frames = []
+    legacy = getattr(formula_context, 'biff_version', 0x0600) == 0x0500
+    while True:
+        while frames and offset == frames[-1][0]:
+            _, depth = frames.pop()
+            if len(stack) != depth + 1:
+                warn("unbalanced memory expression stack; expression omitted")
+                return ""
+        if offset == len(tokens):
+            break
+        token_end = frames[-1][0] if frames else len(tokens)
+        available = len(stack) - (frames[-1][1] if frames else 0)
         token = tokens[offset]
         offset += 1
         token = _base_formula_token(token)
+        if token == 0x18:  # PtgElf uses a second opcode byte.
+            if legacy or offset + 5 > token_end or tokens[offset] != 0x01:
+                warn('unsupported or truncated PtgElf token; expression omitted')
+                return ''
+            label_index, flags = struct.unpack_from('<HH', tokens, offset + 1)
+            try:
+                if formula_context is None:
+                    raise FormulaDataError('unresolved PtgElfLel without Lel table')
+                stack.append(formula_context.deleted_label(label_index, flags & 1))
+            except FormulaDataError as exc:
+                warn(str(exc))
+                return ''
+            offset += 5
+            continue
+        if token in (0x26, 0x27, 0x28, 0x29):
+            # [MS-XLS] 2.5.198.70-73: reserved/error bytes then cce,
+            # followed by a binary-reference-expression (not a stack value).
+            size = 2 if token == 0x29 else 6
+            if offset + size > token_end:
+                warn("truncated memory token; expression omitted")
+                return ""
+            length = struct.unpack_from('<H', tokens, offset + size - 2)[0]
+            offset += size
+            if not length or offset + length > token_end:
+                warn("invalid memory expression length; expression omitted")
+                return ""
+            if len(frames) >= 256:
+                warn("memory nesting limit exceeded")
+                return ""
+            if token == 0x26:
+                try:
+                    extra.memory()
+                except FormulaDataError as exc:
+                    warn("memory token: " + str(exc))
+                    return ""
+            frames.append((offset + length, len(stack)))
+            continue
+        if legacy and token in (0x20, 0x23, 0x39, 0x3A, 0x3B, 0x3C, 0x3D):
+            warn("unsupported BIFF5 token 0x%02X; expression omitted" % token)
+            return ""
+        if legacy and token in (0x24, 0x25, 0x2C, 0x2D, 0x2A, 0x2B):
+            area = token in (0x25, 0x2D, 0x2B)
+            size = 6 if area else 3
+            if offset + size > token_end:
+                warn("truncated BIFF5 reference token; expression omitted")
+                return ""
+            if token in (0x2A, 0x2B):
+                value = '#REF!'
+            else:
+                if area:
+                    r1, r2, c1, c2 = struct.unpack_from('<HHBB', tokens, offset)
+                else:
+                    r1, c1 = struct.unpack_from('<HB', tokens, offset)
+                def legacy_ref(row, col):
+                    flags = row & 0xc000
+                    row &= 0x3fff
+                    if token in (0x2C, 0x2D):
+                        if flags & 0x8000:
+                            row = (row + base_row) & 0x3fff
+                        if flags & 0x4000:
+                            col = (col + base_col) & 0xff
+                        return _formula_cell_ref(row, flags | col)
+                    return _formula_cell_ref(row, flags | col, row_delta, col_delta)
+                value = legacy_ref(r1, c1)
+                if area:
+                    value += ':' + legacy_ref(r2, c2)
+            stack.append(value)
+            offset += size
+            continue
+        if legacy and token == 0x17:
+            if offset >= token_end or offset + 1 + tokens[offset] > token_end:
+                warn("truncated BIFF5 string token; expression omitted")
+                return ""
+            size = tokens[offset]
+            offset += 1
+            try:
+                value = bytes(tokens[offset:offset + size]).decode(formula_context.codepage)
+            except (LookupError, UnicodeDecodeError):
+                warn("invalid BIFF5 string codepage data; expression omitted")
+                return ""
+            stack.append(_quote_formula_string(value))
+            offset += size
+            continue
         if token == 0x01:  # PtgExp is resolved by the shared/array formula owner.
             return ""
         if token == 0x16:  # PtgMissArg occupies one function argument.
             stack.append("")
             continue
         if token == 0x20:  # PtgArray: 7 reserved bytes, values in RgbExtra.
-            if offset + 7 > len(tokens):
+            if offset + 7 > token_end:
                 warn("truncated array token")
                 return ""
             try:
@@ -1591,7 +1700,7 @@ def _decode_formula_token_stream(
                 warn("array constant token 0x20: " + str(exc))
                 return ""
             offset += 7
-        elif token == 0x39 and offset + 6 <= len(tokens):  # PtgNameX
+        elif token == 0x39 and offset + 6 <= token_end:  # PtgNameX
             xti_index, name_index = struct.unpack_from("<HI", tokens, offset)
             try:
                 if formula_context is None:
@@ -1603,7 +1712,7 @@ def _decode_formula_token_stream(
             offset += 6
         elif token in (0x2A, 0x2B, 0x3C, 0x3D):  # Deleted Ref/Area, including 3d.
             size = {0x2A: 4, 0x2B: 8, 0x3C: 6, 0x3D: 10}[token]
-            if offset + size > len(tokens):
+            if offset + size > token_end:
                 warn('truncated deleted reference token')
                 return ''
             prefix = ''
@@ -1617,29 +1726,29 @@ def _decode_formula_token_stream(
                     return ''
             stack.append(prefix + '#REF!' if prefix != '#REF!' else prefix)
             offset += size
-        elif token == 0x2C and offset + 4 <= len(tokens):  # PtgRefN / RgceLocRel
+        elif token == 0x2C and offset + 4 <= token_end:  # PtgRefN / RgceLocRel
             row, col = struct.unpack_from("<HH", tokens, offset)
             stack.append(_formula_relative_cell_ref(row, col, base_row, base_col))
             offset += 4
-        elif token == 0x2D and offset + 8 <= len(tokens):  # PtgAreaN / RgceAreaRel
+        elif token == 0x2D and offset + 8 <= token_end:  # PtgAreaN / RgceAreaRel
             first_row, last_row, first_col, last_col = struct.unpack_from("<4H", tokens, offset)
             stack.append(
                 _formula_relative_cell_ref(first_row, first_col, base_row, base_col)
                 + ":" + _formula_relative_cell_ref(last_row, last_col, base_row, base_col)
             )
             offset += 8
-        elif token == 0x24 and offset + 4 <= len(tokens):  # ptgRef
+        elif token == 0x24 and offset + 4 <= token_end:  # ptgRef
             row, col = struct.unpack_from("<HH", tokens, offset)
             stack.append(_formula_cell_ref(row, col, row_delta=row_delta, col_delta=col_delta))
             offset += 4
-        elif token == 0x25 and offset + 8 <= len(tokens):  # ptgArea
+        elif token == 0x25 and offset + 8 <= token_end:  # ptgArea
             first_row, last_row, first_col, last_col = struct.unpack_from("<HHHH", tokens, offset)
             stack.append(
                 f"{_formula_cell_ref(first_row, first_col, row_delta=row_delta, col_delta=col_delta)}:"
                 f"{_formula_cell_ref(last_row, last_col, row_delta=row_delta, col_delta=col_delta)}"
             )
             offset += 8
-        elif token == 0x3A and offset + 6 <= len(tokens):  # ptgRef3d
+        elif token == 0x3A and offset + 6 <= token_end:  # ptgRef3d
             xti_index, row, col = struct.unpack_from("<HHH", tokens, offset)
             try:
                 prefix = _formula_3d_prefix(xti_index, external_sheets, sheet_names, internal_supbooks, errors, formula_context)
@@ -1648,7 +1757,7 @@ def _decode_formula_token_stream(
                 return ""
             stack.append(f"{prefix}{_formula_cell_ref(row, col)}")
             offset += 6
-        elif token == 0x3B and offset + 10 <= len(tokens):  # ptgArea3d
+        elif token == 0x3B and offset + 10 <= token_end:  # ptgArea3d
             xti_index, first_row, last_row, first_col, last_col = struct.unpack_from("<HHHHH", tokens, offset)
             try:
                 prefix = _formula_3d_prefix(xti_index, external_sheets, sheet_names, internal_supbooks, errors, formula_context)
@@ -1660,7 +1769,7 @@ def _decode_formula_token_stream(
                 f"{_formula_cell_ref(last_row, last_col)}"
             )
             offset += 10
-        elif token == 0x23 and offset + 4 <= len(tokens):  # ptgName
+        elif token == 0x23 and offset + 4 <= token_end:  # ptgName
             name_index, = struct.unpack_from("<I", tokens, offset)
             # Preserve the established low-word compatibility for producers
             # that leave nonzero bytes in the high word of the name index.
@@ -1668,7 +1777,7 @@ def _decode_formula_token_stream(
                 name_index &= 0xffff
             stack.append(_formula_name(name_index, defined_names))
             offset += 4
-        elif token in {0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11} and len(stack) >= 2:
+        elif token in {0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11} and available >= 2:
             right = stack.pop()
             left = stack.pop()
             stack.append(f"{left}{_formula_operator(token)}{right}")
@@ -1677,7 +1786,7 @@ def _decode_formula_token_stream(
             return ""
         elif token in (0x21, 0x22):
             size = 3 if token == 0x22 else 2
-            if offset + size > len(tokens):
+            if offset + size > token_end:
                 warn("truncated function token")
                 return ""
             function_index = struct.unpack_from("<H", tokens, offset + (token == 0x22))[0]
@@ -1688,12 +1797,12 @@ def _decode_formula_token_stream(
                 argument_count = _fixed_function_arg_count(function_index)
                 if function_index == 5:
                     warn("variadic AVERAGE in fixed token; legacy single-range compatibility")
-                    if len(stack) != 1:
+                    if available != 1:
                         return ""
                 if not is_known or argument_count is None:
                     warn("unknown fixed function %d; expression omitted" % function_index)
                     return ""
-            if len(stack) < argument_count:
+            if available < argument_count:
                 warn("function argument stack underflow")
                 return ""
             args = stack[-argument_count:] if argument_count else []
@@ -1707,32 +1816,32 @@ def _decode_formula_token_stream(
                 warn("unknown variable function %d" % function_index)
             stack.append(f"{function_name}({','.join(args)})")
             offset += size
-        elif token == 0x1E and offset + 2 <= len(tokens):  # ptgInt
+        elif token == 0x1E and offset + 2 <= token_end:  # ptgInt
             stack.append(str(struct.unpack_from("<H", tokens, offset)[0]))
             offset += 2
-        elif token == 0x1F and offset + 8 <= len(tokens):  # ptgNum
+        elif token == 0x1F and offset + 8 <= token_end:  # ptgNum
             stack.append(_format_number(struct.unpack_from("<d", tokens, offset)[0]))
             offset += 8
-        elif token == 0x17 and offset + 2 <= len(tokens):  # ptgStr
+        elif token == 0x17 and offset + 2 <= token_end:  # ptgStr
             char_count = tokens[offset]
             flags = tokens[offset + 1]
             offset += 2
             byte_count = char_count * (2 if flags & 0x01 else 1)
-            if offset + byte_count > len(tokens):
+            if offset + byte_count > token_end:
                 warn("truncated string token; expression omitted")
                 return ""
             raw = tokens[offset:offset + byte_count]
             text = raw.decode("utf-16-le" if flags & 0x01 else "cp1252", errors="replace")
             stack.append(_quote_formula_string(text))
             offset += byte_count
-        elif token == 0x1D and offset + 1 <= len(tokens):  # ptgBool
+        elif token == 0x1D and offset + 1 <= token_end:  # ptgBool
             stack.append("TRUE" if tokens[offset] else "FALSE")
             offset += 1
-        elif token == 0x1C and offset + 1 <= len(tokens):  # ptgErr
+        elif token == 0x1C and offset + 1 <= token_end:  # ptgErr
             stack.append(_format_biff_error(tokens[offset]))
             offset += 1
         elif token == 0x19:  # MS-XLS PtgAttr: one flag byte and two data bytes
-            if offset + 3 > len(tokens):
+            if offset + 3 > token_end:
                 warn("truncated attribute token; expression omitted")
                 return ""
             flags = tokens[offset]
@@ -1740,19 +1849,22 @@ def _decode_formula_token_stream(
             offset += 3
             if flags & 0x04:  # PtgAttrChoose has an additional jump-offset array.
                 jump_bytes = 2 * (attr_data + 1)
-                if jump_bytes > len(tokens) - offset:
+                if jump_bytes > token_end - offset:
                     warn("truncated attribute jump table; expression omitted")
                     return ""
                 offset += jump_bytes
-            if flags & 0x10 and stack:  # PtgAttrSum is the optimized SUM form.
+            if flags & 0x10:  # PtgAttrSum is the optimized SUM form.
+                if not available:
+                    warn('SUM argument stack underflow; expression omitted')
+                    return ''
                 stack[-1] = f"SUM({stack[-1]})"
-        elif token == 0x12 and stack:  # ptgUplus
+        elif token == 0x12 and available:  # ptgUplus
             stack[-1] = f"+{stack[-1]}"
-        elif token == 0x13 and stack:  # ptgUminus
+        elif token == 0x13 and available:  # ptgUminus
             stack[-1] = f"-{stack[-1]}"
-        elif token == 0x14 and stack:  # ptgPercent
+        elif token == 0x14 and available:  # ptgPercent
             stack[-1] = f"{stack[-1]}%"
-        elif token == 0x15 and stack:  # ptgParen
+        elif token == 0x15 and available:  # ptgParen
             stack[-1] = f"({stack[-1]})"
         else:
             warn("unsupported or truncated token 0x%02X; expression omitted" % token)

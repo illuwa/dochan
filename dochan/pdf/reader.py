@@ -555,12 +555,16 @@ class PDFReader:
         return paragraphs
 
     def _configure_form_extractor(self, extractor, pdf, resources, font_cache):
-        """Attach page-local Form lookup so probes and the reader share geometry."""
+        """Attach Form lookup with document-wide decode and font caches."""
         extractor.resources = resources
         loaded_forms = {}
-        stream_info = {}
-        rejected_streams = {}
-        cached_form_bytes = [0]
+        state = getattr(pdf, "_form_cache_state", None)
+        if state is None:
+            state = {"stream_info": {}, "rejected_streams": {},
+                     "cached_bytes": 0, "font_infos": {}}
+            pdf._form_cache_state = state
+        stream_info = state["stream_info"]
+        rejected_streams = state["rejected_streams"]
 
         def load_form(name, caller_resources):
             if not isinstance(caller_resources, dict):
@@ -592,10 +596,9 @@ class PDFReader:
             if info is None or info[0] is not stream:
                 data = pdf.decode_stream_bytes(stream)
                 if (len(data) > MAX_FORM_CACHE_BYTES or
-                        cached_form_bytes[0] + len(data) > MAX_FORM_CACHE_BYTES):
-                    # decode_stream_bytes uses a document-wide cache. A rejected
-                    # Form must not remain there outside the Form cache budget.
-                    pdf._decoded_cache.pop(id(stream), None)
+                        state["cached_bytes"] + len(data) > MAX_FORM_CACHE_BYTES):
+                    # The document decode cache retains this stream so a later
+                    # page cannot charge its bytes to the decode budget again.
                     warning = "WARN: PDF Form 디코드 캐시 한도 — 해당 Form 건너뜀"
                     if warning not in pdf.warnings:
                         pdf.warnings.append(warning)
@@ -605,7 +608,7 @@ class PDFReader:
                 op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
                 info = (stream, data, op_count, has_text_or_form)
                 stream_info[id(stream)] = info
-                cached_form_bytes[0] += len(data)
+                state["cached_bytes"] += len(data)
             else:
                 _, data, op_count, has_text_or_form = info
             if not has_text_or_form:
@@ -625,16 +628,19 @@ class PDFReader:
                 props = {key: pdf.resolve(value) for key, value in props.items()}
             else:
                 props = {}
-            font_infos = [None]
-
             def get_fonts():
-                if font_infos[0] is None:
-                    font_infos[0] = self._font_infos(pdf, form_resources, font_cache)
-                return font_infos[0]
+                if "Font" not in form_resources:
+                    return {}
+                cached = state["font_infos"].get(id(form_resources))
+                if cached is not None and cached[0] is form_resources:
+                    return cached[1]
+                infos = self._font_infos(pdf, form_resources, font_cache)
+                state["font_infos"][id(form_resources)] = (form_resources, infos)
+                return infos
 
             loaded = (id(stream), data, matrix, form_resources,
                       get_fonts, props, op_count, bbox,
-                      isinstance(stream.dictionary.get("StructParents"), int))
+                      isinstance(pdf.resolve(stream.dictionary.get("StructParents")), int))
             loaded_forms[cache_key] = loaded
             return loaded
 

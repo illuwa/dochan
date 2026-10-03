@@ -221,6 +221,23 @@ def _clip_form_fragments(fragments, bbox, ctm):
                 return False
         return True
 
+    def overlaps(quad):
+        if not all(math.isfinite(value) for point in quad for value in point):
+            return False
+        for shape in (polygon, quad):
+            for edge, (px, py) in enumerate(shape):
+                qx, qy = shape[(edge + 1) % 4]
+                axis_length = math.hypot(qy - py, qx - px)
+                if not axis_length:
+                    continue
+                nx, ny = -(qy - py) / axis_length, (qx - px) / axis_length
+                clip_projection = [nx * x + ny * y for x, y in polygon]
+                glyph_projection = [nx * x + ny * y for x, y in quad]
+                if (max(clip_projection) < min(glyph_projection) - 1e-7 or
+                        max(glyph_projection) < min(clip_projection) - 1e-7):
+                    return False
+        return True
+
     kept = []
     for frag in fragments:
         count = len(frag.text)
@@ -233,11 +250,14 @@ def _clip_form_fragments(fragments, bbox, ctm):
         ux, uy = frag.dir_x / direction, frag.dir_y / direction
         vx, vy = frag.up_x / upward, frag.up_y / upward
         if len(frag.char_offsets) != count + 1:
-            # Width alone cannot locate individual glyphs accurately. Keep
-            # the whole run only when its full extent is safely inside.
-            if all(inside(frag.x + ux * distance + vx * height,
-                          frag.y + uy * distance + vy * height)
-                   for distance in (0, frag.width) for height in (0, frag.size)):
+            # Without individual positions, preserve an overlapping run as a
+            # whole. This also handles vertical runs whose origin is shifted
+            # by v1y and whose rectangle can cross the Form boundary.
+            quad = [(frag.x + ux * distance + vx * height,
+                     frag.y + uy * distance + vy * height)
+                    for distance, height in ((0, 0), (frag.width, 0),
+                                             (frag.width, frag.size), (0, frag.size))]
+            if overlaps(quad):
                 kept.append(frag)
             continue
         offsets = frag.char_offsets
@@ -256,24 +276,7 @@ def _clip_form_fragments(fragments, bbox, ctm):
                      frag.y + uy * distance + vy * height)
                     for distance, height in ((first, 0), (last, 0),
                                              (last, frag.size), (first, frag.size))]
-            overlap = all(math.isfinite(value) for point in quad for value in point)
-            if overlap:
-                for shape in (polygon, quad):
-                    for edge, (px, py) in enumerate(shape):
-                        qx, qy = shape[(edge + 1) % 4]
-                        axis_length = math.hypot(qy - py, qx - px)
-                        if not axis_length:
-                            continue
-                        nx, ny = -(qy - py) / axis_length, (qx - px) / axis_length
-                        clip_projection = [nx * x + ny * y for x, y in polygon]
-                        glyph_projection = [nx * x + ny * y for x, y in quad]
-                        if (max(clip_projection) < min(glyph_projection) - 1e-7 or
-                                max(glyph_projection) < min(clip_projection) - 1e-7):
-                            overlap = False
-                            break
-                    if not overlap:
-                        break
-            accepted.append(overlap)
+            accepted.append(overlaps(quad))
         start = 0
         while start < count:
             if not accepted[start]:

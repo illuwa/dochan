@@ -2,14 +2,14 @@
 from types import SimpleNamespace
 
 from dochan.pdf.annotations import LinkRegion, attach_links
-from dochan.pdf.content import ContentTextExtractor, Fragment
-from dochan.pdf.objects import PDFStream
+from dochan.pdf.content import ContentTextExtractor, Fragment, _clip_form_fragments
 from dochan.pdf.reader import PDFReader
 from dochan.pdf.running import edge_block
 from dochan.pdf.structure import PDFFile
 
 from test_pdf_forms import _read, _stream, _texts
 from test_pdf_structure import _build_pdf, _minimal_objects
+from test_pdf_content import _vertical_font
 
 
 def _extract(tmp_path, page_content, forms, track_positions=False):
@@ -158,17 +158,73 @@ def test_parent_form_bbox_clips_nested_form_glyphs(tmp_path):
     assert _texts(doc) == ["IN"]
 
 
-def test_rejected_form_bytes_do_not_remain_in_document_cache(tmp_path, monkeypatch):
-    from dochan.pdf import reader, content
+def test_rejected_large_shared_form_keeps_every_page_body(tmp_path, monkeypatch):
+    from dochan.pdf import reader, structure
 
-    monkeypatch.setattr(reader, "MAX_FORM_CACHE_BYTES", 100)
-    monkeypatch.setattr(content, "MAX_FORM_CACHE_BYTES", 100)
-    pdf, result = _extract(tmp_path, b"/F Do", {
-        6: _stream(b" " * 101 + b"BT (X) Tj ET", "/Subtype /Form")})
-    stream = pdf.resolve(pdf.resolve(pdf.pages()[0][1]["XObject"])["F"])
-    assert isinstance(stream, PDFStream)
-    assert id(stream) not in pdf._decoded_cache
-    assert result.fragments == []
+    monkeypatch.setattr(reader, "MAX_FORM_CACHE_BYTES", 512 * 1024)
+    monkeypatch.setattr(structure, "MAX_TOTAL_DECODED", 2 * 1024 * 1024 + 100 * 1024)
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 >>",
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        21: _stream(b" " * (1024 * 1024) + b"BT /F1 10 Tf (HIDDEN) Tj ET",
+                    "/Subtype /Form"),
+    }
+    for index in range(5):
+        objects[3 + index] = (
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 20 0 R >> "
+            "/XObject << /F 21 0 R >> >> /Contents %d 0 R >>" % (10 + index))
+        body = b"/F Do BT /F1 10 Tf 40 500 Td (PAGE%d) Tj ET" % (index + 1)
+        objects[10 + index] = _stream(body)
+    path = tmp_path / "shared.pdf"
+    path.write_bytes(_build_pdf(objects))
+    doc = PDFReader().read(str(path))
+    assert [[e.text for e in section.elements if hasattr(e, "text")]
+            for section in doc.sections] == [["PAGE%d" % (index + 1)] for index in range(5)]
+    assert not any("문서 스트림 해제 총량" in error for error in doc.errors)
+
+
+def test_vertical_form_run_overlapping_bbox_is_kept():
+    font = _vertical_font()
+    extractor = ContentTextExtractor.from_fonts({"F1": font})
+    fragments = extractor.extract_fragments(
+        b"BT /F1 20 Tf 50 105 Td <00010001000100010001> Tj ET")
+    assert len(fragments) == 1
+    assert fragments[0].char_offsets == ()
+    assert [frag.text for frag in _clip_form_fragments(
+        fragments, (0, 0, 100, 300), (1, 0, 0, 1, 0, 0))] == ["AAAAA"]
+
+
+def test_shared_inline_form_fonts_are_built_once_across_callers(tmp_path, monkeypatch):
+    original = PDFReader._font_infos
+    calls = []
+
+    def counted(self, pdf, resources, font_cache):
+        calls.append(resources)
+        return original(self, pdf, resources, font_cache)
+
+    monkeypatch.setattr(PDFReader, "_font_infos", counted)
+    wrappers = {
+        number: _stream(b"/X Do", "/Subtype /Form /Resources << "
+                        "/XObject << /X 6 0 R >> >>")
+        for number in range(7, 17)
+    }
+    page_resources = " ".join("/W%d %d 0 R" % (n, n) for n in wrappers)
+    doc = _read(tmp_path, b" ".join(b"/W%d Do" % n for n in wrappers), {
+        6: _stream(b"BT /F1 10 Tf 40 500 Td (X) Tj ET",
+                   "/Subtype /Form /Resources << /Font << /F1 4 0 R >> >>"),
+        **wrappers}, page_resources)
+    assert _texts(doc)
+    assert len(calls) == 2
+
+
+def test_indirect_structparents_separates_form_mcid_from_page(tmp_path):
+    _pdf, result = _extract(tmp_path, b"/P <</MCID 7>> BDC /F Do EMC", {
+        6: _stream(b"BT /F1 10 Tf 40 500 Td (A) Tj ET",
+                   "/Subtype /Form /StructParents 7 0 R"),
+        7: "3",
+    })
+    assert [frag.mcids for frag in result.fragments] == [()]
 
 
 def test_rejected_form_is_not_decoded_again_for_other_callers(tmp_path, monkeypatch):

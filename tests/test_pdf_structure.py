@@ -215,3 +215,26 @@ def test_xref_offset_without_object_header_rescans():
     pdf = PDFFile(bytes(data))
     assert len(pdf.pages()) == 1
     assert any("객체 스캔으로 재구성" in warning for warning in pdf.warnings)
+
+
+def test_body_syntax_error_at_a_real_header_does_not_rescan():
+    """감수 s1: 헤더가 맞는 객체의 본문 오류는 문서 전체 재스캔을 일으키지 않는다."""
+    objects = _minimal_objects()
+    objects[3] = "<< /Type /Page /Parent 2 0 R /Resources 7 0 R /Contents 5 0 R >>"
+    objects[7] = "<< /Font << /F1 4 0 R >"  # header is fine, body is broken
+    pdf = PDFFile(_build_pdf(objects))
+    pages = pdf.pages()
+    assert len(pages) == 1
+    assert not any("객체 스캔으로 재구성" in warning for warning in pdf.warnings)
+
+
+def test_scanned_catalog_prefers_the_latest_definition():
+    objects = _minimal_objects()
+    objects[6] = "<< /Producer (x) >>"
+    objects[7] = "<< /Type /Catalog /Pages 2 0 R /Lang (old) >>"
+    objects[8] = "<< /Type /Catalog /Pages 2 0 R /Lang (new) >>"
+    del objects[1]
+    data = _build_pdf({**objects, 1: "<< /Producer (info) >>"}).replace(b"/Root 1 0 R", b"/Root 6 0 R")
+    pdf = PDFFile(data)
+    assert len(pdf.pages()) == 1
+    assert pdf.resolve(pdf.trailer["Root"])["Lang"] == b"new"

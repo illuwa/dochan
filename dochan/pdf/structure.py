@@ -3,6 +3,7 @@
 xref 스트림(PDF 1.5+)과 객체 스트림은 이번 마일스톤에서 지원하지 않는다.
 발견하면 경고를 남기고 `N G obj` 패턴 스캔으로 대체 복구를 시도한다.
 """
+import bisect
 import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,7 +29,9 @@ MAX_IMAGE_DECODED_CACHE = 50 * 1024 * 1024
 MAX_IMAGE_CACHE_ENTRIES = 128
 
 _OBJ_RE = re.compile(rb"(?<!\d)(\d{1,10})\s+(\d{1,5})\s+obj\b")
+_HEADER_AT_RE = re.compile(rb"[\x00\t\n\x0c\r ]*\d{1,10}\s+\d{1,5}\s+obj\b")
 _ENCRYPT_RE = re.compile(rb"/Encrypt\s+\d+\s+\d+\s+R")
+_CATALOG_RE = re.compile(rb"/Type\s*/Catalog(?![A-Za-z0-9])")
 
 
 class PDFFile:
@@ -64,6 +67,7 @@ class PDFFile:
         start = self._find_startxref()
         ok = start is not None and self._parse_xref_chain(start)
         if not ok or "Root" not in self.trailer:
+            self._rescanned = True  # review prototype: a scanned file is not scanned again
             self._scan_objects()
         if self.trailer.get("Encrypt") is not None:
             self.encrypted = True
@@ -313,8 +317,9 @@ class PDFFile:
         compressed = dict(self._compressed)
         self._scan_objects()
         for num, location in compressed.items():
-            if num not in self.xref:
-                self._compressed[num] = location
+            # review prototype: the newest xref said "compressed"; a plain match is older
+            self.xref.pop(num, None)
+            self._compressed[num] = location
 
     def _recover_trailers(self) -> None:
         """스캔 폴백에서 trailer 사전을 복구한다.
@@ -344,7 +349,22 @@ class PDFFile:
             self.trailer["Encrypt"] = True
 
     def _find_root_by_scan(self) -> None:
-        for num in sorted(self.xref)[:_SCAN_ROOT_LIMIT]:
+        # Only objects whose bytes say /Type /Catalog are parsed (a catalog is
+        # a plain dictionary, never a stream), latest in the file first so an
+        # incremental update's catalog wins over a superseded one.
+        located = sorted((offset, num) for num, offset in self.xref.items()
+                         if isinstance(offset, int))
+        starts = [offset for offset, _ in located]
+        tried = set()
+        matches = list(_CATALOG_RE.finditer(self.data))
+        for match in reversed(matches[-_SCAN_ROOT_LIMIT:]):
+            index = bisect.bisect_right(starts, match.start()) - 1
+            if index < 0:
+                continue
+            num = located[index][1]
+            if num in tried:
+                continue
+            tried.add(num)
             try:
                 obj = self.get_object(PDFRef(num, 0))
             except Exception:
@@ -369,7 +389,7 @@ class PDFFile:
         try:
             num, _gen, obj = parse_indirect_object(self.data, offset, resolve=self.resolve)
         except PDFSyntaxError as e:
-            if not self._rescanned:
+            if not self._rescanned and not _HEADER_AT_RE.match(self.data, offset):
                 # A stale xref offset that lands on no object header (e.g. a
                 # broken incremental update) gets the same scan recovery as
                 # an offset naming another object.
@@ -524,13 +544,13 @@ class PDFFile:
     def pages(self) -> List[Tuple[dict, dict]]:
         """(페이지 사전, 유효 Resources) 목록을 문서 순서대로 반환."""
         root = self.resolve(self.trailer.get("Root"))
-        if not (isinstance(root, dict) and isinstance(self.resolve(root.get("Pages")), dict)):
+        if not (isinstance(root, dict) and (str(root.get("Type", "")) == "Catalog" or "Pages" in root)):
             # A broken update may name a non-catalog object as Root (pdf.js
             # issue9418.pdf points at the Info dictionary). Look for a real
             # /Type /Catalog once before giving up.
             declared = self.trailer.get("Root")
             self._find_root_by_scan()
-            if self.trailer.get("Root") != declared:
+            if getattr(self.trailer.get("Root"), "num", None) != getattr(declared, "num", None):
                 self.warnings.append("WARN: trailer Root 가 카탈로그가 아님 — 스캔한 카탈로그 사용")
                 root = self.resolve(self.trailer.get("Root"))
         if not isinstance(root, dict):

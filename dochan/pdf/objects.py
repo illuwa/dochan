@@ -206,6 +206,22 @@ class PDFLexer:
             raise PDFSyntaxError("잘못된 16진 문자열")
 
     def _parse_array(self) -> list:
+        # Review prototype: lenient pass first; if it does not close cleanly,
+        # re-parse strictly so a missing ']' fails at the first operator as before.
+        if self.skip_array_operators and self._depth == 0:
+            start = self.pos
+            try:
+                return self._parse_array_body()
+            except PDFSyntaxError:
+                self.pos = start
+                self.skip_array_operators = False
+                try:
+                    return self._parse_array_body()
+                finally:
+                    self.skip_array_operators = True
+        return self._parse_array_body()
+
+    def _parse_array_body(self) -> list:
         self.pos += 1  # '['
         self._depth += 1
         try:

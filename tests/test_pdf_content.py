@@ -181,3 +181,10 @@ def test_array_keyword_skipping_is_only_for_content_streams():
     from dochan.pdf.objects import PDFLexer, PDFSyntaxError
     with pytest.raises(PDFSyntaxError):
         PDFLexer(b"[1 Tc 2]").parse_object()
+
+
+def test_unclosed_array_does_not_swallow_the_rest_of_the_page():
+    """감수 c1: 닫히지 않은 `[` 하나가 뒤 텍스트를 지우면 안 된다(엄격 재파싱으로 전과 같이 그 배열만 잃음)."""
+    page = ContentTextExtractor().extract_page(
+        b"BT /F1 10 Tf [(Lost) Tj ET BT /F1 10 Tf 0 -20 Td (Kept) Tj ET")
+    assert "Kept" in "".join(fragment.text for fragment in page.fragments)

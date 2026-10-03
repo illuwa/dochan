@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 추가 (PDF 미리 정의된 CMap·내장 CMap 스트림)
+
+- 동아시아 Type0 글꼴의 비 Identity 인코딩을 읽는다. ISO 32000-1 표 118 의 미리 정의된 CMap 59개(+`90pv-RKSJ-V`·`KSCpc-EUC-V`)를 Adobe `cmap-resources`(BSD-3)에서
+  생성 스크립트로 만든 데이터로 담고, 내장 Encoding CMap 스트림(codespacerange·cidrange·cidchar·notdefrange·usecmap·`/UseCMap`)도 해석한다. 바이트를 코드 공간에 따라
+  가변 길이(1–4바이트) 코드로 자르고(9.7.6.2, 무효 코드는 9.7.6.3 규칙), 폭은 CID 로 찾으며, ToUnicode 가 없으면 Registry·Ordering 이 맞을 때만 Adobe CID→Unicode 표로 글자를 낸다.
+  전에는 모든 Type0 코드를 2바이트 CID 로 취급해 글자·폭·단어 간격이 틀렸다. 공개 pdf.js 983개 중 18개 문서의 글자·읽기 순서·공백이 렌더와 맞게 바뀌었고
+  (`90ms-RKSJ-H`·`GBK-EUC-H`·`UniGB-UTF16-H`·`EUC-H`·`H` 등), 나머지 965개와 공개 보도자료·내부 PDF 출력은 그대로다. 코드 공간 수·usecmap 사슬·블록 크기에 상한을 둔다.
+
 ### 수정 (PDF 각주)
 
 - 위첨자 각주 표지가 숫자와 닫는 괄호 두 조각(`1`·`)`)으로 그려져도 같은 기준선에 맞닿아 있으면 한 표지로 읽는다. 표지가 붙는 본문은 쪽의 최빈 크기가 아니어도

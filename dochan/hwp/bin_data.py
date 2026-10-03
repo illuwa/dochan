@@ -45,6 +45,7 @@ def extract_bin_data(
     stream_budget: Optional[ByteBudget] = None,
     max_item_size: Optional[int] = None,
     max_total_size: Optional[int] = None,
+    warnings: Optional[list] = None,
 ) -> Dict[int, BinDataItem]:
     """
     OLE 스토리지에서 BinData/ 하위의 모든 바이너리 데이터 추출
@@ -83,16 +84,22 @@ def extract_bin_data(
 
                 # 압축 해제 (문서가 압축 설정인 경우)
                 if is_compressed:
+                    limit = min(item_limit, extracted_budget.remaining)
                     try:
-                        raw_data = safe_zlib_decompress(
-                            raw_data,
-                            max_size=min(item_limit, extracted_budget.remaining),
-                        )
+                        raw_data = safe_zlib_decompress(raw_data, max_size=limit)
                     except (ValueError, zlib.error) as e:
                         if "Decompressed size exceeds limit" in str(e):
-                            raise ResourceLimitError(
-                                f"{stream_name} exceeds extracted BinData budget"
-                            ) from e
+                            if limit < item_limit:
+                                # The whole document's image budget is spent.
+                                raise ResourceLimitError(
+                                    f"{stream_name} exceeds extracted BinData budget"
+                                ) from e
+                            # One oversized image: inflation stopped at the
+                            # item limit, so skip only this item.
+                            if warnings is not None:
+                                warnings.append(
+                                    f"WARN: HWP {stream_name} exceeds the image size limit; image omitted")
+                            continue
                         logger.debug("BinData 압축 해제 실패 (비압축 데이터일 수 있음): %s", e)
 
                 extracted_budget.consume(len(raw_data), stream_name)

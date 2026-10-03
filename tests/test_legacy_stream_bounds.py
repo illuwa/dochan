@@ -514,3 +514,30 @@ def test_extensionless_ambiguous_ole_fails_closed(monkeypatch, tmp_path):
     assert document.sections == []
     assert document.source_format == ""
     assert document.errors == ["ERR: 모호한 OLE 파일 형식: doc, xls"]
+
+
+def test_hwp_bindata_oversized_item_is_skipped_with_warning():
+    big = b"\x00" * 4096
+    compressor = zlib.compressobj(wbits=-15)
+    bomb = compressor.compress(big) + compressor.flush()
+    ole = _BinDataOle({"BIN0001.bmp": bomb, "BIN0002.png": b"\x89PNGsmall"})
+    warnings = []
+
+    items = extract_bin_data(ole, True, max_item_size=1024, max_total_size=1 << 20,
+                             warnings=warnings)
+
+    assert set(items) == {2}
+    assert any("BIN0001.bmp" in warning and warning.startswith("WARN") for warning in warnings)
+
+
+def test_hwp_text_survives_bindata_budget_overflow():
+    """공개 실물: 12MB 압축 BMP 하나가 해제 상한을 넘어도 본문과 다른 그림은 남는다."""
+    import os
+    corpus = os.environ.get("DOCHAN_PUBLIC_HWP_CORPUS", "")
+    path = os.path.join(corpus, "hwp", "2026년 2분기 가축동향조사 결과 보도자료(최종).hwp")
+    if not corpus or not os.path.exists(path):
+        pytest.skip("public HWP corpus not available")
+    document = Dochan(path)
+    assert len(document.to_markdown()) > 1000
+    assert not any(error.startswith("ERR") for error in document.errors)
+    assert any("BIN000C.bmp" in error and error.startswith("WARN") for error in document.errors)

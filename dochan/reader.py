@@ -454,8 +454,13 @@ class Dochan:
                     ole,
                     file_header.is_compressed,
                     stream_budget=stream_budget,
+                    warnings=self.doc.errors,
                 )
                 link_images_to_bin_data(self.doc, bin_items, doc_info.bin_data_entries)
+            except ResourceLimitError as e:
+                # Body text is already parsed within its budgets; only the
+                # images are dropped when their combined size runs out.
+                self.doc.errors.append(f"WARN: HWP BinData 예산 초과로 그림 생략: {e}")
             except BoundedIOError:
                 raise
             except Exception as e:

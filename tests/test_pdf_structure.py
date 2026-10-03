@@ -194,3 +194,24 @@ def test_xref_stream_trailer_encrypt_detected():
 
     assert pdf.encrypted
     assert any("암호화" in w for w in pdf.warnings)
+
+
+def test_root_naming_a_non_catalog_falls_back_to_scanned_catalog():
+    """pdf.js issue9418.pdf: a broken update's /Root names the Info dictionary."""
+    objects = _minimal_objects()
+    objects[6] = "<< /Producer (x) >>"
+    data = _build_pdf(objects).replace(b"/Root 1 0 R", b"/Root 6 0 R")
+    pdf = PDFFile(data)
+    assert len(pdf.pages()) == 1
+    assert any("카탈로그가 아님" in warning for warning in pdf.warnings)
+
+
+def test_xref_offset_without_object_header_rescans():
+    objects = _minimal_objects()
+    data = bytearray(_build_pdf(objects))
+    # Point object 2's xref entry at the file header, not at "2 0 obj".
+    entry = data.index(b"xref\n") + len(b"xref\n0 6\n") + 20 * 2
+    data[entry:entry + 10] = b"0000000003"
+    pdf = PDFFile(bytes(data))
+    assert len(pdf.pages()) == 1
+    assert any("객체 스캔으로 재구성" in warning for warning in pdf.warnings)

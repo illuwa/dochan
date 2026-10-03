@@ -308,6 +308,14 @@ class PDFFile:
         if "Root" not in self.trailer:
             self._find_root_by_scan()
 
+    def _rescan_keeping_compressed(self) -> None:
+        """Rebuild offsets by scanning, keeping object-stream entries the scan cannot see."""
+        compressed = dict(self._compressed)
+        self._scan_objects()
+        for num, location in compressed.items():
+            if num not in self.xref:
+                self._compressed[num] = location
+
     def _recover_trailers(self) -> None:
         """스캔 폴백에서 trailer 사전을 복구한다.
 
@@ -361,13 +369,21 @@ class PDFFile:
         try:
             num, _gen, obj = parse_indirect_object(self.data, offset, resolve=self.resolve)
         except PDFSyntaxError as e:
+            if not self._rescanned:
+                # A stale xref offset that lands on no object header (e.g. a
+                # broken incremental update) gets the same scan recovery as
+                # an offset naming another object.
+                self._rescanned = True
+                self.warnings.append(f"WARN: 객체 {ref.num} 파싱 실패: {e} — 객체 스캔으로 재구성")
+                self._rescan_keeping_compressed()
+                return self.get_object(ref)
             self.warnings.append(f"WARN: 객체 {ref.num} 파싱 실패: {e}")
             return None
         if num != ref.num:
             if not self._rescanned:
                 self._rescanned = True
                 self.warnings.append("WARN: xref 오프셋 불일치 — 객체 스캔으로 재구성")
-                self._scan_objects()
+                self._rescan_keeping_compressed()
                 return self.get_object(ref)
             self.warnings.append(f"WARN: 객체 {ref.num} 오프셋이 {num} 을 가리킴")
             return None
@@ -508,6 +524,15 @@ class PDFFile:
     def pages(self) -> List[Tuple[dict, dict]]:
         """(페이지 사전, 유효 Resources) 목록을 문서 순서대로 반환."""
         root = self.resolve(self.trailer.get("Root"))
+        if not (isinstance(root, dict) and isinstance(self.resolve(root.get("Pages")), dict)):
+            # A broken update may name a non-catalog object as Root (pdf.js
+            # issue9418.pdf points at the Info dictionary). Look for a real
+            # /Type /Catalog once before giving up.
+            declared = self.trailer.get("Root")
+            self._find_root_by_scan()
+            if self.trailer.get("Root") != declared:
+                self.warnings.append("WARN: trailer Root 가 카탈로그가 아님 — 스캔한 카탈로그 사용")
+                root = self.resolve(self.trailer.get("Root"))
         if not isinstance(root, dict):
             self.warnings.append("WARN: PDF 카탈로그(Root)를 찾지 못함")
             return []

@@ -205,3 +205,28 @@ def test_button_captions_hide_mnemonic_ampersands_like_hancom(raw, shown):
         assert form_text(_form(kind, contents)) == prefix + shown
     # 콤보 상자·입력 상자의 글은 캡션이 아니므로 그대로다.
     assert form_text(_form(b'tde+', _set('EditSet', _parameter('Text', raw)))) == raw
+
+
+
+def _char_shape_record(props):
+    # 글꼴 7 + 장평 7 + 자간 7 + 상대 크기 7 + 위치 7 + 기준 크기 4 + 속성 4 (+ 색 4)
+    return bytes(14) + bytes(7) * 4 + struct.pack('<iII', 1000, props, 0)
+
+
+# 한컴오피스 화면 실측과 공개 HWP·HWPX 짝 511개의 대응: 밑줄 종류(비트 2-3)는 1(아래)·3(위)만 보이고 2 는 HWPX
+# NONE 이며, 취소선(비트 18-20)은 모양(비트 26-29)이 3D 계열(13·14·15)이면 그리지 않는다.
+@pytest.mark.parametrize('props,underline,strikeout', [
+    (0x3c0400f8, False, False),   # 공개 실물: 밑줄 2·모양 15, 취소선 1·모양 15(3D) — 화면에 둘 다 없음
+    (0x00040008, False, True),    # 밑줄 2, 취소선 1·모양 0(SOLID)
+    (0x00000004, True, False),    # 밑줄 1(아래)
+    (0x0000000c, True, False),    # 밑줄 3(위)
+    (0x1c040000, False, True),    # 취소선 모양 7(DOUBLE_SLIM)
+    (0x2c040000, False, True),    # 취소선 모양 11(WAVE)
+    (0x34040000, False, False),   # 취소선 모양 13(THICK_3D)
+    (0x38040000, False, False),   # 취소선 모양 14(THICK_3D_REVERS)
+])
+def test_hwp_char_shape_visible_underline_and_strikeout(props, underline, strikeout):
+    from dochan.hwp.records.char_shape import CharShape
+    shape = CharShape.parse(_char_shape_record(props))
+    assert shape.has_underline is underline
+    assert shape.has_strikeout is strikeout

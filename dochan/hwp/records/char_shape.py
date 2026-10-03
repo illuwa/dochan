@@ -41,6 +41,7 @@ class CharShape:
     superscript: bool = False   # bit 15
     subscript: bool = False     # bit 16
     strikeout: int = 0          # bit 18-20
+    strikeout_shape: int = 0    # bit 26-29 (선 종류: 0 SOLID … 13 THICK_3D, 14 THICK_3D_REVERS, 15 3D)
     text_color: int = 0         # COLORREF
     underline_color: int = 0
     shade_color: int = 0
@@ -50,6 +51,19 @@ class CharShape:
     def size_pt(self) -> float:
         """기준 크기 → pt 변환. 저장값은 pt×100 (예: 10pt = 1000)."""
         return self.base_size / 100.0
+
+    @property
+    def has_underline(self) -> bool:
+        """화면에 보이는 밑줄. 종류 1(글자 아래)·3(글자 위)만 그린다.
+
+        공개 HWP·HWPX 짝 511개에서 종류 2 는 HWPX 의 type="NONE" 과 대응하고, 한컴오피스 화면에도 밑줄이 없다.
+        """
+        return self.underline_type in (1, 3)
+
+    @property
+    def has_strikeout(self) -> bool:
+        """화면에 보이는 취소선. 3D 계열 모양(13·14·15)은 한컴오피스가 그리지 않는다(화면 실측)."""
+        return self.strikeout != 0 and self.strikeout_shape not in (13, 14, 15)
 
     @property
     def is_heading_size(self) -> bool:
@@ -95,6 +109,7 @@ class CharShape:
             cs.superscript    = bool(props & (1 << 15))   # bit 15
             cs.subscript      = bool(props & (1 << 16))   # bit 16
             cs.strikeout      = (props >> 18) & 0x7       # bit 18-20
+            cs.strikeout_shape = (props >> 26) & 0xF      # bit 26-29
 
         # 글자 색 (offset 52)
         if len(data) >= 56:

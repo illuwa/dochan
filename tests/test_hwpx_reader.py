@@ -7,6 +7,7 @@ from dochan.hwpx.parser import HWPXParser
 from dochan.output.json_out import to_dict
 from dochan.output.markdown import to_markdown
 from dochan.output.plain_text import to_plain_text
+import pytest
 
 # OWPML 실제 네임스페이스. 합성 픽스처라도 URI 는 실물과 같아야
 # _local_tag() 우회 같은 회귀를 잡을 수 있다.
@@ -765,6 +766,25 @@ def test_hwpx_partial_strikeout_is_kept(tmp_path):
     assert doc.char_shapes[0].strikeout == 0
     assert doc.char_shapes[1].strikeout == 1
     assert to_markdown(doc) == "보통 문장\n\n~~표시된 문장~~"
+
+
+# 한컴오피스 HWP(Mac) 화면 실측(공개 문서의 취소선 모양만 바꾼 통제 표본): 3D 계열 모양은 취소선을 그리지 않고,
+# SOLID·DOUBLE_SLIM·WAVE·DASH_DOT_DOT 은 그린다. 공개 HWPX 572개 문서가 3D 를 쓰며, 일부 글자모양만 NONE 이면
+# 전 글자모양 휴리스틱이 걸리지 않아 본문 전체가 가짜 취소선으로 나왔다.
+@pytest.mark.parametrize("shape,visible", [
+    ("3D", False), ("3D_REVERS", False), ("THICK_3D", False), ("THICK_3D_REVERS", False),
+    ("SOLID", True), ("DOUBLE_SLIM", True), ("WAVE", True), ("DASH_DOT_DOT", True),
+])
+def test_hwpx_strikeout_follows_hancom_visible_line_shapes(tmp_path, shape, visible):
+    path = tmp_path / "strikeout-shape.hwpx"
+    _write_hwpx(
+        path,
+        _STRIKEOUT_SECTION,
+        header_xml=_head(_char_properties(["NONE", shape, "NONE", "NONE", "NONE", "NONE"])),
+    )
+    doc = HWPXParser().parse(str(path))
+    assert doc.sections[0].elements[1].runs[0].strikeout is visible
+    assert doc.char_shapes[1].strikeout == (1 if visible else 0)
 
 
 # ── 13. 머리글 안 표 셀의 이미지 ──

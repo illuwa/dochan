@@ -139,6 +139,7 @@ DRAWING_TAGS = {
     'arc', 'container', 'ole',
 }
 FORM_TAGS = {'btn', 'checkBtn', 'radioBtn', 'comboBox', 'edit'}
+_INVISIBLE_STRIKEOUT_SHAPES = {'NONE', '3D', '3D_REVERS', 'THICK_3D', 'THICK_3D_REVERS'}
 
 # 스타일 이름에서 개요 수준을 읽어내기 위한 패턴 ("개요 1", "Outline 2", "Heading 3")
 _STYLE_HEADING_RE = re.compile(r'^\s*(?:개요|outline|heading)\s*(\d+)\s*$', re.IGNORECASE)
@@ -566,7 +567,8 @@ class HWPXParser:
             elif ctag == 'underline':
                 cs['underline'] = child.get('type', 'NONE') != 'NONE'
             elif ctag == 'strikeout':
-                cs['strikeout'] = child.get('shape', 'NONE') != 'NONE'
+                # 한컴오피스는 3D 계열 모양의 취소선을 그리지 않는다(화면 실측). HWP 모양 15 가 3D 로 저장된다.
+                cs['strikeout'] = child.get('shape', 'NONE') not in _INVISIBLE_STRIKEOUT_SHAPES
 
         self._char_shapes.append(cs)
         char_pr_id = _int_attr(elem, 'id', -1)

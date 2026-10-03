@@ -631,8 +631,8 @@ class SectionParser:
                         return True
                     if shape_id is not None and 0 <= shape_id < len(shapes):
                         cs = shapes[shape_id]
-                        if (cs.bold or cs.italic or cs.size_pt != 10.0 or cs.underline_type > 0
-                                or cs.strikeout > 0 or cs.superscript or cs.subscript):
+                        if (cs.bold or cs.italic or cs.size_pt != 10.0 or cs.has_underline
+                                or cs.has_strikeout or cs.superscript or cs.subscript):
                             return True
                 cursor = boundary
                 shape_id = following_id
@@ -652,8 +652,8 @@ class SectionParser:
                 run.bold = cs.bold
                 run.italic = cs.italic
                 run.font_size_pt = cs.size_pt
-                run.underline = cs.underline_type > 0
-                run.strikeout = cs.strikeout > 0
+                run.underline = cs.has_underline
+                run.strikeout = cs.has_strikeout
                 run.superscript = cs.superscript
                 run.subscript = cs.subscript
             runs.append(run)

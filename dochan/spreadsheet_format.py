@@ -689,9 +689,9 @@ class SpreadsheetNumberFormatter:
         if re.fullmatch(r"0+/0+", section):
             # A slash between zero-fill slots is literal, not a denominator.
             return self._zero_filled_number(number, section)
-        if section in ("#,##0 ?/?", "0.0 ?/?"):
-            # Retain the existing compact Markdown display for these plain
-            # formats; decorated formats render their grouping tokens.
+        if section == "0.0 ?/?":
+            # A decimal point inside the whole part has no fraction meaning;
+            # keep the display from before token rendering.
             return prior()
         if "%" in self._format_code_tokens(section) or re.match(
                 r"(?:\[[^]]+\])*[#,0.]+\s+\?+/(?:[0#?]+|[1-9]\d*)$", section
@@ -721,8 +721,10 @@ class SpreadsheetNumberFormatter:
         pad = bool(whole_positions) and any(
             kind == "pad" for _, kind in tokens[whole_positions[0]:numerator_start])
         mixed = bool(whole_positions) and not pad
+        first_slot = next((index for index, (_, kind) in enumerate(tokens)
+                           if kind == "slot"), slash)
         if not mixed and (metadata.fixed_denominator or not any(
-                kind == "pad" for _, kind in tokens[:slash])):
+                kind == "pad" for _, kind in tokens[first_slot:slash])):
             # Bare and fixed-denominator improper fractions have no direct
             # Excel cache evidence. Preserve the prior mixed-number display.
             return prior()

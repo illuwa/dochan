@@ -21,8 +21,10 @@ from dochan.spreadsheet_format import SpreadsheetNumberFormatter
     ("1.05", "$# ??/100", "$1  5/100"),
     ("3.75", "_(# ?/?_)", " 3 3/4 "),
     ("3.75", "#,##0 ?/?", "3 3/4"),
-    ("0.5", "#,##0 ?/?", "1/2"),
-    ("10000000000", "#,##0 ?/?", "10000000000"),
+    ("0.5", "#,##0 ?/?", "0 1/2"),
+    ("10000000000", "#,##0 ?/?", "10,000,000,000    "),
+    ("1234567.5", "#,##0 ?/?", "1,234,567 1/2"),
+    ("-1234567.5", "#,##0 ?/?;-#,##0 ?/?", "-1,234,567 1/2"),
     ("1225", "00/00", "12/25"),
     ("1.5", "?/?", "1 1/2"),
     ("3.75", "# ? / ?", "3 3/4"),
@@ -166,3 +168,9 @@ def test_fraction_fuzz_reaches_token_path_and_public_length_limit():
 def test_fraction_fallback_keeps_literal_affixes(value, fmt, expected):
     """토큰 경로를 버릴 때는 리터럴 접두·접미까지 수정 전 표시와 같아야 한다."""
     assert SpreadsheetNumberFormatter()._format_cell_value(value, fmt) == expected
+
+
+@pytest.mark.parametrize("value, expected", [("1.5", " 1 1/2 "), ("3", " 3 ")])
+def test_leading_padding_does_not_make_an_improper_fraction(value, expected):
+    """앞쪽 `_(` 는 정수 자리 뒤 패딩이 아니므로 가분수로 바꾸지 않는다."""
+    assert SpreadsheetNumberFormatter()._format_cell_value(value, "_(?/?_)") == expected

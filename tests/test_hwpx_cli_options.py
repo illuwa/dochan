@@ -281,6 +281,9 @@ def make_partial_hwpx(path, problem):
 ])
 @pytest.mark.parametrize("command", ["convert", "batch"])
 def test_partial_revision_cli_severity_and_output(tmp_path, problem, flags, success, command):
+    # Formatting changes leave the text projection unchanged, so every mode
+    # can publish the result with an informational warning.
+    success = success or problem == "formatting"
     source = make_partial_hwpx(tmp_path / "input" / "partial.hwpx", problem)
     original_bytes = source.read_bytes()
     output = tmp_path / "output"
@@ -293,7 +296,11 @@ def test_partial_revision_cli_severity_and_output(tmp_path, problem, flags, succ
         args = ["batch", source.parent, output, "--workers", "1"]
     result = cli_process(*args, "--format", "text", *flags)
     assert result.returncode == (0 if success else 1), result.stderr
-    assert ("WARN: HWPX revision partial" if success else "ERR: HWPX revision partial") in result.stderr
+    if problem == "formatting":
+        assert "WARN: HWPX revision info [formatting]" in result.stderr
+    else:
+        assert ("WARN: HWPX revision partial" if success else
+                "ERR: HWPX revision partial") in result.stderr
     if success:
         assert "BODYKEEP" in destination.read_text()
         if problem == "malformed-flow":

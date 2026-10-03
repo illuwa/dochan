@@ -118,13 +118,8 @@ def test_marker_siblings_at_parser_boundaries(tmp_path, scope):
     ('<hp:deleteBegin TcId="2"/>kept' + marker("delete", True), "missing-id"),
     (marker("delete", tc="99") + "kept" + marker("delete", True, tc="99"), "header-reference"),
     (marker("delete", tc="1") + "kept" + marker("delete", True, tc="1"), "header-reference"),
-    (marker("delete") + "kept" + marker("delete", True, paraend="1"), "paraend"),
     (marker("delete") + "kept" + marker("delete", True, paraend="bad"), "paraend"),
     (marker("delete") + "kept" + '<hp:deleteEnd Id="range-D" TcId="2"/>', "paraend"),
-    (marker("delete") + "ke" + marker("insert") + "p" + marker("delete", True)
-     + "t" + marker("insert", True), "overlap"),
-    (marker("delete") + "ke" + marker("insert") + "p" + marker("insert", True)
-     + "t" + marker("delete", True), "overlap"),
     ('<foreign:deleteBegin Id="range-D" TcId="2"/>kept'
      '<foreign:deleteEnd Id="range-D" TcId="2" paraend="0"/>', "namespace"),
 ])
@@ -250,8 +245,10 @@ def test_formatting_revision_is_explicitly_partial(tmp_path, mode):
     assert texts(document) == ["kept"]
     assert any("formatting" in e for e in document.errors)
     assert any("header-reference" in e for e in document.errors)
-    prefix = "WARN:" if mode == "preserve" else "ERR:"
-    assert all(e.startswith(prefix) for e in document.errors)
+    assert any(e.startswith("WARN:") and "formatting" in e for e in document.errors)
+    reference_severity = "WARN:" if mode == "preserve" else "ERR:"
+    assert any(e.startswith(reference_severity) and "header-reference" in e
+               for e in document.errors)
 
 
 @pytest.mark.parametrize("mode", [None, "accepted", "FINAL", "", [], 1])

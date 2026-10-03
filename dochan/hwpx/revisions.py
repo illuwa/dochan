@@ -16,11 +16,13 @@ SECTION = "{http://www.hancom.co.kr/hwpml/2011/section}sec"
 MARKERS = {"insertBegin": "Insert", "insertEnd": "Insert",
            "deleteBegin": "Delete", "deleteEnd": "Delete"}
 MAX_OPEN_RANGES = 128
+MAX_RANGES = 10000
 OBJECTS = {"tbl", "pic", "equation", "rect", "ellipse", "line", "connectLine",
            "curve", "polygon", "arc", "container", "ole", "ctrl"}
 TEXT_TOKENS = {HP + n for n in ("tab", "lineBreak", "fwSpace", "nbSpace")}
 MARKER_PARENTS = {SECTION, HP + "p", HP + "run", HP + "t"}
-FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose"} | TEXT_TOKENS
+FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose",
+                HP + "titleMark"} | TEXT_TOKENS
 
 
 def validate_revision_mode(mode):
@@ -45,6 +47,8 @@ class _Flow:
     opened: dict = field(default_factory=dict)
     spans: list = field(default_factory=list)
     disabled: bool = False
+    range_count: int = 0
+    paragraph_ends: list = field(default_factory=list)
 
     def add(self, element, attribute):
         if self.opened:
@@ -64,20 +68,28 @@ class RevisionProjector:
         self.mode = mode
         self.changes = {}
         self._problems = {}
+        self._formatting_reported = False
+        self._section_ranges = 0
 
     def _report(self, code, location):
+        if code == "formatting":
+            if self._formatting_reported:
+                return
+            self._formatting_reported = True
         # Bound diagnostics by category, not by the number of hostile markers.
         if code not in self._problems:
             self._problems[code] = [0, location]
         self._problems[code][0] += 1
 
     def _flush(self, part):
-        severity = "WARN" if self.mode == "preserve" else "ERR"
         for code, (count, location) in self._problems.items():
+            severity = "WARN" if self.mode == "preserve" or code == "formatting" else "ERR"
+            label = "info" if code == "formatting" else "partial"
+            outcome = ("text projection unchanged" if code == "formatting"
+                       else "unresolved content preserved")
             self.errors.append(
-                f"{severity}: HWPX revision partial [{code}] {part}: {location}; "
-                f"occurrences={count}; revision_mode={self.mode}; "
-                "unresolved content preserved"
+                f"{severity}: HWPX revision {label} [{code}] {part}: {location}; "
+                f"occurrences={count}; revision_mode={self.mode}; {outcome}"
             )
         self._problems.clear()
 
@@ -101,7 +113,7 @@ class RevisionProjector:
             else:
                 self.changes[identity] = kind
             if kind in ("ParaShape", "CharShape"):
-                self._report("formatting", kind + " projection is unsupported")
+                self._report("formatting", kind + " does not change text projection")
             elif kind not in ("Insert", "Delete"):
                 self._report("unsupported-type", "trackChange@type")
         self._flush("Contents/header.xml")
@@ -123,25 +135,29 @@ class RevisionProjector:
         if not reference_valid:
             self._report("header-reference", location + " @TcId/type")
         if name.endswith("Begin"):
-            overlap = bool(flow.opened)
-            if overlap:
-                flow.invalidate_open()
-                self._report("overlap", location)
+            self._section_ranges += 1
             if key in flow.opened:
                 flow.disabled = True
                 self._report("duplicate-begin", location)
                 return
-            if len(flow.opened) >= MAX_OPEN_RANGES:
+            if (len(flow.opened) >= MAX_OPEN_RANGES or
+                    flow.range_count >= MAX_RANGES or
+                    self._section_ranges > MAX_RANGES):
                 flow.disabled = True
                 self._report("range-limit", location)
                 return
+            flow.range_count += 1
             flow.opened[key] = _Range(kind, tc_id, len(flow.slots), location,
-                                      reference_valid and not overlap)
+                                      reference_valid)
         else:
             span = flow.opened.pop(key, None)
-            paraend_valid = element.get("paraend") == "0"
+            # OWPML (KS X 6101:2011) hp:insertEnd/deleteEnd @paraend.
+            # Per the task's interpretation, 1 includes the paragraph end;
+            # the numbered normative clause was unavailable offline.
+            paraend = element.get("paraend")
+            paraend_valid = paraend in ("0", "1")
             if not paraend_valid:
-                self._report("paraend", location + " (only paraend=0 is supported)")
+                self._report("paraend", location + " (expected paraend=0 or 1)")
             if span is None:
                 flow.invalidate_open()
                 self._report("missing-begin", location)
@@ -151,11 +167,19 @@ class RevisionProjector:
                 span.valid = False
             span.valid = span.valid and reference_valid and paraend_valid
             flow.spans.append((span, len(flow.slots)))
+            if paraend == "1" and span.valid:
+                paragraph = next((p for p in element.iterancestors()
+                                  if p.tag == HP + "p"), None)
+                if paragraph is None:
+                    self._report("paraend-boundary", location)
+                else:
+                    flow.paragraph_ends.append((span, paragraph))
         if len(element) or element.text:
             flow.disabled = True
             self._report("marker-content", location + " (expected empty marker)")
 
     def project_section(self, root, part="section"):
+        self._section_ranges = 0
         # No edits or extra text allocations for documents without revisions.
         if not any(
             isinstance(e.tag, str) and (
@@ -176,14 +200,19 @@ class RevisionProjector:
             # open a range in the surrounding body. Unknown containers are
             # boundaries too; only established inline content shares a flow.
             if element is not root and name not in MARKERS and element.tag not in FLOW_CONTENT:
-                if flow.opened:
+                is_object = element.tag.startswith(HP) and name in OBJECTS
+                if is_object:
+                    # OWPML change markers delimit a content range. A complete
+                    # object is one position in its parent's range; its own text
+                    # story cannot close the parent's markers.
+                    flow.add(element, "object")
+                elif flow.opened:
                     flow.invalidate_open()
                     # Alternate/unknown wrappers may contain an object: keep
                     # the existing object diagnostic without sharing ranges.
-                    has_object = any(
-                        isinstance(e.tag, str) and e.tag.rsplit("}", 1)[-1] in OBJECTS
-                        for e in element.iter()
-                    )
+                    has_object = any(isinstance(e.tag, str) and
+                                     e.tag.rsplit("}", 1)[-1] in OBJECTS
+                                     for e in element.iter())
                     code = "object" if has_object else "flow-boundary"
                     self._report(code, location + "/" + name + " (text-only projection)")
                 flow = flows.setdefault(element, _Flow())
@@ -242,11 +271,22 @@ class RevisionProjector:
                 self._report("missing-end", span.location)
             if flow.disabled or excluded is None:
                 continue
+            # Difference array makes even deeply crossed ranges linear in the
+            # number of markers and slots; no repeated span slices are copied.
+            difference = [0] * (len(flow.slots) + 1)
             for span, end in flow.spans:
-                if not span.valid or span.kind != excluded:
-                    continue
-                for element, attribute in flow.slots[span.start:end]:
-                    if attribute == "tag":
+                if span.valid and span.kind == excluded:
+                    difference[span.start] += 1
+                    difference[end] -= 1
+            active = 0
+            for index, (element, attribute) in enumerate(flow.slots):
+                active += difference[index]
+                if active:
+                    if attribute == "object":
+                        # Keep the XML node so its tail, which can contain
+                        # following visible text in mixed content, survives.
+                        element.tag = HP + "revisionSuppressed"
+                    elif attribute == "tag":
                         # Keep the element and its tail in place. The parser
                         # ignores this empty token rather than losing its tail.
                         element.tag = HP + "revisionSuppressed"
@@ -254,4 +294,51 @@ class RevisionProjector:
                         element.set(attribute, "")
                     else:
                         setattr(element, attribute, "")
+            # OWPML hp:p and change-end @paraend: removing the separator
+            # joins the next sibling's runs to the surviving paragraph.
+            # Its properties remain the anchor unless it has no content.
+            representative = {}
+            following_paragraph = {paragraph: paragraph.getnext()
+                                   for _, paragraph in flow.paragraph_ends}
+            candidates = set(following_paragraph)
+            candidates.update(p for p in following_paragraph.values() if p is not None)
+
+            def has_visible_content(paragraph):
+                pending = [paragraph]
+                while pending:
+                    node = pending.pop()
+                    if node is not paragraph and node.tail and node.tail.strip():
+                        return True
+                    if node.tag == HP + "revisionSuppressed":
+                        continue
+                    if isinstance(node.tag, str) and node.tag.startswith(HP):
+                        if node.tag.rsplit("}", 1)[-1] in OBJECTS:
+                            return True
+                    if node.text and node.text.strip():
+                        return True
+                    pending.extend(node)
+                return False
+
+            visible = {}
+            for candidate in candidates:
+                visible[candidate] = has_visible_content(candidate)
+            for span, paragraph in flow.paragraph_ends:
+                if span.kind != excluded:
+                    continue
+                current = representative.get(paragraph, paragraph)
+                following = following_paragraph[paragraph]
+                if following is None or following.tag != HP + "p":
+                    continue
+                parent = following.getparent()
+                if parent is None or current.getparent() is not parent:
+                    continue
+                if not visible[current]:
+                    parent.remove(current)
+                    representative[following] = following
+                    continue
+                for child in list(following):
+                    current.append(child)
+                parent.remove(following)
+                representative[following] = current
+                visible[current] = visible[current] or visible[following]
         self._flush(part)

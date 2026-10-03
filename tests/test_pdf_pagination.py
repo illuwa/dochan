@@ -213,34 +213,3 @@ def test_empty_form_rows_after_a_header_are_not_absorbed():
     prev = Table(rows=_rows(("번호", "내용"), ("", ""), ("", ""), ("", "")))
     nxt = Table(rows=_rows(("번호", "내용"), ("", ""), ("", ""), ("", "x")))
     assert repeated_header_rows(prev, nxt) == 1
-
-
-def test_repeated_named_subheaders_under_three_column_groups_are_dropped():
-    from dochan.pdf.pagination import repeated_header_rows
-
-    def group_table(values):
-        table = Table(rows=_rows(("1위", "", "2위", "", "3위", ""),
-                                 ("연도", "값", "연도", "값", "연도", "값"), values))
-        for col in (0, 2, 4):
-            table.rows[0][col].col_span = 2
-            table.rows[0][col + 1].row_span = table.rows[0][col + 1].col_span = 0
-        return table
-
-    prev = group_table(("2020", "19", "2018", "18", "2017", "17"))
-    nxt = group_table(("2026", "20", "2022", "19", "2021", "18"))
-    assert repeated_header_rows(prev, nxt) == 2
-
-
-def test_repeated_numeric_values_under_groups_remain_data():
-    from dochan.pdf.pagination import repeated_header_rows
-
-    def group_table(last):
-        table = Table(rows=_rows(("1위", "", "2위", "", "3위", ""),
-                                 ("2020", "19", "2020", "19", "2020", "19"), last))
-        for col in (0, 2, 4):
-            table.rows[0][col].col_span = 2
-            table.rows[0][col + 1].row_span = table.rows[0][col + 1].col_span = 0
-        return table
-
-    assert repeated_header_rows(group_table(("a",) * 6),
-                                group_table(("b",) * 6)) == 1

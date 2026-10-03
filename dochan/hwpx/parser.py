@@ -521,25 +521,6 @@ class HWPXParser:
                 self.errors.append(f"header.xml 파싱 실패: {e}")
             break
 
-        self._drop_blanket_strikeout()
-
-    def _drop_blanket_strikeout(self):
-        """모든 글자모양에 취소선이 걸려 있으면 문서 기본값으로 보고 해제한다.
-
-        <hh:strikeout> 는 취소선 '모양'만 담고 적용 여부를 따로 두지 않는다.
-        대부분의 생성기는 미적용을 shape="NONE" 으로 쓰지만(실측: HWP 바이너리의
-        취소선 비트 개수와 정확히 일치), 일부 문서는 모양 기본값을 전 글자모양에
-        박아둔다. 그 경우 본문 전체가 취소선으로 렌더되므로 걸러낸다.
-        """
-        if len(self._char_shapes) < 5:
-            return
-        if not all(cs['strikeout'] for cs in self._char_shapes):
-            return
-        for cs in self._char_shapes:
-            cs['strikeout'] = False
-        for entry in self._char_shape_entries:
-            entry.strikeout = 0
-
     def _collect_char_pr(self, elem):
         """<hh:charPr> → 본문 조회용 dict + Document.char_shapes 용 CharShape"""
         cs = {

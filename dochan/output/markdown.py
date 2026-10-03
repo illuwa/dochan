@@ -166,6 +166,9 @@ def _element_to_md(elem, ctx=None) -> str:
     return ""
 
 
+_CODE_FENCE_OPEN = re.compile(r'^( {0,3})(?=`{3,}|~{3,})', re.M)
+
+
 def _paragraph_to_md(para: Paragraph, ctx=None) -> str:
     text = _runs_to_md(para.runs, ctx)
     if not text.strip():
@@ -175,7 +178,9 @@ def _paragraph_to_md(para: Paragraph, ctx=None) -> str:
         prefix = '#' * min(para.heading_level, 6)
         return f"{prefix} {text}"
 
-    return text
+    # 본문 글자로 시작하는 ``` ·~~~ 줄은 CommonMark 코드 펜스를 열어 뒤 문서 전체를 삼킨다.
+    # 펜스를 내는 생성 경로는 없으므로 줄 머리 펜스의 첫 글자만 이스케이프한다.
+    return _CODE_FENCE_OPEN.sub(lambda match: match.group(1) + '\\', text)
 
 
 def _ppt_markdown_runs(runs):

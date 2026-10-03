@@ -54,7 +54,7 @@ class CharShape:
 
     @property
     def has_underline(self) -> bool:
-        """화면에 보이는 밑줄. 종류 1(글자 아래)·3(글자 위)만 그린다.
+        """화면에 보이는 밑줄(원시 underline_type 대신 이것으로 판단). 종류 1(글자 아래)·3(글자 위)만 그린다.
 
         공개 HWP·HWPX 짝 511개에서 종류 2 는 HWPX 의 type="NONE" 과 대응하고, 한컴오피스 화면에도 밑줄이 없다.
         """

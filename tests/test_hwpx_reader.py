@@ -732,7 +732,7 @@ _STRIKEOUT_SECTION = _section(
 )
 
 
-def test_hwpx_blanket_strikeout_is_dropped(tmp_path):
+def test_hwpx_all_3d_strikeout_is_not_visible(tmp_path):
     path = tmp_path / "strikeout-all.hwpx"
     _write_hwpx(
         path,
@@ -742,12 +742,20 @@ def test_hwpx_blanket_strikeout_is_dropped(tmp_path):
 
     doc = HWPXParser().parse(str(path))
 
-    # 전 글자모양에 취소선이 걸린 건 문서 기본값이지 실제 취소선이 아니다
+    # 3D 계열 모양은 한컴오피스가 그리지 않는다(모양 규칙). 전 글자모양 휴리스틱은 없앴다.
     assert all(not run.strikeout
                for elem in doc.sections[0].elements
                for run in elem.runs)
     assert all(entry.strikeout == 0 for entry in doc.char_shapes)
     assert "~~" not in to_markdown(doc)
+
+
+def test_hwpx_all_visible_strikeout_shapes_are_kept(tmp_path):
+    # 모든 글자모양이 한컴이 그리는 모양이면 화면도 전부 취소선이다(옛 전 글자모양 휴리스틱은 이를 지웠다).
+    path = tmp_path / "strikeout-all-solid.hwpx"
+    _write_hwpx(path, _STRIKEOUT_SECTION, header_xml=_head(_char_properties(["SOLID"] * 6)))
+    doc = HWPXParser().parse(str(path))
+    assert to_markdown(doc) == "~~보통 문장~~\n\n~~표시된 문장~~"
 
 
 def test_hwpx_partial_strikeout_is_kept(tmp_path):

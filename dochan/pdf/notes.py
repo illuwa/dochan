@@ -24,6 +24,7 @@ GEOMETRY_TOLERANCE = 1.5
 MAX_SEPARATOR_GAP = 15.0 + GEOMETRY_TOLERANCE
 _MARKER = re.compile(r"^\s*(\d{1,3})\)\s*$")
 _DEFINITION = re.compile(r"^\s*(\d{1,3})\)\s*\S")
+_DIGITS = re.compile(r"^\s*\d{1,3}\s*$")
 
 
 def _finite_fragment(frag):
@@ -77,6 +78,47 @@ def _has_separator(segments, line, budget, warnings):
         if not attached:
             return True
     return False
+
+
+class _SplitMarker:
+    """숫자와 닫는 괄호가 따로 그려진 위첨자 표지. 첫 조각 자리에 참조를 단다."""
+
+    def __init__(self, parts):
+        first, last = parts[0], parts[-1]
+        self.x, self.y, self.size, self.order = first.x, first.y, first.size, first.order
+        self.width = last.x + last.width - first.x
+        self.text = "".join(part.text for part in parts)
+        self.extra_orders = {part.order for part in parts[1:]}
+
+
+def _marker_candidates(small):
+    """작은 조각 중 각주 표지 `n)` 후보. 한 조각이거나, 내용 순서로 이어지고
+    같은 기준선·크기에서 맞닿은 숫자 조각과 괄호 조각(최대 4조각)을 합친다."""
+    ordered = sorted(small, key=lambda frag: frag.order)
+    markers = []
+    for index, frag in enumerate(ordered):
+        match = _MARKER.match(frag.text)
+        if match:
+            frag.extra_orders = set()
+            markers.append((frag, match))
+            continue
+        if not _DIGITS.match(frag.text):
+            continue
+        parts = [frag]
+        for following in ordered[index + 1:index + 4]:
+            previous = parts[-1]
+            gap = following.x - previous.x - previous.width
+            if (following.order != previous.order + 1
+                    or abs(following.size - frag.size) > 0.05 * frag.size
+                    or abs(following.y - frag.y) > 0.1 * frag.size
+                    or not -0.1 * frag.size <= gap <= 0.3 * frag.size):
+                break
+            parts.append(following)
+            match = _MARKER.match("".join(part.text for part in parts))
+            if match:
+                markers.append((_SplitMarker(parts), match))
+                break
+    return markers
 
 
 def _paragraph(line, page_number, strip_marker=False):
@@ -140,14 +182,15 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
     budget = [MAX_NOTE_GEOMETRY_CHECKS]
     if not _has_separator(segments, first, budget, warnings):
         return empty
-    markers = [(frag, _MARKER.match(frag.text)) for frag in horizontal
-               if 0 < frag.size <= body * 0.8]
-    markers = [(frag, match) for frag, match in markers if match]
+    markers = _marker_candidates([frag for frag in horizontal if 0 < frag.size <= body * 0.8])
     if len(markers) > MAX_NOTE_MARKERS:
         if warnings is not None:
             warnings.append("WARN: PDF 각주 표지 수 한도(1000) 초과 — 각주 복원 생략")
         return empty
-    hosts = sorted((frag for frag in horizontal if frag.size >= body * 0.95), key=lambda frag: frag.y)
+    # 각주 정의는 그것을 다는 본문보다 작게 짠다. 쪽의 최빈 크기(제목이 많으면
+    # 본문보다 클 수 있다)뿐 아니라 정의 글자보다 뚜렷이 큰 글자도 표지의 바탕이다.
+    host_size = min(body * 0.95, min(line.size for _index, line, _match in definitions) * 1.1)
+    hosts = sorted((frag for frag in horizontal if frag.size >= host_size), key=lambda frag: frag.y)
     host_ys = [frag.y for frag in hosts]
     max_size = max((host.size for host in hosts), default=0)
     references = {}
@@ -177,8 +220,14 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
         left_margins = [line.left]
         # 표지가 독립 조각이면 실제 정의 텍스트의 시작 x도 연속 줄의
         # 내어쓰기 기준으로 쓴다. 글자 수로 들여쓰기 폭을 추정하지 않는다.
-        if len(line.segments) > 1 and _MARKER.match(line.segments[0].text):
-            left_margins.append(line.segments[1].x0)
+        # 글자마다 조각인 줄은 앞 조각들을 이어 붙여 표지를 찾는다.
+        prefix = ""
+        for position, segment in enumerate(line.segments[:4]):
+            prefix += segment.text
+            if _MARKER.match(prefix):
+                if position + 1 < len(line.segments):
+                    left_margins.append(line.segments[position + 1].x0)
+                break
         for continuation in lines[index + 1:following]:
             gap = previous_y - continuation.y
             # 하단 영역은 독립 바닥글일 수 있으므로, 위에서 실제로 관찰한
@@ -209,7 +258,9 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
             if not _spend(budget, len(note_line.fragment_orders), warnings):
                 return empty
             consumed.update(note_line.fragment_orders)
-        reference_numbers[references[match.group(1)][0].order] = number
+        marker = references[match.group(1)][0]
+        reference_numbers[marker.order] = number
+        consumed.update(marker.extra_orders)
         number += 1
     return notes, consumed, reference_numbers, number
 

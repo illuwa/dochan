@@ -246,10 +246,13 @@ class FormulaContext:
                 or qualifier[10:] != b'\0' * 4):
             raise FormulaDataError('unsupported BIFF5 3D qualifier')
         index, = struct.unpack_from('<H', qualifier, 8)
-        if not 1 <= index <= self.legacy_extern_count or index > len(self.legacy_externs):
+        # One public sample cannot tell which field selects the sheet: its
+        # leading -1, bytes 8-9 and trailing sheet range all name the first
+        # sheet. Accept only that observed agreement.
+        if index != 1 or not self.legacy_externs or not self.sheets:
             raise FormulaDataError('unresolved BIFF5 EXTERNSHEET index')
-        label = self.legacy_externs[index - 1]
-        if not label or label not in self.sheets:
+        label = self.legacy_externs[0]
+        if not label or label != self.sheets[0]:
             raise FormulaDataError('unresolved BIFF5 EXTERNSHEET name')
         return quote_reference(label) + '!'
 

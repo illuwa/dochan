@@ -13,9 +13,9 @@ CRC 가 0 이 아닌데 다르거나 ISIZE 가 다르면 전처럼 거부한다(
 
 ## 해제 상한을 넘는 그림 하나
 
-같은 재스캔에서 공개 `2026년 2분기 가축동향조사 결과 보도자료(최종).hwp` 가 `ERR: HWP stream validation failed: BinData/BINNC.bmp exceeds extracted BinData budget` 로
+같은 재스캔에서 공개 `2026년 2분기 가축동향조사 결과 보도자료(최종).hwp` 가 `ERR: HWP stream validation failed: BinData/BIN000C.bmp exceeds extracted BinData budget` 로
 본문까지 통째로 비었다. 12MB 로 압축된 BMP(`BIN000C.bmp`) 하나가 그림 한 개 상한(100MB)을 넘었기 때문이다. 이제 그 그림만 생략하고 경고를 남긴다
-(`WARN: HWP BinData/BIN000C.bmp exceeds the image size limit; image omitted`). 해제는 전처럼 상한에서 멈추므로 메모리 상한은 그대로다. 문서 전체 그림 예산을 다 쓰면
+(`WARN: HWP 그림 1개가 크기 상한을 넘어 생략됨: BinData/BIN000C.bmp`). 생략한 그림의 해제량도 문서 그림 예산에 계상한다. 해제는 전처럼 상한에서 멈추므로 메모리 상한은 그대로다. 문서 전체 그림 예산을 다 쓰면
 남은 그림을 버리되, 이미 읽은 본문은 버리지 않는다.
 
 | 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |

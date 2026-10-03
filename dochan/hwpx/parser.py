@@ -268,6 +268,10 @@ class HWPXParser:
                         if _compression_ratio_exceeded(info.file_size, info.compress_size):
                             self.errors.append(f"ERR: 섹션 {sf} 압축률 초과")
                             continue
+                        # Release the previous section's tree before parsing
+                        # the next, so two large trees never live together.
+                        self._section_root = None
+                        self._section_parents = None
                         xml_data = self._read_zip_part(zf, sf, MAX_SECTION_XML_SIZE)
                         section = self._parse_section_xml(xml_data, part_name=sf)
                         doc.sections.append(section)

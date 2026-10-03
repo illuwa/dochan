@@ -30,3 +30,23 @@ def test_section_over_section_limit_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(hwpx_parser, "MAX_SECTION_XML_SIZE", size - 1)
     document = HWPXParser().parse(str(tmp_path / "huge.hwpx"))
     assert any("크기 초과" in error for error in document.errors)
+
+
+def test_previous_section_tree_is_released_before_next_section(tmp_path, monkeypatch):
+    path = tmp_path / "two.hwpx"
+    section = ('<hs:sec %s><hp:p><hp:run><hp:t>s</hp:t></hp:run></hp:p></hs:sec>' % NS).encode()
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/hwp+zip")
+        archive.writestr("Contents/section0.xml", section)
+        archive.writestr("Contents/section1.xml", section)
+    seen = []
+    original = HWPXParser._read_zip_part
+
+    def spy(self, zf, name, limit):
+        if name.startswith("Contents/section"):
+            seen.append(self._section_root is None)
+        return original(self, zf, name, limit)
+
+    monkeypatch.setattr(HWPXParser, "_read_zip_part", spy)
+    HWPXParser().parse(str(path))
+    assert seen == [True, True]

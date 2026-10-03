@@ -57,6 +57,7 @@ def extract_bin_data(
     total_limit = MAX_BINDATA_TOTAL_SIZE if max_total_size is None else max_total_size
     raw_budget = stream_budget or ByteBudget(total_limit)
     extracted_budget = ByteBudget(total_limit)
+    oversized = []
 
     for entry in ole.listdir():
         if len(entry) >= 2 and entry[0] == 'BinData':
@@ -95,10 +96,11 @@ def extract_bin_data(
                                     f"{stream_name} exceeds extracted BinData budget"
                                 ) from e
                             # One oversized image: inflation stopped at the
-                            # item limit, so skip only this item.
-                            if warnings is not None:
-                                warnings.append(
-                                    f"WARN: HWP {stream_name} exceeds the image size limit; image omitted")
+                            # item limit, so skip only this item. Its inflation
+                            # still spends the document budget.
+                            extracted_budget.consume(
+                                min(getattr(e, "inflated", 0), limit) or limit, stream_name)
+                            oversized.append(stream_name)
                             continue
                         logger.debug("BinData 압축 해제 실패 (비압축 데이터일 수 있음): %s", e)
 
@@ -116,6 +118,9 @@ def extract_bin_data(
                 logger.warning("BinData 항목 '%s' 파싱 실패: %s", storage_name, e)
                 continue
 
+    if oversized and warnings is not None:
+        shown = ", ".join(oversized[:3]) + (" …" if len(oversized) > 3 else "")
+        warnings.append(f"WARN: HWP 그림 {len(oversized)}개가 크기 상한을 넘어 생략됨: {shown}")
     return result
 
 

@@ -541,3 +541,22 @@ def test_hwp_text_survives_bindata_budget_overflow():
     assert len(document.to_markdown()) > 1000
     assert not any(error.startswith("ERR") for error in document.errors)
     assert any("BIN000C.bmp" in error and error.startswith("WARN") for error in document.errors)
+
+
+def test_hwp_bindata_skipped_inflation_spends_document_budget():
+    """생략한 그림의 해제량도 예산에 들어가 폭탄 수천 개로 시간을 끌 수 없다."""
+    compressor = zlib.compressobj(wbits=-15)
+    bomb = compressor.compress(b"\x00" * 4096) + compressor.flush()
+    ole = _BinDataOle({"BIN0001.bmp": bomb, "BIN0002.bmp": bomb})
+    warnings = []
+    with pytest.raises(ResourceLimitError, match="extracted BinData budget"):
+        extract_bin_data(ole, True, max_item_size=1024, max_total_size=1500, warnings=warnings)
+
+
+def test_hwp_bindata_oversized_items_share_one_warning():
+    compressor = zlib.compressobj(wbits=-15)
+    bomb = compressor.compress(b"\x00" * 4096) + compressor.flush()
+    ole = _BinDataOle({"BIN%04X.bmp" % index: bomb for index in range(1, 6)})
+    warnings = []
+    extract_bin_data(ole, True, max_item_size=1024, max_total_size=1 << 20, warnings=warnings)
+    assert len(warnings) == 1 and "5개" in warnings[0]

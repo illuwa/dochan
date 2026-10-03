@@ -84,3 +84,13 @@ def test_biff5_3d_malformed_record_fuzz_never_raises():
                                               formula_context=legacy_context(), errors=errors)
         assert result == ''
         assert errors
+
+
+def test_biff5_unobserved_qualifier_index_does_not_pick_another_sheet():
+    """한 표본으로는 시트를 고르는 칸을 알 수 없으니 관찰한 형태(1번 = 첫 시트)만 푼다."""
+    context = legacy_context()
+    context.sheets = ['Sheet1', 'Sheet2']
+    context.legacy_extern_count = 2
+    context.legacy_externs = ['Sheet1', 'Sheet2']
+    second = QUALIFIER[:8] + b'\x02\x00' + QUALIFIER[10:]
+    assert _decode_formula_token_stream(b'\x3b' + second + AREA, formula_context=context) == ''

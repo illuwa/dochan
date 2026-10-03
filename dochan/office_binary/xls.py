@@ -10,6 +10,7 @@ from ..cfb import append_recovery_warnings
 
 from .structure import is_encrypted_container
 from .xls_hyperlink import parse_hlink
+from .xls_notes import MAX_NOTE_OBJECTS, MAX_SHEET_NOTE_CHARS, comment_object_id, read_txo_text
 from .xls_chart import parse_chart_substreams
 from .xls_drawing import XlsDrawingReader
 from .xls_ftab import FUNCTION_NAMES, FIXED_ARGUMENT_COUNTS
@@ -880,6 +881,10 @@ def _parse_sheet_records(
     table_cells = {}
     table_cell_count = 0
     chart_depth = 0
+    note_object_id = None
+    note_texts = {}
+    notes = []
+    note_chars = 0
     records = iter(_iter_records(data))
     pending_record = None
     while True:
@@ -906,7 +911,24 @@ def _parse_sheet_records(
                 if record_type == 0x000A:
                     chart_depth -= 1
                 continue
-        if record_type == 0x00FD and len(record_data) >= 10:  # LABELSST
+        if record_type == 0x005D:  # Obj.ftCmo connects the following TxO to NOTE.idObj.
+            note_object_id = comment_object_id(record_data)
+        elif record_type == 0x01B6 and note_object_id is not None:  # TxO
+            object_id = note_object_id
+            note_object_id = None
+            if len(note_texts) >= MAX_NOTE_OBJECTS or note_chars >= MAX_SHEET_NOTE_CHARS:
+                _append_sheet_error_once(sheet, 'WARN: XLS note text limit exceeded')
+            else:
+                text, pending_record, warning = read_txo_text(record_data, records)
+                if warning:
+                    _append_sheet_error_once(sheet, 'WARN: XLS ' + warning)
+                elif text:
+                    if note_chars + len(text) > MAX_SHEET_NOTE_CHARS:
+                        _append_sheet_error_once(sheet, 'WARN: XLS note text limit exceeded')
+                    else:
+                        note_texts[object_id] = text
+                        note_chars += len(text)
+        elif record_type == 0x00FD and len(record_data) >= 10:  # LABELSST
             pending_formula_cell = None
             pending_shared_formula_anchor = None
             row, col, ixfe, sst_index = struct.unpack_from("<HHHI", record_data, 0)
@@ -1430,15 +1452,17 @@ def _parse_sheet_records(
             pending_shared_formula_anchor = None
             row, col = struct.unpack_from("<HH", record_data, 0)
             author = _extract_note_author(record_data)
-            if author and _set_sheet_cell(
-                sheet,
-                row,
-                col,
-                "",
-                "NOTE",
-                overwrite=False,
-            ):
-                sheet.comments[(row, col)] = author
+            object_id = struct.unpack_from("<H", record_data, 6)[0]
+            if len(notes) < MAX_NOTE_OBJECTS:
+                notes.append((row, col, object_id, author))
+            else:
+                _append_sheet_error_once(sheet, 'WARN: XLS note count limit exceeded')
+
+    for row, col, object_id, author in notes:
+        text = note_texts.get(object_id, "")
+        comment = (author + ": " + text if author and text else author or text)
+        if comment and _set_sheet_cell(sheet, row, col, "", "NOTE", overwrite=False):
+            sheet.comments[(row, col)] = comment
 
     if any(anchor not in table_formulas for anchor in table_cells):
         _append_sheet_error_once(sheet, 'WARN: XLS PtgTbl without valid TABLE record; cached value retained')

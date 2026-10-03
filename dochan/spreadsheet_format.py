@@ -74,7 +74,7 @@ class SpreadsheetNumberFormatter:
                 return ""
             code = self._format_code_tokens(section)
             if re.search(r"general", code, re.I):
-                return self._render_general_section(section, value, number, position)
+                return self._render_general_section(section, value, number, position, sections[0])
             if not re.search(r"[0#?@hmsyd]", self._format_code_tokens(section), re.I):
                 literal = "".join(token for token, is_format in self._format_literal_tokens(section)
                                   if not is_format)
@@ -530,7 +530,8 @@ class SpreadsheetNumberFormatter:
         return len(match[1]) - len(match[1].rstrip("#?")) if match else 0
 
     _BRACKET = re.compile(r"\[[^\]]*\]")
-    # 조건([<0]), 지역·통화([$-412], [$€-2]), 경과 시간([h], [mm], [ss])이 아닌 대괄호는 색 표기다(지역화된 색 이름 포함).
+    # 조건([<0]), 지역·통화([$-412], [$€-2]), 경과 시간([h], [mm], [ss])이 아닌 대괄호는 색·숫자 표기다
+    # (지역화된 색 이름, [DBNum1] 같은 숫자 표기 포함). 어느 쪽이든 Markdown 에서는 부호를 대신하지 못한다.
     _COLOR = re.compile(r"\[(?![$<>=])(?![hHmMsS]+\])[^\]]+\]")
 
     def _is_color_only_negative_section(self, positive: str, negative: str) -> bool:
@@ -550,7 +551,7 @@ class SpreadsheetNumberFormatter:
         return all(token in positive_literals for token in literals(negative))
 
     def _render_general_section(self, section: str, value: str,
-                                number: float, position: int) -> str:
+                                number: float, position: int, positive: str = "") -> str:
         masked = re.sub(r'"[^"]*"|[\\_*].|\[[^\]]*\]',
                         lambda match: " " * len(match[0]), section)
         match = re.search(r"general", masked, re.I)
@@ -561,6 +562,8 @@ class SpreadsheetNumberFormatter:
         suffix = "".join(token for token, is_format in
                          self._format_literal_tokens(section[match.end():]) if not is_format)
         formatted = value.lstrip("-") if number < 0 and position == 1 and prefix.strip() else value
+        if number < 0 and position == 1 and self._is_color_only_negative_section(positive, section):
+            return "-" + prefix + value.lstrip("-") + suffix
         if number < 0 and position == 0 and prefix.strip():
             # 한 구역 서식의 음수는 리터럴 앞에 부호가 온다(NumberFormatTests A22 Excel 저장값).
             return "-" + prefix + value.lstrip("-") + suffix

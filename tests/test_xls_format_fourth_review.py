@@ -30,3 +30,10 @@ def test_color_only_negative_section_rule(value, fmt, expected):
 
 def test_single_section_general_puts_minus_before_literal_prefix():
     assert SpreadsheetNumberFormatter()._format_cell_value("-5", '"Total "General') == "-Total 5"
+
+
+def test_color_only_negative_general_section_keeps_sign():
+    # 리터럴이 붙은 General 에 색만 다른 음수 구역이 겹쳐도 같은 규칙을 따른다(5차 감수 R1).
+    fmt = '"Total "General;[Red]"Total "General'
+    assert SpreadsheetNumberFormatter()._format_cell_value("-5", fmt) == "-Total 5"
+    assert SpreadsheetNumberFormatter()._format_cell_value("-5", '"Total "General;[Red]"Net "General') == "Net 5"

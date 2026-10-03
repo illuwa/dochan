@@ -11,15 +11,16 @@ import zlib
 from functools import lru_cache
 from typing import Dict, Set, Tuple
 
-_TO_UNICODE_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|bfchar|bfrange)\b")
+_TO_UNICODE_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|bfchar|bfrange)")
 _HEX_RE = re.compile(rb"<([0-9A-Fa-f]+)>")
 _TOKEN_RE = re.compile(rb"<([0-9A-Fa-f]+)>|(\[)|(\])")
 
 MAX_ENCODING_BYTES = 4 * 1024 * 1024
 MAX_TOUNICODE_BYTES = 16 * 1024 * 1024
 MAX_ENCODING_RANGES = 100_000
+MAX_CODESPACE_RANGES = 100
 MAX_CID_SPAN = 0x10ffff
-_ENC_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|cidrange|cidchar|notdefrange|notdefchar)\b")
+_ENC_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|cidrange|cidchar|notdefrange|notdefchar)")
 _HEX_PAIR = re.compile(rb"<((?:[0-9A-Fa-f]{2}){1,4})>\s*<((?:[0-9A-Fa-f]{2}){1,4})>")
 _CID_RANGE = re.compile(rb"<((?:[0-9A-Fa-f]{2}){1,4})>\s*<((?:[0-9A-Fa-f]{2}){1,4})>\s*([0-9]{1,5})(?![0-9])")
 _CID_CHAR = re.compile(rb"<((?:[0-9A-Fa-f]{2}){1,4})>\s*([0-9]{1,5})(?![0-9])")
@@ -84,14 +85,14 @@ class EncodingCMap:
         self.warnings = warnings
         self._spaces = {}
         for length in (1, 2, 3, 4):
-            intervals = sorted((lo, hi) for size, lo, hi in self.codespaces if size == length)
-            merged = []
-            for lo, hi in intervals:
-                if merged and lo <= merged[-1][1] + 1:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
-                else:
-                    merged.append((lo, hi))
-            self._spaces[length] = ([lo for lo, _hi in merged], merged)
+            # A codespace is a byte-wise box, not an integer interval (§9.7.6.2).
+            rows = set((lo.to_bytes(length, "big"), hi.to_bytes(length, "big"))
+                       for size, lo, hi in self.codespaces if size == length)
+            first_byte = {}
+            for lo, hi in rows:
+                for byte in range(lo[0], hi[0] + 1):
+                    first_byte.setdefault(byte, []).append((lo, hi))
+            self._spaces[length] = first_byte
         self._ranges = {}
         self._notdef = {}
         for source, target in ((self.cidranges, self._ranges),
@@ -102,10 +103,11 @@ class EncodingCMap:
                 target[length] = ([row[0] for row in rows], rows)
 
     def _space(self, length, code):
-        starts, rows = self._spaces[length]
-        pos = bisect.bisect_right(starts, code) - 1
-        if pos >= 0 and code <= rows[pos][1]:
-            return True
+        value = code.to_bytes(length, "big")
+        for lo, hi in self._spaces[length].get(value[0], ()):
+            if all(lower <= byte <= upper
+                   for byte, lower, upper in zip(value, lo, hi)):
+                return True
         return self.parent._space(length, code) if self.parent else False
 
     def has_codespace(self):
@@ -113,23 +115,34 @@ class EncodingCMap:
 
     def _prefix(self, length, prefix_length, value):
         """Whether a partial code can still fall in a declared code space."""
-        shift = 8 * (length - prefix_length)
-        lo = value << shift
-        hi = lo + (1 << shift) - 1
-        starts, rows = self._spaces[length]
-        pos = bisect.bisect_right(starts, hi) - 1
-        if pos >= 0 and rows[pos][1] >= lo:
-            return True
+        prefix = value.to_bytes(prefix_length, "big")
+        for lo, hi in self._spaces[length].get(prefix[0], ()):
+            if all(lower <= byte <= upper
+                   for byte, lower, upper in zip(prefix, lo, hi)):
+                return True
         return self.parent._prefix(length, prefix_length, value) if self.parent else False
+
+    def _codespace_lengths(self):
+        lengths = {size for size, _lo, _hi in self.codespaces}
+        if self.parent:
+            lengths.update(self.parent._codespace_lengths())
+        return sorted(lengths)
 
     def _invalid_length(self, raw, pos):
         remaining = len(raw) - pos
-        for prefix_length in range(min(3, remaining), 0, -1):
+        lengths = self._codespace_lengths()
+        if not lengths:
+            return 1
+        # §9.7.6.3: longest matching prefix, then shortest range on a tie.
+        chosen = lengths[0]
+        for prefix_length in range(1, min(3, remaining) + 1):
             value = int.from_bytes(raw[pos:pos + prefix_length], "big")
-            if any(self._prefix(length, prefix_length, value)
-                   for length in range(prefix_length + 1, 5)):
-                return min(prefix_length + 1, remaining)
-        return 1
+            matching = next((length for length in lengths if length > prefix_length
+                             and self._prefix(length, prefix_length, value)), None)
+            if matching is None:
+                break
+            chosen = matching
+        return min(chosen, remaining)
 
     def _lookup(self, length, code, notdef=False):
         starts, rows = (self._notdef if notdef else self._ranges)[length]
@@ -232,6 +245,9 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cm
                 truncated = True
                 continue
             row = (size, lo, hi, cid) if kind != b"codespacerange" else (size, lo, hi)
+            if kind == b"codespacerange" and len(spaces) >= MAX_CODESPACE_RANGES:
+                truncated = True
+                continue
             (spaces if kind == b"codespacerange" else
              notdef if kind.startswith(b"notdef") else ranges).append(row)
             count += 1

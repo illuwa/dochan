@@ -2,9 +2,10 @@
 import random
 import time
 
-from dochan.pdf.cmap import MAX_ENCODING_BYTES, parse_encoding_cmap, parse_tounicode
+from dochan.pdf.cmap import (MAX_ENCODING_BYTES, parse_encoding_cmap,
+                             parse_tounicode, predefined_cmap)
 from dochan.pdf.content import ContentTextExtractor, FontInfo, VerticalMetrics
-from dochan.pdf.objects import PDFRef
+from dochan.pdf.objects import PDFRef, PDFStream
 from dochan.pdf.reader import PDFReader
 from dochan.pdf.structure import PDFFile
 from dochan.pdf.widths import WidthMap
@@ -36,7 +37,7 @@ def test_invalid_or_truncated_code_consumes_bounded_input():
     data = b"1 begincodespacerange <8140> <81ff> endcodespacerange"
     cmap = parse_encoding_cmap(data)
     warnings = []
-    assert list(cmap.iter_codes(b"\xff\x81", warnings)) == [(b"\xff", 0), (b"\x81", 0)]
+    assert list(cmap.iter_codes(b"\xff\x81", warnings)) == [(b"\xff\x81", 0)]
     assert warnings
 
 
@@ -174,7 +175,9 @@ def test_many_codespaces_have_bounded_lookup_cost():
             b"endcodespacerange")
     cmap = parse_encoding_cmap(data)
     start = time.monotonic()
-    assert len(list(cmap.iter_codes(b"\xff" * 1000))) == 1000
+    chunks = list(cmap.iter_codes(b"\xff" * 1000))
+    assert len(chunks) == 250
+    assert sum(len(raw) for raw, _cid in chunks) == 1000
     assert time.monotonic() - start < 1.0
 
 
@@ -298,3 +301,93 @@ def test_shared_encoding_stream_is_parsed_once(monkeypatch):
     reader._build_font_info(pdf, "F1", resolved)
     reader._build_font_info(pdf, "F2", resolved)
     assert len(calls) == 1
+
+
+def test_gbk2k_four_byte_code_is_not_split_by_numeric_two_byte_range():
+    for name in ("GBK2K-H", "GBK2K-V"):
+        cmap = predefined_cmap(name)
+        assert list(cmap.iter_codes(bytes.fromhex("82308130"))) == [
+            (bytes.fromhex("82308130"), 22690)]
+
+
+def test_utf16_invalid_surrogate_consumes_shortest_codespace_length():
+    cmap = predefined_cmap("UniGB-UTF16-H")
+    assert list(cmap.iter_codes(bytes.fromhex("DC0B004100420043"))) == [
+        (bytes.fromhex("DC0B"), 0),
+        (bytes.fromhex("0041"), cmap._lookup(2, 0x41)),
+        (bytes.fromhex("0042"), cmap._lookup(2, 0x42)),
+        (bytes.fromhex("0043"), cmap._lookup(2, 0x43))]
+
+
+def test_gbk2k_tounicode_keeps_four_byte_character(tmp_path):
+    font = ("<< /Type /Font /Subtype /Type0 /Encoding /GBK2K-H /ToUnicode 8 0 R "
+            "/DescendantFonts [6 0 R] >>")
+    cid = ("<< /Subtype /CIDFontType0 /CIDSystemInfo "
+           "<< /Registry (Adobe) /Ordering (GB1) >> >>")
+    unicode = (b"2 beginbfchar <41> <0041> <82308130> <3405> endbfchar")
+    doc = _document(tmp_path, font, bytes.fromhex("418230813041"),
+                    {6: cid, 8: _stream(unicode)})
+    assert doc.sections[0].elements[0].text == "A\u3405A"
+
+
+def test_utf16_split_tj_keeps_following_ascii(tmp_path):
+    unicode = (b"3 beginbfchar <0041> <0041> <0042> <0042> "
+               b"<0043> <0043> endbfchar")
+    font = ("<< /Type /Font /Subtype /Type0 /Encoding /UniGB-UTF16-H "
+            "/ToUnicode 8 0 R /DescendantFonts [6 0 R] >>")
+    cid = ("<< /Subtype /CIDFontType0 /CIDSystemInfo "
+           "<< /Registry (Adobe) /Ordering (GB1) >> >>")
+    content = b"BT /F1 12 Tf 72 720 Td [<D840> -10 <DC0B004100420043>] TJ ET"
+    objects = {1: "<< /Type /Catalog /Pages 2 0 R >>",
+               2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               3: "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+               4: font, 5: _stream(content), 6: cid, 8: _stream(unicode)}
+    path = tmp_path / "split.pdf"
+    path.write_bytes(_build_pdf(objects))
+    doc = PDFReader().read(str(path))
+    assert doc.sections[0].elements[0].text == "ABC"
+
+
+def test_invalid_partial_code_consumes_chosen_codespace_length():
+    cmap = parse_encoding_cmap(
+        b"2 begincodespacerange <8140> <81ff> <82308130> <82398139> endcodespacerange")
+    assert list(cmap.iter_codes(bytes.fromhex("823000008140"))) == [
+        (bytes.fromhex("82300000"), 0), (bytes.fromhex("8140"), 0)]
+
+
+def test_invalid_partial_tie_uses_shortest_codespace_length():
+    cmap = parse_encoding_cmap(
+        b"2 begincodespacerange <8140> <81ff> "
+        b"<81308130> <81398139> endcodespacerange")
+    assert list(cmap.iter_codes(bytes.fromhex("81008140"))) == [
+        (bytes.fromhex("8100"), 0), (bytes.fromhex("8140"), 0)]
+
+
+def test_end_tokens_adjacent_to_other_tokens_close_blocks():
+    assert parse_tounicode(b"1 beginbfchar <41> <005a> endbfcharendcmap").decode(b"A") == "Z"
+    cmap = parse_encoding_cmap(
+        b"1 begincodespacerange <41> <41> endcodespacerange"
+        b"1 begincidchar <41> 7 endcidchar1")
+    assert list(cmap.iter_codes(b"A")) == [(b"A", 7)]
+
+
+def test_encoding_stream_cache_checks_stream_identity_after_key_reuse():
+    pdf = PDFFile(_build_pdf({1: "<< /Type /Catalog >>"}))
+    first = PDFStream({}, b"1 begincodespacerange <41> <41> endcodespacerange "
+                          b"1 begincidchar <41> 7 endcidchar")
+    second = PDFStream({}, b"1 begincodespacerange <42> <42> endcodespacerange "
+                           b"1 begincidchar <42> 8 endcidchar")
+    reader = PDFReader()
+    assert list(reader._encoding_stream_cmap(pdf, first).iter_codes(b"A")) == [(b"A", 7)]
+    cache = pdf._encoding_cmap_cache
+    cache[id(second)] = cache.pop(id(first))
+    assert list(reader._encoding_stream_cmap(pdf, second).iter_codes(b"B")) == [(b"B", 8)]
+
+
+def test_dictionary_cidsysteminfo_strips_surrounding_space():
+    pdf = PDFFile(_build_pdf({1: "<< /Type /Catalog >>"}))
+    stream = PDFStream({"CIDSystemInfo": {"Registry": b" Adobe ",
+                                           "Ordering": b" GB1 "}},
+                       b"1 begincodespacerange <41> <41> endcodespacerange")
+    cmap = PDFReader()._encoding_stream_cmap(pdf, stream)
+    assert (cmap.registry, cmap.ordering) == ("Adobe", "GB1")

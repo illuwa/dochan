@@ -828,8 +828,9 @@ class PDFReader:
         if cache is None:
             cache = pdf._encoding_cmap_cache = {}
         key = id(stream)
-        if key in cache:
-            return cache[key]
+        cached = cache.get(key)
+        if cached is not None and cached[0] is stream:
+            return cached[1]
         seen = set(seen or ())
         if key in seen or len(seen) >= 8:
             pdf.warnings.append("WARN: Encoding CMap /UseCMap 순환 또는 깊이 한도")
@@ -848,11 +849,11 @@ class PDFReader:
             for key_name, attr in (("Registry", "registry"), ("Ordering", "ordering")):
                 value = pdf.resolve(system.get(key_name))
                 if isinstance(value, bytes) and len(value) <= 32:
-                    setattr(cmap, attr, value.decode("ascii", "ignore"))
+                    setattr(cmap, attr, value.decode("ascii", "ignore").strip())
         if not cmap.has_codespace():
             pdf.warnings.append("WARN: Encoding CMap 코드 공간 없음 — 기존 2바이트 경로 사용")
             cmap = None
-        cache[key] = cmap
+        cache[key] = (stream, cmap)
         return cmap
 
     def _cid_descendant(self, pdf: PDFFile, font: dict):
@@ -957,8 +958,10 @@ class PDFReader:
                 if cmap.mapping:
                     if encoding_cmap is not None:
                         def decode_encoded(raw):
-                            return "".join(cmap.decode(chunk)
-                                           for chunk, _cid in encoding_cmap.iter_codes(raw, pdf.warnings))
+                            return "".join(cmap.decode(chunk) for chunk, _cid in
+                                           encoding_cmap.iter_codes(raw, pdf.warnings)
+                                           if encoding_cmap._space(len(chunk),
+                                                                   int.from_bytes(chunk, "big")))
                         decode_encoded.mapping = cmap.mapping
                         return decode_encoded
                     return cmap.decode

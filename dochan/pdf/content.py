@@ -348,6 +348,7 @@ class ContentTextExtractor:
         marked_ids = set()
         duplicate_marked_ids = set()
         lexer = PDFLexer(content)
+        lexer.skip_array_operators = True
         ctm = _initial_ctm
         stack = []
         overflow = 0
@@ -571,6 +572,7 @@ class ContentTextExtractor:
     def _count_operators(cls, data: bytes) -> Tuple[int, bool]:
         """Count a Form once, then charge every invocation against the page budget."""
         lexer = PDFLexer(data)
+        lexer.skip_array_operators = True
         count = 0
         has_text_or_form = False
         while lexer.pos < len(data):

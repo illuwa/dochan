@@ -42,6 +42,9 @@ class PDFLexer:
         self.data = data
         self.pos = pos
         self._depth = 0
+        # Content streams only: a stray operator inside an array (e.g.
+        # "[(a) 0 Tc (b)] TJ", pdf.js operator-in-TJ-array.pdf) is skipped.
+        self.skip_array_operators = False
 
     def _peek(self) -> int:
         if self.pos >= len(self.data):
@@ -218,6 +221,17 @@ class PDFLexer:
                     raise PDFSyntaxError("닫히지 않은 배열")
                 if len(items) >= MAX_COLLECTION_ITEMS:
                     raise PDFSyntaxError("배열 항목 수가 한도를 초과")
+                if self.skip_array_operators and (
+                        0x41 <= self._peek() <= 0x5A or 0x61 <= self._peek() <= 0x7A
+                        or self._peek() in (0x22, 0x27)):
+                    saved = self.pos
+                    token = self.read_token()
+                    if not token:
+                        self.pos = saved + 1
+                        continue
+                    if token not in (b"true", b"false", b"null"):
+                        continue
+                    self.pos = saved
                 items.append(self.parse_object())
         finally:
             self._depth -= 1

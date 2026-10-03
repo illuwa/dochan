@@ -3,6 +3,8 @@
 폰트 폭/크기가 있는 실제 지오메트리로 단어 간격·줄바꿈·읽기 순서를
 검증한다. (이전 휴리스틱 테스트를 좌표 기반 계약으로 갱신)
 """
+import pytest
+
 from dochan.pdf.content import ContentTextExtractor, FontInfo, default_byte_decoder
 from dochan.pdf.widths import WidthMap
 
@@ -165,3 +167,17 @@ def test_vertical_w2_cumulative_expansion_budget():
     assert len(font.vertical_metrics._table) == 65536
     assert font.vertical_metrics.metrics(1) == (-1000, 500, 880)
     assert font.vertical_metrics.warnings
+
+
+def test_operator_inside_tj_array_is_ignored():
+    """pdf.js operator-in-TJ-array.pdf: `[(Grandes) 0.0 Tc -250.0 (Client) ] TJ` still shows its strings."""
+    from dochan.pdf.content import ContentTextExtractor
+    page = ContentTextExtractor().extract_page(
+        b"BT /F1 10 Tf [(Grandes) 0.0 Tc -250.0 (Clients) 0.0 Tc] TJ ET")
+    assert "".join(fragment.text for fragment in page.fragments).replace(" ", "") == "GrandesClients"
+
+
+def test_array_keyword_skipping_is_only_for_content_streams():
+    from dochan.pdf.objects import PDFLexer, PDFSyntaxError
+    with pytest.raises(PDFSyntaxError):
+        PDFLexer(b"[1 Tc 2]").parse_object()

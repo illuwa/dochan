@@ -1471,6 +1471,9 @@ def _decode_formula_cached_result(record_data: bytes, format_string: str = "", d
     result = record_data[6:14]
     if result[6:8] == b"\xff\xff":
         result_type = result[0]
+        if result_type == 0x00:
+            # The text is carried by the following STRING record.
+            return ""
         if result_type == 0x01:
             return "TRUE" if result[2] else "FALSE"
         if result_type == 0x02:

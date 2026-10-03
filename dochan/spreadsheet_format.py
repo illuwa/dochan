@@ -45,7 +45,6 @@ class _FormatMetadata:
     optional_decimals: int = 0
     thousands: bool = False
     currency_symbol: str = ""
-    negative_parentheses: bool = False
     pattern: str = ""
     literal_prefix: str = ""
     literal_suffix: str = ""
@@ -71,15 +70,31 @@ class SpreadsheetNumberFormatter:
             position = 1 if number < 0 and len(sections) > 1 else 2 if number == 0 and len(sections) > 2 else 0
             section = sections[position]
             shown = abs(number) if number < 0 and position == 1 else number
-            if self._format_code_tokens(section).strip().lower() == "general":
-                return value
             if not section or section == '""':
                 return ""
+            code = self._format_code_tokens(section)
+            if re.search(r"general", code, re.I):
+                return self._render_general_section(section, value, number, position)
             if not re.search(r"[0#?@hmsyd]", self._format_code_tokens(section), re.I):
-                return "".join(token for token, is_format in self._format_literal_tokens(section)
-                               if not is_format)
+                literal = "".join(token for token, is_format in self._format_literal_tokens(section)
+                                  if not is_format)
+                # Color/condition annotations alone cannot hide a numeric value.
+                residue = re.sub(r"\[[^\]]*\]", "", code)
+                if not literal or re.search(r"[^ +\-()/.:!&$£€¥=<>^'`~{}]", residue):
+                    return value
+                return literal
             metadata = self._format_metadata(section)
-            clean = self._format_code_tokens(section).lower()
+            clean = code.lower()
+            if metadata.kind != "scientific" and re.search(r"[Ee][+-][0#?]", code):
+                return value
+            auto_minus = (number < 0 and position == 1 and
+                          re.search(r"\[(?:Red|Blue|Green|Yellow|White|Black|Cyan|Magenta|Color\d+)\]",
+                                    section, re.I) is not None and
+                          not any((any(char in token for char in "-()") or
+                                   (re.search(r"[A-Za-z]", token) is not None and
+                                    not (metadata.kind == "scientific" and token.lower() == "e")))
+                                  for token, is_format in self._format_literal_tokens(section)
+                                  if not is_format))
             if number == 0 and position == 2 and "0" not in clean and any(
                     char in clean for char in "#?"):
                 return "".join(" " if token == "?" else "" if is_format else token
@@ -126,14 +141,16 @@ class SpreadsheetNumberFormatter:
                 return formatted
             if metadata.kind == "zero_fill":
                 formatted = self._zero_filled_number(shown, metadata.pattern)
-                return formatted
+                return "-" + formatted if auto_minus else formatted
             if metadata.kind == "fraction":
                 formatted = self._fraction_number(shown, metadata.denominator_limit,
                                                   metadata.fixed_denominator)
-                return self._apply_literal_affixes(formatted, metadata)
+                formatted = self._apply_literal_affixes(formatted, metadata)
+                return "-" + formatted if auto_minus else formatted
             if metadata.kind == "scientific":
                 formatted = self._scientific_number(shown, section, metadata.decimals)
-                return self._apply_literal_affixes(formatted, metadata)
+                formatted = self._apply_literal_affixes(formatted, metadata)
+                return "-" + formatted if auto_minus else formatted
             if metadata.kind == "percent":
                 # Excel stores double values and rounds ties away from zero.
                 # Excel's display precision is 15 significant decimal digits.
@@ -141,34 +158,29 @@ class SpreadsheetNumberFormatter:
                 with localcontext() as context:
                     context.prec = max(32, len(value) + metadata.decimals + 4)
                     scaled = Decimal(format(shown, ".15g")) * 100
-                    if metadata.negative_parentheses and number < 0:
-                        scaled = abs(scaled)
                     scaled = scaled.quantize(Decimal(1).scaleb(-metadata.decimals), rounding=ROUND_HALF_UP)
                     formatted = f"{scaled:.{metadata.decimals}f}%"
                 formatted = self._apply_literal_affixes(formatted, metadata)
-                if number < 0 and "(" in section and ")" in section:
-                    formatted = formatted.strip()
-                return f"({formatted.strip()})" if metadata.negative_parentheses and number < 0 else formatted
+                return "-" + formatted if auto_minus else formatted
             if metadata.kind == "decimal":
                 if re.search(r"[0#?]\s*/[1-9]\d*", clean) and "?" not in clean:
                     return value
-                scale_match = re.search(r"[0#?](,+)(?=$|[^0#?,])", clean)
-                scale = len(scale_match[1]) if scale_match else 0
+                scale = sum(len(match[0]) for match in re.finditer(
+                    r"(?<=[0#?]),+(?=\.|$|[^0#?,])", clean))
                 separator = "," if metadata.thousands and (not scale or clean.count(",") > scale) else ""
                 display_number = shown / (1000 ** scale)
-                if metadata.negative_parentheses and number < 0:
-                    display_number = abs(display_number)
                 rounded = self._round_decimal(display_number, metadata.decimals)
                 formatted = f"{rounded:{separator}.{metadata.decimals}f}"
                 integer, dot, fraction = formatted.partition(".")
                 sign = "-" if integer.startswith("-") else ""
                 integer = integer.lstrip("-")
                 int_code = clean.split(".", 1)[0]
-                required = int_code.count("0") if re.fullmatch(r"[0#?,]+", int_code) else 0
+                numeric_run = re.search(r"[0#?,]+", int_code)
+                required = numeric_run[0].count("0") if numeric_run else 0
                 if required:
                     integer = integer.replace(",", "").zfill(required)
                     if separator:
-                        integer = f"{int(integer):,}"
+                        integer = re.sub(r"(?<=\d)(?=(?:\d{3})+$)", ",", integer)
                 formatted = sign + integer + (dot + fraction if dot else "")
                 if metadata.optional_decimals and "." in formatted:
                     integer, fraction = formatted.split(".", 1)
@@ -191,9 +203,7 @@ class SpreadsheetNumberFormatter:
                             formatted = metadata.currency_symbol + formatted
                     formatted = self._apply_literal_affixes(
                         formatted, metadata)
-                if number < 0 and "(" in section and ")" in section:
-                    formatted = formatted.strip()
-                return f"({formatted.strip()})" if metadata.negative_parentheses and number < 0 else formatted
+                return "-" + formatted if auto_minus else formatted
         except (OverflowError, ValueError, InvalidOperation):
             source = getattr(self, "_format_warning_source", "spreadsheet")
             warning = f"WARN: {source} formatted numeric value is out of range: {value[:80]}"
@@ -273,7 +283,6 @@ class SpreadsheetNumberFormatter:
             metadata = _FormatMetadata(
                 kind="percent",
                 decimals=self._decimal_places_before_percent(fmt),
-                negative_parentheses=self._negative_uses_parentheses(fmt),
                 literal_prefix=literal_prefix,
                 literal_suffix=literal_suffix,
             )
@@ -289,7 +298,6 @@ class SpreadsheetNumberFormatter:
                     optional_decimals=self._optional_decimal_places(fmt),
                     thousands=thousands,
                     currency_symbol=currency_symbol,
-                    negative_parentheses=self._negative_uses_parentheses(fmt),
                     literal_prefix=literal_prefix,
                     literal_suffix=literal_suffix,
                 )
@@ -518,14 +526,28 @@ class SpreadsheetNumberFormatter:
         return decimals if decimals is not None else 0
 
     def _decimal_places(self, fmt: str):
-        match = re.search(r"[0#?]\.([0#?]+)", self._format_code_tokens(fmt))
+        match = re.search(r"[0#?],*\.([0#?]+)", self._format_code_tokens(fmt))
         if match:
             return len(match.group(1))
         return None
 
     def _optional_decimal_places(self, fmt: str) -> int:
-        match = re.search(r"[0#?]\.([0#?]+)", self._format_code_tokens(fmt))
+        match = re.search(r"[0#?],*\.([0#?]+)", self._format_code_tokens(fmt))
         return len(match[1]) - len(match[1].rstrip("#?")) if match else 0
+
+    def _render_general_section(self, section: str, value: str,
+                                number: float, position: int) -> str:
+        masked = re.sub(r'"[^"]*"|[\\_*].|\[[^\]]*\]',
+                        lambda match: " " * len(match[0]), section)
+        match = re.search(r"general", masked, re.I)
+        if match is None:
+            return str(number)
+        prefix = "".join(token for token, is_format in
+                         self._format_literal_tokens(section[:match.start()]) if not is_format)
+        suffix = "".join(token for token, is_format in
+                         self._format_literal_tokens(section[match.end():]) if not is_format)
+        formatted = value.lstrip("-") if number < 0 and position == 1 and prefix.strip() else value
+        return prefix + formatted + suffix
 
     def _uses_thousands_separator(self, fmt: str) -> bool:
         return "," in self._format_without_literals(fmt)
@@ -634,14 +656,6 @@ class SpreadsheetNumberFormatter:
             tokens.append((char, char in "0#?.,%$"))
             index += 1
         return tokens
-
-    def _negative_uses_parentheses(self, fmt: str) -> bool:
-        sections = self._format_sections(fmt)
-        if len(sections) < 2:
-            return False
-        literals = [token for token, is_format in self._format_literal_tokens(sections[1])
-                    if not is_format]
-        return "(" in literals and ")" in literals
 
     def _format_sections(self, fmt: str) -> List[str]:
         sections = []

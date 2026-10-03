@@ -36,7 +36,10 @@ def _kind(fmt, reader):
     metadata = reader._format_metadata(fmt)
     kind = metadata.kind or "General"
     if kind == "decimal":
-        return "currency/accounting" if metadata.currency_symbol or metadata.negative_parentheses else "decimal"
+        literals = [token for token, is_format in reader._format_literal_tokens(fmt)
+                    if not is_format]
+        accounting = any("(" in token or ")" in token for token in literals)
+        return "currency/accounting" if metadata.currency_symbol or accounting else "decimal"
     return kind
 
 

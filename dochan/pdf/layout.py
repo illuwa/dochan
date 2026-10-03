@@ -101,7 +101,7 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
         if joins:
             block = blocks[-1]
             # 앞 줄 끝에 보이는 공백 글리프가 있으면 공백으로 잇는다(한컴 PDF 실측: 원문 띄어쓰기). 없을 때만 통계로 판정한다.
-            if getattr(previous, "trailing_space", False):
+            if previous.trailing_space:
                 sep = ' '
             else:
                 sep = '' if _joins_without_space(block.text[-1:], line.text[:1]) else ' '

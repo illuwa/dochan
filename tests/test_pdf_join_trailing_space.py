@@ -17,9 +17,26 @@ def test_trailing_space_glyph_forces_space_at_join():
     assert [block.text for block in merge_lines(lines)] == ["도서 관리를 합니다"]
 
 
-def test_without_trailing_space_model_decides():
+def test_without_trailing_space_model_decides(monkeypatch):
+    from dochan.pdf import layout
+
+    class Model:
+        def joins_with_space(self, last, first):
+            return False
+
+    monkeypatch.setattr(layout, "load_model", lambda: Model())
     lines = [line("도서", 700), line("관리를 합니다", 686)]
     assert [block.text for block in merge_lines(lines)] == ["도서관리를 합니다"]
+
+
+def test_render_mode_is_restored_by_graphics_state():
+    from dochan.pdf.content import ContentTextExtractor, FontInfo
+    from dochan.pdf.widths import WidthMap
+    font = FontInfo(decode=lambda raw: raw.decode("latin-1"), widths=WidthMap({}, 500.0), code_bytes=1)
+    content = b"BT /F1 10 Tf 72 700 Td q 3 Tr (a) Tj Q (b) Tj 7.0 Tr (c) Tj 4 Tr (d) Tj ET"
+    frags = ContentTextExtractor.from_fonts({"F1": font}).extract_fragments(content)
+    assert [(fragment.text, fragment.invisible) for fragment in frags] == [
+        ("a", True), ("b", False), ("c", True), ("d", False)]
 
 
 def test_trailing_space_is_not_part_of_line_text():

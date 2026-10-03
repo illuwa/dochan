@@ -523,8 +523,8 @@ class ContentTextExtractor:
                 th = float(operands[-1]) / 100.0
             elif op == b"TL" and operands and isinstance(operands[-1], (int, float)):
                 tl = float(operands[-1])
-            elif op == b"Tr" and operands and isinstance(operands[-1], int):
-                tr = operands[-1]
+            elif op == b"Tr" and operands and isinstance(operands[-1], (int, float)):
+                tr = int(operands[-1]) if float(operands[-1]).is_integer() else tr
             elif op == b"Td" and len(operands) >= 2:
                 tx = _num(operands[-2])
                 ty = _num(operands[-1])
@@ -801,6 +801,8 @@ class _Segment:
 
 class _Line:
     """한 기준선의 텍스트 — 세그먼트 좌표와 조립된 문자열."""
+
+    trailing_space = False
 
     def __init__(self, frags: List[Fragment]):
         self.fragment_orders = tuple(f.order for f in frags)

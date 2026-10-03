@@ -4,6 +4,7 @@ CTM과 글리프 폭으로 본문과 링크를 배치하며, 검증한 기하 �
 분리한다. 지원하지 않는 요소와 손상 입력은 doc.errors 경고로 보고한다.
 """
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
@@ -29,6 +30,9 @@ from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, 
 from .notes import detect_notes, detect_endnotes, endnote_references
 from .running import detect_running
 from .annotations import CommentExtractor, DestinationResolver, attach_comments, attach_links, link_regions, text_string
+
+# 글자 표시(Tj·TJ·'·")와 중첩 Form(Do) 연산자 바이트. 없으면 Form 연산자 세기를 건너뛴다.
+_FORM_TEXT_OR_NESTED = re.compile(rb"Tj|TJ|Do|['\"]")
 
 MAX_IMAGES_PER_PAGE = 64
 
@@ -596,7 +600,14 @@ class PDFReader:
                 matrix = (float("nan"),) * 6
             info = stream_info.get(id(stream))
             if info is None or info[0] is not stream:
-                data = pdf.decode_stream_bytes(stream)
+                data = pdf.decode_form_bytes(stream)
+                if data is None:
+                    warning = "WARN: PDF Form 해제 예산 한도 — 이후 Form 건너뜀(페이지 본문은 유지)"
+                    if warning not in pdf.warnings:
+                        pdf.warnings.append(warning)
+                    rejected_streams[id(stream)] = stream
+                    loaded_forms[cache_key] = None
+                    return None
                 if len(data) > MAX_FORM_CACHE_BYTES:
                     # 단독으로 상한을 넘는 Form 만 문서 단위로 거부한다. 디코드 결과는 문서 캐시에 남아
                     # 다른 페이지가 해제 예산을 다시 쓰지 않는다.
@@ -606,11 +617,18 @@ class PDFReader:
                     rejected_streams[id(stream)] = stream
                     loaded_forms[cache_key] = None
                     return None
-                op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
-                info = (stream, data, op_count, has_text_or_form)
+                if _FORM_TEXT_OR_NESTED.search(data) is None:
+                    # 글자 표시·중첩 Form 연산자 바이트가 없으면 연산자를 세지 않고 바이트도 보관하지 않는다.
+                    op_count, has_text_or_form = 0, False
+                else:
+                    op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
+                info = (stream, data if has_text_or_form else b"", op_count, has_text_or_form)
                 stream_info[id(stream)] = info
             else:
                 _, data, op_count, has_text_or_form = info
+            if not has_text_or_form:
+                loaded_forms[cache_key] = None
+                return None
             if id(stream) not in page_forms["seen"]:
                 if page_forms["bytes"] + len(data) > MAX_FORM_CACHE_BYTES:
                     # 이 페이지에서만 건너뛴다(다른 페이지에서는 다시 쓸 수 있다).

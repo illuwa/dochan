@@ -40,7 +40,8 @@ def test_form_operator_scan_is_shared_across_callers(tmp_path, monkeypatch):
         return original(cls, data)
 
     monkeypatch.setattr(ContentTextExtractor, "_count_operators", classmethod(counted))
-    large = b" " * (1024 * 1024) + b"0 0 m"
+    # 글자 연산자를 넣어 바이트 사전 검사를 통과시킨다(글자 없는 Form 은 아예 세지 않는다).
+    large = b" " * (1024 * 1024) + b"0 0 m BT /F1 10 Tf (A) Tj ET"
     wrappers = {}
     for number in range(7, 1007):
         wrappers[number] = _stream(
@@ -232,7 +233,7 @@ def test_rejected_form_is_not_decoded_again_for_other_callers(tmp_path, monkeypa
 
     monkeypatch.setattr(reader, "MAX_FORM_CACHE_BYTES", 100)
     monkeypatch.setattr(content, "MAX_FORM_CACHE_BYTES", 100)
-    original = PDFFile.decode_stream_bytes
+    original = PDFFile.decode_form_bytes
     calls = []
 
     def counted(pdf, stream):
@@ -240,7 +241,7 @@ def test_rejected_form_is_not_decoded_again_for_other_callers(tmp_path, monkeypa
             calls.append(1)
         return original(pdf, stream)
 
-    monkeypatch.setattr(PDFFile, "decode_stream_bytes", counted)
+    monkeypatch.setattr(PDFFile, "decode_form_bytes", counted)
     wrappers = {7: _stream(b"/X Do", "/Subtype /Form /Resources << "
                            "/XObject << /X 6 0 R >> >>"),
                 8: _stream(b"/X Do", "/Subtype /Form /Resources << "
@@ -323,3 +324,29 @@ def test_large_drawing_form_on_first_page_does_not_starve_later_pages(tmp_path, 
     doc = _per_page_form_pdf(tmp_path, 6, 8 * 1024, first_drawing=62 * 1024)
     assert [[e.text for e in section.elements if hasattr(e, "text")]
             for section in doc.sections][1:] == [["P%d" % (i + 1)] for i in range(1, 6)]
+
+
+def test_many_large_drawing_forms_do_not_exhaust_page_decode_budget(tmp_path, monkeypatch):
+    # 4차 감수 P1: Form 해제가 페이지 본문과 같은 문서 해제 예산을 쓰면 도면집처럼 페이지마다 큰 도면 Form 이 있는
+    # 문서에서 뒤 페이지 본문이 사라진다(1.13.0 은 Form 을 해제하지 않아 본문이 남았다).
+    from dochan.pdf import structure
+    monkeypatch.setattr(structure, "MAX_TOTAL_DECODED", 600 * 1024)
+    pages = 8
+    objects = {
+        1: "<< /Type /Catalog /Pages 2 0 R >>",
+        2: "<< /Type /Pages /Kids [%s] /Count %d >>" % (
+            " ".join("%d 0 R" % (100 + i) for i in range(pages)), pages),
+        20: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    }
+    for i in range(pages):
+        objects[100 + i] = (
+            "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 20 0 R >> "
+            "/XObject << /D %d 0 R >> >> /Contents %d 0 R >>" % (300 + i, 200 + i))
+        objects[200 + i] = _stream(b"/D Do BT /F1 10 Tf 40 500 Td (BODY%d) Tj ET" % (i + 1))
+        objects[300 + i] = _stream(b"0 0 m 1 1 l S " * (150 * 1024 // 14), "/Subtype /Form")
+    path = tmp_path / "drawings.pdf"
+    path.write_bytes(_build_pdf(objects))
+    doc = PDFReader().read(str(path))
+    assert [[e.text for e in section.elements if hasattr(e, "text")]
+            for section in doc.sections] == [["BODY%d" % (i + 1)] for i in range(pages)]
+    assert not any("문서 스트림 해제 총량" in error for error in doc.errors)

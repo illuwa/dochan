@@ -21,6 +21,8 @@ _SCAN_ROOT_LIMIT = 10_000
 # 문서 단위 누적 해제 예산 — 스트림 1개당 한도만으로는 같은 폭탄 스트림을
 # 반복 참조하는 40KB PDF 가 수 GB 를 강제할 수 있다 (감수 2차 C2)
 MAX_TOTAL_DECODED = 200 * 1024 * 1024
+# Form XObject 는 페이지 본문과 별도 예산으로 해제한다(큰 도면 Form 이 본문 예산을 소진해 뒤 페이지 본문을 잃지 않게).
+MAX_FORM_TOTAL_DECODED = 200 * 1024 * 1024
 # Image samples must not consume the body budget or accumulate in its cache.
 MAX_IMAGE_DECODED_CACHE = 50 * 1024 * 1024
 MAX_IMAGE_CACHE_ENTRIES = 128
@@ -46,6 +48,7 @@ class PDFFile:
         self._image_decoded_cache = OrderedDict()
         self._image_cached_bytes = 0
         self._decode_budget = MAX_TOTAL_DECODED
+        self._form_decode_budget = MAX_FORM_TOTAL_DECODED
         self._predictor_budget = PredictorBudget()
         # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
         self._compressed: Dict[int, Tuple[int, int]] = {}
@@ -456,6 +459,22 @@ class PDFFile:
                 self._image_cached_bytes -= len(evicted)
             self._image_decoded_cache[key] = (stream, out)
             self._image_cached_bytes += len(out)
+        return out
+
+    def decode_form_bytes(self, stream: PDFStream) -> Optional[bytes]:
+        """Form XObject 를 본문과 별도인 문서 예산으로 해제한다. 예산을 넘으면 None(그 Form 만 건너뜀).
+
+        결과는 호출자(Form 분석 캐시)가 스트림당 한 번만 요청하므로 여기서는 캐시하지 않는다.
+        내용 스트림을 중간에서 자르면 연산자가 깨지므로 예산 초과 Form 은 통째로 건너뛴다.
+        """
+        if self._form_decode_budget <= 0:
+            return None
+        out = decode_stream(stream.dictionary, stream.raw, self.warnings,
+                            self._predictor_budget)
+        if len(out) > self._form_decode_budget:
+            self._form_decode_budget = 0
+            return None
+        self._form_decode_budget -= len(out)
         return out
 
     def decode_stream_bytes(self, stream: PDFStream) -> bytes:

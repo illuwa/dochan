@@ -134,13 +134,13 @@ def test_form_cache_and_expansion_bytes_are_bounded(tmp_path, monkeypatch):
 def test_repeated_form_decodes_once(tmp_path, monkeypatch):
     from dochan.pdf.structure import PDFFile
 
-    original = PDFFile.decode_stream_bytes
+    original = PDFFile.decode_form_bytes
     calls = []
     def counted(pdf, stream):
         if str(stream.dictionary.get("Subtype")) == "Form":
             calls.append(1)
         return original(pdf, stream)
-    monkeypatch.setattr(PDFFile, "decode_stream_bytes", counted)
+    monkeypatch.setattr(PDFFile, "decode_form_bytes", counted)
     doc = _read(tmp_path, b"/F Do " * 50, {
         6: _stream(b"BT /F1 10 Tf 40 500 Td (X) Tj ET", "/Subtype /Form")})
     assert len(calls) == 1

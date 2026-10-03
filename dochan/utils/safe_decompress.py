@@ -113,7 +113,8 @@ def _validate_hwp_trailer(trailing: bytes, checksum: int, output_size: int) -> N
 
     expected_checksum = int.from_bytes(trailing[:4], "little")
     expected_size = int.from_bytes(trailing[4:], "little")
-    if expected_checksum != checksum & 0xFFFFFFFF:
+    # Some HWP writers leave the CRC field zero; the size still has to match.
+    if expected_checksum and expected_checksum != checksum & 0xFFFFFFFF:
         raise ValueError("Invalid compressed stream: trailing data checksum mismatch")
     if expected_size != output_size & 0xFFFFFFFF:
         raise ValueError("Invalid compressed stream: trailing data size mismatch")

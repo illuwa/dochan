@@ -14,6 +14,51 @@ ISO/IEC 29500 (ECMA-376) and ISO 32000. Tables such as the Excel function table 
 reproduced from [MS-XLS] for implementation purposes under Microsoft's Open Specifications
 notice.
 
+Adobe mapping-resources-pdf/pdf2unicode CID to Unicode data
+Source: https://github.com/adobe-type-tools/mapping-resources-pdf/tree/master/pdf2unicode
+Modified: scripts/generate_pdf_cid2unicode.py extracts mappings, excludes undefined
+characters, and compresses the CID tables into dochan/pdf/cid_unicode_data.py.
+The original CMap files are not distributed with dochan.
+SHA-256 Adobe-CNS1-UCS2: 8375afd535e153a7e3bcf448be93e5012b26229547a20d52520e46b3c386351f
+SHA-256 Adobe-GB1-UCS2: 368b40ec05568faf323cfbbddf23c60d566bbc88e366981eb6541b026381a3b8
+SHA-256 Adobe-Japan1-UCS2: 6a9693361647a37996312cc57071bb79f8c06411207be7c730a83fda1254cd82
+SHA-256 Adobe-KR-UCS2: 6861a3208f331ecd73369c5d51eacf3b72c820fe3c87524f79c9ac1bb16830ec
+SHA-256 Adobe-Korea1-UCS2: 45bcf869acdcec2507f75836919e589e7137b9f9dbaa8e4975747035024248ef
+SHA-256 LICENSE.txt: feb8b068a417681821823ef2e8995072aa111121fa11f8664038f78717f4497c
+
+Copyright lines as they appear in the source files:
+  Adobe-CNS1-UCS2:   Copyright 1990-2020 Adobe. All rights reserved.
+  Adobe-GB1-UCS2:    Copyright 1990-2020 Adobe. All rights reserved.
+  Adobe-Japan1-UCS2: Copyright 1990-2023 Adobe. All rights reserved.
+  Adobe-KR-UCS2:     Copyright 1990-2020 Adobe. All rights reserved.
+  Adobe-Korea1-UCS2: Copyright 1990-2019 Adobe. All rights reserved.
+  LICENSE.txt:       Copyright 1990-2019 Adobe. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+Neither the name of Adobe nor the names of its contributors may be used to
+endorse or promote products derived from this software without specific prior
+written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 Adobe Core 14 AFM metrics and Adobe Glyph List
 
 Copyright (c) 1985, 1987, 1988, 1989, 1997 Adobe Systems Incorporated. All Rights Reserved.

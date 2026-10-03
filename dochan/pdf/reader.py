@@ -14,6 +14,7 @@ from ..model.image import Image
 from .content import (MAX_FORM_CACHE_BYTES, ContentTextExtractor, FontInfo,
                       VerticalMetrics, assemble_lines, default_byte_decoder)
 from .cmap import encoding_wmode, parse_tounicode
+from .cid_unicode import CIDDecoder, MAX_FONT_BYTES, adobe_cid, reverse_truetype_cmap
 from .images import extract_image_bytes
 from .formulas import FormulaExtractor
 from .objects import PDFName, PDFRef, PDFStream
@@ -874,6 +875,10 @@ class PDFReader:
                 cmap = parse_tounicode(cmap_data, pdf.warnings)
                 if cmap.mapping:
                     return cmap.decode
+        if str(font.get("Subtype", "")) == "Type0":
+            recovered = self._cid_fallback_decoder(pdf, name, font)
+            if recovered is not None:
+                return recovered.decode
         # ToUnicode 없는 CID 폰트를 cp1252 로 해석하면 NUL 등 제어문자가
         # 본문으로 새어 나간다 — 경고를 남기고 해당 텍스트는 버린다 (감수 M4)
         encoding = pdf.resolve(font.get("Encoding"))
@@ -893,6 +898,51 @@ class PDFReader:
         if encoding_name == "MacRomanEncoding":
             return lambda raw: raw.decode("mac_roman", errors="replace")
         return default_byte_decoder
+
+    def _cid_fallback_decoder(self, pdf: PDFFile, name: str, font: dict):
+        encoding = pdf.resolve(font.get("Encoding"))
+        if not isinstance(encoding, PDFName) or encoding not in ("Identity-H", "Identity-V"):
+            return None  # 다른 미리 정의된 CMap은 코드→CID 표가 필요하다.
+        descendant = self._cid_descendant(pdf, font)
+        system = pdf.resolve(descendant.get("CIDSystemInfo"))
+        if isinstance(system, dict):
+            registry = pdf.resolve(system.get("Registry"))
+            ordering = pdf.resolve(system.get("Ordering"))
+            registry = (registry.decode("ascii", "ignore") if isinstance(registry, bytes)
+                        and len(registry) <= 32 else str(registry) if isinstance(registry, PDFName) else "")
+            ordering = (ordering.decode("ascii", "ignore") if isinstance(ordering, bytes)
+                        and len(ordering) <= 32 else str(ordering) if isinstance(ordering, PDFName) else "")
+            if registry == "Adobe" and ordering in ("Japan1", "GB1", "CNS1", "Korea1", "KR"):
+                return CIDDecoder(lambda cid: adobe_cid(ordering, cid), pdf.warnings, name)
+        if pdf.resolve(descendant.get("Subtype")) != "CIDFontType2":
+            return None
+        descriptor = pdf.resolve(descendant.get("FontDescriptor"))
+        if not isinstance(descriptor, dict):
+            return None
+        font_stream = pdf.resolve(descriptor.get("FontFile2"))
+        if not isinstance(font_stream, PDFStream) or len(font_stream.raw) > MAX_FONT_BYTES:
+            return None
+        font_bytes = pdf.decode_stream_bytes(font_stream)
+        if len(font_bytes) > MAX_FONT_BYTES:
+            pdf.warnings.append("WARN: 내장 TrueType 글꼴 크기 한도 초과 — CID 복원 보류")
+            return None
+        reverse = reverse_truetype_cmap(font_bytes)
+        if not reverse:
+            return None
+        gid_object = pdf.resolve(descendant.get("CIDToGIDMap"))
+        gid_bytes = None
+        if isinstance(gid_object, PDFStream):
+            if len(gid_object.raw) > 131072:
+                return None
+            gid_bytes = pdf.decode_stream_bytes(gid_object)
+            if len(gid_bytes) > 131072:
+                return None
+        elif gid_object is not None and gid_object != "Identity":
+            return None
+        if gid_bytes is None:
+            return CIDDecoder(lambda cid: reverse.get(cid, ""), pdf.warnings, name)
+        return CIDDecoder(lambda cid: reverse.get(int.from_bytes(gid_bytes[2 * cid:2 * cid + 2], "big"), "")
+                          if 2 * cid + 2 <= len(gid_bytes) else "", pdf.warnings, name)
 
     def _page_images(self, pdf: PDFFile, resources, page_number: int) -> list:
         """페이지 XObject 이미지에서 바이너리를 추출해 Image 요소로 반환."""

@@ -55,16 +55,22 @@ def _table_like(line) -> bool:
     return gaps >= 2
 
 
+def _readable_line(line) -> bool:
+    """Unmapped font control codes are not a running header or footer."""
+    return not any(char == "\ufffd" or (unicodedata.category(char) == "Cc" and char not in "\t\n\r")
+                   for char in line.text)
+
+
 def edge_block(lines, bounds, zone: str) -> list:
     bottom, top = bounds
     span = (top - bottom) * EDGE_FRACTION_RUNNING
     if zone == "header":
         candidates = heapq.nlargest(
-            3, (line for line in lines if line.direction == "ltr"
+            3, (line for line in lines if line.direction == "ltr" and _readable_line(line)
                 and top - span <= line.y <= top), key=lambda line: line.y)
     else:
         candidates = heapq.nsmallest(
-            3, (line for line in lines if line.direction == "ltr"
+            3, (line for line in lines if line.direction == "ltr" and _readable_line(line)
                 and bottom <= line.y <= bottom + span), key=lambda line: line.y)
     block = []
     for line in candidates:

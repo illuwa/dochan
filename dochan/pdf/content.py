@@ -13,6 +13,10 @@ from .widths import WidthMap
 from .paths import PathCollector, Segment
 
 _OPERAND_START = b"(</[0123456789+-."
+MAX_FORM_DEPTH = 16
+MAX_FORM_CACHE_BYTES = 16 * 1024 * 1024
+MAX_FORM_EXPANDED_BYTES = 32 * 1024 * 1024
+MAX_FORM_OPERATORS = 32768
 
 # 같은 기준선으로 볼 y 허용오차 (device 단위)
 _LINE_Y_TOLERANCE = 3.0
@@ -237,8 +241,12 @@ class ContentTextExtractor:
     def extract_fragments(self, content: bytes) -> List[Fragment]:
         return self.extract_page(content).fragments
 
-    def extract_page(self, content: bytes) -> PageContent:
+    def extract_page(self, content: bytes, _initial_ctm=(1, 0, 0, 1, 0, 0),
+                     _form_context=None) -> PageContent:
         """그래픽 상태를 유지하며 텍스트와 괘선을 함께 해석한다."""
+        if _form_context is None:
+            _form_context = {"active": set(), "cache": {}, "cache_bytes": 0,
+                             "expanded": 0, "operators": 0, "warned": set()}
         self._char_position_budget = 200000
         self._link_position_reliable = True
         self._marked_stack = []
@@ -246,7 +254,7 @@ class ContentTextExtractor:
         marked_ids = set()
         duplicate_marked_ids = set()
         lexer = PDFLexer(content)
-        ctm = (1, 0, 0, 1, 0, 0)
+        ctm = _initial_ctm
         stack = []
         overflow = 0
         paths = PathCollector()
@@ -318,6 +326,65 @@ class ContentTextExtractor:
                     ctm, font, fs, tc, tw, th, tl = stack.pop()
             elif op == b"cm" and len(operands) >= 6:
                 ctm = _matmul(tuple(_num(o) for o in operands[-6:]), ctm)
+            elif op == b"Do" and operands and isinstance(operands[-1], PDFName):
+                loader = getattr(self, "form_loader", None)
+                if loader is not None:
+                    loaded = loader(str(operands[-1]), getattr(self, "resources", {}))
+                    if loaded is not None:
+                        key, data, matrix, resources, fonts, properties, op_count = loaded
+                        reason = None
+                        try:
+                            form_ctm = _matmul(matrix, ctm)
+                        except OverflowError:
+                            form_ctm = (float("inf"),) * 6
+                        if key in _form_context["active"]:
+                            reason = "순환 참조"
+                        elif len(_form_context["active"]) >= MAX_FORM_DEPTH:
+                            reason = "깊이 한도"
+                        elif (len(data) > MAX_FORM_CACHE_BYTES or
+                              key not in _form_context["cache"] and
+                              _form_context["cache_bytes"] + len(data) > MAX_FORM_CACHE_BYTES):
+                            reason = "디코드 캐시 한도"
+                        elif (not all(math.isfinite(v) and abs(v) <= 1e150 for v in form_ctm) or
+                              not all(math.isfinite(v) for v in matrix)):
+                            reason = "행렬 크기 한도"
+                        elif matrix[0] * matrix[3] - matrix[1] * matrix[2] == 0:
+                            reason = "특이 행렬"
+                        else:
+                            cached = _form_context["cache"].get(key)
+                            if cached is None:
+                                cached = (data, op_count)
+                                _form_context["cache"][key] = cached
+                                _form_context["cache_bytes"] += len(data)
+                            op_count = cached[1]
+                            if (_form_context["expanded"] + len(data) > MAX_FORM_EXPANDED_BYTES or
+                                    _form_context["operators"] + op_count > MAX_FORM_OPERATORS):
+                                reason = "확장 한도"
+                        if reason is not None:
+                            if reason not in _form_context["warned"]:
+                                paths.warnings.append("WARN: PDF Form " + reason + " — 해당 Form 건너뜀")
+                                _form_context["warned"].add(reason)
+                        else:
+                            _form_context["expanded"] += len(data)
+                            _form_context["operators"] += op_count
+                            _form_context["active"].add(key)
+                            try:
+                                child = ContentTextExtractor.from_fonts(
+                                    fonts, track_char_positions=self.track_char_positions)
+                                child.form_loader = loader
+                                child.resources = resources
+                                child.properties = properties
+                                result = child.extract_page(data, form_ctm, _form_context)
+                                offset = len(frags)
+                                for frag in result.fragments:
+                                    frag.order += offset
+                                    frag.mcids = ()  # Form MCIDs belong to its own StructParents.
+                                frags.extend(result.fragments)
+                                # Form vector art is outside this text pass. Adding
+                                # its rules creates empty grids in unrelated artwork.
+                                paths.warnings.extend(result.warnings)
+                            finally:
+                                _form_context["active"].remove(key)
             elif op == b"BT":
                 tm = (1, 0, 0, 1, 0, 0)
                 tlm = (1, 0, 0, 1, 0, 0)
@@ -383,6 +450,33 @@ class ContentTextExtractor:
             paths.warnings.append("WARN: PDF 비유한 텍스트 좌표 — 해당 조각 건너뜀")
         return PageContent(safe, paths.segments, paths.warnings, marked_ids,
                            duplicate_marked_ids, paths.short_segments)
+
+    @classmethod
+    def _count_operators(cls, data: bytes) -> Tuple[int, bool]:
+        """Count a Form once, then charge every invocation against the page budget."""
+        lexer = PDFLexer(data)
+        count = 0
+        has_text_or_form = False
+        while lexer.pos < len(data):
+            lexer.skip_whitespace()
+            if lexer.pos >= len(data):
+                break
+            if data[lexer.pos] in _OPERAND_START:
+                try:
+                    lexer.parse_object()
+                except PDFSyntaxError:
+                    lexer.pos += 1
+                continue
+            op = lexer.read_token()
+            if not op:
+                lexer.pos += 1
+                continue
+            count += 1
+            if op in (b"Tj", b"TJ", b"'", b'"', b"Do"):
+                has_text_or_form = True
+            if op == b"BI":
+                lexer.pos = cls._skip_inline_image(data, lexer.pos)
+        return count, has_text_or_form
 
     def _show(self, raw, tm, font, fs, tc, tw, th, frags, ctm):
         if not raw:

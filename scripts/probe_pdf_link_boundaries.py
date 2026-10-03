@@ -120,6 +120,7 @@ def verify(path, text_tables=False):
             native_page, resources = pages[page_index]
             extractor = ContentTextExtractor.from_fonts(reader._font_infos(pdf, resources, cache),
                                                         track_char_positions=True)
+            reader._configure_form_extractor(extractor, pdf, resources, cache)
             fragments = extractor.extract_fragments(b"\n".join(reader._page_content_parts(pdf, native_page)))
             attach_links(fragments, regions, [])
             selected = []

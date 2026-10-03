@@ -10,7 +10,8 @@ from typing import Callable, Dict, Optional
 from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
-from .content import ContentTextExtractor, FontInfo, VerticalMetrics, assemble_lines, default_byte_decoder
+from .content import (MAX_FORM_CACHE_BYTES, ContentTextExtractor, FontInfo,
+                      VerticalMetrics, assemble_lines, default_byte_decoder)
 from .cmap import encoding_wmode, parse_tounicode
 from .images import extract_image_bytes
 from .formulas import FormulaExtractor
@@ -196,6 +197,7 @@ class PDFReader:
                     properties = pdf.resolve(resources.get("Properties")) if isinstance(resources, dict) else None
                     if isinstance(properties, dict):
                         extractor.properties = {key: pdf.resolve(value) for key, value in properties.items()}
+                    self._configure_form_extractor(extractor, pdf, resources, font_cache)
                     page_content = extractor.extract_page(b"\n".join(content_parts))
                     pdf.warnings.extend(page_content.warnings)
                     attach_links(page_content.fragments, regions, pdf.warnings)
@@ -551,6 +553,65 @@ class PDFReader:
                 )
             )
         return paragraphs
+
+    def _configure_form_extractor(self, extractor, pdf, resources, font_cache):
+        """Attach page-local Form lookup so probes and the reader share geometry."""
+        extractor.resources = resources
+        loaded_forms = {}
+        cached_form_bytes = [0]
+        cached_streams = set()
+
+        def load_form(name, caller_resources):
+            if not isinstance(caller_resources, dict):
+                return None
+            xobjects = pdf.resolve(caller_resources.get("XObject"))
+            if not isinstance(xobjects, dict):
+                return None
+            ref = xobjects.get(name)
+            stream = pdf.resolve(ref)
+            if not isinstance(stream, PDFStream) or str(stream.dictionary.get("Subtype")) != "Form":
+                return None
+            cache_key = (id(stream), id(caller_resources))
+            if cache_key in loaded_forms:
+                return loaded_forms[cache_key]
+            form_resources = pdf.resolve(stream.dictionary.get("Resources"))
+            if not isinstance(form_resources, dict):
+                form_resources = caller_resources
+            matrix = pdf.resolve(stream.dictionary.get("Matrix"))
+            if not isinstance(matrix, list) or len(matrix) != 6:
+                matrix = [1, 0, 0, 1, 0, 0]
+            try:
+                matrix = tuple(float(v) if isinstance(v, (int, float)) else float("nan")
+                               for v in matrix)
+            except (OverflowError, ValueError):
+                matrix = (float("nan"),) * 6
+            data = pdf.decode_stream_bytes(stream)
+            if (len(data) > MAX_FORM_CACHE_BYTES or
+                    id(stream) not in cached_streams and
+                    cached_form_bytes[0] + len(data) > MAX_FORM_CACHE_BYTES):
+                warning = "WARN: PDF Form 디코드 캐시 한도 — 해당 Form 건너뜀"
+                if warning not in pdf.warnings:
+                    pdf.warnings.append(warning)
+                loaded_forms[cache_key] = None
+                return None
+            op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
+            if not has_text_or_form:
+                loaded_forms[cache_key] = None
+                return None
+            props = pdf.resolve(form_resources.get("Properties"))
+            if isinstance(props, dict):
+                props = {key: pdf.resolve(value) for key, value in props.items()}
+            else:
+                props = {}
+            loaded = (id(stream), data, matrix, form_resources,
+                      self._font_infos(pdf, form_resources, font_cache), props, op_count)
+            loaded_forms[cache_key] = loaded
+            if id(stream) not in cached_streams:
+                cached_streams.add(id(stream))
+                cached_form_bytes[0] += len(data)
+            return loaded
+
+        extractor.form_loader = load_form
 
     def _page_content_parts(self, pdf: PDFFile, page: dict) -> list:
         contents = pdf.resolve(page.get("Contents"))

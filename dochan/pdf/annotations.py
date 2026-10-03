@@ -454,7 +454,9 @@ def _attach_unique_links(fragments, regions, warnings):
                     middle = _contains(polygon, x, y)
                     if not char.isspace():
                         first, last = frag.char_offsets[index:index + 2]
-                        inset = min(abs(last - first) / 4, 1e-5)
+                        # PDF matrix/annotation coordinates can differ by a few
+                        # ten-thousandths of a point after decimal rounding.
+                        inset = min(abs(last - first) / 4, 1e-4)
                         edges = [_contains(polygon, frag.x + ux * d + vx * frag.size * 0.5,
                                            frag.y + uy * d + vy * frag.size * 0.5)
                                  for d in (first + inset, last - inset)]

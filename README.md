@@ -231,7 +231,7 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 [`docs/SUPPORT_NOTES.md`](docs/SUPPORT_NOTES.md) 와 `docs/benchmarks/` 에 있다. 주요 범위 제한:
 
 1. DOC·PPT 수식은 내장 Equation 3.0(MathType MTEF v2/v3/v5) 개체를 LaTeX 로 바꾼다. 공개 실물 변환율은 DOC 42/54, PPT 13/18 이고 변환하지 못한 식은 미리보기 그림으로 남는다.
-2. XLS 수식은 BIFF8 기준이다. 같은 문서의 XLSX 와 비교한 1,070 수식 중 1,059개(98.97%)가 일치하며, DDE·OLE 링크와 해석하지 못한 BIFF5 식은 수식 대신 캐시 값만 낸다.
+2. XLS 수식은 BIFF8 과, BIFF5 의 셀 참조·공유식을 해석한다. 같은 문서의 XLSX 와 비교한 1,070 수식 중 1,059개(98.97%)가 일치하며, DDE·OLE 링크·데이터 표(PtgTbl)와 해석하지 못한 BIFF5 이름·3D 참조·배열은 수식 대신 캐시 값만 낸다.
 3. 캡션은 Caption 스타일·SEQ 필드 문단이 최상위 흐름에서 표·그림 바로 앞/뒤에 있을 때만 결합한다. DOC 의 위쪽 캡션은 합성 문서로만 검증했다.
 4. HWP 는 배포용 문서를 복호화한다. 열기 암호로 보호된 HWP 는 명확한 오류로 거부한다.
 5. DOC 의 XOR 난독화는 공개 실물 표본이 없어 합성 문서로만 검증했다(RC4·RC4 CryptoAPI 는 실물 검증).

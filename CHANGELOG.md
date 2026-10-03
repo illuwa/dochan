@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 추가·수정 (XLS 수식)
+
+- 메모리 토큰(`PtgMemFunc`·`PtgMemArea`·`PtgMemErr`·`PtgMemNoMem`), `PtgElfLel`, BIFF5 셀 참조·공유식을 해석해 공개 XLS 721개에서 수식 845셀을 더 낸다
+  (기존 수식 소실·캐시 값 변경 0). 다음 토큰을 삼키던 BIFF5 참조 해석 오류로 사라지던 단항 `+` 를 되살렸다.
+- BIFF5 통합문서의 시트·정의 이름을 바이트 문자열로 읽어 `Feuil1` 이 `euil1` 로 깨지던 결함을 고쳤다. 코드페이지 32768·32769 를 지원한다.
+
 ## [1.11.0] - 2026-10-03
 
 PPT 글자 서식을 마스터·문서 기본 서식에서 상속해 내고(Microsoft PowerPoint 실측으로 검증), Markdown 출력의 강조가 줄을 넘어 깨지지 않게 했다.

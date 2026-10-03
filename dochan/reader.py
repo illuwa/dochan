@@ -450,6 +450,7 @@ class Dochan:
             self.doc.errors.extend(section_parser.errors)
 
             # 4. BinData 이미지 연결
+            bin_items = {}
             try:
                 bin_items = extract_bin_data(
                     ole,
@@ -470,7 +471,7 @@ class Dochan:
                 # Resolve markers even if image extraction failed; unresolved
                 # markers must never escape into JSON as unknown objects.
                 try:
-                    resolve_charts(self.doc, locals().get('bin_items', {}),
+                    resolve_charts(self.doc, bin_items,
                                    doc_info.bin_data_entries,
                                    existing_cells=section_parser._document_cells)
                 except Exception as e:

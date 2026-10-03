@@ -76,8 +76,11 @@ def main():
         if not storages:
             continue
         ole = olefile.OleFileIO(str(path))
+        # Excel charts use Category/Series headers (or Series | X | Y for
+        # scatter); OOXML chart tables start with 범주 and are skipped here.
         tables = [t for t in Dochan(str(path)).doc.find_all('table')
-                  if (t.caption_text or '').startswith('Chart type:')]
+                  if (t.caption_text or '').startswith('Chart type:')
+                  and t.rows and t.rows[0] and t.rows[0][0].text in ('Category', 'Series')]
         for storage, table in zip(storages, tables):
             raw = ole.openstream('BinData/BIN%04X.OLE' % storage).read()
             if record['compressed']:

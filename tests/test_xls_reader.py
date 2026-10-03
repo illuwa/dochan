@@ -914,7 +914,7 @@ def test_parse_biff_workbook_applies_format_and_xf_number_formats():
     table = doc.sections[0].elements[0]
 
     assert table.rows[1][0].text == "2024-01-01"
-    assert table.rows[1][1].text == "12.5%"
+    assert table.rows[1][1].text == "13%"
     assert table.rows[1][2].text == "$1,234.50"
 
 

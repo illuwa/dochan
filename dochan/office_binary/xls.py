@@ -1,5 +1,5 @@
 """Native XLS BIFF reader."""
-from datetime import date, timedelta
+from functools import lru_cache
 import re
 import struct
 from dataclasses import dataclass, field
@@ -15,6 +15,7 @@ from .xls_drawing import XlsDrawingReader
 from .xls_ftab import FUNCTION_NAMES, FIXED_ARGUMENT_COUNTS
 from .xls_formula import BoundedErrors, FormulaContext, FormulaDataError, FormulaName, ExtraReader, warn as formula_warn
 from ..conversion import Provenance
+from ..spreadsheet_format import BUILTIN_NUM_FORMATS, SpreadsheetNumberFormatter
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.table import Cell, Table
 from ..utils.bounded_io import (
@@ -41,6 +42,7 @@ MAX_RANGE_FILL_CELLS = 100_000  # MERGEDCELLS/HLINK 가 선언한 범위로 채�
 MAX_EMPTY_GRID_CELLS = 1_000     # 내용 없는 격자를 표로 만들 최대 크기
 MAX_RICH_RUNS = 100_000          # Workbook-wide materialized formatting runs.
 MAX_RICH_BYTES = 16 * 1024 * 1024
+MAX_NUMBER_FORMAT_CACHE = 4096
 
 
 @dataclass
@@ -183,20 +185,21 @@ def _format_number_with_format(value: float, format_string: str = "", date_1904:
 
 
 def _display_number_with_format(value: float, format_string: str = "", date_1904: bool = False) -> str:
-    normalized = format_string.lower()
-    if _is_date_format(normalized):
-        return _excel_serial_to_date(value, date_1904=date_1904)
-    if "%" in normalized:
-        formatted = _format_number(value * 100)
-        return f"{formatted}%"
-    if "$" in normalized:
-        return f"${value:,.2f}"
-    if "," in normalized and "0" in normalized:
-        if "." in normalized:
-            decimals = len(normalized.rsplit(".", 1)[1].replace("0", "").replace("#", ""))
-            return f"{value:,.{decimals}f}"
-        return f"{value:,.0f}"
-    return _format_number(value)
+    raw = _format_number(value)
+    if not format_string or format_string.lower() == "general":
+        return raw
+    formatter = _number_formatter(date_1904)
+    cache = getattr(formatter, "_format_metadata_cache", None)
+    if cache is not None and len(cache) >= MAX_NUMBER_FORMAT_CACHE:
+        cache.clear()
+    return formatter._format_cell_value(raw, format_string)
+
+
+@lru_cache(maxsize=2)
+def _number_formatter(date_1904: bool) -> SpreadsheetNumberFormatter:
+    formatter = SpreadsheetNumberFormatter()
+    formatter._date_1904 = date_1904
+    return formatter
 
 
 def _decode_rk(raw: int) -> float:
@@ -212,31 +215,6 @@ def _decode_rk(raw: int) -> float:
     if raw & 0x01:
         decoded /= 100
     return decoded
-
-
-def _is_date_format(normalized: str) -> bool:
-    return any(marker in normalized for marker in ("m/d", "d/m", "yyyy", "yy")) and not any(token in normalized for token in ("h", "s"))
-
-
-def _excel_serial_to_date(value: float, date_1904: bool = False) -> str:
-    # NaN/inf 는 int() 에서 ValueError/OverflowError 가 나고, 지나치게 큰 값은
-    # timedelta 에서 OverflowError 가 난다. 어느 쪽이든 원본 숫자를 그대로 돌려준다.
-    if value != value or value in (float("inf"), float("-inf")):
-        return _format_number(value)
-    try:
-        serial = int(value)
-    except (ValueError, OverflowError):
-        return _format_number(value)
-    if serial >= 60:
-        serial -= 1
-    # date + timedelta 의 실제 한계는 상수로 가늠하지 말고 예외로 잡는다.
-    # 셀 하나가 워크북 전체를 날리면 안 된다.
-    try:
-        if date_1904:
-            return (date(1904, 1, 1) + timedelta(days=serial)).isoformat()
-        return (date(1899, 12, 31) + timedelta(days=serial)).isoformat()
-    except (OverflowError, ValueError):
-        return _format_number(value)
 
 
 def _read_short_string(data: bytes, offset: int = 0) -> Tuple[str, int]:
@@ -1128,7 +1106,8 @@ def _parse_sheet_records(
             _set_sheet_cell(sheet, row, col, formatted, "BOOLERR")
         elif record_type == 0x0006 and len(record_data) >= 14:  # FORMULA cached number
             row, col, xf_index = struct.unpack_from("<HHH", record_data, 0)
-            formatted = _decode_formula_cached_result(record_data, _format_for_xf(xf_index, formats, xf_formats))
+            formatted = _decode_formula_cached_result(
+                record_data, _format_for_xf(xf_index, formats, xf_formats), date_1904)
             formula = _decode_formula_tokens(record_data, external_sheets, sheet_names, defined_names,
                                              errors=sheet.errors, internal_supbooks=internal_supbooks, formula_context=formula_context)
             if not _set_sheet_cell(
@@ -1404,7 +1383,8 @@ def _fill_cell_range(
 def _format_for_xf(xf_index: int, formats: Dict[int, str], xf_formats: List[int]) -> str:
     if xf_index < 0 or xf_index >= len(xf_formats):
         return ""
-    return formats.get(xf_formats[xf_index], "")
+    format_index = xf_formats[xf_index]
+    return formats.get(format_index, BUILTIN_NUM_FORMATS.get(format_index, ""))
 
 
 def _font_flags_for_xf(
@@ -1470,7 +1450,7 @@ def _extract_note_author(record_data: bytes) -> str:
     return raw.decode("utf-16-le" if flags & 0x01 else "cp1252", errors="replace").strip()
 
 
-def _decode_formula_cached_result(record_data: bytes, format_string: str = "") -> str:
+def _decode_formula_cached_result(record_data: bytes, format_string: str = "", date_1904: bool = False) -> str:
     if len(record_data) < 14:
         return ""
     result = record_data[6:14]
@@ -1483,7 +1463,7 @@ def _decode_formula_cached_result(record_data: bytes, format_string: str = "") -
         if result_type == 0x03:
             return ""
     value = struct.unpack_from("<d", record_data, 6)[0]
-    return _format_number_with_format(value, format_string)
+    return _format_number_with_format(value, format_string, date_1904)
 
 
 def _decode_formula_tokens(

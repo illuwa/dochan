@@ -79,7 +79,7 @@ def test_xls_chart_overrides_source_display_without_losing_raw_numeric_value():
     data = chart(series(formatted_brai(1, 2, tokens=area(0, 0, 0, 0, 0))), cache(1, [0.99]))
     out = parse_chart_substreams(data, sheets=[{(0, 0): value}], external_sheets=[(0, 0)])
     assert rows(out[0])[1] == ['0', '0.217']
-    assert str(value) == '21.7%'  # Worksheet output remains unchanged.
+    assert str(value) == '22%'  # 0% displays a rounded whole percent.
 
 
 def test_xls_chart_linked_source_reuses_exact_time_value():
@@ -105,7 +105,7 @@ def test_xls_numeric_metadata_preserves_string_copy_and_json_contract():
     from dochan.office_binary.xls import _format_number_with_format
     original = _format_number_with_format(0.217, '0%')
     copied = copy.deepcopy(original)
-    assert json.dumps(copied) == '"21.7%"'
+    assert json.dumps(copied) == '"22%"'
     assert copied.number == original.number == 0.217
     assert copied.number_format == '0%'
 
@@ -141,5 +141,5 @@ def test_xls_workbook_plumbs_chart_formats_epoch_and_numeric_source():
             + chart(series(formatted_brai(2, 0, linked=True, tokens=tokens), formatted_brai(1, 164)),
                     cache(1, [1.5])) + rec(0x000a))
     doc = parse_biff_workbook(data)
-    assert rows(doc.sections[0].elements[0]) == [['0.5']]
+    assert rows(doc.sections[0].elements[0]) == [['1904-01-01 12:00']]
     assert rows(doc.sections[0].elements[1])[1] == ['1904-01-01 12:00', '1904-01-02 12:00']

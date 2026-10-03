@@ -13,6 +13,7 @@ from dochan import cfb
 from .cfb import append_recovery_warnings
 
 from .hwp.bin_data import extract_bin_data, link_images_to_bin_data
+from .hwp.charts import resolve_charts
 from .hwp.distdoc import decode_distribution_section
 from .hwp.doc_info import DocInfoParser
 from .hwp.header import FileHeader
@@ -457,6 +458,7 @@ class Dochan:
                     warnings=self.doc.errors,
                 )
                 link_images_to_bin_data(self.doc, bin_items, doc_info.bin_data_entries)
+                resolve_charts(self.doc, bin_items, doc_info.bin_data_entries)
             except ResourceLimitError as e:
                 # Body text is already parsed within its budgets; only the
                 # images are dropped when their combined size runs out.

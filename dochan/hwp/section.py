@@ -23,7 +23,8 @@ from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
 from ..constants import (
     HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT, HWPTAG_PARA_CHAR_SHAPE,
     HWPTAG_CTRL_HEADER, HWPTAG_LIST_HEADER, HWPTAG_TABLE,
-    HWPTAG_EQEDIT, HWPTAG_SHAPE_COMP_PICTURE, HWPTAG_SHAPE_COMPONENT,
+    HWPTAG_EQEDIT, HWPTAG_SHAPE_COMP_PICTURE, HWPTAG_SHAPE_COMP_OLE,
+    HWPTAG_SHAPE_COMPONENT,
     HWPTAG_CTRL_DATA, MAX_OUTLINE_HEADING_LEVEL,
 )
 from ..model.document import Section, Paragraph, TextRun
@@ -38,6 +39,7 @@ from .records.ctrl_header import (
 )
 from .records.para_text import parse_para_text
 from .forms import form_text
+from .charts import ChartReference, MAX_CHARTS
 from .revisions import project_text_result
 
 
@@ -165,6 +167,7 @@ class SectionParser:
         self._fatal_error_keys = set()
         self._document_error_keys = set()
         self._table_failure_serial = 0
+        self._chart_count = 0
 
     def _document_limit_once(self, key, message):
         if key not in self._document_error_keys:
@@ -1218,6 +1221,10 @@ class SectionParser:
                 flow.extend(self._parse_shape_component(child))
             elif tag == HWPTAG_SHAPE_COMP_PICTURE:
                 flow.append(self._picture_to_image(child['record'].data))
+            elif tag == HWPTAG_SHAPE_COMP_OLE:
+                ref = self._ole_to_chart_reference(child['record'].data)
+                if ref is not None:
+                    flow.append(ref)
 
         images = [e for e in flow if isinstance(e, Image)]
         if images:
@@ -1261,6 +1268,10 @@ class SectionParser:
             tag = child['record'].tag_id
             if tag == HWPTAG_SHAPE_COMP_PICTURE:
                 out.append(self._picture_to_image(child['record'].data))
+            elif tag == HWPTAG_SHAPE_COMP_OLE:
+                ref = self._ole_to_chart_reference(child['record'].data)
+                if ref is not None:
+                    out.append(ref)
             elif tag == HWPTAG_SHAPE_COMPONENT:
                 out.extend(self._parse_shape_component(child, depth + 1))
             elif tag == HWPTAG_LIST_HEADER:
@@ -1274,6 +1285,18 @@ class SectionParser:
             elif tag == HWPTAG_PARA_HEADER:
                 out.extend(self._parse_paragraph_group(child))
         return out
+
+    def _ole_to_chart_reference(self, data):
+        # HWPTAG_SHAPE_COMP_OLE: properties(4), extent(8), BinData slot(2).
+        self._chart_count += 1
+        if self._chart_count > MAX_CHARTS:
+            if self._chart_count == MAX_CHARTS + 1:
+                self.errors.append('WARN: HWP chart placement count limit exceeded')
+            return None
+        if len(data) < 14:
+            self.errors.append('WARN: HWP chart OLE control truncated')
+            return None
+        return ChartReference(struct.unpack_from('<H', data, 12)[0])
 
     @staticmethod
     def _picture_to_image(data: bytes) -> Image:

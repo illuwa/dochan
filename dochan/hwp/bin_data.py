@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 MAX_BINDATA_ITEM_SIZE = MAX_OLE_STREAM_SIZE
 MAX_BINDATA_TOTAL_SIZE = MAX_OLE_DOCUMENT_SIZE
+MAX_CHART_OLE_ITEMS = 256
 
 
 @dataclass
@@ -58,6 +59,7 @@ def extract_bin_data(
     raw_budget = stream_budget or ByteBudget(total_limit)
     extracted_budget = ByteBudget(total_limit)
     oversized = []
+    ole_count = 0
 
     for entry in ole.listdir():
         if len(entry) >= 2 and entry[0] == 'BinData':
@@ -73,6 +75,12 @@ def extract_bin_data(
 
                 # 확장자
                 ext = storage_name.split('.')[-1] if '.' in storage_name else ""
+                if ext.lower() == 'ole':
+                    ole_count += 1
+                    if ole_count > MAX_CHART_OLE_ITEMS:
+                        if ole_count == MAX_CHART_OLE_ITEMS + 1 and warnings is not None:
+                            warnings.append('WARN: HWP embedded OLE item count limit exceeded')
+                        continue
 
                 # 데이터 읽기
                 stream_name = '/'.join(entry)
@@ -112,7 +120,11 @@ def extract_bin_data(
                     extension=ext.lower(),
                 )
 
-            except BoundedIOError:
+            except BoundedIOError as exc:
+                if storage_name.lower().endswith('.ole') and warnings is not None:
+                    warnings.append('WARN: HWP chart BinData stream limit exceeded (%s)' %
+                                  type(exc).__name__)
+                    continue
                 raise
             except (ValueError, struct.error, UnicodeDecodeError, OSError, zlib.error) as e:
                 logger.warning("BinData 항목 '%s' 파싱 실패: %s", storage_name, e)

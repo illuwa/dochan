@@ -1,6 +1,7 @@
 """Regression inputs for the stdlib XML migration review."""
 from io import BytesIO
 from time import perf_counter
+import tracemalloc
 
 import pytest
 
@@ -269,6 +270,44 @@ def test_vml_fallback_rejects_oversized_part(monkeypatch):
     source = b'<xml><br>' + b'x' * 100 + b'</xml>'
     with pytest.raises(ValueError, match='XML size limit'):
         xml.vml_fromstring(source)
+
+
+def test_vml_unterminated_eight_mib_tag_uses_input_sized_memory(monkeypatch):
+    assert xml.MAX_VML_FALLBACK_BYTES == 1024 * 1024
+    monkeypatch.setattr(xml, 'MAX_VML_FALLBACK_BYTES', 8 * 1024 * 1024)
+    source = b'<xml><' + b'a' * (8 * 1024 * 1024 - 6)
+    tracemalloc.start()
+    try:
+        root = xml.vml_fromstring(source)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert root.tag == 'xml'
+    assert peak < 48 * 1024 * 1024
+
+
+def test_vml_namespace_text_inside_attribute_is_not_a_declaration():
+    source = (b'<xml note="x xmlns:v=\'urn:schemas-microsoft-com:vml\'">'
+              b'<br><v:imagedata id="forged"/></xml>')
+    root = xml.vml_fromstring(source)
+    assert root.find('.//{urn:schemas-microsoft-com:vml}imagedata') is None
+
+
+@pytest.mark.parametrize('encoding', ['utf-16-le', 'utf-16-be'])
+def test_vml_fallback_recognizes_bomless_utf16(encoding):
+    source = ('<xml xmlns:v="urn:schemas-microsoft-com:vml"><br>'
+              '<v:imagedata id="real"/></xml>').encode(encoding)
+    root = xml.vml_fromstring(source)
+    assert root.find('.//{urn:schemas-microsoft-com:vml}imagedata').get('id') == 'real'
+
+
+def test_iterparse_short_reads_keep_multibyte_declaration():
+    class ShortRead(BytesIO):
+        def read(self, size=-1):
+            return super().read(1 if size < 0 else min(size, 1))
+
+    source = '<?xml version="1.0" encoding="EUC-KR"?><r><row>한글</row></r>'.encode('euc-kr')
+    assert list(xml.iterparse(ShortRead(source), tag='row'))[0][1].text == '한글'
 
 
 def test_streaming_does_not_keep_comment_or_pi_nodes():

@@ -95,6 +95,28 @@ def test_damaged_optional_sheet_part_keeps_cells_and_footer(tmp_path, damaged_pa
     assert any("parse failed" in error for error in doc.errors)
 
 
+def test_crc_damaged_sheet_relationships_keep_cells(tmp_path):
+    path = tmp_path / "crc-relationships.xlsx"
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    workbook = (f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships"><sheets>'
+                '<sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>')
+    sheet = (f'<worksheet xmlns="{ns}"><sheetData><row r="1">'
+             '<c r="A1"><v>7</v></c></row></sheetData></worksheet>')
+    marker = b'crc_target_marker'
+    rels = (b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            b'<Relationship Id="rId2" Target="' + marker + b'"/></Relationships>')
+    _write_xlsx(path, workbook, {"xl/worksheets/sheet1.xml": sheet},
+                extra_parts={"xl/worksheets/_rels/sheet1.xml.rels": rels})
+    data = path.read_bytes()
+    assert data.count(marker) == 1
+    path.write_bytes(data.replace(marker, b'crc_target_markeR'))
+    doc = XLSXReader().read(str(path))
+    assert doc.find_all("table")[0].rows[0][0].text == "7"
+    assert any("sheet relationships XML parse failed" in error and "CRC" in error
+               for error in doc.errors)
+
+
 def test_oversized_streaming_sheet_does_not_discard_other_sheet(tmp_path, monkeypatch):
     path = tmp_path / "oversized.xlsx"
     ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"

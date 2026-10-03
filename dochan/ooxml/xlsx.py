@@ -711,7 +711,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             return
         try:
             root = package.read_xml_part(rels_path)
-        except (etree.XMLSyntaxError, ValueError) as exc:
+        except (etree.XMLSyntaxError, ValueError, zipfile.BadZipFile) as exc:
             warning = f"ERR: XLSX sheet relationships XML parse failed: {rels_path}: {exc}"
             if warning not in self._errors:
                 self._errors.append(warning)
@@ -1321,7 +1321,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             return {}
         try:
             root = package.read_xml_part(rels_path)
-        except (etree.XMLSyntaxError, ValueError) as exc:
+        except (etree.XMLSyntaxError, ValueError, zipfile.BadZipFile) as exc:
             warning = f"ERR: XLSX sheet relationships XML parse failed: {rels_path}: {exc}"
             if warning not in self._errors:
                 self._errors.append(warning)
@@ -1341,7 +1341,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             return {}
         try:
             rels_root = package.read_xml_part(rels_path)
-        except (etree.XMLSyntaxError, ValueError) as exc:
+        except (etree.XMLSyntaxError, ValueError, zipfile.BadZipFile) as exc:
             warning = f"ERR: XLSX sheet relationships XML parse failed: {rels_path}: {exc}"
             if warning not in self._errors:
                 self._errors.append(warning)
@@ -1356,7 +1356,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
 
         try:
             root = package.read_xml_part(comments_path)
-        except (etree.XMLSyntaxError, ValueError) as exc:
+        except (etree.XMLSyntaxError, ValueError, zipfile.BadZipFile) as exc:
             self._errors.append(f"ERR: XLSX comments XML parse failed: {comments_path}: {exc}")
             return {}
         authors = [

@@ -22,14 +22,12 @@ MAX_DEPTH = 256
 MAX_NAMESPACE_WORK = 1000000
 CHUNK_SIZE = 1024 * 1024
 MAX_DTD_SUBSET_BYTES = 64 * 1024
-MAX_VML_FALLBACK_BYTES = 8 * 1024 * 1024
+MAX_VML_FALLBACK_BYTES = 1024 * 1024
 _namespaces = WeakKeyDictionary()
 _declared_uris = WeakKeyDictionary()
 _encoding = re.compile(br'^\s*<\?xml\s[^?]*encoding\s*=\s*[\'"]([^\'"]+)[\'"]', re.I)
 _dtd_delimiter = re.compile(br'[\[\]<>\'\"]')
-_vml_tokens = re.compile(r'<!--.*?(?:-->|$)|<!\[CDATA\[.*?(?:\]\]>|$)|<\?.*?(?:\?>|$)|<(?:[^<>"\']|"[^"]*"|\'[^\']*\')*>', re.S)
 _vml_attributes = re.compile(r'([^\s=/>]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))')
-_vml_xmlns_attributes = re.compile(r'(?:^|\s)(xmlns(?::[^\s=/>]+)?)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))')
 _expat_numbers = tuple(int(value) for value in re.findall(r'\d+', expat.EXPAT_VERSION)[:3])
 EXPAT_BELOW_RECOMMENDED = _expat_numbers < (2, 4, 0)
 
@@ -357,8 +355,31 @@ class _BoundedTree:
         return node
 
 
+class _PlainBoundedTree(_BoundedTree):
+    """Fast path for parts that do not need per-element namespace scopes."""
+    def start(self, tag, attrs):
+        self.depth += 1
+        if self.depth > self.greatest_depth:
+            self.greatest_depth = self.depth
+        self.elements += 1
+        if self.depth > self.max_depth:
+            raise ValueError('XML depth limit exceeded')
+        if self.elements > 1000000:
+            raise ValueError('XML element limit exceeded')
+        node = self.builder.start(tag, attrs)
+        if self.root is None:
+            self.root = node
+        return node
+
+    def end(self, tag):
+        node = self.builder.end(tag)
+        self.depth -= 1
+        return node
+
+
 def _parse_tree(data, options, namespaces, max_namespaces, max_depth, truncate):
-    target = _BoundedTree(options, namespaces, max_namespaces, max_depth, truncate)
+    target_class = _BoundedTree if namespaces else _PlainBoundedTree
+    target = target_class(options, namespaces, max_namespaces, max_depth, truncate)
     parser = _ET.XMLParser(target=target)  # nosemgrep: use-defused-xml -- prolog rejected; target checks before allocation
     try:
         parser.feed(data)
@@ -438,18 +459,26 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
         if not chunk:
             break
         first = total == 0
-        if first and chunk.startswith(b'<?xml') and b'?>' not in chunk:
-            declaration_chunks = [chunk]
-            declaration_size = len(chunk)
-            while b'?>' not in chunk:
-                chunk = source.read(CHUNK_SIZE)
-                if not chunk:
+        if first and b'<?xml'.startswith(chunk[:5]):
+            declaration = bytearray(chunk)
+            while len(declaration) < 5 and b'<?xml'.startswith(declaration):
+                extra = source.read(CHUNK_SIZE)
+                if not extra:
                     break
-                declaration_size += len(chunk)
-                if declaration_size > max_bytes:
+                declaration.extend(extra)
+                if len(declaration) > max_bytes:
                     raise ValueError('XML size limit exceeded')
-                declaration_chunks.append(chunk)
-            chunk = b''.join(declaration_chunks)
+            if declaration.startswith(b'<?xml'):
+                complete = b'?>' in declaration
+                while not complete:
+                    extra = source.read(CHUNK_SIZE)
+                    if not extra:
+                        break
+                    complete = b'?>' in declaration[-1:] + extra
+                    declaration.extend(extra)
+                    if len(declaration) > max_bytes:
+                        raise ValueError('XML size limit exceeded')
+            chunk = bytes(declaration)
         total += len(chunk)
         if total > max_bytes:
             raise ValueError('XML size limit exceeded')
@@ -512,6 +541,89 @@ def XML(data):
     return fromstring(data)
 
 
+def _vml_tag_tokens(data):
+    """Yield complete tags with one forward scan and bounded transient state."""
+    position = 0
+    while True:
+        start = data.find('<', position)
+        if start < 0:
+            return
+        for prefix, ending in (('<!--', '-->'), ('<![CDATA[', ']]>'), ('<?', '?>')):
+            if data.startswith(prefix, start):
+                end = data.find(ending, start + len(prefix))
+                if end < 0:
+                    return
+                position = end + len(ending)
+                break
+        else:
+            if data.startswith('<!', start):
+                end = data.find('>', start + 2)
+                if end < 0:
+                    return
+                position = end + 1
+                continue
+            cursor = start + 1
+            quote = None
+            while cursor < len(data):
+                char = data[cursor]
+                if quote:
+                    if char == quote:
+                        quote = None
+                elif char in ('"', "'"):
+                    quote = char
+                elif char == '<':
+                    # Broken HTML often leaves a start tag open before the next.
+                    position = cursor
+                    break
+                elif char == '>':
+                    yield data[start + 1:cursor].strip()
+                    position = cursor + 1
+                    break
+                cursor += 1
+            else:
+                return
+
+
+def _vml_namespace_attributes(data):
+    """Find actual xmlns attributes while skipping complete quoted values."""
+    position = 0
+    length = len(data)
+    while position < length:
+        while position < length and data[position].isspace():
+            position += 1
+        start = position
+        while position < length and not data[position].isspace() and data[position] not in '=/>':
+            position += 1
+        if position == start:
+            position += 1
+            continue
+        name = data[start:position].lower()
+        while position < length and data[position].isspace():
+            position += 1
+        if position >= length or data[position] != '=':
+            continue
+        position += 1
+        while position < length and data[position].isspace():
+            position += 1
+        if position >= length:
+            return
+        quote = data[position] if data[position] in ('"', "'") else None
+        if quote:
+            position += 1
+            start = position
+            end = data.find(quote, position)
+            if end < 0:
+                return
+            position = end + 1
+        else:
+            start = position
+            while position < length and not data[position].isspace() and data[position] != '>':
+                position += 1
+            end = position
+        if name == 'xmlns' or name.startswith('xmlns:'):
+            yield name, unescape(data[start:end])
+
+
 def vml_fromstring(data):
     """Read VML strictly first, then extract only image references from HTML.
 
@@ -528,15 +640,21 @@ def vml_fromstring(data):
     data = _decode(data)
     check_prolog(data)
     if isinstance(data, bytes):
-        data = data.decode('utf-16' if data.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig')
+        if data.startswith((b'\xff\xfe', b'\xfe\xff')):
+            data = data.decode('utf-16')
+        elif data[:2] == b'<\x00':
+            data = data.decode('utf-16-le')
+        elif data[:2] == b'\x00<':
+            data = data.decode('utf-16-be')
+        else:
+            data = data.decode('utf-8-sig')
     root = Element('xml')
 
     scopes = [({}, '')]
     open_tags = {}
     count = 0
     namespace_work = 0
-    for match in _vml_tokens.finditer(data):
-        token = match.group()[1:-1].strip()
+    for token in _vml_tag_tokens(data):
         if not token or token[0] in ('!', '?'):
             continue
         if token[0] == '/':
@@ -559,10 +677,13 @@ def vml_fromstring(data):
         if count > 1000000:
             raise ValueError('XML element limit exceeded')
         attrs = []
-        attributes = _vml_attributes if tag.endswith('imagedata') else _vml_xmlns_attributes
-        for attribute in attributes.finditer(parts[1] if len(parts) > 1 else ''):
-            name = attribute.group(1).lower()
-            attrs.append((name, unescape(next(value for value in attribute.groups()[1:] if value is not None))))
+        attribute_text = parts[1] if len(parts) > 1 else ''
+        if tag.endswith('imagedata'):
+            for attribute in _vml_attributes.finditer(attribute_text):
+                name = attribute.group(1).lower()
+                attrs.append((name, unescape(next(value for value in attribute.groups()[1:] if value is not None))))
+        else:
+            attrs.extend(_vml_namespace_attributes(attribute_text))
         scope = scopes[-1][0]
         declarations = {name[6:] if name.startswith('xmlns:') else '': value
                         for name, value in attrs if name == 'xmlns' or name.startswith('xmlns:')}

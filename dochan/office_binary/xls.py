@@ -625,7 +625,9 @@ def _defined_name_elements(
 ) -> List[Paragraph]:
     elements = []
     for defined_name in defined_names:
-        if (not defined_name.name or not defined_name.tokens or defined_name.hidden
+        # 숨은 이름(_FilterDatabase 등)은 XLSX 리더도 낸다 — 같은 계약으로 낸다.
+        # `_xlfn.` 은 미래 함수 자리표시자라 XLSX 정의 이름에 나타나지 않는다.
+        if (not defined_name.name or not defined_name.tokens
                 or defined_name.name.startswith("_xlfn.")):
             continue
         target = _decode_formula_token_stream(
@@ -2362,30 +2364,32 @@ def _parse_summary_information(data: bytes, errors=None) -> Dict[str, str]:
     codepage = 1252
     if 1 in offsets and offsets[1] + 6 <= end:
         offset = offsets[1]
-        if struct.unpack_from("<I", data, offset)[0] == 2:
+        if struct.unpack_from("<H", data, offset)[0] == 2:  # VT_I2 (Type 2바이트 + 패딩 2바이트)
             codepage = struct.unpack_from("<H", data, offset + 4)[0]
     result = {}
     for identifier, key in ((2, "title"), (4, "creator")):
         offset = offsets.get(identifier)
         if offset is None or offset + 8 > end:
             continue
-        value_type, count = struct.unpack_from("<II", data, offset)
+        value_type = struct.unpack_from("<H", data, offset)[0]
+        count = struct.unpack_from("<I", data, offset + 4)[0]
         if value_type not in (30, 31) or count > 4096:
             continue
         byte_count = count * (2 if value_type == 31 else 1)
         if offset + 8 + byte_count > end:
             continue
         raw = data[offset + 8:offset + 8 + byte_count]
-        if value_type == 31:
-            encoding = "utf-16-le"
-        elif codepage == 1200:
+        if value_type == 31 or codepage == 1200:
             encoding = "utf-16-le"
         else:
-            encoding = "cp%d" % codepage
+            # CODEPAGE 레코드와 같은 매핑(10000·32768 → mac_roman, 32769 → cp1252).
+            encoding = ('mac_roman' if codepage in (10000, 32768)
+                        else 'cp1252' if codepage == 32769 else 'cp%d' % codepage)
         try:
-            value = raw.decode(encoding, errors="replace").rstrip("\x00").strip()
+            value = raw.decode(encoding, errors="replace")
         except LookupError:
-            value = raw.decode("cp1252", errors="replace").rstrip("\x00").strip()
+            value = raw.decode("cp1252", errors="replace")
+        value = value.split("\x00", 1)[0].strip()  # 첫 NUL 에서 끝난다
         if value:
             result[key] = value
     return result

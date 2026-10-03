@@ -34,7 +34,7 @@ def test_xls_trims_only_trailing_empty_rows_and_columns():
     assert table.rows[1][2].text == "3"
 
 
-def test_xls_hidden_and_internal_defined_names_are_not_output():
+def test_xls_hidden_names_are_output_like_xlsx_but_xlfn_placeholders_are_not():
     visible = _name_record("Visible", b"\x1e\x01\x00")
     hidden = bytearray(_name_record("Hidden", b"\x1e\x02\x00"))
     struct.pack_into("<H", hidden, 4, 0x0001)
@@ -42,7 +42,7 @@ def test_xls_hidden_and_internal_defined_names_are_not_output():
     globals_part = _bof() + visible + bytes(hidden) + future
     doc = xls.parse_biff_workbook(_workbook(globals_part, _bof() + _eof()))
     text = [element.text for element in doc.sections[0].elements]
-    assert text == ["Defined name: Visible = 1"]
+    assert text == ["Defined name: Visible = 1", "Defined name: Hidden = 2"]
 
 
 def test_xls_array_formula_follower_uses_only_cached_value():

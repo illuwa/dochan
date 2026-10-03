@@ -520,3 +520,11 @@ POI 417개와 LibreOffice 303개, 총 720개를 파일마다 Markdown SHA-256·�
 | `corpus/poi-src/test-data/spreadsheet/testRVA.xls` | 셀 |
 | `corpus/poi-src/test-data/spreadsheet/text.xls` | 속성 |
 | `corpus/poi-src/test-data/spreadsheet/unicodeNameRecord.xls` | 속성 |
+
+## 감수 반영(2026-10-04)
+
+- 숨은 정의 이름 제외를 되돌렸다. XLSX 리더는 `hidden="1"` 이름(`_FilterDatabase`, `SAPBEXdnldView` 등)도 내므로, XLS 에서 숨은 이름을 지우면 같은 통합문서의 두 형식이 오히려 달라진다(짝 없는 34파일에서 이름 271개가 사라질 뻔했다). `_xlfn.` 미래 함수 자리표시자만 뺀다(두 코퍼스의 어떤 XLSX 에도 `_xlfn.` 정의 이름이 없다). BIFF5 공개 이름 테스트의 원래 단언(`Sheet1!$A$5:$F$376`)을 되살렸다.
+- 기존 단언 변경의 성격을 정정한다: 끝 빈 격자 단언은 버그가 아니라 DIMENSION·ROW·COLINFO 사용 범위를 보존하던 이전 계약이었고 이번에 XLSX 계약(서식만 있는 빈 셀 생략)으로 바꿨다. 이름이 "보존"이던 테스트는 `trims_trailing_…` 로 고쳤다. 배열 후속 셀은 ECMA-376 `<f ref>` 가 기준 셀에만 쓰이는 XLSX 계약을 따랐다.
+- SummaryInformation: Type 을 2바이트로 읽고(패딩 무시), 코드 페이지는 CODEPAGE 레코드와 같은 매핑(10000·32768 → mac_roman, 32769 → cp1252), 문자열은 첫 NUL 에서 자른다.
+- 감수 재측정: 공개 XLS 720개에서 비어 있지 않은 셀이 사라진 경우 0, 바뀐 505셀(16파일)은 모두 배열 후속 셀의 ` (=…)` 꼬리만 빠졌다. 처리 시간 51.9초 → 32.1초.
+- 남은 일: 빈 병합이 격자를 늘리는 동작(`15375.xls`, 부모와 같음), DOC·PPT 의 SummaryInformation 제목·작성자(짝 DOC 13/13·PPT 8/8 에서 OOXML 쪽에만 `Author:`) — 공용 OLE 모듈로 옮겨 후속 적용.

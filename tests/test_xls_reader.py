@@ -796,7 +796,7 @@ def test_parse_biff_workbook_checks_merge_endpoints_against_dense_budget(
     assert not doc.find_all("table")
 
 
-def test_parse_biff_workbook_preserves_mulblank_cell_coordinates():
+def test_parse_biff_workbook_trims_trailing_mulblank_cells():
     globals_part = _bof()
     worksheet = (
         _bof()
@@ -817,7 +817,7 @@ def test_parse_biff_workbook_preserves_mulblank_cell_coordinates():
     assert table.rows[0][0].col == 0
 
 
-def test_parse_biff_workbook_preserves_row_and_colinfo_extents():
+def test_parse_biff_workbook_trims_trailing_row_and_colinfo_extents():
     globals_part = _bof()
     worksheet = (
         _bof()
@@ -837,7 +837,7 @@ def test_parse_biff_workbook_preserves_row_and_colinfo_extents():
     assert [cell.text for cell in table.rows[0]] == ["10"]
 
 
-def test_parse_biff_workbook_preserves_dimension_used_range():
+def test_parse_biff_workbook_trims_trailing_dimension_used_range():
     globals_part = _bof()
     worksheet = (
         _bof()

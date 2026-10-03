@@ -326,7 +326,7 @@ def test_hyperlink_range_claiming_whole_sheet_fills_only_anchor():
 # --- 5. BIFF2/3/4 의 짧은 DIMENSION 레코드 -----------------------------------
 
 
-def test_biff2_eight_byte_dimension_is_applied():
+def test_biff2_eight_byte_dimension_does_not_extend_grid():
     """8바이트 DIMENSION(BIFF2)을 읽되 끝의 빈 서식 범위는 표시하지 않는다.
 
     고치기 전에는 12바이트 형식만 가정해 이 레코드를 통째로 무시했다.

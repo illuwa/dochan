@@ -192,6 +192,8 @@ class ExtraReader:
 class ExternalName:
     name: str = ''
     scope: int = 0
+    dde_item: str = ''
+    flags: int = 0
 
 
 @dataclass
@@ -200,6 +202,8 @@ class SupBook:
     ordinal: int = 0
     sheets: List[str] = field(default_factory=list)
     names: List[ExternalName] = field(default_factory=list)
+    service: str = ''
+    topic: str = ''
 
 
 class FormulaContext:
@@ -270,6 +274,7 @@ class FormulaContext:
                 if (count == 0 and path[:1] not in ('\x01', '\x02', '\x04', '\x05')
                         and path.count('\x03') == 1):
                     book.kind = 'dde'
+                    book.service, book.topic = path.split('\x03')
                     return
                 sheets = []
                 for _ in range(count):
@@ -295,6 +300,21 @@ class FormulaContext:
         try:
             reader = ExtraReader(data)
             flags, scope, _ = reader.unpack('<HHH')
+            if book.kind == 'dde':
+                label = reader.string(short=True)
+                value.flags = flags
+                # fOle (0x0008), fOleLink (0x0010), and fIcon (0x8000)
+                # carry different object semantics. Keep their cached cells
+                # until a formula-level display can be verified.
+                if flags & 0x8018:
+                    raise FormulaDataError('unsupported OLE external name')
+                if (scope or not label
+                        or any(char in label for char in '\r\n!|')
+                        or not book.service or not book.topic
+                        or any(char in book.service + book.topic for char in '\r\n!|')):
+                    raise FormulaDataError('invalid DDE external name')
+                value.dde_item = label
+                return
             # fWantAdvise/fWantPict, fOle/fOleLink, cf and fIcon describe
             # DDE/OLE bodies, not plain workbook names. fBuiltIn is bit 0.
             if flags & 0xfffe or book.kind not in ('external', 'addin'):
@@ -330,6 +350,13 @@ class FormulaContext:
 
     def namex(self, index, name_index):
         book, _, _ = self.link(index)
+        if book.kind == 'dde':
+            if not 1 <= name_index <= len(book.names):
+                raise FormulaDataError('unresolved DDE NameX index')
+            item = book.names[name_index - 1].dde_item
+            if not item:
+                raise FormulaDataError('unresolved DDE/OLE external name')
+            return FormulaName(book.service + '|' + book.topic + '!' + item)
         names = self.names if book.kind == 'internal' else book.names
         if not 1 <= name_index <= len(names) or not names[name_index - 1].name:
             raise FormulaDataError('unresolved NameX index')

@@ -1518,6 +1518,28 @@ class XLSXReader(SpreadsheetNumberFormatter):
 
     def _with_formula(self, text: str, cell_elem, shared_formulas: Dict[str, Tuple[str, str]], formula=None) -> str:
         formula_text = _node_text(formula)
+        if not formula_text and formula is not None and formula.get("t", "") == "dataTable":
+            def input_ref(attribute):
+                match = re.fullmatch(r'\$?([A-Z]{1,3})\$?([1-9][0-9]{0,6})',
+                                     formula.get(attribute, ''))
+                if match is None:
+                    return ''
+                column = 0
+                for char in match.group(1):
+                    column = column * 26 + ord(char) - 64
+                if column > 16384 or int(match.group(2)) > 1048576:
+                    return ''
+                return '$%s$%s' % match.groups()
+
+            first = input_ref('r1')
+            if first:
+                if formula.get('dt2D') in ('1', 'true'):
+                    second = input_ref('r2')
+                    formula_text = 'TABLE(%s,%s)' % (first, second) if second else ''
+                elif formula.get('dtr') in ('1', 'true'):
+                    formula_text = 'TABLE(%s,)' % first
+                else:
+                    formula_text = 'TABLE(,%s)' % first
         if not formula_text and formula is not None and formula.get("t", "") == "shared":
             shared_formula = shared_formulas.get(formula.get("si", ""), ("", ""))
             formula_text = self._translate_shared_formula(

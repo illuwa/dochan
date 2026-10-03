@@ -60,11 +60,18 @@ def test_namespace_scope_rebinding():
 def test_large_token_stream_and_dtd_guard():
     source = b'<r><row value="' + b'x' * (24 * 1024 * 1024) + b'"/></r>'
     started = time.monotonic()
-    with pytest.raises(ValueError, match='start tag byte limit'):
-        list(xml.iterparse(BytesIO(source), events=('end',), tag='row'))
-    assert time.monotonic() - started < 4
+    assert list(xml.iterparse(BytesIO(source), events=('end',), tag='row'))[0][1].get('value') == 'x' * (24 * 1024 * 1024)
+    assert time.monotonic() - started < 8
     with pytest.raises(xml.ForbiddenDTD):
         list(xml.iterparse(BytesIO(b'<!DOCTYPE r [<!ENTITY x "boom">]><r>&x;</r>')))
+
+
+def test_large_vml_gfxdata_and_utf16_streaming_are_accepted():
+    payload = 'x' * (3 * 1024 * 1024)
+    source = ('<r xmlns:o="urn:schemas-microsoft-com:office:office" '
+              'o:gfxdata="%s"><row a="Ģ"/></r>' % payload).encode('utf-16')
+    assert xml.fromstring(source).get('{urn:schemas-microsoft-com:office:office}gfxdata') == payload
+    assert list(xml.iterparse(BytesIO(source), tag='row'))[0][1].get('a') == 'Ģ'
 
 
 def test_recovery_still_rejects_dtd():

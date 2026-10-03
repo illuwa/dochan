@@ -206,9 +206,12 @@ class XLSXReader(SpreadsheetNumberFormatter):
                             "headers, footers, drawings, and embedded assets: "
                             f"{sheet_path}"
                         )
-                        table = self._read_large_sheet_table(package, sheet_path, sheet_name, shared_strings, styles)
-                        if table.rows:
-                            section.elements.append(table)
+                        try:
+                            table = self._read_large_sheet_table(package, sheet_path, sheet_name, shared_strings, styles)
+                            if table.rows:
+                                section.elements.append(table)
+                        except (etree.XMLSyntaxError, ValueError) as exc:
+                            doc.errors.append(f"ERR: XLSX sheet XML parse failed: {sheet_path}: {exc}")
                     else:
                         try:
                             sheet_root = package.read_xml_part(sheet_path)
@@ -221,7 +224,19 @@ class XLSXReader(SpreadsheetNumberFormatter):
                             section.elements.extend(self._read_sheet_drawings(package, sheet_root, sheet_path, sheet_name))
                             section.elements.extend(footers)
                         except (etree.XMLSyntaxError, ValueError) as exc:
-                            doc.errors.append(f"ERR: XLSX sheet XML parse failed: {sheet_path}: {exc}")
+                            # The completed row events are useful even when the
+                            # trailing XML is malformed. The streaming path
+                            # records the sheet error and keeps those rows.
+                            try:
+                                table = self._read_large_sheet_table(package, sheet_path, sheet_name,
+                                                                     shared_strings, styles)
+                                if table.rows:
+                                    section.elements.append(table)
+                            except (etree.XMLSyntaxError, ValueError):
+                                pass
+                            if not any(error.startswith(f"ERR: XLSX sheet XML parse failed: {sheet_path}:")
+                                       for error in doc.errors):
+                                doc.errors.append(f"ERR: XLSX sheet XML parse failed: {sheet_path}: {exc}")
                 else:
                     doc.errors.append(f"ERR: XLSX sheet part not found: {sheet_path}")
                 if index == 1 and core_elements:
@@ -694,7 +709,13 @@ class XLSXReader(SpreadsheetNumberFormatter):
         }
         if not embedded_rel_ids:
             return
-        root = package.read_xml_part(rels_path)
+        try:
+            root = package.read_xml_part(rels_path)
+        except (etree.XMLSyntaxError, ValueError) as exc:
+            warning = f"ERR: XLSX sheet relationships XML parse failed: {rels_path}: {exc}"
+            if warning not in self._errors:
+                self._errors.append(warning)
+            return {}
         sheet_dir = posixpath.dirname(sheet_path)
         for rel in root.findall("rel:Relationship", namespaces=NS):
             rel_id = rel.get("Id", "")
@@ -1298,7 +1319,13 @@ class XLSXReader(SpreadsheetNumberFormatter):
         rels_path = f"{sheet_dir}/_rels/{posixpath.basename(sheet_path)}.rels"
         if not package.exists(rels_path):
             return {}
-        root = package.read_xml_part(rels_path)
+        try:
+            root = package.read_xml_part(rels_path)
+        except (etree.XMLSyntaxError, ValueError) as exc:
+            warning = f"ERR: XLSX sheet relationships XML parse failed: {rels_path}: {exc}"
+            if warning not in self._errors:
+                self._errors.append(warning)
+            return {}
         relationships = {}
         for rel in root.findall("rel:Relationship", namespaces=NS):
             rel_id = rel.get("Id", "")
@@ -1312,7 +1339,13 @@ class XLSXReader(SpreadsheetNumberFormatter):
         rels_path = f"{sheet_dir}/_rels/{posixpath.basename(sheet_path)}.rels"
         if not package.exists(rels_path):
             return {}
-        rels_root = package.read_xml_part(rels_path)
+        try:
+            rels_root = package.read_xml_part(rels_path)
+        except (etree.XMLSyntaxError, ValueError) as exc:
+            warning = f"ERR: XLSX sheet relationships XML parse failed: {rels_path}: {exc}"
+            if warning not in self._errors:
+                self._errors.append(warning)
+            return {}
         comments_path = ""
         for rel in rels_root.findall("rel:Relationship", namespaces=NS):
             if rel.get("Type", "").endswith("/comments") and rel.get("Target"):
@@ -1321,7 +1354,11 @@ class XLSXReader(SpreadsheetNumberFormatter):
         if not comments_path or not package.exists(comments_path):
             return {}
 
-        root = package.read_xml_part(comments_path)
+        try:
+            root = package.read_xml_part(comments_path)
+        except (etree.XMLSyntaxError, ValueError) as exc:
+            self._errors.append(f"ERR: XLSX comments XML parse failed: {comments_path}: {exc}")
+            return {}
         authors = [
             author.text or ""
             for author in root.findall("s:authors/s:author", namespaces=_namespaces(root))

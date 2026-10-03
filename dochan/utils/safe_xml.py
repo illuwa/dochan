@@ -21,12 +21,15 @@ MAX_BYTES = 100 * 1024 * 1024
 MAX_DEPTH = 256
 MAX_NAMESPACE_WORK = 1000000
 CHUNK_SIZE = 1024 * 1024
-MAX_START_TAG_BYTES = 256 * 1024
-MAX_START_TAG_ATTRIBUTES = 1024
+MAX_DTD_SUBSET_BYTES = 64 * 1024
+MAX_VML_FALLBACK_BYTES = 8 * 1024 * 1024
 _namespaces = WeakKeyDictionary()
 _declared_uris = WeakKeyDictionary()
 _encoding = re.compile(br'^\s*<\?xml\s[^?]*encoding\s*=\s*[\'"]([^\'"]+)[\'"]', re.I)
 _dtd_delimiter = re.compile(br'[\[\]<>\'\"]')
+_vml_tokens = re.compile(r'<!--.*?(?:-->|$)|<!\[CDATA\[.*?(?:\]\]>|$)|<\?.*?(?:\?>|$)|<(?:[^<>"\']|"[^"]*"|\'[^\']*\')*>', re.S)
+_vml_attributes = re.compile(r'([^\s=/>]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))')
+_vml_xmlns_attributes = re.compile(r'(?:^|\s)(xmlns(?::[^\s=/>]+)?)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))')
 _expat_numbers = tuple(int(value) for value in re.findall(r'\d+', expat.EXPAT_VERSION)[:3])
 EXPAT_BELOW_RECOMMENDED = _expat_numbers < (2, 4, 0)
 
@@ -117,31 +120,48 @@ def sanitize_dtd(data):
         chunks.append(data[cursor:start])
         position = after
         subset = 0
+        subset_start = None
         while position < len(data):
             match = _dtd_delimiter.search(data, position)
             if match is None:
+                if subset_start is not None and len(data) - subset_start > MAX_DTD_SUBSET_BYTES:
+                    raise ValueError('DTD internal subset limit exceeded')
                 position = len(data)
                 break
             position = match.start()
+            if subset_start is not None and position - subset_start > MAX_DTD_SUBSET_BYTES:
+                raise ValueError('DTD internal subset limit exceeded')
             char = data[position]
             if data.startswith(b'<!--', position):
                 end = data.find(b'-->', position + 4)
                 if end < 0:
+                    if subset_start is not None and len(data) - subset_start > MAX_DTD_SUBSET_BYTES:
+                        raise ValueError('DTD internal subset limit exceeded')
                     position = len(data)
                     break
+                if subset_start is not None and end + 3 - subset_start > MAX_DTD_SUBSET_BYTES:
+                    raise ValueError('DTD internal subset limit exceeded')
                 position = end + 3
                 continue
             if char in (34, 39):
                 end = data.find(bytes((char,)), position + 1)
                 if end < 0:
+                    if subset_start is not None and len(data) - subset_start > MAX_DTD_SUBSET_BYTES:
+                        raise ValueError('DTD internal subset limit exceeded')
                     position = len(data)
                     break
+                if subset_start is not None and end + 1 - subset_start > MAX_DTD_SUBSET_BYTES:
+                    raise ValueError('DTD internal subset limit exceeded')
                 position = end + 1
                 continue
             if char == 91:
                 subset += 1
+                if subset_start is None:
+                    subset_start = position
             elif char == 93 and subset:
                 subset -= 1
+                if not subset:
+                    subset_start = None
             elif char == 62 and not subset:
                 position += 1
                 break
@@ -186,116 +206,6 @@ def check_prolog(data):
             raise XMLSyntaxError("Start tag expected, '<' not found, line %d, column %d (<string>, line %d)"
                                  % (line, column, line)) from exc
         raise XMLSyntaxError(str(exc)) from exc
-
-
-class _StartTagGuard:
-    """Bound the tokenizer's work before Expat allocates attribute dictionaries."""
-    def __init__(self):
-        self.pending = b''
-        self.skip_until = b''
-
-    def feed(self, data):
-        if isinstance(data, str):
-            data = data.encode('utf-8')
-        data = self.pending + data
-        position = 0
-        while True:
-            if self.skip_until:
-                end = data.find(self.skip_until, position)
-                if end < 0:
-                    self.pending = data[max(position, len(data) - len(self.skip_until) + 1):]
-                    return
-                position = end + len(self.skip_until)
-                self.skip_until = b''
-            start = data.find(b'<', position)
-            if start < 0:
-                self.pending = b''
-                return
-            if start + 1 == len(data):
-                self.pending = data[start:]
-                return
-            if len(data) - start < 9:
-                fragment = data[start:]
-                if any(marker.startswith(fragment) for marker in
-                       (b'<!--', b'<![CDATA[', b'<?')):
-                    self.pending = fragment
-                    return
-            if data.startswith(b'<!--', start):
-                self.skip_until = b'-->'
-                position = start + 4
-                continue
-            if data.startswith(b'<![CDATA[', start):
-                self.skip_until = b']]>'
-                position = start + 9
-                continue
-            if data.startswith(b'<?', start):
-                self.skip_until = b'?>'
-                position = start + 2
-                continue
-            if data[start + 1:start + 2] in (b'!', b'/'):
-                self.skip_until = b'>'
-                position = start + 2
-                continue
-            # A complete delimiter within the budget is the common case.
-            end = data.find(b'>', start + 1)
-            if end < 0:
-                if len(data) - start > MAX_START_TAG_BYTES:
-                    raise ValueError('XML start tag byte limit exceeded')
-                self.pending = data[start:]
-                return
-            token = data[start:end + 1]
-            if token.count(b'"') % 2 or token.count(b"'") % 2:
-                # A '>' inside an attribute value is not a tag delimiter.
-                quote = 0
-                end = start + 1
-                while end < len(data):
-                    char = data[end]
-                    if quote:
-                        if char == quote:
-                            quote = 0
-                    elif char in (34, 39):
-                        quote = char
-                    elif char == 62:
-                        break
-                    end += 1
-                    if end - start > MAX_START_TAG_BYTES:
-                        raise ValueError('XML start tag byte limit exceeded')
-                if end == len(data):
-                    self.pending = data[start:]
-                    return
-                token = data[start:end + 1]
-            if len(token) > MAX_START_TAG_BYTES:
-                raise ValueError('XML start tag byte limit exceeded')
-            if token.count(b'=') > MAX_START_TAG_ATTRIBUTES:
-                quote = 0
-                attributes = 0
-                for char in token:
-                    if quote:
-                        if char == quote:
-                            quote = 0
-                    elif char in (34, 39):
-                        quote = char
-                    elif char == 61:
-                        attributes += 1
-                        if attributes > MAX_START_TAG_ATTRIBUTES:
-                            raise ValueError('XML start tag attribute limit exceeded')
-            position = end + 1
-
-
-def _guard_start_tags(data):
-    if isinstance(data, bytes):
-        if data.startswith((b'\xff\xfe', b'\xfe\xff')):
-            data = data.decode('utf-16')
-        elif data[:2] == b'<\x00':
-            data = data.decode('utf-16-le')
-        elif data[:2] == b'\x00<':
-            data = data.decode('utf-16-be')
-    if isinstance(data, str):
-        data = data.encode('utf-8')
-    # A whole part smaller than both budgets cannot contain an oversized tag.
-    if len(data) <= MAX_START_TAG_BYTES and data.count(b'=') <= MAX_START_TAG_ATTRIBUTES:
-        return
-    _StartTagGuard().feed(data)
 
 
 class XMLParser:
@@ -386,6 +296,7 @@ class _BoundedTree:
         self.pi = self.builder.pi
         self.close = self.builder.close
         self.namespaces = namespaces
+        self.track_namespaces = bool(namespaces)
         self.max_namespaces = max_namespaces
         self.max_depth = max_depth * 8 if truncate else max_depth
         self.depth = 0
@@ -394,8 +305,8 @@ class _BoundedTree:
         self.declarations = 0
         self.uris = set()
         self.scope_work = 0
-        self.scopes = [{}]
-        self.pending = {}
+        self.scopes = [{}] if self.track_namespaces else None
+        self.pending = {} if self.track_namespaces else None
         self.root = None
 
     def start_ns(self, prefix, uri):
@@ -407,25 +318,29 @@ class _BoundedTree:
             self.uris.add(uri)
         if self.declarations > self.max_namespaces:
             raise ValueError('package XML namespace limit exceeded')
-        self.pending[prefix] = uri
+        if self.track_namespaces:
+            self.pending[prefix] = uri
 
     def start(self, tag, attrs):
-        self.depth += 1
-        self.greatest_depth = max(self.greatest_depth, self.depth)
+        depth = self.depth + 1
+        self.depth = depth
+        if depth > self.greatest_depth:
+            self.greatest_depth = depth
         self.elements += 1
-        if self.depth > self.max_depth:
+        if depth > self.max_depth:
             raise ValueError('XML depth limit exceeded')
         if self.elements > 1000000:
             raise ValueError('XML element limit exceeded')
-        scope = self.scopes[-1]
-        declared = bool(self.pending)
-        if declared:
-            self.scope_work += len(scope) + len(self.pending)
-            if self.scope_work > self.max_namespaces:
-                raise ValueError('package XML namespace limit exceeded')
-            scope = dict(scope, **self.pending)
-            self.pending.clear()
-        self.scopes.append(scope)
+        if self.track_namespaces:
+            scope = self.scopes[-1]
+            declared = bool(self.pending)
+            if declared:
+                self.scope_work += len(scope) + len(self.pending)
+                if self.scope_work > self.max_namespaces:
+                    raise ValueError('package XML namespace limit exceeded')
+                scope = dict(scope, **self.pending)
+                self.pending.clear()
+            self.scopes.append(scope)
         node = self.builder.start(tag, attrs)
         if self.root is None:
             self.root = node
@@ -436,7 +351,8 @@ class _BoundedTree:
 
     def end(self, tag):
         node = self.builder.end(tag)
-        self.scopes.pop()
+        if self.track_namespaces:
+            self.scopes.pop()
         self.depth -= 1
         return node
 
@@ -465,7 +381,6 @@ def fromstring(data, parser=None, *, max_bytes=MAX_BYTES, max_depth=None,
     data = _decode(data)
     if namespaces is None:
         namespaces = ('Requires' if isinstance(data, str) else b'Requires') in data
-    _guard_start_tags(data)
     check_prolog(data)
     options = parser or XMLParser(recover=recover)
     depth = options.max_depth if max_depth is None else max_depth
@@ -484,10 +399,9 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
     first element, so even a declaration crossing chunk boundaries is rejected.
     """
     guard = None
-    start_tag_guard = _StartTagGuard()
     pending = []
     total = 0
-    parser = _ET.XMLParser(target=_ET.TreeBuilder(insert_comments=True, insert_pis=True))  # nosemgrep: use-defused-xml -- input quarantined until prolog check
+    parser = _ET.XMLParser(target=_ET.TreeBuilder(insert_comments=False, insert_pis=False))  # nosemgrep: use-defused-xml -- input quarantined until prolog check
     pull = _ET.XMLPullParser(events=('start', 'end', 'start-ns'), _parser=parser)  # nosemgrep: use-defused-xml -- each prolog guarded before feed
     stack = []
     elements = 0
@@ -551,7 +465,6 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
                     decoder = codecs.getincrementaldecoder(name)()
         if decoder is not None:
             chunk = decoder.decode(chunk)
-        start_tag_guard.feed(chunk)
         if first:
             guard = _prolog_parser()
         if guard is not None:
@@ -575,7 +488,11 @@ def iterparse(source, events=('end',), tag=None, *, max_bytes=MAX_BYTES,
         pull.feed(buffered)
     if decoder is not None:
         pull.feed(decoder.decode(b'', final=True))
-    pull.close()
+    try:
+        pull.close()
+    except XMLSyntaxError:
+        yield from drain()
+        raise
     yield from drain()
 
 
@@ -606,7 +523,7 @@ def vml_fromstring(data):
         return fromstring(data)
     except XMLSyntaxError:
         pass
-    if len(data) > MAX_BYTES:
+    if len(data) > MAX_VML_FALLBACK_BYTES:
         raise ValueError('XML size limit exceeded')
     data = _decode(data)
     check_prolog(data)
@@ -618,53 +535,8 @@ def vml_fromstring(data):
     open_tags = {}
     count = 0
     namespace_work = 0
-    position = 0
-    length = len(data)
-    while position < length:
-        start = data.find('<', position)
-        if start < 0:
-            break
-        if data.startswith('<!--', start):
-            end = data.find('-->', start + 4)
-            if end < 0:
-                break
-            position = end + 3
-            continue
-        if data.startswith('<![CDATA[', start):
-            end = data.find(']]>', start + 9)
-            if end < 0:
-                break
-            position = end + 3
-            continue
-        if data.startswith('<?', start):
-            end = data.find('?>', start + 2)
-            if end < 0:
-                break
-            position = end + 2
-            continue
-        index = start + 1
-        quote = ''
-        # A second '<' outside a quoted attribute resynchronizes an
-        # incomplete start tag. No suffix is rescanned.
-        while index < length:
-            char = data[index]
-            if quote:
-                if char == quote:
-                    quote = ''
-            elif char in ('"', "'"):
-                quote = char
-            elif char == '<':
-                break
-            elif char == '>':
-                break
-            index += 1
-        if index == length:
-            break
-        if data[index] == '<':
-            position = index
-            continue
-        token = data[start + 1:index].strip()
-        position = index + 1
+    for match in _vml_tokens.finditer(data):
+        token = match.group()[1:-1].strip()
         if not token or token[0] in ('!', '?'):
             continue
         if token[0] == '/':
@@ -679,48 +551,18 @@ def vml_fromstring(data):
         self_closing = token.endswith('/')
         if self_closing:
             token = token[:-1].rstrip()
-        tag_end = 0
-        while tag_end < len(token) and not token[tag_end].isspace():
-            tag_end += 1
-        tag = token[:tag_end].lower()
+        parts = token.split(None, 1)
+        tag = parts[0].lower() if parts else ''
         if not tag:
             continue
         count += 1
         if count > 1000000:
             raise ValueError('XML element limit exceeded')
         attrs = []
-        attr_pos = tag_end
-        while attr_pos < len(token):
-            while attr_pos < len(token) and token[attr_pos].isspace():
-                attr_pos += 1
-            begin = attr_pos
-            while attr_pos < len(token) and not token[attr_pos].isspace() and token[attr_pos] != '=':
-                attr_pos += 1
-            if attr_pos == begin:
-                attr_pos += 1
-                continue
-            name = token[begin:attr_pos].lower()
-            while attr_pos < len(token) and token[attr_pos].isspace():
-                attr_pos += 1
-            value = ''
-            if attr_pos < len(token) and token[attr_pos] == '=':
-                attr_pos += 1
-                while attr_pos < len(token) and token[attr_pos].isspace():
-                    attr_pos += 1
-                if attr_pos < len(token) and token[attr_pos] in ('"', "'"):
-                    delimiter = token[attr_pos]
-                    attr_pos += 1
-                    begin = attr_pos
-                    while attr_pos < len(token) and token[attr_pos] != delimiter:
-                        attr_pos += 1
-                    value = token[begin:attr_pos]
-                    attr_pos += attr_pos < len(token)
-                else:
-                    begin = attr_pos
-                    while attr_pos < len(token) and not token[attr_pos].isspace():
-                        attr_pos += 1
-                    value = token[begin:attr_pos]
-            attrs.append((name, unescape(value)))
+        attributes = _vml_attributes if tag.endswith('imagedata') else _vml_xmlns_attributes
+        for attribute in attributes.finditer(parts[1] if len(parts) > 1 else ''):
+            name = attribute.group(1).lower()
+            attrs.append((name, unescape(next(value for value in attribute.groups()[1:] if value is not None))))
         scope = scopes[-1][0]
         declarations = {name[6:] if name.startswith('xmlns:') else '': value
                         for name, value in attrs if name == 'xmlns' or name.startswith('xmlns:')}

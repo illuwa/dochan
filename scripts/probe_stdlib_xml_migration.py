@@ -14,6 +14,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import random
 import signal
 import resource
 import sys
@@ -281,6 +282,8 @@ def main():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--formats", nargs="+", choices=sorted(set(EXTENSIONS.values())))
+    parser.add_argument("--shuffle-seed", type=int,
+                        help="셔플된 문서 순서로 성능을 반복 측정할 때 사용할 시드")
     parser.add_argument("--exclude", action="append", default=[],
                         help="별도 검증하는 공개 상대 경로를 제외하고 요약에 명시한다")
     parser.add_argument("--compare", nargs=2)
@@ -309,6 +312,8 @@ def main():
     if any(path not in paths for path in excluded):
         parser.error("--exclude must identify a discovered corpus-relative path")
     paths = [path for path in paths if path not in excluded]
+    if args.shuffle_seed is not None:
+        random.Random(args.shuffle_seed).shuffle(paths)
     rows = []
     started = time.perf_counter()
     print(json.dumps({"discovered": discovered, "selected": len(paths),

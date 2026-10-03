@@ -183,57 +183,39 @@ def test_sheet_keeps_completed_rows_before_damage(tail):
     assert rows == ['1', '2']
 
 
-def test_start_tag_byte_and_attribute_limits_precede_expat(monkeypatch):
-    source = b'<r ' + b' '.join(b'a%d="x"' % index for index in range(8000)) + b'/>'
-    calls = []
-    original = xml._prolog_parser
-
-    def watched():
-        calls.append(True)
-        return original()
-
-    monkeypatch.setattr(xml, '_prolog_parser', watched)
-    with pytest.raises(ValueError, match='start tag'):
-        xml.fromstring(source)
-    with pytest.raises(ValueError, match='start tag'):
-        list(xml.iterparse(BytesIO(source)))
-    assert not calls
+def test_many_attributes_are_bounded_by_part_size_and_parse_consistently():
+    source = b'<r ' + b' '.join(b'a%d="x"' % index for index in range(1500)) + b'/>'
+    assert len(xml.fromstring(source).attrib) == 1500
+    assert len(list(xml.iterparse(BytesIO(source), events=('start',)))[0][1].attrib) == 1500
+    with pytest.raises(ValueError, match='size'):
+        xml.fromstring(source, max_bytes=100)
+    with pytest.raises(ValueError, match='size'):
+        list(xml.iterparse(BytesIO(source), max_bytes=100))
 
 
-def test_start_tag_attribute_count_is_bounded_independently(monkeypatch):
-    monkeypatch.setattr(xml, 'MAX_START_TAG_ATTRIBUTES', 8)
-    source = b'<r ' + b' '.join(b'a%d="x"' % index for index in range(9)) + b'/>'
-    with pytest.raises(ValueError, match='attribute limit'):
-        xml.fromstring(source)
-    with pytest.raises(ValueError, match='attribute limit'):
-        list(xml.iterparse(BytesIO(source)))
-    assert xml.fromstring(b'<r a="' + b'=' * 20 + b'"/>').get('a') == '=' * 20
+def test_quote_mixture_does_not_bypass_xml_parser():
+    source = b'<r x="\'" y=\'"\' z="\'>" a="ok"/>'
+    assert xml.fromstring(source).get('a') == 'ok'
+    assert list(xml.iterparse(BytesIO(source), events=('start',)))[0][1].get('a') == 'ok'
 
 
-def test_start_tag_limit_crossing_stream_chunks(monkeypatch):
+def test_large_start_tag_crossing_stream_chunks(monkeypatch):
     monkeypatch.setattr(xml, 'CHUNK_SIZE', 32)
-    monkeypatch.setattr(xml, 'MAX_START_TAG_BYTES', 48)
     source = b'<r><a x="' + b'a' * 60 + b'"/></r>'
-    with pytest.raises(ValueError, match='start tag byte limit'):
-        list(xml.iterparse(BytesIO(source)))
+    assert list(xml.iterparse(BytesIO(source), tag='a'))[0][1].get('x') == 'a' * 60
 
 
 def test_dtd_comment_brackets_do_not_consume_root():
     assert xml.sanitize_dtd(b'<!DOCTYPE r [<!-- [ -->]><r/>') == b'<r/>'
 
 
-def test_dtd_long_plain_span_uses_one_delimiter_search(monkeypatch):
-    original = xml._dtd_delimiter
-    calls = []
-
-    class Counted:
-        def search(self, data, position):
-            calls.append(position)
-            return original.search(data, position)
-
-    monkeypatch.setattr(xml, '_dtd_delimiter', Counted())
-    assert xml.sanitize_dtd(b'<!DOCTYPE r [' + b'a' * (1024 * 1024)) == b''
-    assert len(calls) == 2
+def test_dtd_subset_size_is_bounded():
+    assert xml.sanitize_dtd(b'<!DOCTYPE r [<!-- [ -->]><r/>') == b'<r/>'
+    for suffix in (b'a' * (64 * 1024 + 1),
+                   b'<!--' + b'a' * (64 * 1024 + 1),
+                   b'"' + b'a' * (64 * 1024 + 1)):
+        with pytest.raises(ValueError, match='DTD internal subset limit'):
+            xml.sanitize_dtd(b'<!DOCTYPE r [' + suffix)
 
 
 @pytest.mark.parametrize('hidden', [
@@ -248,6 +230,31 @@ def test_vml_skips_markup_containers(hidden):
     assert [node.get('id') for node in root.findall('.//{urn:schemas-microsoft-com:vml}imagedata')] == ['real']
 
 
+def test_vml_unclosed_comment_does_not_create_fake_image():
+    source = (b'<xml xmlns:v="urn:schemas-microsoft-com:vml"><br>'
+              b'<!-- <v:imagedata id="fake"/></xml>')
+    root = xml.vml_fromstring(source)
+    assert root.find('.//{urn:schemas-microsoft-com:vml}imagedata') is None
+
+
+def test_vml_ignores_non_image_attributes_before_parsing(monkeypatch):
+    original = xml._vml_attributes
+    calls = []
+
+    class Counted:
+        def finditer(self, token):
+            calls.append(token)
+            return original.finditer(token)
+
+    monkeypatch.setattr(xml, '_vml_attributes', Counted())
+    attrs = b' '.join(b'a%d="x"' % index for index in range(1000))
+    source = (b'<xml xmlns:v="urn:schemas-microsoft-com:vml"><br '
+              + attrs + b'><v:imagedata id="real"/></xml>')
+    root = xml.vml_fromstring(source)
+    assert root.find('.//{urn:schemas-microsoft-com:vml}imagedata').get('id') == 'real'
+    assert calls == ['id="real"']
+
+
 def test_vml_unmatched_closes_remain_bounded():
     source = (b'<xml xmlns:v="urn:schemas-microsoft-com:vml">' + b'<a>' * 250 +
               b'</missing>' * 100_000 + b'<v:imagedata id="real"/></xml>')
@@ -255,6 +262,20 @@ def test_vml_unmatched_closes_remain_bounded():
     root = xml.vml_fromstring(source)
     assert root.find('.//{urn:schemas-microsoft-com:vml}imagedata').get('id') == 'real'
     assert perf_counter() - started < 3
+
+
+def test_vml_fallback_rejects_oversized_part(monkeypatch):
+    monkeypatch.setattr(xml, 'MAX_VML_FALLBACK_BYTES', 64)
+    source = b'<xml><br>' + b'x' * 100 + b'</xml>'
+    with pytest.raises(ValueError, match='XML size limit'):
+        xml.vml_fromstring(source)
+
+
+def test_streaming_does_not_keep_comment_or_pi_nodes():
+    source = b'<r><!-- comment --><?pi data?><row>ok</row></r>'
+    events = list(xml.iterparse(BytesIO(source), events=('end',)))
+    root = events[-1][1]
+    assert [child.tag for child in root] == ['row']
 
 
 def test_xlsx_vml_part_error_does_not_discard_sheet(monkeypatch):

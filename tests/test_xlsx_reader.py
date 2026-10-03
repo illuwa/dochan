@@ -66,14 +66,56 @@ def test_damaged_sheet_isolated_and_completed_rows_kept(tmp_path, monkeypatch, s
     doc = XLSXReader().read(str(path))
     assert [section.provenance.sheet for section in doc.sections] == ["Good", "Broken"]
     assert doc.find_all("table")[0].rows[0][0].text == "7"
-    if streaming:
-        assert doc.find_all("table")[1].rows[0][0].text == "11"
-        assert doc.find_all("table")[1].rows[1][0].text == "12"
-    else:
-        assert len(doc.find_all("table")) == 1
+    assert doc.find_all("table")[1].rows[0][0].text == "11"
+    assert doc.find_all("table")[1].rows[1][0].text == "12"
     assert any(error.startswith("ERR: XLSX sheet XML parse failed: xl/worksheets/sheet2.xml:")
                for error in doc.errors)
     assert not any("package parse failed" in error for error in doc.errors)
+
+
+@pytest.mark.parametrize("damaged_part", ["rels", "comments"])
+def test_damaged_optional_sheet_part_keeps_cells_and_footer(tmp_path, damaged_part):
+    path = tmp_path / "optional.xlsx"
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    workbook = (f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships"><sheets>'
+                '<sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>')
+    sheet = (f'<worksheet xmlns="{ns}"><sheetData><row r="1"><c r="A1"><v>7</v></c>'
+             '</row></sheetData><headerFooter><oddFooter>Footer</oddFooter></headerFooter></worksheet>')
+    rels = ('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/comments" Target="../comments1.xml"/></Relationships>')
+    parts = {"xl/worksheets/_rels/sheet1.xml.rels": rels,
+             "xl/comments1.xml": f'<comments xmlns="{ns}"/>'}
+    parts["xl/worksheets/_rels/sheet1.xml.rels" if damaged_part == "rels" else "xl/comments1.xml"] = "<broken"
+    _write_xlsx(path, workbook, {"xl/worksheets/sheet1.xml": sheet}, extra_parts=parts)
+    doc = XLSXReader().read(str(path))
+    assert doc.find_all("table")[0].rows[0][0].text == "7"
+    assert "Footer" in to_markdown(doc)
+    assert any("parse failed" in error for error in doc.errors)
+
+
+def test_oversized_streaming_sheet_does_not_discard_other_sheet(tmp_path, monkeypatch):
+    path = tmp_path / "oversized.xlsx"
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    workbook = (f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships"><sheets>'
+                '<sheet name="Good" sheetId="1" r:id="rId1"/>'
+                '<sheet name="Large" sheetId="2" r:id="rId2"/></sheets></workbook>')
+    rels = ('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>')
+    good = f'<worksheet xmlns="{ns}"><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>'
+    large = good + ' ' * 600
+    _write_xlsx(path, workbook, {"xl/worksheets/sheet1.xml": good,
+                                 "xl/worksheets/sheet2.xml": large}, workbook_rels_xml=rels)
+    monkeypatch.setattr(xlsx_module, 'MAX_XML_PART_SIZE', 1)
+    monkeypatch.setattr('dochan.ooxml.package.MAX_PART_SIZE', 500)
+    doc = XLSXReader().read(str(path))
+    assert doc.find_all("table")[0].rows[0][0].text == "7"
+    assert [section.provenance.sheet for section in doc.sections] == ["Good", "Large"]
+    assert any("ERR: XLSX sheet XML parse failed: xl/worksheets/sheet2.xml:" in error
+               for error in doc.errors)
 
 
 def test_reads_xlsx_shared_strings_as_table(tmp_path):

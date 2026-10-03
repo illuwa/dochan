@@ -50,7 +50,7 @@ HWPXParser().parse(file_path, *, include_assets=True, revision_mode="preserve")
 - header 참조 누락·종류 불일치·중복, begin/end TcId 불일치.
 - `paraend` 누락·잘못된 값. `paraend="1"` 은 문단 끝을 범위에 포함해 다음 문단과 합친다(2026-10-03 갱신).
 - 미지원 이벤트 종류. ParaShape/CharShape·`paraTcId`/`charTcId` 서식 변경은 텍스트를 바꾸지 않아
-  `info` 진단(final/original 에서도 `WARN:`)으로 모으며, 합쳐지는 문단의 개요 수준이 다르면 부분 지원 오류다.
+  `info` 진단(final/original 에서도 `WARN:`)으로 모으며, 같은 문단에서 ParaShape 변경 전후의 개요 수준이 다르면 부분 지원 오류(`formatting-heading`)다.
 - 미지원 namespace, 내용이 있는 빈 마커, `hp:t` 밖의 marker tail,
   변경 마커가 있는 switch 분기, 개체를 감싼 알 수 없는 래퍼. 변경 범위 안의 표·그림 등 개체는
   하나의 위치로 투영한다(2026-10-03 갱신).

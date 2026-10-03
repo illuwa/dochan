@@ -22,7 +22,7 @@ from ..utils import safe_xml as etree
 from ..utils.heading_font import (
     MAX_FONT_HEADING_LENGTH, MAX_FONT_HEADING_PARAGRAPHS,
     finalize_font_headings, first_visible_font_size,
-    heading_level_from_style_name,
+    heading_level_from_style_name, is_nonheading_style_name,
 )
 
 from ..model.document import Document, Section, Paragraph, TextRun
@@ -925,8 +925,10 @@ class HWPXParser:
 
         if style:
             # (a) 스타일 이름이 "개요 N" / "Outline N" / "Heading N"
-            level = _heading_level_from_style_name(style['name']) or \
-                _heading_level_from_style_name(style['eng_name'])
+            level = 0
+            if not is_nonheading_style_name(style['name']):
+                level = _heading_level_from_style_name(style['name']) or \
+                    _heading_level_from_style_name(style['eng_name'])
             if level:
                 return level if level <= MAX_OUTLINE_HEADING_LEVEL else 0
 

@@ -2,6 +2,8 @@
 
 import struct
 
+import pytest
+
 from dochan.constants import (
     HWPTAG_CTRL_DATA, HWPTAG_CTRL_HEADER, HWPTAG_PARA_CHAR_SHAPE,
     HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT,
@@ -14,7 +16,8 @@ from dochan.model.document import Document, Paragraph, Section, TextRun
 from dochan.model.header_footer import Footnote, HeaderFooter
 from dochan.model.image import Image
 from dochan.utils.heading_font import (
-    body_font_size, finalize_font_headings, relative_heading_level,
+    body_font_size, finalize_font_headings, heading_level_from_style_name,
+    relative_heading_level,
 )
 import dochan.hwp.section as hwp_section
 import dochan.hwpx.parser as hwpx_parser
@@ -66,6 +69,39 @@ def test_hwpx_title_named_style_matches_hwp(tmp_path):
         para = _heading_document(tmp_path, 'NONE', 0, name, 0)
         expected = 2 if name == '부제목' else 1
         assert para.heading_level == expected
+
+
+@pytest.mark.parametrize('name', (
+    '표제목', '표 제목', '통계표 제목', '그림제목', '박스제목/표제목',
+    '차례(소제목)', '목차 제목', '양식제목',
+))
+def test_caption_contents_form_style_is_not_named_heading_in_both_readers(tmp_path, name):
+    from dochan.model.style import StyleEntry
+    from test_hwp_styles import _paragraph as hwp_paragraph
+    from test_hwpx_heading_priority import _heading_document
+
+    assert heading_level_from_style_name(name) == 0
+    assert hwp_paragraph(DocInfo(styles=[StyleEntry(name=name)])).heading_level == 0
+    assert _heading_document(tmp_path, 'NONE', 0, name, 0).heading_level == 0
+
+
+def test_caption_style_keeps_explicit_outline_and_font_fallback(tmp_path):
+    from test_hwpx_heading_priority import _heading_document
+
+    assert _heading_document(tmp_path, 'OUTLINE', 1, '표제목', 0).heading_level == 2
+    assert _heading_document(tmp_path, 'NONE', 0, '표제목', 0,
+                             font_size=2000).heading_level == 1
+
+
+def test_hwpx_caption_name_is_not_overridden_by_english_title(tmp_path):
+    header = ('<hh:charProperties><hh:charPr id="0" height="1000"/>'
+              '</hh:charProperties><hh:styles>'
+              '<hh:style id="1" name="표제목" engName="Custom Title"/>'
+              '</hh:styles>')
+    body = ('<hp:p styleIDRef="1"><hp:run charPrIDRef="0">'
+            '<hp:t>표 위 설명</hp:t></hp:run></hp:p>')
+    doc = HWPXParser().parse(package(tmp_path, body, header))
+    assert doc.sections[0].elements[0].heading_level == 0
 
 
 def test_h1_boundary_and_long_large_paragraph():

@@ -6,11 +6,21 @@ from collections import Counter
 MAX_FONT_HEADING_PARAGRAPHS = 200_000
 MAX_FONT_HEADING_LENGTH = 120
 _BODY_EXCLUDED_PREFIXES = ('※', '*', '주:', '(단위')
+_NONHEADING_STYLE_LABELS = ('표', '그림', '차례', '목차', '양식')
+
+
+def is_nonheading_style_name(name):
+    """캡션·차례·양식 스타일 이름인지 확인한다."""
+    return any(label in (name or '') for label in _NONHEADING_STYLE_LABELS)
 
 
 def heading_level_from_style_name(name):
     """두 한글 형식에 공통인 개요·제목 스타일 이름 규칙."""
     name = (name or '').lower()
+    # 캡션·차례·양식의 이름에 '제목'이 포함되어도 문서 제목은 아니다.
+    # 명시적 개요와 글꼴 폴백은 호출자가 별도로 판정한다.
+    if is_nonheading_style_name(name):
+        return 0
     if '개요' in name or 'outline' in name or 'heading' in name:
         for level in range(1, 7):
             if str(level) in name:

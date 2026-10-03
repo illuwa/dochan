@@ -72,6 +72,8 @@ MAX_META_FILE_SIZE = 32 * 1024 * 1024
 
 # 패키지 자체의 폭주 방어 — 엔트리 수·해제 총량·XML 크기·섹션 수 상한
 MAX_XML_FILE_SIZE = 32 * 1024 * 1024
+# 본문 섹션은 표가 많은 공개 통계 보도자료에서 41.7MB 가 나와 따로 둔다(파싱 2초·RSS 0.5GB 실측).
+MAX_SECTION_XML_SIZE = 64 * 1024 * 1024
 MAX_XML_ELEMENTS = 1000000
 MAX_ARCHIVE_UNCOMPRESSED_SIZE = 512 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 10000
@@ -260,13 +262,13 @@ class HWPXParser:
                 for sf in self._section_files:
                     try:
                         info = zf.getinfo(sf)
-                        if info.file_size > MAX_XML_FILE_SIZE:
+                        if info.file_size > MAX_SECTION_XML_SIZE:
                             self.errors.append(f"ERR: 섹션 {sf} 크기 초과: {info.file_size} bytes")
                             continue
                         if _compression_ratio_exceeded(info.file_size, info.compress_size):
                             self.errors.append(f"ERR: 섹션 {sf} 압축률 초과")
                             continue
-                        xml_data = self._read_zip_part(zf, sf, MAX_XML_FILE_SIZE)
+                        xml_data = self._read_zip_part(zf, sf, MAX_SECTION_XML_SIZE)
                         section = self._parse_section_xml(xml_data, part_name=sf)
                         doc.sections.append(section)
                     except Exception as e:

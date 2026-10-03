@@ -558,8 +558,9 @@ class PDFReader:
         """Attach page-local Form lookup so probes and the reader share geometry."""
         extractor.resources = resources
         loaded_forms = {}
+        stream_info = {}
+        rejected_streams = {}
         cached_form_bytes = [0]
-        cached_streams = set()
 
         def load_form(name, caller_resources):
             if not isinstance(caller_resources, dict):
@@ -570,6 +571,8 @@ class PDFReader:
             ref = xobjects.get(name)
             stream = pdf.resolve(ref)
             if not isinstance(stream, PDFStream) or str(stream.dictionary.get("Subtype")) != "Form":
+                return None
+            if rejected_streams.get(id(stream)) is stream:
                 return None
             cache_key = (id(stream), id(caller_resources))
             if cache_key in loaded_forms:
@@ -585,30 +588,54 @@ class PDFReader:
                                for v in matrix)
             except (OverflowError, ValueError):
                 matrix = (float("nan"),) * 6
-            data = pdf.decode_stream_bytes(stream)
-            if (len(data) > MAX_FORM_CACHE_BYTES or
-                    id(stream) not in cached_streams and
-                    cached_form_bytes[0] + len(data) > MAX_FORM_CACHE_BYTES):
-                warning = "WARN: PDF Form 디코드 캐시 한도 — 해당 Form 건너뜀"
-                if warning not in pdf.warnings:
-                    pdf.warnings.append(warning)
-                loaded_forms[cache_key] = None
-                return None
-            op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
+            info = stream_info.get(id(stream))
+            if info is None or info[0] is not stream:
+                data = pdf.decode_stream_bytes(stream)
+                if (len(data) > MAX_FORM_CACHE_BYTES or
+                        cached_form_bytes[0] + len(data) > MAX_FORM_CACHE_BYTES):
+                    # decode_stream_bytes uses a document-wide cache. A rejected
+                    # Form must not remain there outside the Form cache budget.
+                    pdf._decoded_cache.pop(id(stream), None)
+                    warning = "WARN: PDF Form 디코드 캐시 한도 — 해당 Form 건너뜀"
+                    if warning not in pdf.warnings:
+                        pdf.warnings.append(warning)
+                    rejected_streams[id(stream)] = stream
+                    loaded_forms[cache_key] = None
+                    return None
+                op_count, has_text_or_form = ContentTextExtractor._count_operators(data)
+                info = (stream, data, op_count, has_text_or_form)
+                stream_info[id(stream)] = info
+                cached_form_bytes[0] += len(data)
+            else:
+                _, data, op_count, has_text_or_form = info
             if not has_text_or_form:
                 loaded_forms[cache_key] = None
                 return None
+            bbox = pdf.resolve(stream.dictionary.get("BBox"))
+            if (not isinstance(bbox, list) or len(bbox) != 4 or
+                    not all(isinstance(v, (int, float)) for v in bbox)):
+                bbox = None
+            else:
+                try:
+                    bbox = tuple(float(v) for v in bbox)
+                except (OverflowError, ValueError):
+                    bbox = None
             props = pdf.resolve(form_resources.get("Properties"))
             if isinstance(props, dict):
                 props = {key: pdf.resolve(value) for key, value in props.items()}
             else:
                 props = {}
+            font_infos = [None]
+
+            def get_fonts():
+                if font_infos[0] is None:
+                    font_infos[0] = self._font_infos(pdf, form_resources, font_cache)
+                return font_infos[0]
+
             loaded = (id(stream), data, matrix, form_resources,
-                      self._font_infos(pdf, form_resources, font_cache), props, op_count)
+                      get_fonts, props, op_count, bbox,
+                      isinstance(stream.dictionary.get("StructParents"), int))
             loaded_forms[cache_key] = loaded
-            if id(stream) not in cached_streams:
-                cached_streams.add(id(stream))
-                cached_form_bytes[0] += len(data)
             return loaded
 
         extractor.form_loader = load_form

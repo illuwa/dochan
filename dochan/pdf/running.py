@@ -57,8 +57,12 @@ def _table_like(line) -> bool:
 
 def _readable_line(line) -> bool:
     """Unmapped font control codes are not a running header or footer."""
-    return not any(char == "\ufffd" or (unicodedata.category(char) == "Cc" and char not in "\t\n\r")
-                   for char in line.text)
+    visible = [char for char in line.text if not char.isspace()]
+    if not visible:
+        return False
+    unreadable = sum(char == "\ufffd" or unicodedata.category(char) == "Cc"
+                     for char in visible)
+    return unreadable * 2 < len(visible)
 
 
 def edge_block(lines, bounds, zone: str) -> list:

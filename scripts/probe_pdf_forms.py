@@ -31,6 +31,16 @@ def _grams(value):
     return dict(Counter(value[i:i + 2] for i in range(max(0, len(value) - 1))))
 
 
+def _readable(value):
+    return "".join(char for char in _normalized(value)
+                   if char != "\ufffd" and unicodedata.category(char) != "Cc")
+
+
+def _readable_grams(value):
+    value = _readable(value)
+    return dict(Counter(value[i:i + 2] for i in range(max(0, len(value) - 1))))
+
+
 def _has_form_text(pdf):
     from dochan.pdf.objects import PDFStream
     for _page, resources in pdf.pages():
@@ -108,6 +118,10 @@ def main():
                 row["pdfium_bigrams"] = _grams(oracle)
                 row["chars"] = dict(Counter(_normalized(plain)))
                 row["pdfium_char_counts"] = dict(Counter(_normalized(oracle)))
+                row["readable_bigrams"] = _readable_grams(plain)
+                row["pdfium_readable_bigrams"] = _readable_grams(oracle)
+                row["readable_chars"] = len(_readable(plain))
+                row["pdfium_readable_chars"] = len(_readable(oracle))
             results[name] = row
         except (Exception, Deadline) as exc:
             results[name] = {"probe_error": type(exc).__name__, "message": str(exc)[:200]}

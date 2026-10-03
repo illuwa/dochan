@@ -162,7 +162,7 @@ def test_form_glyph_edge_rounding_does_not_discard_link():
     fragment = Fragment(x=0, y=0, width=10, size=10, text="hi", space_width=5,
                         char_offsets=(0, 5, 10))
     region = LinkRegion("https://example.org", [
-        [(0.000046, 0), (10, 0), (10, 10), (0.000046, 10)]])
+        [(-0.000046, 0), (10, 0), (10, 10), (-0.000046, 10)]])
     attach_links([fragment], [region], [])
     assert fragment.link_spans == [(0, 2, "https://example.org")]
 

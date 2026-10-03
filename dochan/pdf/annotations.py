@@ -269,6 +269,24 @@ def _contains(polygon, x, y):
                for i, (a, b) in enumerate(polygon))
 
 
+def _on_boundary(polygon, x, y):
+    """An exact shared edge may select one glyph and exclude its neighbor."""
+    # The former 1e-5pt allowance covers observed coordinate rounding; the
+    # wider 1e-4pt inset also accepted actual inward cuts of a glyph.
+    tolerance = 1e-5
+    for index, (ax, ay) in enumerate(polygon):
+        bx, by = polygon[(index + 1) % 4]
+        length = math.hypot(bx - ax, by - ay)
+        if not length:
+            continue
+        cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+        if (abs(cross) <= tolerance * length
+                and min(ax, bx) - tolerance <= x <= max(ax, bx) + tolerance
+                and min(ay, by) - tolerance <= y <= max(ay, by) + tolerance):
+            return True
+    return False
+
+
 def link_regions(pdf, page, destinations):
     regions = []
     for ref in page_annotations(pdf, page):
@@ -454,13 +472,14 @@ def _attach_unique_links(fragments, regions, warnings):
                     middle = _contains(polygon, x, y)
                     if not char.isspace():
                         first, last = frag.char_offsets[index:index + 2]
-                        # PDF matrix/annotation coordinates can differ by a few
-                        # ten-thousandths of a point after decimal rounding.
-                        inset = min(abs(last - first) / 4, 1e-4)
-                        edges = [_contains(polygon, frag.x + ux * d + vx * frag.size * 0.5,
-                                           frag.y + uy * d + vy * frag.size * 0.5)
-                                 for d in (first + inset, last - inset)]
-                        if any(edge != middle for edge in edges):
+                        # Test the exact glyph ends. A small difference at the
+                        # boundary uses the measured 1e-5 allowance below;
+                        # a deeper inward cut remains ambiguous.
+                        edges = [(frag.x + ux * d + vx * frag.size * 0.5,
+                                  frag.y + uy * d + vy * frag.size * 0.5)
+                                 for d in (first, last)]
+                        if any(_contains(polygon, px, py) != middle and
+                               not _on_boundary(polygon, px, py) for px, py in edges):
                             ambiguous.add(region_index)
                     if middle:
                         hits.append(region_index)

@@ -4,7 +4,7 @@
 실제 x/y 를 누적한다. 이 좌표가 있어야 단어 간격, 열 경계(표), 읽기
 순서를 복원한다. CTM과 괘선 경로를 같은 패스에서 해석한다.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -202,6 +202,96 @@ def _matmul(m1, m2):
     )
 
 
+def _clip_form_fragments(fragments, bbox, ctm):
+    """Keep glyphs overlapping a Form's transformed BBox, including rotations."""
+    x0, y0, x1, y1 = bbox
+    a, b, c, d, e, f = ctm
+    polygon = [(a * x + c * y + e, b * x + d * y + f)
+               for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
+    if not all(math.isfinite(value) for point in polygon for value in point):
+        return []
+    signed_area = sum(polygon[i][0] * polygon[(i + 1) % 4][1] -
+                      polygon[(i + 1) % 4][0] * polygon[i][1] for i in range(4))
+    sign = 1 if signed_area >= 0 else -1
+
+    def inside(x, y):
+        for index, (px, py) in enumerate(polygon):
+            qx, qy = polygon[(index + 1) % 4]
+            if sign * ((qx - px) * (y - py) - (qy - py) * (x - px)) < -1e-7:
+                return False
+        return True
+
+    kept = []
+    for frag in fragments:
+        count = len(frag.text)
+        if not count:
+            continue
+        direction = math.hypot(frag.dir_x, frag.dir_y)
+        upward = math.hypot(frag.up_x, frag.up_y)
+        if not direction or not upward:
+            continue
+        ux, uy = frag.dir_x / direction, frag.dir_y / direction
+        vx, vy = frag.up_x / upward, frag.up_y / upward
+        if len(frag.char_offsets) != count + 1:
+            # Width alone cannot locate individual glyphs accurately. Keep
+            # the whole run only when its full extent is safely inside.
+            if all(inside(frag.x + ux * distance + vx * height,
+                          frag.y + uy * distance + vy * height)
+                   for distance in (0, frag.width) for height in (0, frag.size)):
+                kept.append(frag)
+            continue
+        offsets = frag.char_offsets
+        accepted = []
+        for index in range(count):
+            first, last = offsets[index:index + 2]
+            middle = (first + last) / 2
+            if inside(frag.x + ux * middle + vx * frag.size / 2,
+                      frag.y + uy * middle + vy * frag.size / 2):
+                accepted.append(True)
+                continue
+            # A partly visible glyph still belongs to the page. Test its
+            # rectangle against the transformed clip polygon (SAT) before
+            # dropping it as entirely outside.
+            quad = [(frag.x + ux * distance + vx * height,
+                     frag.y + uy * distance + vy * height)
+                    for distance, height in ((first, 0), (last, 0),
+                                             (last, frag.size), (first, frag.size))]
+            overlap = all(math.isfinite(value) for point in quad for value in point)
+            if overlap:
+                for shape in (polygon, quad):
+                    for edge, (px, py) in enumerate(shape):
+                        qx, qy = shape[(edge + 1) % 4]
+                        axis_length = math.hypot(qy - py, qx - px)
+                        if not axis_length:
+                            continue
+                        nx, ny = -(qy - py) / axis_length, (qx - px) / axis_length
+                        clip_projection = [nx * x + ny * y for x, y in polygon]
+                        glyph_projection = [nx * x + ny * y for x, y in quad]
+                        if (max(clip_projection) < min(glyph_projection) - 1e-7 or
+                                max(glyph_projection) < min(clip_projection) - 1e-7):
+                            overlap = False
+                            break
+                    if not overlap:
+                        break
+            accepted.append(overlap)
+        start = 0
+        while start < count:
+            if not accepted[start]:
+                start += 1
+                continue
+            end = start + 1
+            while end < count and accepted[end]:
+                end += 1
+            shift = offsets[start]
+            kept.append(replace(
+                frag, text=frag.text[start:end], x=frag.x + ux * shift,
+                y=frag.y + uy * shift, width=offsets[end] - shift,
+                char_offsets=tuple(value - shift for value in offsets[start:end + 1])
+                if frag.char_offsets else ()))
+            start = end
+    return kept
+
+
 class ContentTextExtractor:
     """콘텐츠 스트림에서 위치 인식 텍스트를 추출한다."""
 
@@ -242,12 +332,13 @@ class ContentTextExtractor:
         return self.extract_page(content).fragments
 
     def extract_page(self, content: bytes, _initial_ctm=(1, 0, 0, 1, 0, 0),
-                     _form_context=None) -> PageContent:
+                     _form_context=None, _initial_text_state=None) -> PageContent:
         """그래픽 상태를 유지하며 텍스트와 괘선을 함께 해석한다."""
         if _form_context is None:
             _form_context = {"active": set(), "cache": {}, "cache_bytes": 0,
-                             "expanded": 0, "operators": 0, "warned": set()}
-        self._char_position_budget = 200000
+                             "expanded": 0, "operators": 0, "warned": set(),
+                             "char_positions": 200000}
+        self._form_context = _form_context
         self._link_position_reliable = True
         self._marked_stack = []
         self._marked_overflow = 0
@@ -263,12 +354,8 @@ class ContentTextExtractor:
         # 텍스트 상태
         tm = (1, 0, 0, 1, 0, 0)   # 텍스트 행렬
         tlm = (1, 0, 0, 1, 0, 0)  # 텍스트 라인 행렬
-        font: Optional[FontInfo] = None
-        fs = 0.0     # Tf 크기
-        tc = 0.0     # 문자 간격
-        tw = 0.0     # 단어 간격
-        th = 1.0     # 수평 스케일 (Tz/100)
-        tl = 0.0     # 행간
+        font, fs, tc, tw, th, tl = (_initial_text_state if _initial_text_state is not None
+                                    else (None, 0.0, 0.0, 0.0, 1.0, 0.0))
         n = len(content)
         while True:
             lexer.skip_whitespace()
@@ -329,9 +416,22 @@ class ContentTextExtractor:
             elif op == b"Do" and operands and isinstance(operands[-1], PDFName):
                 loader = getattr(self, "form_loader", None)
                 if loader is not None:
-                    loaded = loader(str(operands[-1]), getattr(self, "resources", {}))
+                    loaded = None
+                    try:
+                        if (_form_context["expanded"] >= MAX_FORM_EXPANDED_BYTES or
+                                _form_context["operators"] >= MAX_FORM_OPERATORS):
+                            reason = "확장 한도"
+                            if reason not in _form_context["warned"]:
+                                paths.warnings.append("WARN: PDF Form " + reason + " — 해당 Form 건너뜀")
+                                _form_context["warned"].add(reason)
+                        else:
+                            loaded = loader(str(operands[-1]), getattr(self, "resources", {}))
+                    except Exception:
+                        if "해석 실패" not in _form_context["warned"]:
+                            paths.warnings.append("WARN: PDF Form 해석 실패 — 해당 Form 건너뜀")
+                            _form_context["warned"].add("해석 실패")
                     if loaded is not None:
-                        key, data, matrix, resources, fonts, properties, op_count = loaded
+                        key, data, matrix, resources, fonts, properties, op_count, bbox, separate_mcids = loaded
                         reason = None
                         try:
                             form_ctm = _matmul(matrix, ctm)
@@ -370,21 +470,34 @@ class ContentTextExtractor:
                             _form_context["active"].add(key)
                             try:
                                 child = ContentTextExtractor.from_fonts(
-                                    fonts, track_char_positions=self.track_char_positions)
+                                    fonts() if callable(fonts) else fonts,
+                                    track_char_positions=self.track_char_positions or bbox is not None)
                                 child.form_loader = loader
                                 child.resources = resources
                                 child.properties = properties
-                                result = child.extract_page(data, form_ctm, _form_context)
+                                result = child.extract_page(
+                                    data, form_ctm, _form_context, (font, fs, tc, tw, th, tl))
+                                child_frags = (_clip_form_fragments(result.fragments, bbox, form_ctm)
+                                               if bbox is not None else result.fragments)
                                 offset = len(frags)
-                                for frag in result.fragments:
-                                    frag.order += offset
-                                    frag.mcids = ()  # Form MCIDs belong to its own StructParents.
-                                frags.extend(result.fragments)
+                                page_mcids = (tuple(item[0] for item in self._marked_stack
+                                                    if item[0] is not None)
+                                              if not self._marked_overflow and not separate_mcids else ())
+                                parent_artifact = any(item[1] for item in self._marked_stack)
+                                for index, frag in enumerate(child_frags):
+                                    frag.order = offset + index
+                                    frag.mcids = page_mcids  # Form MCIDs have their own space.
+                                    frag.artifact = frag.artifact or parent_artifact
+                                frags.extend(child_frags)
                                 # Form vector art is outside this text pass. Adding
                                 # its rules creates empty grids in unrelated artwork.
                                 paths.warnings.extend(result.warnings)
+                            except Exception:
+                                if "해석 실패" not in _form_context["warned"]:
+                                    paths.warnings.append("WARN: PDF Form 해석 실패 — 해당 Form 건너뜀")
+                                    _form_context["warned"].add("해석 실패")
                             finally:
-                                _form_context["active"].remove(key)
+                                _form_context["active"].discard(key)
             elif op == b"BT":
                 tm = (1, 0, 0, 1, 0, 0)
                 tlm = (1, 0, 0, 1, 0, 0)
@@ -488,9 +601,9 @@ class ContentTextExtractor:
         if font.wmode == 1:
             return self._show_vertical(raw, text, tm, font, fs, tc, tw, th, frags, ctm)
         track_positions = (self.track_char_positions and len(text) <= 50000
-                           and len(text) <= self._char_position_budget)
+                           and len(text) <= self._form_context["char_positions"])
         if track_positions:
-            self._char_position_budget -= len(text)
+            self._form_context["char_positions"] -= len(text)
         start_tm = _matmul(tm, ctm)
         # 조각 전체 device 폭을 계산하며 tm 을 전진
         total_adv = 0.0
@@ -514,7 +627,7 @@ class ContentTextExtractor:
                 for index in range(len(piece)):
                     offsets.append(total_adv + disp * (index + 1) / len(piece))
             total_adv += disp
-        scale = (start_tm[0] ** 2 + start_tm[1] ** 2) ** 0.5 or 1.0
+        scale = math.hypot(start_tm[0], start_tm[1]) or 1.0
         space_w = font.widths.advance(font.space_code) / 1000.0 * fs * th * scale
         if space_w <= 0:
             space_w = 0.25 * fs * scale

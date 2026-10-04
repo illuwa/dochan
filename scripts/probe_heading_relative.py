@@ -20,7 +20,7 @@ def _marker_type(text):
     text = text.lstrip()
     if text.startswith(('□', '■')):
         return 'square'
-    if re.match(r'(?:\d+(?:-\d+)?|[가-하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)]', text):
+    if re.match(r'(?:\d+(?:-\d+)?|[가나다라마바사아자차카타파하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)](?=\s|[<〈\[【])', text):
         return 'number'
     if text.startswith(('<', '〈', '[', '【')):
         return 'bracket'

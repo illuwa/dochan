@@ -1331,6 +1331,10 @@ class SectionParser:
                 images[0].alt_text = alt_text
         elif caption_paras:
             # 이미지 없는 도형의 캡션은 잃지 않도록 흐름에 남긴다
+            # 흐름에 평탄화되어도 제목 후보나 본문 크기 표본이 되지는 않는다.
+            for para in caption_paras:
+                para._heading_caption = True
+                para.heading_level = 0
             flow.extend(caption_paras)
         return flow
 

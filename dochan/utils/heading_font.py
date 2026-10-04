@@ -13,11 +13,23 @@ _BODY_EXCLUDED_PREFIXES = ('※', '*', '주:', '(단위')
 _NONHEADING_STYLE = re.compile(
     r'(?<![별대])표\s*제목|통계표|도표|표안|그림|캡션|(?:차례|목차)\D{0,6}\d|(?:차례|목차)\s*(?:개요|\()')
 _OUTLINE_STYLE = re.compile(r'(?:개요|outline|heading)\s*(\d+)')
-_NUMBER_MARKER = re.compile(r'(?:\d+(?:-\d+)?|[가-하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)](?=\s|[<〈\[【])')
+# 표지 뒤에는 공백이나 여는 괄호가 와야 한다. 소수·백분율의 점은 번호가 아니다.
+# 한글 표지는 실제 순번에 쓰는 14음절만 허용한다.
+_NUMBER_MARKER = re.compile(r'(?:\d+(?:-\d+)?|[가나다라마바사아자차카타파하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)](?=\s|[<〈\[【])')
 _BRACKET_END = {'<': '>', '〈': '〉', '[': ']', '【': '】'}
+# 종결형·날짜·표 캡션은 표지와 강조가 있어도 절 제목으로 보지 않는다.
 _SENTENCE_END = re.compile(r'(?:다\.|음\.?|함\.?)$')
 _TABLE_LABEL = re.compile(r'(?:표|그림)\s*\d+[.)]')
 _DATE_LINE = re.compile(r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*$')
+# 두 리더가 별도 런으로 붙이는 모델 출력 표지만 판정에서 제거한다.
+_BOOKMARK_RUN = re.compile(r'\[bookmark: [^\]\r\n]+\] ')
+
+
+def _content_runs(runs):
+    """리더가 붙인 참조·책갈피 표지를 제목 서식 판정에서 제외한다."""
+    return [run for run in runs if not run.note_ref
+            and not run.note_reference_type
+            and not _BOOKMARK_RUN.fullmatch(run.text)]
 
 
 def is_nonheading_style_name(name):
@@ -47,7 +59,7 @@ def heading_level_from_style_name(name):
 
 def first_visible_font_size(runs):
     """공백뿐인 선행 런을 건너뛴 첫 글자 런의 포인트 크기."""
-    for run in runs:
+    for run in _content_runs(runs):
         if run.text.strip():
             return run.font_size_pt
     return 0
@@ -74,14 +86,17 @@ def body_font_size(paragraphs, doc=None):
     count = 0
     reachable, excluded = _sample_exclusions(doc)
     for para in paragraphs:
-        if para is None or id(para) in excluded:
+        if para is None or id(para) in excluded or getattr(para, '_heading_caption', False):
             continue
         if reachable is not None and id(para) not in reachable:
             continue
-        text = para.text.strip()
+        content_runs = _content_runs(para.runs)
+        text = ''.join(run.text for run in content_runs).strip()
+        if not text:
+            continue
         if text.startswith(_BODY_EXCLUDED_PREFIXES):
             continue
-        size = first_visible_font_size(para.runs)
+        size = first_visible_font_size(content_runs)
         if size <= 0:
             continue
         count += 1
@@ -93,8 +108,9 @@ def body_font_size(paragraphs, doc=None):
 
 def relative_heading_level(runs, body_size):
     """본문 크기보다 뚜렷이 큰 첫 글자 런만 H1~H3로 판정한다."""
-    size = first_visible_font_size(runs)
-    text = ''.join(run.text for run in runs).strip()
+    content_runs = _content_runs(runs)
+    size = first_visible_font_size(content_runs)
+    text = ''.join(run.text for run in content_runs).strip()
     if len(text) > MAX_FONT_HEADING_LENGTH or text.startswith(_BODY_EXCLUDED_PREFIXES):
         # 주석(※·*·주:)·단위 줄은 글꼴이 커도 제목이 아니다.
         return 0
@@ -120,6 +136,7 @@ def _section_marker(text):
     closing = _BRACKET_END.get(text[:1])
     if closing and text.endswith(closing) and len(text) > 2:
         return 1, 'bracket'
+    # 한컴 도형 글머리는 Unicode Private Use 영역의 한 글자로 시작한다.
     if text and unicodedata.category(text[0]) == 'Co':
         return 1, 'pua'
     return 0, ''
@@ -127,9 +144,11 @@ def _section_marker(text):
 
 def emphasized_heading_level(runs, body_size):
     """본문 크기와 비슷한, 절 표지와 시각 강조가 함께 있는 줄만 H3으로 올린다."""
-    text = ''.join(run.text for run in runs).strip()
+    runs = _content_runs(runs)
+    raw_text = ''.join(run.text for run in runs)
+    text = raw_text.strip()
     if (not text or len(text) > MAX_FONT_HEADING_LENGTH
-            or text.startswith(_BODY_EXCLUDED_PREFIXES)
+            or text.startswith(('※', '*', '(단위'))
             or '\n' in text or '\r' in text or ':' in text or '：' in text
             or _SENTENCE_END.search(text) or _DATE_LINE.fullmatch(text)):
         return 0
@@ -138,7 +157,7 @@ def emphasized_heading_level(runs, body_size):
         return 0
     # 앞 공백과 표지는 글자 크기·굵기 판정에서 뺀다. 특히 HWP의 PUA
     # 글머리 글자만 작고 뒤의 실제 제목은 큰 경우가 있다.
-    leading = len(''.join(run.text for run in runs)) - len(''.join(run.text for run in runs).lstrip())
+    leading = len(raw_text) - len(raw_text.lstrip())
     start = leading + marker_end
     first_size = 0
     all_bold = True
@@ -154,8 +173,12 @@ def emphasized_heading_level(runs, body_size):
             position += 1
     if not content or body_size <= 0:
         return 0
+    # 본문 최빈 크기는 0.1pt 단위로 집계하므로 후보도 같은 단위로 비교한다.
+    first_size = round(first_size, 1)
     if first_size > body_size:
         return 3
+    # 번호·PUA 표지는 독립적인 굵기 강조가 아니라 목록 기호로도 쓰인다.
+    # 따라서 두 종류는 크기가 커진 경우에만 올린다.
     if kind not in ('pua', 'number') and first_size >= body_size and all_bold:
         return 3
     return 0
@@ -171,10 +194,13 @@ def finalize_font_headings(paragraphs, doc=None):
     body_size = body_font_size(paragraphs, doc=doc)
     if body_size:
         top_level = ({id(para) for section in doc.sections for para in section.elements
-                      if hasattr(para, 'heading_level')} if doc is not None else None)
+                      if hasattr(para, 'heading_level')} if doc is not None else set())
         for para in paragraphs:
+            if getattr(para, '_heading_caption', False):
+                para.heading_level = 0
+                continue
             level = relative_heading_level(para.runs, body_size)
-            if not level and (top_level is None or id(para) in top_level):
+            if not level and id(para) in top_level:
                 level = emphasized_heading_level(para.runs, body_size)
             para.heading_level = level
     return body_size

@@ -8,7 +8,7 @@ import pytest
 from dochan.constants import (
     HWPTAG_CTRL_DATA, HWPTAG_CTRL_HEADER, HWPTAG_LIST_HEADER,
     HWPTAG_PARA_CHAR_SHAPE, HWPTAG_PARA_HEADER, HWPTAG_PARA_TEXT,
-    HWPTAG_SHAPE_COMPONENT,
+    HWPTAG_SHAPE_COMPONENT, HWPTAG_TABLE,
 )
 from dochan.hwp.doc_info import DocInfo
 from dochan.hwp.records.char_shape import CharShape
@@ -258,6 +258,9 @@ def test_emphasis_needs_document_context(tmp_path):
     ('◆ 공무상 재해 공무원 보상', 3),
     ('◇ 제도 개선', 3),
     ('>> AI 친화적 정보시스템', 3),
+    ('▶중앙행정기관', 0),
+    ('>>AI 친화적 정보시스템', 0),
+    ('□추진배경', 3),
     ('Q.1 언제부터 적용하는지?', 3),
     ('Q 2. 무엇이 달라지는지?', 3),
     ('▶ 굵지 않은 목록', 0),
@@ -316,3 +319,96 @@ def test_key_value_group_has_no_arbitrary_sibling_gap(tmp_path):
         finalize_font_headings(paras, doc=doc)
         assert paras[3].heading_level == 0
         assert paras[-1].heading_level == 0
+
+
+@pytest.mark.parametrize('size,expected', [(21, 1), (18, 2)])
+def test_large_bracket_heading_before_table_keeps_font_level(tmp_path, size, expected):
+    for doc in _documents(tmp_path, [[('<기관현황 및 인력현황>', 5)]]):
+        para = doc.sections[0].elements[-1]
+        para.runs[0].font_size_pt = size
+        para.para_shape_id = 0
+        doc.para_shapes = [ParaShape(align=3)]
+        doc.sections[0].elements.append(Table())
+        finalize_font_headings(doc.sections[0].elements[:-1], doc=doc)
+        assert para.heading_level == expected
+
+
+def test_centered_bracket_without_following_table_keeps_heading(tmp_path):
+    for doc in _documents(tmp_path, [[('< 보도내용 요약 >', 2)]]):
+        para = doc.sections[0].elements[-1]
+        para.para_shape_id = 0
+        doc.para_shapes = [ParaShape(align=3)]
+        finalize_font_headings(doc.sections[0].elements, doc=doc)
+        assert para.heading_level == 3
+
+
+@pytest.mark.parametrize('tail,shape_ids,expected', [
+    ([], [30], [3]),
+    (['□ (참석자) 본부'], [30, 30], [3, 3]),
+    (['□ (장소) 회의실'], [30, 31], [3, 3]),
+    (['일반 본문', '□ (장소) 회의실'], [30, 30, 30], [3, 0, 3]),
+])
+def test_key_value_group_requires_date_place_count_and_same_shape(
+        tmp_path, tail, shape_ids, expected):
+    first = '□ (기관) 본부' if tail == ['□ (참석자) 본부'] else '□ (일시) 오전'
+    parts = [[(first, 1)]]
+    parts.extend([[(text, 1 if text.startswith('□') else 0)] for text in tail])
+    for doc in _documents(tmp_path, parts):
+        paras = doc.sections[0].elements[-len(parts):]
+        for para, shape_id in zip(paras, shape_ids):
+            para.para_shape_id = shape_id
+        finalize_font_headings(doc.sections[0].elements, doc=doc)
+        assert [para.heading_level for para in paras] == expected
+
+
+def test_bookmark_before_centered_bracket_caption_is_ignored(tmp_path):
+    for doc in _documents(tmp_path, [[('<용도별 공시지가 공시>', 1)]]):
+        para = doc.sections[0].elements[-1]
+        para.runs.insert(0, TextRun(text='[bookmark: anchor] ', font_size_pt=21))
+        para.para_shape_id = 0
+        doc.para_shapes = [ParaShape(align=3)]
+        doc.sections[0].elements.append(Table())
+        finalize_font_headings(doc.sections[0].elements[:-1], doc=doc)
+        assert para.heading_level == 0
+
+
+def test_centered_bracket_table_mapping_in_real_hwp_and_hwpx_parsers(tmp_path):
+    shapes = [CharShape(base_size=1400), CharShape(base_size=1400, bold=True)]
+    para_shapes = [ParaShape(align=1), ParaShape(align=3)]
+    parser = SectionParser(DocInfo(char_shapes=shapes, para_shapes=para_shapes))
+    payload = bytearray()
+    for text, char_id, para_id in ([(BODY, 0, 0)] * 3 +
+                                   [('< 표 앞 캡션 >', 1, 1)]):
+        header = bytearray(22)
+        struct.pack_into('<H', header, 8, para_id)
+        payload.extend(rec(HWPTAG_PARA_HEADER, 0, bytes(header)))
+        payload.extend(rec(HWPTAG_PARA_TEXT, 1, text.encode('utf-16-le') + b'\r\x00'))
+        payload.extend(rec(HWPTAG_PARA_CHAR_SHAPE, 1, struct.pack('<II', 0, char_id)))
+    payload.extend(rec(HWPTAG_CTRL_HEADER, 1, b' lbt' + bytes(4)))
+    payload.extend(rec(HWPTAG_TABLE, 2, bytes(4) + struct.pack('<HH', 1, 1)))
+    hwp = Document(sections=[parser.parse_stream(bytes(payload), is_compressed=False)],
+                   para_shapes=para_shapes)
+    parser.finalize_font_headings(doc=hwp)
+    hwp_elements = hwp.sections[0].elements
+    assert hwp_elements[-2].text == '< 표 앞 캡션 >'
+    assert hwp_elements[-2].para_shape_id == 1
+    assert isinstance(hwp_elements[-1], Table)
+    assert hwp_elements[-2].heading_level == 0
+
+    header = ('<hh:charPr id="0" height="1400"/>'
+              '<hh:charPr id="1" height="1400"><hh:bold/></hh:charPr>'
+              '<hh:paraPr id="0"><hh:align horizontal="LEFT"/></hh:paraPr>'
+              '<hh:paraPr id="1"><hh:align horizontal="CENTER"/></hh:paraPr>')
+    body = ''.join('<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>%s</hp:t>'
+                   '</hp:run></hp:p>' % BODY for _ in range(3))
+    body += ('<hp:p paraPrIDRef="1"><hp:run charPrIDRef="1">'
+             '<hp:t>&lt; 표 앞 캡션 &gt;</hp:t></hp:run></hp:p>'
+             '<hp:p><hp:run><hp:tbl rowCnt="1" colCnt="1"><hp:tr><hp:tc>'
+             '<hp:subList><hp:p><hp:run><hp:t>값</hp:t></hp:run></hp:p>'
+             '</hp:subList></hp:tc></hp:tr></hp:tbl></hp:run></hp:p>')
+    hwpx = HWPXParser().parse(package(tmp_path, body, header))
+    hwpx_elements = hwpx.sections[0].elements
+    caption = next(e for e in hwpx_elements if getattr(e, 'text', '') == '< 표 앞 캡션 >')
+    assert hwpx.para_shapes[caption.para_shape_id].align == 3
+    assert isinstance(hwpx_elements[hwpx_elements.index(caption) + 1], Table)
+    assert caption.heading_level == 0

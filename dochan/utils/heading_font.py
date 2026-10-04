@@ -153,13 +153,14 @@ def _section_marker(text):
 
 def _context_exclusions(doc):
     """표 직전 캡션과 같은 문단 모양의 연속된 괄호 키 목록을 찾는다."""
-    excluded = set()
+    captions = set()
+    key_values = set()
     if doc is None:
-        return excluded
+        return captions, key_values
 
     def finish_keys(group):
         if len(group) >= 2 and any(key in ('일시', '장소') for _, key in group):
-            excluded.update(id(para) for para, _ in group)
+            key_values.update(id(para) for para, _ in group)
 
     for section in doc.sections:
         elements = section.elements
@@ -167,7 +168,7 @@ def _context_exclusions(doc):
         group_shape = -1
         for index, element in enumerate(elements):
             paragraph = hasattr(element, 'heading_level')
-            text = element.text.strip() if paragraph else ''
+            text = ''.join(run.text for run in _content_runs(element.runs)).strip() if paragraph else ''
             if paragraph:
                 shapes = doc.para_shapes
                 shape_id = element.para_shape_id
@@ -177,7 +178,7 @@ def _context_exclusions(doc):
                         and centered
                         and index + 1 < len(elements)
                         and hasattr(elements[index + 1], 'rows')):
-                    excluded.add(id(element))
+                    captions.add(id(element))
             match = _KEY_VALUE_MARKER.match(text) if paragraph else None
             if match:
                 if group and element.para_shape_id != group_shape:
@@ -195,7 +196,7 @@ def _context_exclusions(doc):
         # 날짜·장소 값을 가진 묶음만 값 목록으로 본다. 중간의 ㅇ 하위 값과
         # 표는 허용하되, 다른 본문 문단이나 네모 절은 묶음을 끊는다.
         finish_keys(group)
-    return excluded
+    return captions, key_values
 
 
 def emphasized_heading_level(runs, body_size):
@@ -249,15 +250,17 @@ def finalize_font_headings(paragraphs, doc=None):
         return 0
     body_size = body_font_size(paragraphs, doc=doc)
     if body_size:
-        context_exclusions = _context_exclusions(doc)
+        caption_exclusions, key_value_exclusions = _context_exclusions(doc)
         top_level = ({id(para) for section in doc.sections for para in section.elements
                       if hasattr(para, 'heading_level')} if doc is not None else set())
         for para in paragraphs:
-            if getattr(para, '_heading_caption', False) or id(para) in context_exclusions:
+            if getattr(para, '_heading_caption', False) or id(para) in key_value_exclusions:
                 para.heading_level = 0
                 continue
             level = relative_heading_level(para.runs, body_size)
-            if not level and id(para) in top_level:
+            if id(para) in caption_exclusions and level not in (1, 2):
+                level = 0
+            elif not level and id(para) in top_level:
                 level = emphasized_heading_level(para.runs, body_size)
             para.heading_level = level
     return body_size

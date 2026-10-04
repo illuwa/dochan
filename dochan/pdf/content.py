@@ -638,7 +638,9 @@ class ContentTextExtractor:
         self._link_position_reliable = geometry_reliable
         xscale, yscale = math.hypot(*start_tm[:2]), math.hypot(*start_tm[2:4])
         geometry_reliable = (geometry_reliable and xscale > 0 and yscale > 0
-                             and math.isclose(xscale, yscale, rel_tol=1e-6)
+                             # Hancom's fixed-point matrices differ by ~5.5e-4.
+                             # At 1e-3 the height-center error is <0.000251 em.
+                             and math.isclose(xscale, yscale, rel_tol=1e-3)
                              and abs(start_tm[0] * start_tm[2] + start_tm[1] * start_tm[3])
                              <= 1e-6 * xscale * yscale)
         for chunk, code in chunks:

@@ -26,6 +26,7 @@ def main():
     parser.add_argument("corpus", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--text-tables", action="store_true")
+    parser.add_argument("--recursive", action="store_true")
     args = parser.parse_args()
 
     def deadline(_signum, _frame):
@@ -33,19 +34,21 @@ def main():
 
     signal.signal(signal.SIGALRM, deadline)
     rows = {}
-    for path in sorted(args.corpus.glob("*.pdf")):
+    paths = args.corpus.rglob("*.pdf") if args.recursive else args.corpus.glob("*.pdf")
+    for path in sorted(paths):
+        key = path.relative_to(args.corpus).as_posix()
         try:
             signal.alarm(15)
             document = PDFReader(text_tables=args.text_tables).read(str(path))
             markdown = to_markdown(document)
             encoded = json.dumps(to_dict(document), ensure_ascii=False, sort_keys=True)
-            rows[path.name] = {"markdown_sha256": _digest(markdown),
+            rows[key] = {"markdown_sha256": _digest(markdown),
                                "markdown_chars": len(markdown),
                                "json_sha256": _digest(encoded),
                                "json_chars": len(encoded),
                                "errors": document.errors}
         except (Exception, ProbeDeadline) as exc:
-            rows[path.name] = {"error": type(exc).__name__}
+            rows[key] = {"error": type(exc).__name__}
         finally:
             signal.alarm(0)
     args.output.write_text(json.dumps(rows, ensure_ascii=False, indent=1))

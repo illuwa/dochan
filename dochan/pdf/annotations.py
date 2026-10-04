@@ -383,6 +383,10 @@ _CLOSING_BOUNDARIES = (")]}>\"\u201d\u00bb"
 # ASCII sentence marks also occur inside tokens (www.example.com, 3.14, 1,000);
 # they end a word only before whitespace, a closing boundary or line end.
 _SENTENCE_MARKS = ",.;:!?"
+# Development press PDFs overlap an outside '(' by 3.49–6.06% of its
+# advance width. Limit this exception to delimiters and at most 10% of
+# their advance; letters and token joiners retain the exact-edge rule.
+_SHALLOW_DELIMITER_OVERLAP = 0.1
 # Neighbour lookups for clipped edges have their own budget. When it runs out
 # only the clipped links still unchecked are deferred, as before clipped-edge
 # support; links with exact glyph edges on the page keep their body text.
@@ -542,9 +546,23 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                                   frag.y + uy * d + vy * frag.size * 0.5)
                                  for d in (first, last)]
                         edge_inside = [_contains(polygon, px, py) for px, py in edges]
+                        shallow_sides = set()
+                        if allow_clipped_edges:
+                            side = (int(not middle) if char in _OPENING_BOUNDARIES else
+                                    int(middle) if char in _CLOSING_BOUNDARIES else None)
+                            if side is not None and edge_inside[side] != middle:
+                                px, py = edges[side]
+                                # Move from the discrepant endpoint toward the
+                                # center by 10% of the glyph advance.
+                                # This measures intrusion along the text axis,
+                                # including rotated text and slanted quads.
+                                fraction = 2 * _SHALLOW_DELIMITER_OVERLAP
+                                if _contains(polygon, px + fraction * (x - px),
+                                             py + fraction * (y - py)) == middle:
+                                    shallow_sides.add(side)
                         uncertain = [side for side, ((px, py), inside) in enumerate(
                             zip(edges, edge_inside)) if inside != middle and
-                            not _on_boundary(polygon, px, py)]
+                            not _on_boundary(polygon, px, py) and side not in shallow_sides]
                         if uncertain:
                             # A sentence mark just outside the right edge is
                             # harmless only when the next glyph cannot be a

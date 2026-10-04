@@ -42,6 +42,12 @@ MAX_CHART_OUTPUT_CELLS = 200000
 MAX_OOXML_UNSIGNED_INT = 4_294_967_295
 MAX_IMAGE_ASSET_REFS = 10000
 MAX_DIAGNOSTIC_PATH_CHARS = 256
+# A cell can repeat one shared string, so a small package could otherwise
+# render billions of characters. Bound total cell text by the parsed sheet and
+# shared-string XML size: distinct text cannot exceed its input, while public
+# workbooks peak near 2.3 million cell characters (2026-10-04, 1,097 files).
+MIN_CELL_TEXT_CHARS = 8 * 1024 * 1024
+CELL_TEXT_CHARS_PER_INPUT_BYTE = 4
 
 
 def _attr(elem, namespace: str, name: str) -> str:
@@ -184,6 +190,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
             )
             defined_name_elements = self._defined_name_elements(workbook)
             sheets = self._read_sheets(workbook, relationships)
+            self._start_cell_text_budget(package, sheets)
             self._chart_resolver = workbook_chart_resolver(package, doc.errors)
             sheet_states = {node.get("name"): {"hidden": 1, "veryHidden": 2}.get(node.get("state"), 0)
                             for node in workbook.findall("s:sheets/s:sheet", namespaces=_namespaces(workbook))}
@@ -1447,7 +1454,42 @@ class XLSXReader(SpreadsheetNumberFormatter):
                 formulas[shared_index] = (formula.text, cell_elem.get("r", ""))
         return formulas
 
+    def _start_cell_text_budget(self, package: OOXMLPackage, sheets) -> None:
+        input_bytes = 0
+        for part in [path for _, path in sheets] + ["xl/sharedStrings.xml"]:
+            try:
+                input_bytes += package.part_size(part)
+            except (KeyError, ValueError):
+                continue
+        self._cell_text_remaining = max(MIN_CELL_TEXT_CHARS, CELL_TEXT_CHARS_PER_INPUT_BYTE * input_bytes)
+        self._cell_text_limit = self._cell_text_remaining
+        self._cell_text_limit_reported = False
+
     def _cell_text(
+        self,
+        cell_elem,
+        shared_strings: List[str],
+        styles: List[str],
+        shared_formulas: Dict[str, Tuple[str, str]],
+        cell_children=None,
+    ) -> str:
+        remaining = getattr(self, "_cell_text_remaining", None)
+        if remaining == 0 and self._cell_text_limit_reported:
+            return ""
+        text = self._cell_value_text(cell_elem, shared_strings, styles, shared_formulas, cell_children)
+        if remaining is None:
+            return text
+        if len(text) > remaining:
+            text = text[:remaining]
+            if not self._cell_text_limit_reported:
+                self._cell_text_limit_reported = True
+                self._errors.append(
+                    "WARN: XLSX cell text limit exceeded "
+                    f"({self._cell_text_limit} characters, repeated shared strings); later cell text omitted")
+        self._cell_text_remaining = remaining - len(text)
+        return text
+
+    def _cell_value_text(
         self,
         cell_elem,
         shared_strings: List[str],

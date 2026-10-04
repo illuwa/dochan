@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 보안 (XLS·XLSX 공유 문자열 출력 증폭 제한)
+
+- 같은 공유 문자열을 많은 셀이 반복 참조하는 작은 통합문서가 수십억 글자의 출력을 만들던 경로를 막았다(공개 Apache POI `poc-shared-strings.xlsx`: 109 KB 입력이
+  약 126억 자 Markdown 으로 불어나 120초 안에 끝나지 않던 것이 0.19초·59 MB 로 끝난다). 셀 글자 총량을 시트·공유 문자열 XML(XLS 는 Workbook 스트림) 크기의 4배,
+  최소 8,388,608자로 제한하고 넘으면 뒤 셀 글자를 비우고 경고를 한 번 남긴다. 서로 다른 글자는 입력보다 길어질 수 없으므로 정상 문서는 잘리지 않는다(공개 XLS·XLSX
+  1,102개의 Markdown·JSON·오류 목록이 그대로, 공개 최대 셀 글자 총량은 약 233만 자).
+
 ### 추가 (HWPX 열기 암호)
 
 - 열기 암호로 보호된 HWPX 를 `password=`(CLI `--password-stdin`·`DOCHAN_PASSWORD`)로 읽는다. 매니페스트의 AES-256-CBC·PBKDF2-HMAC-SHA1(SHA-256 시작 키)·해제 후 sha256-1k 검사를

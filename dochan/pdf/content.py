@@ -362,10 +362,11 @@ class ContentTextExtractor:
         # 텍스트 상태
         tm = (1, 0, 0, 1, 0, 0)   # 텍스트 행렬
         tlm = (1, 0, 0, 1, 0, 0)  # 텍스트 라인 행렬
-        font, fs, tc, tw, th, tl = (_initial_text_state if _initial_text_state is not None
-                                    else (None, 0.0, 0.0, 0.0, 1.0, 0.0))
+        initial = (_initial_text_state if _initial_text_state is not None
+                   else (None, 0.0, 0.0, 0.0, 1.0, 0.0))
+        font, fs, tc, tw, th, tl = initial[:6]
         # 텍스트 렌더 모드(ISO 32000-1 9.3.6). 3·7 은 보이지 않는 글자(OCR 텍스트층 등)다.
-        tr = 0
+        tr, stroke_width = initial[6:] if len(initial) == 8 else (0, 1.0)
         n = len(content)
         while True:
             lexer.skip_whitespace()
@@ -413,14 +414,14 @@ class ContentTextExtractor:
                     self._marked_stack.pop()
             elif op == b"q":
                 if len(stack) < 256:
-                    stack.append((ctm, font, fs, tc, tw, th, tl, tr))
+                    stack.append((ctm, font, fs, tc, tw, th, tl, tr, stroke_width))
                 else:
                     overflow += 1
             elif op == b"Q":
                 if overflow:
                     overflow -= 1
                 elif stack:
-                    ctm, font, fs, tc, tw, th, tl, tr = stack.pop()
+                    ctm, font, fs, tc, tw, th, tl, tr, stroke_width = stack.pop()
             elif op == b"cm" and len(operands) >= 6:
                 ctm = _matmul(tuple(_num(o) for o in operands[-6:]), ctm)
             elif op == b"Do" and operands and isinstance(operands[-1], PDFName):
@@ -486,7 +487,8 @@ class ContentTextExtractor:
                                 child.resources = resources
                                 child.properties = properties
                                 result = child.extract_page(
-                                    data, form_ctm, _form_context, (font, fs, tc, tw, th, tl))
+                                    data, form_ctm, _form_context,
+                                    (font, fs, tc, tw, th, tl, tr, stroke_width))
                                 child_frags = (_clip_form_fragments(result.fragments, bbox, form_ctm)
                                                if bbox is not None else result.fragments)
                                 offset = len(frags)
@@ -526,6 +528,9 @@ class ContentTextExtractor:
                 tl = float(operands[-1])
             elif op == b"Tr" and operands and isinstance(operands[-1], (int, float)):
                 tr = int(operands[-1]) if float(operands[-1]).is_integer() else tr
+            elif op == b"w" and operands and isinstance(operands[-1], (int, float)):
+                stroke_width = float(operands[-1])
+                paths.operate(op, [stroke_width], ctm)
             elif op == b"Td" and len(operands) >= 2:
                 tx = _num(operands[-2])
                 ty = _num(operands[-1])
@@ -547,8 +552,7 @@ class ContentTextExtractor:
                 if operands and isinstance(operands[-1], bytes):
                     shown = len(frags)
                     tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
-                    if tr in (3, 7):
-                        _mark_invisible(frags, shown)
+                    _mark_render_style(frags, shown, tr, stroke_width)
             elif op in (b"'", b'"'):
                 tlm = _matmul((1, 0, 0, 1, 0, -tl), tlm)
                 tm = tlm
@@ -558,8 +562,7 @@ class ContentTextExtractor:
                 if operands and isinstance(operands[-1], bytes):
                     shown = len(frags)
                     tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
-                    if tr in (3, 7):
-                        _mark_invisible(frags, shown)
+                    _mark_render_style(frags, shown, tr, stroke_width)
             elif op == b"TJ":
                 if operands and isinstance(operands[-1], list):
                     shown = len(frags)
@@ -571,8 +574,7 @@ class ContentTextExtractor:
                             adj = -item / 1000.0 * fs * (1.0 if vertical else th)
                             tm = _matmul((1, 0, 0, 1, 0 if vertical else adj,
                                           adj if vertical else 0), tm)
-                    if tr in (3, 7):
-                        _mark_invisible(frags, shown)
+                    _mark_render_style(frags, shown, tr, stroke_width)
             elif op == b"BI":
                 lexer.pos = self._skip_inline_image(content, lexer.pos)
             else:
@@ -781,6 +783,15 @@ class ContentTextExtractor:
 def _mark_invisible(frags, start):
     for fragment in frags[start:]:
         fragment.invisible = True
+
+
+def _mark_render_style(frags, start, mode, stroke_width):
+    """ISO 32000-1 9.3.6: 채우기+테두리는 한컴의 합성 굵게 표현이다."""
+    if mode in (3, 7):
+        _mark_invisible(frags, start)
+    elif mode in (2, 6) and math.isfinite(stroke_width) and stroke_width > 0:
+        for fragment in frags[start:]:
+            fragment.bold = True
 
 
 def assemble_lines(fragments: List[Fragment]) -> List["_Line"]:

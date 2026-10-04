@@ -26,6 +26,8 @@ from .core14_metrics import GLYPH_WIDTHS
 from .tables import TableBudget, build_tables
 from .text_tables import detect_text_tables
 from .layout import merge_lines
+from .headings import (candidate_geometry, finalize_emphasized_headings,
+                      horizontal_bounds, sized_runs)
 from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
                          continues, merge_continued, page_bounds, page_rotation,
                          repeated_header_rows)
@@ -54,6 +56,10 @@ class _PageDraft:
     groups: list = field(default_factory=list)
     ordered: list = field(default_factory=list)
     median_size: float = 0.0
+    font_sizes: dict = field(default_factory=dict)
+    horizontal_bounds: Optional[tuple] = None
+    table_tops: list = field(default_factory=list)
+    baselines: list = field(default_factory=list)
     bounds: tuple = (0.0, 842.0)
     rotation: int = 0
     links: list = field(default_factory=list)
@@ -176,6 +182,7 @@ class PDFReader:
             draft = _PageDraft(section=section, page_number=page_number)
             try:
                 draft.bounds = page_bounds(pdf, page)
+                draft.horizontal_bounds = horizontal_bounds(pdf, page)
                 draft.rotation = page_rotation(pdf, page)
                 try:
                     regions = link_regions(pdf, page, destinations)
@@ -314,6 +321,10 @@ class PDFReader:
                 draft.groups = groups
                 draft.ordered = ordered
                 draft.median_size = median_size
+                draft.font_sizes = {fragment.order: fragment.size for fragment in
+                                    (page_content.fragments if page_content else [])}
+                draft.table_tops = sorted((table.bbox[3], table.bbox[0], table.bbox[2]) for table in tables)
+                draft.baselines = sorted(line.y for line in lines if line.direction == 'ltr')
                 draft.links = self._link_paragraphs(pdf, page, page_number)
                 draft.images = image_elems
                 for img in image_elems:
@@ -366,6 +377,11 @@ class PDFReader:
                 removed = drops.get(draft.page_number, set())
                 self._safe_finalize_draft(draft, removed, pdf.warnings)
                 doc.sections.append(draft.section)
+
+        try:
+            finalize_emphasized_headings(doc)
+        except Exception as e:
+            pdf.warnings.append(f"WARN: PDF 강조 제목 판정 실패: {e!r}")
 
         for section in doc.sections:
             number = getattr(section.provenance, "page", None)
@@ -428,6 +444,10 @@ class PDFReader:
                     paragraph = block.paragraph(draft.page_number)
                     paragraph.heading_level = _heading_level_for_size(
                         block.text, block.size, draft.median_size)
+                    paragraph.runs = sized_runs(paragraph, block.lines, draft.font_sizes)
+                    paragraph._pdf_heading = candidate_geometry(
+                        block, draft.horizontal_bounds, draft.rotation, draft.median_size,
+                        draft.table_tops, draft.baselines)
                     ordered.append((block.order, 1, paragraph))
         draft.section.elements.extend(item for _, _, item in sorted(
             ordered, key=lambda event: (event[0], event[1])))

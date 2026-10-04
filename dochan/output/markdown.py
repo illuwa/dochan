@@ -188,7 +188,7 @@ def _paragraph_to_md(para: Paragraph, ctx=None) -> str:
 
 
 def _ppt_markdown_runs(runs):
-    """Coalesce only the PPT Markdown view; retain source runs and font sizes."""
+    """PPT/PDF의 크기만 다른 런은 Markdown에서 합치고 원본 런은 보존한다."""
     fields = ('bold', 'italic', 'underline', 'strikeout', 'superscript',
               'subscript', 'link', 'note_ref')
     result = []
@@ -196,7 +196,7 @@ def _ppt_markdown_runs(runs):
     while index < len(runs):
         run = runs[index]
         provenance = getattr(run, 'provenance', None)
-        if (getattr(provenance, 'source_format', '') != 'ppt' or getattr(run, 'note_ref', 0)
+        if (getattr(provenance, 'source_format', '') not in ('ppt', 'pdf') or getattr(run, 'note_ref', 0)
                 or run.equation is not None):
             result.append(run)
             index += 1

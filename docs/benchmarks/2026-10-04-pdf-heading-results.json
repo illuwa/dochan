@@ -1,0 +1,371 @@
+{
+  "development_labels": [
+    {
+      "counts": {
+        "rows": 372,
+        "heading_rows": 50,
+        "matched": 366,
+        "heading_matched": 49,
+        "fp": 7,
+        "tp": 32,
+        "unmatched": 6,
+        "unmatched_headings": 1
+      },
+      "precision": 0.8205128205128205,
+      "recall_all": 0.64,
+      "recall_matched": 0.6530612244897959,
+      "news_ids": [
+        "156782879",
+        "156782903",
+        "156782906",
+        "156782924",
+        "156782925",
+        "156782927",
+        "156782928",
+        "156782932",
+        "156782957",
+        "156783028",
+        "156783038",
+        "156783057",
+        "156783108",
+        "156783110",
+        "156783129",
+        "156783201",
+        "156783202",
+        "156783234",
+        "156783254",
+        "156783270",
+        "156783287",
+        "156783299",
+        "156783316",
+        "156783324",
+        "156783340",
+        "156783379"
+      ]
+    },
+    {
+      "counts": {
+        "rows": 580,
+        "heading_rows": 70,
+        "matched": 546,
+        "heading_matched": 62,
+        "fp": 8,
+        "tp": 40,
+        "unmatched": 26,
+        "unmatched_headings": 8,
+        "ambiguous": 8,
+        "ambiguous_headings": 0
+      },
+      "precision": 0.8333333333333334,
+      "recall_all": 0.5714285714285714,
+      "recall_matched": 0.6451612903225806,
+      "news_ids": [
+        "156782416",
+        "156782422",
+        "156782423",
+        "156782428",
+        "156782432",
+        "156782446",
+        "156782517",
+        "156782521",
+        "156782524",
+        "156782607",
+        "156782634",
+        "156782638",
+        "156782661",
+        "156782670",
+        "156782690",
+        "156782692",
+        "156782699",
+        "156782727",
+        "156782749",
+        "156782788",
+        "156782800",
+        "156782803",
+        "156782813",
+        "156782820",
+        "156782821",
+        "156782832",
+        "156782844",
+        "156782845",
+        "156782846",
+        "156782855",
+        "156782860",
+        "156782863",
+        "156782892",
+        "156783018"
+      ]
+    },
+    {
+      "counts": {
+        "rows": 574,
+        "heading_rows": 95,
+        "matched": 549,
+        "heading_matched": 85,
+        "fp": 1,
+        "tp": 62,
+        "unmatched": 10,
+        "unmatched_headings": 0,
+        "ambiguous": 15,
+        "ambiguous_headings": 10
+      },
+      "precision": 0.9841269841269841,
+      "recall_all": 0.6526315789473685,
+      "recall_matched": 0.7294117647058823,
+      "news_ids": [
+        "156781947",
+        "156781964",
+        "156781971",
+        "156782044",
+        "156782054",
+        "156782059",
+        "156782106",
+        "156782111",
+        "156782118",
+        "156782136",
+        "156782144",
+        "156782151",
+        "156782158",
+        "156782168",
+        "156782169",
+        "156782173",
+        "156782182",
+        "156782189",
+        "156782215",
+        "156782226",
+        "156782242",
+        "156782256",
+        "156782258",
+        "156782267",
+        "156782271",
+        "156782275",
+        "156782333",
+        "156782340",
+        "156782344",
+        "156782349",
+        "156782411",
+        "156782412",
+        "156782485"
+      ]
+    }
+  ],
+  "body_size_experiments": {
+    "page": [
+      {
+        "counts": {
+          "rows": 372,
+          "heading_rows": 50,
+          "matched": 366,
+          "heading_matched": 49,
+          "fp": 7,
+          "tp": 13,
+          "unmatched": 6,
+          "unmatched_headings": 1
+        },
+        "precision": 0.65,
+        "recall_matched": 0.2653061224489796,
+        "recall_all": 0.26
+      },
+      {
+        "counts": {
+          "rows": 580,
+          "heading_rows": 70,
+          "matched": 546,
+          "heading_matched": 62,
+          "fp": 12,
+          "tp": 20,
+          "unmatched": 26,
+          "unmatched_headings": 8,
+          "ambiguous": 8,
+          "ambiguous_headings": 0
+        },
+        "precision": 0.625,
+        "recall_matched": 0.3225806451612903,
+        "recall_all": 0.2857142857142857
+      },
+      {
+        "counts": {
+          "rows": 574,
+          "heading_rows": 95,
+          "matched": 549,
+          "heading_matched": 85,
+          "fp": 16,
+          "tp": 45,
+          "unmatched": 10,
+          "unmatched_headings": 0,
+          "ambiguous": 15,
+          "ambiguous_headings": 10
+        },
+        "precision": 0.7377049180327869,
+        "recall_matched": 0.5294117647058824,
+        "recall_all": 0.47368421052631576
+      }
+    ],
+    "h3": [
+      {
+        "counts": {
+          "rows": 372,
+          "heading_rows": 50,
+          "matched": 366,
+          "heading_matched": 49,
+          "fp": 7,
+          "tp": 32,
+          "unmatched": 6,
+          "unmatched_headings": 1
+        },
+        "precision": 0.8205128205128205,
+        "recall_matched": 0.6530612244897959,
+        "recall_all": 0.64
+      },
+      {
+        "counts": {
+          "rows": 580,
+          "heading_rows": 70,
+          "matched": 546,
+          "heading_matched": 62,
+          "fp": 8,
+          "tp": 40,
+          "unmatched": 26,
+          "unmatched_headings": 8,
+          "ambiguous": 8,
+          "ambiguous_headings": 0
+        },
+        "precision": 0.8333333333333334,
+        "recall_matched": 0.6451612903225806,
+        "recall_all": 0.5714285714285714
+      },
+      {
+        "counts": {
+          "rows": 574,
+          "heading_rows": 95,
+          "matched": 549,
+          "heading_matched": 85,
+          "fp": 9,
+          "tp": 66,
+          "unmatched": 10,
+          "unmatched_headings": 0,
+          "ambiguous": 15,
+          "ambiguous_headings": 10
+        },
+        "precision": 0.88,
+        "recall_matched": 0.7764705882352941,
+        "recall_all": 0.6947368421052632
+      }
+    ]
+  },
+  "pdf_regression": {
+    "pdfjs": {
+      "files": 983,
+      "markdown_changed": 26,
+      "headings_before": 692,
+      "headings_after": 799,
+      "first_changed": 0,
+      "new_first": 0,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    },
+    "press": {
+      "files": 375,
+      "markdown_changed": 369,
+      "headings_before": 287,
+      "headings_after": 804,
+      "first_changed": 111,
+      "new_first": 104,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    },
+    "holdout": {
+      "files": 217,
+      "markdown_changed": 213,
+      "headings_before": 122,
+      "headings_after": 325,
+      "first_changed": 60,
+      "new_first": 57,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    },
+    "holdout2": {
+      "files": 232,
+      "markdown_changed": 230,
+      "headings_before": 84,
+      "headings_after": 404,
+      "first_changed": 75,
+      "new_first": 67,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    },
+    "holdout3": {
+      "files": 233,
+      "markdown_changed": 228,
+      "headings_before": 148,
+      "headings_after": 490,
+      "first_changed": 82,
+      "new_first": 81,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    },
+    "lo": {
+      "files": 24,
+      "markdown_changed": 0,
+      "headings_before": 4,
+      "headings_after": 4,
+      "first_changed": 0,
+      "new_first": 0,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    },
+    "internal": {
+      "files": 80,
+      "markdown_changed": 10,
+      "headings_before": 420,
+      "headings_after": 448,
+      "first_changed": 1,
+      "new_first": 0,
+      "errors_changed": 0,
+      "text_changed": 0,
+      "size_headings_changed": 0,
+      "truncated": 0
+    }
+  },
+  "new_first_kind": {
+    "press": {
+      "other": 42,
+      "square": 62
+    },
+    "holdout": {
+      "square": 30,
+      "other": 27
+    },
+    "holdout2": {
+      "other": 22,
+      "square": 45
+    },
+    "holdout3": {
+      "other": 32,
+      "square": 49
+    }
+  },
+  "hwp_hwpx_regression": {
+    "hwp": 5363,
+    "hwpx": 1675,
+    "markdown_changed": 0
+  },
+  "render_review": {
+    "new_heading_documents": 19,
+    "additional_documents": 2,
+    "new_heading_count": 107,
+    "remaining_observed_false_positives": 0
+  }
+}

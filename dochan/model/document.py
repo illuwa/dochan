@@ -1,6 +1,7 @@
 """Document model — 전체 문서 구조"""
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
+from .equation import Equation
 
 
 @dataclass
@@ -21,6 +22,7 @@ class TextRun:
     provenance: Any = None
     note_reference_type: str = ""
     note_reference_number: Optional[int] = None
+    equation: Optional['Equation'] = None
 
 
 @dataclass
@@ -104,6 +106,7 @@ class Document:
         if _depth > 32:
             return
         from .table import Table
+        from .equation import Equation
         from .image import Image
         from .header_footer import HeaderFooter, Footnote
 
@@ -118,6 +121,12 @@ class Document:
             type_matches = allowed_types is None or getattr(elem, 'type', None) in allowed_types
             if isinstance(elem, cls) and type_matches:
                 results.append(elem)
+            if cls is Equation and isinstance(elem, Paragraph):
+                for run in elem.runs:
+                    equation = run.equation
+                    if equation is not None and id(equation) not in seen:
+                        seen.add(id(equation))
+                        results.append(equation)
 
             if isinstance(elem, Table):
                 for row in elem.rows:

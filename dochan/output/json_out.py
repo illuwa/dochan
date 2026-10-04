@@ -162,6 +162,12 @@ def _run_to_dict(run) -> dict:
         'subscript': run.subscript,
         'font_size_pt': run.font_size_pt,
     }
+    if run.equation is not None:
+        result['equation'] = {
+            'latex': run.equation.latex,
+            'script': run.equation.script,
+            'script_format': run.equation.script_format,
+        }
     if getattr(run, 'link', ''):
         result['link'] = run.link
     if getattr(run, 'note_ref', 0):

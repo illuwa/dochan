@@ -423,6 +423,7 @@ class DOCXReader:
         elements = []
         runs = []
         images = []
+        has_other_text = any(run.text.strip() and run.equation is None for run in para.runs)
 
         def flush():
             if any(r.text.strip() for r in runs):
@@ -437,6 +438,13 @@ class DOCXReader:
             images.clear()
 
         for run in para.runs:
+            if run.equation is not None:
+                if has_other_text:
+                    runs.append(run)
+                else:
+                    flush()
+                    elements.append(run.equation)
+                continue
             flow = getattr(run, "_flow_elements", None)
             if flow is None:
                 runs.append(run)
@@ -1546,7 +1554,10 @@ class DOCXReader:
                 continue
             elif child.tag == f"{{{W_NS}}}del":
                 continue
-            elif child.tag in (f"{{{M_NS}}}oMath", f"{{{M_NS}}}oMathPara"):
+            elif child.tag == f"{{{M_NS}}}oMath":
+                runs.extend(TextRun(text=equation.latex, equation=equation)
+                            for equation in self._equations_in(child, include_self=True))
+            elif child.tag == f"{{{M_NS}}}oMathPara":
                 run = TextRun()
                 run._flow_elements = self._equations_in(child, include_self=True)
                 runs.append(run)
@@ -1655,6 +1666,9 @@ class DOCXReader:
                     flow = getattr(drawing_run, "_flow_elements", None)
                     if getattr(drawing_run, "_text_boundary", False):
                         text_parts.append(None)
+                    elif drawing_run.equation is not None:
+                        flush_text()
+                        segments.append((drawing_run.text, "equation", drawing_run.equation))
                     elif flow is not None:
                         flush_text()
                         segments.append(("", "flow", flow))
@@ -1668,6 +1682,9 @@ class DOCXReader:
         r_pr = r_elem.find("w:rPr", namespaces=NS)
         runs = []
         for text, note_type, note_number in segments:
+            if note_type == "equation":
+                runs.append(TextRun(text=text, equation=note_number))
+                continue
             if note_type == "flow":
                 run = TextRun(text="")
                 run._flow_elements = note_number
@@ -1749,7 +1766,13 @@ class DOCXReader:
                     yield boundary
                 for index, runs in enumerate(paragraphs):
                     # 기존 텍스트박스의 문단 줄바꿈 및 호스트 런 서식을 유지한다.
+                    has_text = any(item.text.strip() and item.equation is None for item in runs)
                     for run in runs:
+                        if run.equation is not None and not has_text:
+                            block = TextRun()
+                            block._flow_elements = [run.equation]
+                            yield block
+                            continue
                         yield run
                     if index < len(paragraphs) - 1 or anchored:
                         yield TextRun(text="\n")
@@ -1758,7 +1781,11 @@ class DOCXReader:
                 continue
             if node.tag in {f"{{{W_NS}}}del", f"{{{W_NS}}}moveFrom"}:
                 continue
-            if node.tag in {f"{{{M_NS}}}oMath", f"{{{M_NS}}}oMathPara"}:
+            if node.tag == f"{{{M_NS}}}oMath":
+                for equation in self._equations_in(node, include_self=True):
+                    yield TextRun(text=equation.latex, equation=equation)
+                continue
+            if node.tag == f"{{{M_NS}}}oMathPara":
                 run = TextRun()
                 run._flow_elements = self._equations_in(node, include_self=True)
                 yield run

@@ -2516,8 +2516,8 @@ def test_reads_docx_omml_equations_as_latex(tmp_path):
     """)
 
     doc = DOCXReader().read(str(path))
-    equations = [e for section in [doc.sections[0]] for e in section.elements
-                 if type(e).__name__ == "Equation"]
+    # Inline OMML now lives in its paragraph run; find_all covers both placements.
+    equations = doc.find_all('equation')
 
     assert len(equations) == 4
     assert equations[0].latex == r"\frac{a}{b}"

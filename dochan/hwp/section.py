@@ -107,6 +107,32 @@ def _apply_link_ranges(runs, ranges, *, max_runs=None, on_limit=None):
     return result
 
 
+def _insert_inline_equation(runs, position, equation):
+    """Insert at a PARA_TEXT offset while preserving character shape boundaries."""
+    result = []
+    offset = 0
+    inserted = False
+    for run in runs:
+        if run.equation is not None:
+            result.append(run)
+            continue
+        end = offset + len(run.text)
+        if not inserted and offset <= position <= end:
+            split = position - offset
+            if split:
+                result.append(_dc_replace(run, text=run.text[:split]))
+            result.append(TextRun(text=equation.latex, equation=equation))
+            if split < len(run.text):
+                result.append(_dc_replace(run, text=run.text[split:]))
+            inserted = True
+        else:
+            result.append(run)
+        offset = end
+    if not inserted:
+        result.append(TextRun(text=equation.latex, equation=equation))
+    return result
+
+
 # Public corpus maximum: 638,984 records in one section. A byte-only
 # bound would admit 52,428,800 empty records in 200 MiB and amplify them
 # into Python tree nodes. Keep an independent object/work bound as well.
@@ -516,6 +542,7 @@ class SectionParser:
                 )
 
         # 텍스트 문단 생성
+        para = None
         if text_result and text_result['text'].strip():
             para = Paragraph()
             para_rec = para_node['record']
@@ -569,6 +596,11 @@ class SectionParser:
             elements.append(Paragraph(runs=list(bookmark_markers)))
 
         # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
+        equation_offsets = iter(
+            text_result['raw_to_text'][min(start, len(text_result['raw_to_text']) - 1)]
+            for start, _end, ctrl_id in text_result.get('inline_controls', [])
+            if ctrl_id == b'deqe'
+        ) if text_result else iter(())
         for ctrl_node in ctrl_nodes:
             failure_serial = self._table_failure_serial
             starting_cells = self._section_cells
@@ -596,6 +628,14 @@ class SectionParser:
             if isinstance(ctrl_elem, list):
                 elements.extend(ctrl_elem)
             elif ctrl_elem:
+                if isinstance(ctrl_elem, Equation):
+                    position = next(equation_offsets, None)
+                    data = ctrl_node['record'].data
+                    as_char = (len(data) >= 8 and
+                               bool(struct.unpack_from('<I', data, 4)[0] & 1))
+                    if as_char and para is not None and position is not None:
+                        para.runs = _insert_inline_equation(para.runs, position, ctrl_elem)
+                        continue
                 elements.append(ctrl_elem)
 
         return elements
@@ -1258,6 +1298,8 @@ class SectionParser:
                             info['paragraphs'].append(e)
                     elif isinstance(e, Image):
                         # 셀 안 이미지도 유지 (HWPX 와 동일 — BinData 연결 대상)
+                        info['paragraphs'].append(e)
+                    elif isinstance(e, Equation):
                         info['paragraphs'].append(e)
                     elif isinstance(e, ChartReference):
                         info['paragraphs'].append(e)

@@ -2,7 +2,6 @@
 import pytest
 
 from dochan.model.document import Paragraph
-from dochan.model.equation import Equation
 from dochan.ooxml.docx import DOCXReader
 from test_docx_remaining import write_docx, paragraph
 
@@ -34,8 +33,10 @@ def test_docx_equations_follow_exact_inline_anchor(tmp_path, container):
     elements = doc.sections[0].elements
     if container == 'cell':
         elements = elements[0].rows[0][0].paragraphs
-    assert [type(e) for e in elements] == [Equation, Paragraph, Equation]
-    assert elements[1].text.strip() == 'middle'
+    # The two inline anchors belong to the same source paragraph as "middle".
+    assert [type(e) for e in elements] == [Paragraph]
+    assert elements[0].text.strip() == 'xmiddlex'
+    assert [bool(run.equation) for run in elements[0].runs] == [True, False, True]
     assert [e.latex for e in doc.find_all('equation')] == ['x', 'x']
 
 

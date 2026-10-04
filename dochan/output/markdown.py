@@ -196,7 +196,8 @@ def _ppt_markdown_runs(runs):
     while index < len(runs):
         run = runs[index]
         provenance = getattr(run, 'provenance', None)
-        if getattr(provenance, 'source_format', '') != 'ppt' or getattr(run, 'note_ref', 0):
+        if (getattr(provenance, 'source_format', '') != 'ppt' or getattr(run, 'note_ref', 0)
+                or run.equation is not None):
             result.append(run)
             index += 1
             continue
@@ -204,7 +205,7 @@ def _ppt_markdown_runs(runs):
         end = index + 1
         while end < len(runs):
             following = runs[end]
-            if (following.provenance != provenance
+            if (following.equation is not None or following.provenance != provenance
                     or tuple(getattr(following, name, None) for name in fields) != key):
                 break
             end += 1
@@ -221,11 +222,16 @@ def _runs_to_md(runs: list, ctx=None) -> str:
     index = 0
     total = len(runs)
     while index < total:
+        if runs[index].equation is not None:
+            parts.append(_run_to_md(runs[index]))
+            index += 1
+            continue
         link = getattr(runs[index], 'link', '')
         if link:
             end = index
             group = []
-            while end < total and getattr(runs[end], 'link', '') == link:
+            while (end < total and runs[end].equation is None
+                   and getattr(runs[end], 'link', '') == link):
                 group.append(runs[end])
                 end += 1
             inner = ''.join(_run_to_md(run) for run in group)
@@ -243,6 +249,8 @@ def _runs_to_md(runs: list, ctx=None) -> str:
 
 
 def _run_to_md(run: TextRun) -> str:
+    if run.equation is not None:
+        return f"${run.equation.latex}$"
     # 각주 참조 마커는 서식 대신 Markdown 각주 참조로 렌더한다.
     note_ref = getattr(run, 'note_ref', 0)
     if note_ref:

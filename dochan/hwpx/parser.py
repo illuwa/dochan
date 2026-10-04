@@ -968,6 +968,13 @@ class HWPXParser:
     def _parse_paragraph_elem(self, p_elem) -> list:
         """<p> 요소 → Paragraph/Table/등"""
         elements = []
+        # Only text in this paragraph's own runs counts; nested cell/note text
+        # must not turn an equation-only host paragraph into inline math.
+        has_other_text = any(
+            _text_of_t(part).strip()
+            for child in _selected_children(p_elem) if _local_tag(child.tag) == 'run'
+            for part in _selected_children(child) if _local_tag(part.tag) == 't'
+        )
 
         # 하이퍼링크 상태는 문단 안에서만 유효하다. 중첩 호출(표 셀, 도형)을 위해 저장/복원.
         saved_links = self._link_stack
@@ -1005,7 +1012,7 @@ class HWPXParser:
 
                 if tag == 'run':
                     # run 안에 tbl/pic이 있을 수 있음 (실제 HWPX 구조)
-                    inline_elems = self._parse_run_with_objects(child)
+                    inline_elems = self._parse_run_with_objects(child, has_other_text)
                     for item in inline_elems:
                         if isinstance(item, str):
                             plain_parts.append(item)
@@ -1038,6 +1045,11 @@ class HWPXParser:
                                 runs.append(ctrl_elem)
                             else:
                                 plain_parts.append(ctrl_elem.text)
+                            continue
+                        if (isinstance(ctrl_elem, Equation) and has_other_text
+                                and getattr(ctrl_elem, '_treat_as_char', False)):
+                            flush_plain()
+                            runs.append(TextRun(text=ctrl_elem.latex, equation=ctrl_elem))
                             continue
                         flush_plain()
                         if isinstance(ctrl_elem, Image):
@@ -1116,7 +1128,7 @@ class HWPXParser:
         if self._link_stack:
             self._link_stack.pop()
 
-    def _parse_run_with_objects(self, run_elem) -> list:
+    def _parse_run_with_objects(self, run_elem, has_other_text=False) -> list:
         """<run> 내부의 텍스트 + 인라인 개체(표, 이미지, 도형) 파싱"""
         results = []
         text_parts = []
@@ -1200,7 +1212,11 @@ class HWPXParser:
                 results.append(self._parse_picture_elem(child))
             elif tag == 'equation':
                 flush()
-                results.append(_parse_equation_elem(child))
+                equation = _parse_equation_elem(child)
+                if has_other_text and _equation_treat_as_char(child):
+                    results.append(TextRun(text=equation.latex, equation=equation))
+                else:
+                    results.append(equation)
             elif tag == 'chart':
                 flush()
                 results.extend(self._parse_chart_elem(child))
@@ -1319,7 +1335,9 @@ class HWPXParser:
             elif tag == 'tbl':
                 return self._parse_table_elem(child)
             elif tag == 'equation':
-                return _parse_equation_elem(child)
+                equation = _parse_equation_elem(child)
+                equation._treat_as_char = _equation_treat_as_char(child)
+                return equation
             elif tag == 'pic':
                 return self._parse_picture_elem(child)
             elif tag == 'chart':
@@ -1778,6 +1796,12 @@ def _text_of_t(t_elem) -> str:
             parts.append(sub.tail)
 
     return ''.join(parts)
+
+
+def _equation_treat_as_char(eq_elem) -> bool:
+    position = _find_child(eq_elem, 'pos')
+    value = position.get('treatAsChar') if position is not None else eq_elem.get('treatAsChar')
+    return value in ('1', 'true')
 
 
 def _parse_equation_elem(eq_elem) -> Equation:

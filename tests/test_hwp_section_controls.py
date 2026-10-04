@@ -520,6 +520,47 @@ def test_gso_description_becomes_image_alt_text():
     assert images[0].alt_text == "그림입니다.\n원본 그림의 이름: CLP0001.bmp"
 
 
+def test_nested_picture_description_overrides_outer_group_description():
+    """중첩 GSO의 실제 그림 설명문은 바깥 도형의 일반 설명보다 우선한다."""
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    inner_desc = "그림입니다.\r\n원본 그림의 이름: sample.bmp"
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("그림 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, gso_ctrl_payload("사각형입니다.")) +
+        rec(HWPTAG_SHAPE_COMPONENT, 2, bytes(4)) +
+        rec(HWPTAG_LIST_HEADER, 3, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 4, bytes(22)) +
+        rec(HWPTAG_CTRL_HEADER, 5, gso_ctrl_payload(inner_desc)) +
+        rec(HWPTAG_SHAPE_COMPONENT, 6, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 7, pic_payload)
+    )
+
+    images = [e for e in parse_section(data).elements if isinstance(e, Image)]
+    assert len(images) == 1
+    assert images[0].alt_text == "그림입니다.\n원본 그림의 이름: sample.bmp"
+
+
+def test_group_label_is_not_picture_alt_text_when_nested_picture_has_no_description():
+    """묶음 도형의 자동 설명은 그 안의 개별 그림 설명이 아니다."""
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("그림 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, gso_ctrl_payload("묶음 개체입니다.")) +
+        rec(HWPTAG_SHAPE_COMPONENT, 2, bytes(4)) +
+        rec(HWPTAG_LIST_HEADER, 3, bytes(8)) +
+        rec(HWPTAG_PARA_HEADER, 4, bytes(22)) +
+        rec(HWPTAG_CTRL_HEADER, 5, gso_ctrl_payload()) +
+        rec(HWPTAG_SHAPE_COMPONENT, 6, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 7, pic_payload)
+    )
+
+    images = [e for e in parse_section(data).elements if isinstance(e, Image)]
+    assert len(images) == 1
+    assert images[0].alt_text == ""
+
+
 def test_gso_without_description_has_empty_alt_text():
     """설명문 길이 0 이면 alt_text 는 빈 문자열 (회계규칙 두 번째 GSO 실측)."""
     pic_payload = bytes(71) + struct.pack("<H", 1)

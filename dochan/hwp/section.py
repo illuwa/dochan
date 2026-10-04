@@ -1379,9 +1379,11 @@ class SectionParser:
         if images:
             if caption_paras:
                 images[0].caption = caption_paras
-            if alt_text:
-                # 개체 설명문은 GSO 단위 속성 — HWPX shapeComment 처럼 이미지의
-                # 대체 텍스트로 쓴다 (본문 텍스트로는 흘리지 않는다)
+            if (alt_text and alt_text != '묶음 개체입니다.'
+                    and not images[0].alt_text):
+                # 중첩 GSO의 그림 설명문이 있으면 바깥 도형의 일반 설명문으로
+                # 덮지 않는다. 자동 생성된 묶음 개체 명칭은 개별 그림 설명이
+                # 아니므로 붙이지 않고, 나머지 설명만 폴백으로 쓴다.
                 images[0].alt_text = alt_text
         elif caption_paras:
             # 이미지 없는 도형의 캡션은 잃지 않도록 흐름에 남긴다

@@ -7,6 +7,9 @@ from collections import Counter
 
 MAX_FONT_HEADING_PARAGRAPHS = 200_000
 MAX_FONT_HEADING_LENGTH = 120
+# 네모 표지는 이름뿐 아니라 길게 축약한 본문에도 쓰인다. 약한 글꼴
+# 강조로 승격할 이름 줄은 별도 상한을 둔다(문답·괄호 제목에는 적용하지 않음).
+MAX_SQUARE_HEADING_LENGTH = 60
 _BODY_EXCLUDED_PREFIXES = ('※', '*', '주:', '(단위')
 # 표·그림 캡션과 차례 항목 스타일은 이름에 '제목'이 있어도 제목이 아니다.
 # 표지(표지 제목)·별표(별표제목)·양식(양식제목)·차례 쪽 제목(차례 제목)은 실제 제목이라 남긴다.
@@ -18,6 +21,9 @@ _OUTLINE_STYLE = re.compile(r'(?:개요|outline|heading)\s*(\d+)')
 _NUMBER_MARKER = re.compile(r'(?:\d+(?:-\d+)?|[가나다라마바사아자차카타파하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)](?=\s|[<〈\[【])')
 _QUESTION_MARKER = re.compile(r'Q(?:\.\d+|\s+\d+\.)(?=\s)')
 _KEY_VALUE_MARKER = re.compile(r'^□\s*\(([^()]{1,15})\)(?=\s|$)')
+_SQUARE_TAG_CONTENT = re.compile(r'^\([^()]+\)\s*(\S.*)$')
+# 어휘별 예외 대신 절을 이어 주는 연결 어미를 확인한다.
+_SQUARE_CLAUSE = re.compile(r'\S+(?:하여|하며|하고|하되)(?=\s)')
 _BRACKET_END = {'<': '>', '〈': '〉', '[': ']', '【': '】'}
 # 종결형·날짜·표 캡션은 표지와 강조가 있어도 절 제목으로 보지 않는다.
 _SENTENCE_END = re.compile(r'(?:다\.|음\.?|함\.?)$')
@@ -212,6 +218,15 @@ def emphasized_heading_level(runs, body_size):
     marker_end, kind = _section_marker(text)
     if not marker_end or (kind == 'square' and _TABLE_LABEL.match(text[marker_end:].strip())):
         return 0
+    if kind == 'square':
+        name = ' '.join(text[marker_end:].split())
+        tag = _SQUARE_TAG_CONTENT.match(name)
+        # 태그만 있는 이름과 뒤에 단일 명사가 오는 애매한 줄은 보존한다.
+        # 두 어절 이상 값·설명이 붙으면 태그는 절 이름이 아니라 본문 분류다.
+        if (len(name) > MAX_SQUARE_HEADING_LENGTH
+                or (tag and len(tag.group(1).split()) >= 2)
+                or '→' in name or _SQUARE_CLAUSE.search(name)):
+            return 0
     # 앞 공백과 표지는 글자 크기·굵기 판정에서 뺀다. 특히 HWP의 PUA
     # 글머리 글자만 작고 뒤의 실제 제목은 큰 경우가 있다.
     leading = len(raw_text) - len(raw_text.lstrip())

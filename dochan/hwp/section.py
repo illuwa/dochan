@@ -22,7 +22,7 @@ from typing import List
 from ..utils.safe_decompress import MAX_DECOMPRESSED_SIZE, safe_zlib_decompress
 from ..utils.heading_font import (
     MAX_FONT_HEADING_LENGTH, MAX_FONT_HEADING_PARAGRAPHS,
-    finalize_font_headings, first_visible_font_size,
+    _section_marker, finalize_font_headings, first_visible_font_size,
     heading_level_from_style_name,
 )
 
@@ -1159,6 +1159,15 @@ class SectionParser:
         level = self._outline_level(para.para_shape_id)
         if level:
             return level
+
+        # A table can split a source title after its bullet. The first
+        # fragment still owns explicit style/outline headings, but a lone
+        # marker is not a font-inferred heading on its own.
+        if getattr(para, '_hwp_heading_source_runs', None) is not None:
+            text = para.text.strip()
+            marker_end, _kind = _section_marker(text)
+            if marker_end and not text[marker_end:].strip():
+                return 0
 
         if self._in_table_cell:
             return 0

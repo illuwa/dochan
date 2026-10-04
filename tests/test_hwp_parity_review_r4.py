@@ -50,6 +50,20 @@ def test_table_anchor_splits_text_at_original_position():
     assert [e.text for e in elements if isinstance(e, Paragraph)] == ['앞', '뒤']
 
 
+def test_table_does_not_make_marker_only_prefix_a_heading():
+    text = '□ '.encode('utf-16-le') + _anchor(11, b' lbt') + '추진배경'.encode('utf-16-le')
+    info = SimpleNamespace(char_shapes=[CharShape(base_size=2000)],
+                           para_shapes=[], styles=[])
+    section = SectionParser(doc_info=info).parse_stream(
+        _rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        _rec(HWPTAG_PARA_TEXT, 1, text + b'\r\x00') +
+        _rec(HWPTAG_PARA_CHAR_SHAPE, 1, struct.pack('<II', 0, 0)) + _table('셀'), False)
+    before, table, after = section.elements
+    assert isinstance(table, Table)
+    assert (before.text, after.text) == ('□ ', '추진배경')
+    assert (before.heading_level, after.heading_level) == (0, 0)
+
+
 def test_multiple_table_anchors_keep_text_between_tables():
     elements = _parse(_anchor(11, b' lbt') + '사이'.encode('utf-16-le') +
                       _anchor(11, b' lbt') + '끝'.encode('utf-16-le'),

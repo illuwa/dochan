@@ -42,6 +42,7 @@ from .records.ctrl_header import (
     parse_ctrl_id, identify_control,
     is_field_ctrl_id, parse_field_command_url, CTRL_FIELD_HYPERLINK,
     CTRL_BOOKMARK, CTRL_FOOTNOTE, CTRL_ENDNOTE,
+    CTRL_TABLE, CTRL_HEADER_HF, CTRL_FOOTER_HF,
 )
 from .records.para_text import parse_para_text
 from .forms import form_text
@@ -153,6 +154,55 @@ def _merge_inline_objects(runs, objects):
 def _merge_inline_equations(runs, equations):
     """Keep the existing equation-only helper used by callers and tests."""
     return _merge_inline_objects(runs, equations)
+
+
+def _split_paragraph_blocks(para, blocks, inline_sizes):
+    """Place anchored blocks between text fragments in one run traversal.
+
+    WCHAR positions distinguish adjacent note/equation and block anchors even
+    when both map to the same visible text offset. Inserted inline text shifts
+    only the blocks whose raw anchor follows it. Work is O(R + A log A), with
+    fragments bounded by the already limited number of control records.
+    """
+    shifts = iter(sorted(inline_sizes))
+    shift = next(shifts, None)
+    added = 0
+    boundaries = []
+    for raw_position, position, block in sorted(blocks, key=lambda item: item[0]):
+        while shift is not None and shift[0] < raw_position:
+            added += shift[1]
+            shift = next(shifts, None)
+        boundaries.append((position + added, block))
+    result = []
+    pieces = []
+    boundary_index = 0
+    offset = 0
+
+    def flush():
+        if pieces and any(run.text.strip() for run in pieces):
+            result.append(_dc_replace(para, runs=list(pieces)))
+        pieces.clear()
+
+    for run in para.runs:
+        end = offset + len(run.text)
+        cursor = offset
+        while boundary_index < len(boundaries) and boundaries[boundary_index][0] <= end:
+            position, block = boundaries[boundary_index]
+            position = max(cursor, position)
+            if cursor < position:
+                pieces.append(run if cursor == offset and position == end else
+                              _dc_replace(run, text=run.text[cursor - offset:position - offset]))
+            flush()
+            result.append(block)
+            cursor = position
+            boundary_index += 1
+        if cursor < end:
+            pieces.append(run if cursor == offset else
+                          _dc_replace(run, text=run.text[cursor - offset:]))
+        offset = end
+    flush()
+    result.extend(block for _position, block in boundaries[boundary_index:])
+    return result
 
 
 # Public corpus maximum: 638,984 records in one section. A byte-only
@@ -569,6 +619,11 @@ class SectionParser:
         has_note_anchor = bool(text_result and any(
             ctrl_id in (CTRL_FOOTNOTE, CTRL_ENDNOTE)
             for _start, _end, ctrl_id in text_result.get('inline_controls', [])))
+        block_anchor_ids = {ctrl_id for _start, _end, ctrl_id in
+                            (text_result.get('inline_controls', []) if text_result else [])
+                            if ctrl_id in (CTRL_TABLE, CTRL_HEADER_HF, CTRL_FOOTER_HF)}
+        defer_heading = any(parse_ctrl_id(node['record'].data) in block_anchor_ids
+                            for node in ctrl_nodes)
         if text_result and (text_result['text'].strip() or has_note_anchor):
             para = Paragraph()
             para_rec = para_node['record']
@@ -605,9 +660,10 @@ class SectionParser:
                 plain_tail = plain_tail or link_tail
             self._document_text_runs += len(para.runs) - int(plain_tail)
 
-            # 제목 감지
-            para.heading_level = self._detect_heading_level(para)
-
+            # Keep the existing heading timing except where the paragraph
+            # will be replaced by fragments at a matching block anchor.
+            if not defer_heading:
+                para.heading_level = self._detect_heading_level(para)
             elements.append(para)
         elif bookmark_markers:
             # 텍스트 없는 책갈피(영역 앵커 등)도 마커로 남긴다
@@ -617,16 +673,18 @@ class SectionParser:
         inline_offsets = {}
         if text_result:
             for start, _end, ctrl_id in text_result.get('inline_controls', []):
-                if ctrl_id in (b'deqe', CTRL_FOOTNOTE, CTRL_ENDNOTE):
-                    position = text_result['raw_to_text'][
-                        min(start, len(text_result['raw_to_text']) - 1)]
-                    inline_offsets.setdefault(ctrl_id, []).append(position)
+                position = text_result['raw_to_text'][
+                    min(start, len(text_result['raw_to_text']) - 1)]
+                inline_offsets.setdefault(ctrl_id, []).append((start, position))
         inline_offsets = {key: iter(value) for key, value in inline_offsets.items()}
         inline_objects = []
+        inline_sizes = []
+        block_objects = []
         for ctrl_node in ctrl_nodes:
             # A failed equation still owns its PARA_TEXT marker.
             ctrl_id = parse_ctrl_id(ctrl_node['record'].data)
-            position = next(inline_offsets.get(ctrl_id, iter(())), None)
+            anchor = next(inline_offsets.get(ctrl_id, iter(())), None)
+            raw_position, position = anchor if anchor is not None else (None, None)
             failure_serial = self._table_failure_serial
             starting_cells = self._section_cells
             starting_document_cells = self._document_cells
@@ -659,6 +717,7 @@ class SectionParser:
                                bool(struct.unpack_from('<I', data, 4)[0] & 1))
                     if as_char and para is not None and position is not None:
                         inline_objects.append((position, ctrl_elem))
+                        inline_sizes.append((raw_position, len(ctrl_elem.latex)))
                         continue
                 if isinstance(ctrl_elem, Footnote) and ctrl_elem.type in ('footnote', 'endnote'):
                     self._note_seq += 1
@@ -666,6 +725,11 @@ class SectionParser:
                     if para is not None and position is not None:
                         inline_objects.append((position, TextRun(
                             text=f'[{self._note_seq}]', note_ref=self._note_seq)))
+                        inline_sizes.append((raw_position, len(f'[{self._note_seq}]')))
+                if (para is not None and position is not None and
+                        isinstance(ctrl_elem, (Table, HeaderFooter))):
+                    block_objects.append((raw_position, position, ctrl_elem))
+                    continue
                 elements.append(ctrl_elem)
 
         if para is not None:
@@ -675,6 +739,15 @@ class SectionParser:
                 for marker in bookmark_markers:
                     marker.font_size_pt = marker_size
                 para.runs = bookmark_markers + para.runs
+                inline_sizes.append((-1, sum(len(marker.text) for marker in bookmark_markers)))
+            if block_objects:
+                flow = _split_paragraph_blocks(para, block_objects, inline_sizes)
+                for fragment in flow:
+                    if isinstance(fragment, Paragraph):
+                        fragment.heading_level = self._detect_heading_level(fragment)
+                elements[0:1] = flow
+            elif defer_heading:
+                para.heading_level = self._detect_heading_level(para)
 
         return elements
 

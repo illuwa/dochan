@@ -15,6 +15,8 @@ from dochan.hwp.records.char_shape import CharShape
 from dochan.hwp.section import SectionParser
 from dochan.hwpx.parser import HWPXParser
 from dochan.model.document import Document, TextRun
+from dochan.model.table import Table
+from dochan.model.style import ParaShape
 from dochan.utils.heading_font import finalize_font_headings
 from test_hwp_section_controls import bokm_ctrl_data, gso_ctrl_payload, rec
 from test_hwpx_controls import package
@@ -248,3 +250,69 @@ def test_emphasis_needs_document_context(tmp_path):
     paragraphs[-1].heading_level = 0
     finalize_font_headings(paragraphs)
     assert paragraphs[-1].heading_level == 0
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('▶ 중앙행정기관', 3),
+    ('▷ 공공기관', 3),
+    ('◆ 공무상 재해 공무원 보상', 3),
+    ('◇ 제도 개선', 3),
+    ('>> AI 친화적 정보시스템', 3),
+    ('Q.1 언제부터 적용하는지?', 3),
+    ('Q 2. 무엇이 달라지는지?', 3),
+    ('▶ 굵지 않은 목록', 0),
+    ('Q.1 굵지 않은 질문', 0),
+    ('ㅇ 굵은 항목', 0),
+    ('첫째, 개선한다.', 0),
+])
+def test_followup_markers_match_in_both_formats(tmp_path, text, expected):
+    shape = 2 if '굵지 않은' not in text else 0
+    for doc in _documents(tmp_path, [[(text, shape)]]):
+        assert doc.sections[0].elements[-1].heading_level == expected
+
+
+def test_bracket_line_before_table_is_caption_in_both_formats(tmp_path):
+    for doc in _documents(tmp_path, [[('<용도별 공시지가 공시>', 1)]]):
+        para = doc.sections[0].elements[-1]
+        para.para_shape_id = 0
+        doc.para_shapes = [ParaShape(align=3)]
+        doc.sections[0].elements.append(Table())
+        finalize_font_headings(doc.sections[0].elements[:-1], doc=doc)
+        assert para.heading_level == 0
+
+
+def test_left_aligned_bracket_before_table_can_be_section_heading(tmp_path):
+    for doc in _documents(tmp_path, [[('[ 추진 배경]', 2)]]):
+        para = doc.sections[0].elements[-1]
+        para.para_shape_id = 0
+        doc.para_shapes = [ParaShape(align=1)]
+        doc.sections[0].elements.append(Table())
+        finalize_font_headings(doc.sections[0].elements[:-1], doc=doc)
+        assert para.heading_level == 3
+
+
+def test_square_key_value_group_stays_body_in_both_formats(tmp_path):
+    parts = [[('□ (일시) 2026. 9. 23.', 1)],
+             [('□ (장소) 회의실', 1)],
+             [('□ (기관별 서명자)', 1)],
+             [('□ (진행 순서)', 1)]]
+    for doc in _documents(tmp_path, parts):
+        paras = doc.sections[0].elements
+        # 실제 문서에서는 같은 문단 모양을 쓰는 값 목록이다.
+        for para in paras[-4:]:
+            para.para_shape_id = 30
+        finalize_font_headings(paras, doc=doc)
+        assert [para.heading_level for para in paras[-4:]] == [0, 0, 0, 0]
+
+
+def test_key_value_group_has_no_arbitrary_sibling_gap(tmp_path):
+    parts = [[('□ (일시) 오전', 1)]]
+    parts.extend([[('ㅇ 참석자 %d' % index, 0)] for index in range(20)])
+    parts.append([('□ (진행 순서)', 1)])
+    for doc in _documents(tmp_path, parts):
+        paras = doc.sections[0].elements
+        paras[3].para_shape_id = 30
+        paras[-1].para_shape_id = 30
+        finalize_font_headings(paras, doc=doc)
+        assert paras[3].heading_level == 0
+        assert paras[-1].heading_level == 0

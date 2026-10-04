@@ -16,6 +16,8 @@ _OUTLINE_STYLE = re.compile(r'(?:개요|outline|heading)\s*(\d+)')
 # 표지 뒤에는 공백이나 여는 괄호가 와야 한다. 소수·백분율의 점은 번호가 아니다.
 # 한글 표지는 실제 순번에 쓰는 14음절만 허용한다.
 _NUMBER_MARKER = re.compile(r'(?:\d+(?:-\d+)?|[가나다라마바사아자차카타파하]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|[IVX]+)[.)](?=\s|[<〈\[【])')
+_QUESTION_MARKER = re.compile(r'Q(?:\.\d+|\s+\d+\.)(?=\s)')
+_KEY_VALUE_MARKER = re.compile(r'^□\s*\(([^()]{1,15})\)(?=\s|$)')
 _BRACKET_END = {'<': '>', '〈': '〉', '[': ']', '【': '】'}
 # 종결형·날짜·표 캡션은 표지와 강조가 있어도 절 제목으로 보지 않는다.
 _SENTENCE_END = re.compile(r'(?:다\.|음\.?|함\.?)$')
@@ -130,6 +132,13 @@ def _section_marker(text):
     """절 표지의 길이와 종류. 괄호형은 줄 전체를 감싸야 한다."""
     if text.startswith(('□', '■')):
         return 1, 'square'
+    if text.startswith(('▶ ', '▷ ', '◆ ', '◇ ')):
+        return 1, 'symbol'
+    if text.startswith('>> '):
+        return 2, 'symbol'
+    question = _QUESTION_MARKER.match(text)
+    if question:
+        return question.end(), 'question'
     match = _NUMBER_MARKER.match(text)
     if match:
         return match.end(), 'number'
@@ -140,6 +149,53 @@ def _section_marker(text):
     if text and unicodedata.category(text[0]) == 'Co':
         return 1, 'pua'
     return 0, ''
+
+
+def _context_exclusions(doc):
+    """표 직전 캡션과 같은 문단 모양의 연속된 괄호 키 목록을 찾는다."""
+    excluded = set()
+    if doc is None:
+        return excluded
+
+    def finish_keys(group):
+        if len(group) >= 2 and any(key in ('일시', '장소') for _, key in group):
+            excluded.update(id(para) for para, _ in group)
+
+    for section in doc.sections:
+        elements = section.elements
+        group = []
+        group_shape = -1
+        for index, element in enumerate(elements):
+            paragraph = hasattr(element, 'heading_level')
+            text = element.text.strip() if paragraph else ''
+            if paragraph:
+                shapes = doc.para_shapes
+                shape_id = element.para_shape_id
+                centered = (0 <= shape_id < len(shapes) and shapes[shape_id].align == 3)
+                if (text[:1] in _BRACKET_END and len(text) <= MAX_FONT_HEADING_LENGTH
+                        and text.endswith(_BRACKET_END[text[0]])
+                        and centered
+                        and index + 1 < len(elements)
+                        and hasattr(elements[index + 1], 'rows')):
+                    excluded.add(id(element))
+            match = _KEY_VALUE_MARKER.match(text) if paragraph else None
+            if match:
+                if group and element.para_shape_id != group_shape:
+                    finish_keys(group)
+                    group = []
+                if not group:
+                    group_shape = element.para_shape_id
+                group.append((element, match.group(1)))
+            elif group and (hasattr(element, 'rows')
+                            or text.startswith(('ㅇ ', '○ ', '◦ '))):
+                continue
+            else:
+                finish_keys(group)
+                group = []
+        # 날짜·장소 값을 가진 묶음만 값 목록으로 본다. 중간의 ㅇ 하위 값과
+        # 표는 허용하되, 다른 본문 문단이나 네모 절은 묶음을 끊는다.
+        finish_keys(group)
+    return excluded
 
 
 def emphasized_heading_level(runs, body_size):
@@ -193,10 +249,11 @@ def finalize_font_headings(paragraphs, doc=None):
         return 0
     body_size = body_font_size(paragraphs, doc=doc)
     if body_size:
+        context_exclusions = _context_exclusions(doc)
         top_level = ({id(para) for section in doc.sections for para in section.elements
                       if hasattr(para, 'heading_level')} if doc is not None else set())
         for para in paragraphs:
-            if getattr(para, '_heading_caption', False):
+            if getattr(para, '_heading_caption', False) or id(para) in context_exclusions:
                 para.heading_level = 0
                 continue
             level = relative_heading_level(para.runs, body_size)

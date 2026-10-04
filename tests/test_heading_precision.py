@@ -54,3 +54,33 @@ def test_single_noun_after_tag_remains_ambiguous(tmp_path):
     # 단일 명사 값과 절 이름은 텍스트만으로 확정하지 않고 기존 계약을 보존한다.
     for doc in _documents(tmp_path, [[('□ (기관) 본부', 1)]]):
         assert doc.sections[0].elements[-1].heading_level == 3
+
+
+@pytest.mark.parametrize('text', [
+    '□ (배경) 신규 상품',        # 태그 뒤 정확히 두 어절
+    '□ (배경)청년의 취업',       # 태그에 붙여 쓴 내용
+    '□ (1) 추진 배경',           # 괄호 순번·참고 표지도 태그로 센다(문서에 명시)
+    '□ (참고) 주요 일정',
+])
+def test_tag_followed_by_two_words_is_statement_in_both_readers(tmp_path, text):
+    for doc in _documents(tmp_path, [[(text, 2)]]):
+        assert doc.sections[0].elements[-1].heading_level == 0
+
+
+@pytest.mark.parametrize('text,shape', [
+    ('▶ (배경) 청년의 취업 준비를 위한 신규 상품 출시', 2),
+    ('◆ 공동 추진단을 구성하여 본격 사업 추진', 2),
+    ('< 연내 설립 완료 → 내년 첫 사업 추진 목표 >', 2),
+    ('1. (배경) 청년의 취업 준비를 위한 신규 상품 출시', 3),
+])
+def test_statement_filter_applies_to_square_markers_only(tmp_path, text, shape):
+    for doc in _documents(tmp_path, [[(text, shape)]]):
+        assert doc.sections[0].elements[-1].heading_level == 3
+
+
+@pytest.mark.parametrize('shape,level', [(1, 2), (0, 3)])
+def test_statement_filter_keeps_font_ratio_levels(tmp_path, shape, level):
+    # 본문 12pt 에서 15pt(1.25배)·14pt(1.17배) 진술 줄은 글꼴 비율 제목 그대로다.
+    text = '□ (배경) 새로운 사업의 추진 방향'
+    for doc in _documents(tmp_path, [[(text, shape)]], body_shape=4):
+        assert doc.sections[0].elements[-1].heading_level == level

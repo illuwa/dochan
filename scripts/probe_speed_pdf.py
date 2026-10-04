@@ -61,13 +61,14 @@ def _worker(path, profile=False):
     return result
 
 
-def _run_one(path, timeout, profile=False):
+def _run_one(path, timeout, profile=False, source=None):
     command = [sys.executable, "-m", "scripts.probe_speed_pdf", "--worker", str(path)]
     if profile:
         command.append("--profile-worker")
     try:
         # nosemgrep: dangerous-subprocess-use-audit
-        run = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        run = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
+                             cwd=source)
         if run.returncode:
             return {"failure": "exit {}".format(run.returncode)}
         return json.loads(run.stdout)
@@ -139,6 +140,39 @@ def _repeat_top(rows, paths, roots, timeout, selected=None):
     return top, lookup
 
 
+def _alternate_top(labels, lookup, source, timeout):
+    """동일 표본의 이전·현재 코드를 AB/BA/AB 순서로 각각 세 번 잰다."""
+    results = {}
+    keys = ("markdown_sha256", "json_sha256", "errors_sha256")
+    for label in labels:
+        timings = {"before": [], "after": []}
+        hashes_equal = True
+        failures = []
+        for repeat in range(3):
+            pair = {}
+            order = (("before", source), ("after", None))
+            if repeat == 1:
+                order = tuple(reversed(order))
+            for version, cwd in order:
+                row = _run_one(lookup[label], timeout, source=cwd)
+                if "total" in row:
+                    timings[version].append(row["total"])
+                else:
+                    failures.append("{}: {}".format(version, row.get("failure")))
+                pair[version] = row
+            hashes_equal = hashes_equal and all(
+                pair["before"].get(key) == pair["after"].get(key) for key in keys)
+        results[label] = {
+            "before": timings["before"], "after": timings["after"],
+            "median_before": median(timings["before"]) if len(timings["before"]) == 3 else None,
+            "median_after": median(timings["after"]) if len(timings["after"]) == 3 else None,
+            "hashes_equal": hashes_equal, "failures": failures,
+        }
+        print("alternated {}/{}".format(len(results), len(labels)), file=sys.stderr,
+              flush=True)
+    return results
+
+
 def _summary(rows):
     groups = {}
     for label, row in rows.items():
@@ -172,6 +206,8 @@ def main():
     parser.add_argument("--hash-only", action="store_true")
     parser.add_argument("--public-top", action="store_true",
                         help="공개 표본의 느린 상위 30개만 3회 중앙값 측정")
+    parser.add_argument("--alternate-source", type=Path,
+                        help="이전 코드 스냅숏 경로. 상위 표본을 이전/현재 교대 측정")
     args = parser.parse_args()
     if args.worker:
         print(json.dumps(_worker(args.worker, args.profile_worker), ensure_ascii=False))
@@ -184,8 +220,21 @@ def main():
     rows = (json.loads(args.existing.read_text())["rows"] if args.existing
             else _measure(paths, args.roots, args.workers, args.timeout))
     reference = json.loads(args.reference.read_text()) if args.reference else None
+    alternating = None
     if args.hash_only:
         top, lookup = [], {}
+    elif args.alternate_source:
+        selected = reference["top30"] if reference else sorted(
+            (label for label in rows if "total" in rows[label]),
+            key=lambda label: rows[label]["total"], reverse=True)[:30]
+        lookup = {}
+        internal = 0
+        for path in paths:
+            if path.parent.name == "test_pairs":
+                internal += 1
+            lookup[_label(path, args.roots, internal)] = path
+        top = selected
+        alternating = _alternate_top(top, lookup, args.alternate_source, args.timeout)
     else:
         selected = reference["top30"] if reference else None
         if args.public_top:
@@ -203,6 +252,8 @@ def main():
             profiles[label] = _run_one(lookup[label], args.timeout * 3, profile=True)
     result = {"summary": _summary(rows), "rows": rows, "top30": top,
               "profiles": profiles}
+    if alternating is not None:
+        result["alternating"] = alternating
     if reference:
         keys = ("markdown_sha256", "json_sha256", "errors_sha256")
         mismatches = [label for label, row in rows.items()

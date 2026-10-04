@@ -6,6 +6,7 @@
 """
 from dataclasses import dataclass, field, replace
 import math
+import re
 import statistics
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -14,6 +15,14 @@ from .widths import WidthMap
 from .paths import PathCollector, Segment
 
 _OPERAND_START = b"(</[0123456789+-."
+_PATH_OPS = frozenset((b"m", b"l", b"re", b"h", b"c", b"v", b"y", b"S",
+                       b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"n"))
+_PATH_PAINT_OPS = frozenset((b"S", b"s", b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"n"))
+_PATH_CLOSE_OPS = frozenset((b"s", b"b", b"b*"))
+_PATH_FILL_OPS = frozenset((b"f", b"F", b"f*"))
+_CONTENT_TOKEN_RE = re.compile(
+    rb"[\x00\t\n\x0c\r ]+|%[^\r\n]*|[^\x00\t\n\x0c\r ()<>\[\]{}/%]+|.", re.DOTALL)
+_CONTENT_GAP_RE = re.compile(rb"[\x00\t\n\x0c\r ]*(?:%[^\r\n]*[\x00\t\n\x0c\r ]*)*")
 MAX_FORM_DEPTH = 16
 MAX_FORM_CACHE_BYTES = 16 * 1024 * 1024
 MAX_FORM_EXPANDED_BYTES = 32 * 1024 * 1024
@@ -21,6 +30,65 @@ MAX_FORM_OPERATORS = 32768
 
 # 같은 기준선으로 볼 y 허용오차 (device 단위)
 _LINE_Y_TOLERANCE = 3.0
+
+
+class ContentScanner:
+    """Content stream token scanner; structured objects retain PDFLexer semantics."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+        self._matches = _CONTENT_TOKEN_RE.finditer(data)
+        self.lexer = PDFLexer(data)
+        self.lexer.skip_array_operators = True
+
+    def _may_be_reference(self, pos):
+        data = self.data
+        first = _CONTENT_GAP_RE.match(data, pos).end()
+        if first == pos or first >= len(data) or not 0x30 <= data[first] <= 0x39:
+            return False
+        number = _CONTENT_TOKEN_RE.match(data, first)
+        if not number.group().isdigit():
+            return False
+        second = _CONTENT_GAP_RE.match(data, number.end()).end()
+        return (second > number.end() and data[second:second + 1] == b"R"
+                and (second + 1 == len(data) or data[second + 1] in WHITESPACE + DELIMITERS))
+
+    def next(self):
+        data = self.data
+        while True:
+            try:
+                match = next(self._matches)
+            except StopIteration:
+                return None
+            if match.start() < self.pos:
+                if self.pos < match.end():
+                    self._matches = _CONTENT_TOKEN_RE.finditer(data, self.pos)
+                continue
+            token = match.group()
+            self.pos = match.end()
+            if token[0] in WHITESPACE or token[0] == 0x25:
+                continue
+            if token[0] in _OPERAND_START:
+                if token[0] not in b"(</[":
+                    try:
+                        value = float(token) if b"." in token else int(token)
+                    except ValueError:
+                        pass
+                    else:
+                        if value < 0 or isinstance(value, float) or not self._may_be_reference(self.pos):
+                            return "operand", value
+                self.lexer.pos = match.start()
+                try:
+                    value = self.lexer.parse_object()
+                except PDFSyntaxError:
+                    self.pos = self.lexer.pos + 1
+                    continue
+                self.pos = self.lexer.pos
+                return "operand", value
+            if token[0] in DELIMITERS:
+                continue
+            return "operator", token
 
 
 def default_byte_decoder(raw: bytes) -> str:
@@ -351,8 +419,7 @@ class ContentTextExtractor:
         self._marked_overflow = 0
         marked_ids = set()
         duplicate_marked_ids = set()
-        lexer = PDFLexer(content)
-        lexer.skip_array_operators = True
+        scanner = ContentScanner(content)
         ctm = _initial_ctm
         stack = []
         overflow = 0
@@ -367,24 +434,22 @@ class ContentTextExtractor:
         font, fs, tc, tw, th, tl = initial[:6]
         # 텍스트 렌더 모드(ISO 32000-1 9.3.6). 3·7 은 보이지 않는 글자(OCR 텍스트층 등)다.
         tr, stroke_width = initial[6:] if len(initial) == 8 else (0, 1.0)
-        n = len(content)
+
+        def point(x, y):
+            a, b, c, d, e, f = ctm
+            return x * a + y * c + e, x * b + y * d + f
+
         while True:
-            lexer.skip_whitespace()
-            if lexer.pos >= n:
+            event = scanner.next()
+            if event is None:
                 break
-            ch = content[lexer.pos]
-            if ch in _OPERAND_START:
-                try:
-                    operands.append(lexer.parse_object())
-                except PDFSyntaxError:
-                    lexer.pos += 1
+            kind, value = event
+            if kind == "operand":
+                operands.append(value)
                 if len(operands) > 64:
                     del operands[:-8]
                 continue
-            op = lexer.read_token()
-            if not op:
-                lexer.pos += 1
-                continue
+            op = value
 
             if op in (b"BT", b"Tm", b"Td", b"TD", b"T*", b"'", b'"'):
                 # 이 연산은 글리프 전진이 아닌 텍스트 줄 행렬에서 다시 시작한다.
@@ -589,9 +654,40 @@ class ContentTextExtractor:
                                           adj if vertical else 0), tm)
                     _mark_render_style(frags, shown, tr, stroke_width)
             elif op == b"BI":
-                lexer.pos = self._skip_inline_image(content, lexer.pos)
-            else:
-                paths.operate(op, [_num(o) for o in operands], ctm)
+                scanner.pos = self._skip_inline_image(content, scanner.pos)
+            elif op in _PATH_OPS:
+                values = [_num(o) for o in operands]
+                if op == b"m" and len(values) >= 2:
+                    paths._move(point(*values[-2:]))
+                elif op == b"l" and len(values) >= 2:
+                    paths._line(point(*values[-2:]))
+                elif op == b"c" and len(values) >= 6:
+                    x1, y1, x2, y2, x3, y3 = values[-6:]
+                    paths._curve((point(x1, y1), point(x2, y2)), point(x3, y3))
+                elif op == b"v" and len(values) >= 4:
+                    x2, y2, x3, y3 = values[-4:]
+                    paths._curve((point(x2, y2),), point(x3, y3))
+                elif op == b"y" and len(values) >= 4:
+                    x1, y1, x3, y3 = values[-4:]
+                    paths._curve((point(x1, y1),), point(x3, y3))
+                elif op == b"re" and len(values) >= 4:
+                    x, y, w, h = values[-4:]
+                    corners = [point(x, y), point(x + w, y), point(x + w, y + h), point(x, y + h)]
+                    paths._move(corners[0])
+                    for corner in corners[1:] + corners[:1]:
+                        paths._line(corner)
+                elif op == b"h" and paths._start is not None:
+                    paths._line(paths._start)
+                elif op in _PATH_PAINT_OPS:
+                    if op in _PATH_CLOSE_OPS and paths._start is not None:
+                        paths._line(paths._start)
+                    if op != b"n":
+                        paths._paint(stroke=op not in _PATH_FILL_OPS)
+                    paths._groups = []
+                    paths._current = None
+                    paths._edge_count = 0
+                    paths._overflow = False
+                    paths._point = paths._start = None
             operands = []
         safe = [frag for frag in frags if all(math.isfinite(v) for v in
                 (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))]
@@ -603,29 +699,21 @@ class ContentTextExtractor:
     @classmethod
     def _count_operators(cls, data: bytes) -> Tuple[int, bool]:
         """Count a Form once, then charge every invocation against the page budget."""
-        lexer = PDFLexer(data)
-        lexer.skip_array_operators = True
+        scanner = ContentScanner(data)
         count = 0
         has_text_or_form = False
-        while lexer.pos < len(data):
-            lexer.skip_whitespace()
-            if lexer.pos >= len(data):
+        while True:
+            event = scanner.next()
+            if event is None:
                 break
-            if data[lexer.pos] in _OPERAND_START:
-                try:
-                    lexer.parse_object()
-                except PDFSyntaxError:
-                    lexer.pos += 1
-                continue
-            op = lexer.read_token()
-            if not op:
-                lexer.pos += 1
+            kind, op = event
+            if kind == "operand":
                 continue
             count += 1
             if op in (b"Tj", b"TJ", b"'", b'"', b"Do"):
                 has_text_or_form = True
             if op == b"BI":
-                lexer.pos = cls._skip_inline_image(data, lexer.pos)
+                scanner.pos = cls._skip_inline_image(data, scanner.pos)
         return count, has_text_or_form
 
     def _show(self, raw, tm, font, fs, tc, tw, th, frags, ctm):
@@ -634,7 +722,10 @@ class ContentTextExtractor:
         if font is None:
             # Tf 미지정/미해석 폰트 — 텍스트 유실 방지용 기본 폰트
             font = FontInfo(decode=default_byte_decoder, widths=WidthMap({}, 500.0), code_bytes=1)
-        text = font.decode(raw)
+        decode = font.decode
+        widths = font.widths
+        advance = widths.advance
+        text = decode(raw)
         if font.wmode == 1:
             return self._show_vertical(raw, text, tm, font, fs, tc, tw, th, frags, ctm)
         track_positions = (self.track_char_positions and len(text) <= 50000
@@ -646,10 +737,11 @@ class ContentTextExtractor:
         total_adv = 0.0
         offsets = [0.0]
         decoded_parts = []
-        chunks = self._iter_code_chunks(raw, font.code_bytes, font.encoding_cmap)
-        codes = [cid for _chunk, cid in chunks]
+        encoding_cmap = font.encoding_cmap
+        chunks = self._iter_code_chunks(raw, font.code_bytes, encoding_cmap)
+        explicit = widths.explicit
         geometry_reliable = (self._link_position_reliable and font.link_metrics_reliable
-                             and all(font.widths.explicit(code) for code in codes))
+                             and all(explicit(code) for _chunk, code in chunks))
         self._link_position_reliable = geometry_reliable
         xscale, yscale = math.hypot(*start_tm[:2]), math.hypot(*start_tm[2:4])
         geometry_reliable = (geometry_reliable and xscale > 0 and yscale > 0
@@ -659,18 +751,18 @@ class ContentTextExtractor:
                              and abs(start_tm[0] * start_tm[2] + start_tm[1] * start_tm[3])
                              <= 1e-6 * xscale * yscale)
         for chunk, code in chunks:
-            w0 = font.widths.advance(code) / 1000.0
+            w0 = advance(code) / 1000.0
             valid_space = (chunk == b" " and
-                           (font.encoding_cmap is None or font.encoding_cmap._space(1, 32)))
+                           (encoding_cmap is None or encoding_cmap._space(1, 32)))
             disp = (w0 * fs + tc + (tw if valid_space else 0.0)) * th
             if track_positions:
-                piece = font.decode(chunk)
+                piece = decode(chunk)
                 decoded_parts.append(piece)
                 for index in range(len(piece)):
                     offsets.append(total_adv + disp * (index + 1) / len(piece))
             total_adv += disp
-        scale = math.hypot(start_tm[0], start_tm[1]) or 1.0
-        space_w = font.widths.advance(font.space_code) / 1000.0 * fs * th * scale
+        scale = xscale or 1.0
+        space_w = advance(font.space_code) / 1000.0 * fs * th * scale
         if space_w <= 0:
             space_w = 0.25 * fs * scale
         eff_size = fs * ((abs(start_tm[0] * start_tm[3] - start_tm[1] * start_tm[2])) ** 0.5 or 1.0)

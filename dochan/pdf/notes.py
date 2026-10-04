@@ -37,12 +37,13 @@ def _finite_fragment(frag):
                (frag.x, frag.y, frag.width, frag.size))
 
 
-def _spend(budget, count, warnings):
+def _spend(budget, count, warnings, label="각주"):
     budget[0] -= count
     if budget[0] >= 0:
         return True
     if warnings is not None:
-        warnings.append("WARN: PDF 각주 기하 검사 수 한도(200000) 초과 — 각주 복원 생략")
+        warnings.append("WARN: PDF %s 기하 검사 수 한도(200000) 초과 — %s 복원 생략" %
+                        (label, label))
     return False
 
 
@@ -347,10 +348,6 @@ def endnote_references(fragments, warnings=None):
     markers = [(f, _ENDNOTE_MARKER.fullmatch(f.text)) for f in horizontal
                if not f.note_ref]
     markers = [(f, m) for f, m in markers if m]
-    if len(markers) > MAX_NOTE_MARKERS:
-        if warnings is not None:
-            warnings.append("WARN: PDF 미주 표지 수 한도 초과 — 참조 복원 생략")
-        return []
     hosts = sorted(horizontal, key=lambda f: f.y)
     ys = [f.y for f in hosts]
     max_size = max((f.size for f in hosts), default=0)
@@ -358,7 +355,7 @@ def endnote_references(fragments, warnings=None):
     result = []
     for marker, match in markers:
         nearby = hosts[bisect_left(ys, marker.y - max_size):bisect_right(ys, marker.y)]
-        if not _spend(budget, len(nearby), warnings):
+        if not _spend(budget, len(nearby), warnings, "미주"):
             return []
         valid = [h for h in nearby if marker.size <= h.size * .8
                  and .15 * h.size <= marker.y - h.y <= max(.30 * h.size, h.size - marker.size) + 1e-6
@@ -367,6 +364,12 @@ def endnote_references(fragments, warnings=None):
         if (valid and max(h.y for h in valid) - min(h.y for h in valid) <= .1
                 and max(h.size for h in valid) - min(h.size for h in valid) <= .1):
             result.append((marker.order, match.group(1)))
+            # 숫자 표 셀도 표지 형태에 맞는다. 한도는 기하 조건을 충족한
+            # 실제 참조 후보에 적용한다. 조각·기하 검사 상한은 위에서 유지한다.
+            if len(result) > MAX_NOTE_MARKERS:
+                if warnings is not None:
+                    warnings.append("WARN: PDF 미주 표지 수 한도 초과 — 참조 복원 생략")
+                return []
     return result
 
 

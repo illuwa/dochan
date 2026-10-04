@@ -77,6 +77,36 @@ def test_endnote_marker_limits_and_baseline_numbers():
     assert warnings
 
 
+def test_endnote_numeric_table_cells_do_not_exhaust_reference_limit():
+    # 표의 숫자 셀은 형태만 미주 표지처럼 보여도 위첨자 참조가 아니다.
+    fragments = [fragment("1", 40 + (n % 11) * 30, 50 + (n // 11) * 7, 10, n)
+                 for n in range(1001)]
+    warnings = []
+    assert endnote_references(fragments, warnings) == []
+    assert warnings == []
+
+
+def test_endnote_confirmed_reference_limit_remains():
+    fragments = []
+    for number in range(1001):
+        y = number * 20
+        fragments.extend((fragment("Body", 40, y, 12, number * 2),
+                          fragment("1", 64, y + 4, 8, number * 2 + 1)))
+    warnings = []
+    assert endnote_references(fragments, warnings) == []
+    assert warnings == ["WARN: PDF 미주 표지 수 한도 초과 — 참조 복원 생략"]
+
+
+def test_endnote_geometry_budget_warning_names_endnotes(monkeypatch):
+    import dochan.pdf.notes as notes
+
+    monkeypatch.setattr(notes, "MAX_NOTE_GEOMETRY_CHECKS", 0)
+    warnings = []
+    assert endnote_references([fragment("Body", 40, 500, 12, 0),
+                               fragment("1)", 64, 503, 8, 1)], warnings) == []
+    assert len(warnings) == 1 and "미주 기하 검사" in warnings[0]
+
+
 def test_reader_endnote_markdown_and_json_contract(tmp_path):
     from dochan.output.markdown import to_markdown
     from dochan.pdf.reader import PDFReader

@@ -133,7 +133,7 @@ def _merge_inline_objects(runs, objects):
                 result.append(_dc_replace(run, text=obj.latex, equation=obj))
             else:
                 result.append(_dc_replace(run, text=obj.text, note_ref=obj.note_ref,
-                                          link='', equation=None))
+                                          link='', equation=obj.equation))
             cursor = position
             event_index += 1
         if cursor < end:
@@ -146,7 +146,7 @@ def _merge_inline_objects(runs, objects):
             result.append(_dc_replace(source, text=obj.latex, equation=obj))
         else:
             result.append(_dc_replace(source, text=obj.text, note_ref=obj.note_ref,
-                                      link='', equation=None))
+                                      link='', equation=obj.equation))
         event_index += 1
     return result
 
@@ -156,7 +156,8 @@ def _merge_inline_equations(runs, equations):
     return _merge_inline_objects(runs, equations)
 
 
-def _split_paragraph_blocks(para, blocks, inline_sizes):
+def _split_paragraph_blocks(para, blocks, inline_sizes, *, max_extra_runs=None,
+                            on_limit=None):
     """Place anchored blocks between text fragments in one run traversal.
 
     WCHAR positions distinguish adjacent note/equation and block anchors even
@@ -170,7 +171,9 @@ def _split_paragraph_blocks(para, blocks, inline_sizes):
     boundaries = []
     for raw_position, position, block in sorted(blocks, key=lambda item: item[0]):
         while shift is not None and shift[0] < raw_position:
-            added += shift[1]
+            # Empty equations occupy one virtual position, so an adjacent
+            # block can distinguish before/after without dropping the object.
+            added += max(1, shift[1])
             shift = next(shifts, None)
         boundaries.append((position + added, block))
     result = []
@@ -179,16 +182,25 @@ def _split_paragraph_blocks(para, blocks, inline_sizes):
     offset = 0
 
     def flush():
-        if pieces and any(run.text.strip() for run in pieces):
+        if pieces and any(run.text.strip() or run.equation is not None for run in pieces):
             result.append(_dc_replace(para, runs=list(pieces)))
         pieces.clear()
 
     for run in para.runs:
-        end = offset + len(run.text)
+        end = offset + (len(run.text) or int(run.equation is not None))
         cursor = offset
         while boundary_index < len(boundaries) and boundaries[boundary_index][0] <= end:
             position, block = boundaries[boundary_index]
             position = max(cursor, position)
+            if cursor < position < end:
+                if max_extra_runs is not None and max_extra_runs <= 0:
+                    # Exhausted budgets keep the run intact and put this
+                    # block after it. Never cut a note or equation object.
+                    position = end
+                    if on_limit is not None:
+                        on_limit()
+                elif max_extra_runs is not None:
+                    max_extra_runs -= 1
             if cursor < position:
                 pieces.append(run if cursor == offset and position == end else
                               _dc_replace(run, text=run.text[cursor - offset:position - offset]))
@@ -622,8 +634,16 @@ class SectionParser:
         block_anchor_ids = {ctrl_id for _start, _end, ctrl_id in
                             (text_result.get('inline_controls', []) if text_result else [])
                             if ctrl_id in (CTRL_TABLE, CTRL_HEADER_HF, CTRL_FOOTER_HF)}
-        defer_heading = any(parse_ctrl_id(node['record'].data) in block_anchor_ids
-                            for node in ctrl_nodes)
+        leading_ids = {ctrl_id for start, _end, ctrl_id in
+                       (text_result.get('inline_controls', []) if text_result else [])
+                       if text_result['raw_to_text'][start] == 0}
+        defer_heading = any(
+            parse_ctrl_id(node['record'].data) in block_anchor_ids and
+            (parse_ctrl_id(node['record'].data) in leading_ids or
+             (parse_ctrl_id(node['record'].data) == CTRL_TABLE and
+              len(node['record'].data) >= 8 and
+              struct.unpack_from('<I', node['record'].data, 4)[0] & 1))
+            for node in ctrl_nodes)
         if text_result and (text_result['text'].strip() or has_note_anchor):
             para = Paragraph()
             para_rec = para_node['record']
@@ -680,6 +700,7 @@ class SectionParser:
         inline_objects = []
         inline_sizes = []
         block_objects = []
+        anchored_objects = []
         for ctrl_node in ctrl_nodes:
             # A failed equation still owns its PARA_TEXT marker.
             ctrl_id = parse_ctrl_id(ctrl_node['record'].data)
@@ -709,45 +730,88 @@ class SectionParser:
                 self._document_text_runs = starting_text_runs
                 continue
             if isinstance(ctrl_elem, list):
-                elements.extend(ctrl_elem)
+                if para is not None and anchor is not None:
+                    anchored_objects.append((raw_position, position, ctrl_elem, False))
+                else:
+                    elements.extend(ctrl_elem)
             elif ctrl_elem:
                 if isinstance(ctrl_elem, Equation):
                     data = ctrl_node['record'].data
                     as_char = (len(data) >= 8 and
                                bool(struct.unpack_from('<I', data, 4)[0] & 1))
                     if as_char and para is not None and position is not None:
-                        inline_objects.append((position, ctrl_elem))
-                        inline_sizes.append((raw_position, len(ctrl_elem.latex)))
+                        run = TextRun(text=ctrl_elem.latex, equation=ctrl_elem)
+                        inline_objects.append((raw_position, position, run))
+                        inline_sizes.append((raw_position, len(run.text)))
                         continue
                 if isinstance(ctrl_elem, Footnote) and ctrl_elem.type in ('footnote', 'endnote'):
                     self._note_seq += 1
                     ctrl_elem.number = self._note_seq
                     if para is not None and position is not None:
-                        inline_objects.append((position, TextRun(
+                        inline_objects.append((raw_position, position, TextRun(
                             text=f'[{self._note_seq}]', note_ref=self._note_seq)))
                         inline_sizes.append((raw_position, len(f'[{self._note_seq}]')))
-                if (para is not None and position is not None and
-                        isinstance(ctrl_elem, (Table, HeaderFooter))):
-                    block_objects.append((raw_position, position, ctrl_elem))
+                if para is not None and position is not None:
+                    data = ctrl_node['record'].data
+                    movable = (isinstance(ctrl_elem, (Table, HeaderFooter)) and
+                               (position == 0 or
+                                (isinstance(ctrl_elem, Table) and len(data) >= 8 and
+                                 struct.unpack_from('<I', data, 4)[0] & 1)))
+                    anchored_objects.append((raw_position, position, [ctrl_elem], movable))
                     continue
                 elements.append(ctrl_elem)
 
         if para is not None:
-            para.runs = _merge_inline_objects(para.runs, inline_objects)
+            # Equal projected offsets still have a source order. Use the same
+            # raw order for insertion and boundary shifts on damaged records.
+            para.runs = _merge_inline_objects(para.runs, [
+                (position, obj) for _raw, position, obj in
+                sorted(inline_objects, key=lambda item: item[0])])
+            pending = []
+            for raw_position, position, objects, movable in sorted(
+                    anchored_objects, key=lambda item: item[0]):
+                pending.extend(objects)
+                if movable:
+                    # HWPX flushes earlier picture/shape/note definitions at
+                    # the table boundary. They share that cut, not a new cut.
+                    block_objects.extend((raw_position, position, obj) for obj in pending)
+                    pending = []
+            elements.extend(pending)
+            if block_objects:
+                initial_runs = len(para.runs)
+                flow = _split_paragraph_blocks(
+                    para, block_objects, inline_sizes,
+                    max_extra_runs=max(0, self.MAX_DOCUMENT_TEXT_RUNS - self._document_text_runs),
+                    on_limit=self._text_run_limit)
+                control_ids = {id(obj) for _raw, _pos, obj in block_objects}
+                fragments = [item for item in flow if isinstance(item, Paragraph)
+                             and id(item) not in control_ids]
+                added_runs = sum(len(fragment.runs) for fragment in fragments) - initial_runs
+                self._document_text_runs += max(0, added_runs)
+                # A source paragraph has one heading, even when inline tables
+                # produce several fragments. Only its first text fragment owns
+                # the paragraph's heading contract and font registration.
+                heading_fragment = next((fragment for fragment in fragments if any(
+                    not char.isspace() and unicodedata.category(char) != 'Co'
+                    for run in fragment.runs if run.equation is None and not run.note_ref
+                    for char in run.text)), None)
+                for fragment in fragments:
+                    fragment.heading_level = 0
+                    if fragment is heading_fragment:
+                        fragment._hwp_heading_source_runs = para.runs
+                        fragment.heading_level = self._detect_heading_level(fragment)
+                        if (not self._font_heading_paragraphs or
+                                self._font_heading_paragraphs[-1] is not fragment):
+                            del fragment._hwp_heading_source_runs
+                elements[0:1] = flow
+            elif defer_heading:
+                para.heading_level = self._detect_heading_level(para)
             if bookmark_markers:
                 marker_size = first_visible_font_size(para.runs)
                 for marker in bookmark_markers:
                     marker.font_size_pt = marker_size
-                para.runs = bookmark_markers + para.runs
-                inline_sizes.append((-1, sum(len(marker.text) for marker in bookmark_markers)))
-            if block_objects:
-                flow = _split_paragraph_blocks(para, block_objects, inline_sizes)
-                for fragment in flow:
-                    if isinstance(fragment, Paragraph):
-                        fragment.heading_level = self._detect_heading_level(fragment)
-                elements[0:1] = flow
-            elif defer_heading:
-                para.heading_level = self._detect_heading_level(para)
+                target = fragments[0] if block_objects and fragments else para
+                target.runs = bookmark_markers + target.runs
 
         return elements
 
@@ -1072,6 +1136,10 @@ class SectionParser:
 
     def _detect_heading_level(self, para) -> int:
         """Style/CharShape 기반 제목 레벨 감지"""
+        if not any(run.text.strip() for run in para.runs
+                   if run.equation is None and not run.note_ref and
+                   not (run.text.startswith('[bookmark: ') and run.text.endswith('] '))):
+            return 0
         # 유효한 직접 문단 모양은 스타일의 개요 기본값보다 우선한다.
         shapes = getattr(self.doc_info, 'para_shapes', [])
         direct = 0 <= para.para_shape_id < len(shapes)
@@ -1099,7 +1167,9 @@ class SectionParser:
         elif len(self._font_heading_paragraphs) == MAX_FONT_HEADING_PARAGRAPHS:
             self.errors.append('WARN: HWP 글꼴 제목 문단 한도 초과')
             self._font_heading_paragraphs.append(None)
-        return self._heading_level_by_font(para)
+        source_runs = getattr(para, '_hwp_heading_source_runs', None)
+        source = _dc_replace(para, runs=source_runs) if source_runs is not None else para
+        return self._heading_level_by_font(source)
 
     @staticmethod
     def _heading_level_by_font(para) -> int:
@@ -1116,9 +1186,21 @@ class SectionParser:
         return 0
 
     def finalize_font_headings(self, doc=None):
+        # Decide a split paragraph's heading from its full source text. Short
+        # prefixes must not turn long statements into titles, and one source
+        # paragraph must retain one contribution to the body-font sample.
+        restored = []
+        for para in self._font_heading_paragraphs:
+            source = getattr(para, '_hwp_heading_source_runs', None)
+            if source is not None:
+                restored.append((para, para.runs))
+                para.runs = source
         try:
             return finalize_font_headings(self._font_heading_paragraphs, doc=doc)
         finally:
+            for para, runs in restored:
+                para.runs = runs
+                del para._hwp_heading_source_runs
             self._font_heading_paragraphs.clear()
 
     def _outline_level(self, shape_id):

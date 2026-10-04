@@ -23,7 +23,8 @@ def _anchor(code, ctrl_id):
 
 
 def _table(value):
-    return (_rec(HWPTAG_CTRL_HEADER, 1, b' lbt' + bytes(8)) +
+    # These tests exercise inline-table splitting, so bit 0 must be set.
+    return (_rec(HWPTAG_CTRL_HEADER, 1, b' lbt' + struct.pack('<I', 1) + bytes(4)) +
             _rec(HWPTAG_TABLE, 2, bytes(4) + struct.pack('<HH', 1, 1)) +
             _rec(HWPTAG_LIST_HEADER, 2, bytes(8) + struct.pack('<HHHH', 0, 0, 1, 1)) +
             _rec(HWPTAG_PARA_HEADER, 2, bytes(22)) +
@@ -121,9 +122,8 @@ def test_bookmark_is_preserved_when_table_splits_paragraph():
     bookmark = (_rec(HWPTAG_CTRL_HEADER, 1, b'mkob' + bytes(8)) +
                 _rec(HWPTAG_CTRL_DATA, 2, bytes(10) + struct.pack('<H', len(name) // 2) + name))
     elements = _parse(_anchor(11, b' lbt') + '뒤'.encode('utf-16-le'), bookmark + _table('셀'))
-    assert [type(e) for e in elements] == [Paragraph, Table, Paragraph]
-    assert elements[0].text == '[bookmark: 표위치] '
-    assert elements[2].text == '뒤'
+    assert [type(e) for e in elements] == [Table, Paragraph]
+    assert elements[1].text == '[bookmark: 표위치] 뒤'
 
 
 def test_unanchored_control_keeps_existing_text_then_table_fallback():

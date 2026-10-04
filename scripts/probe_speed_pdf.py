@@ -16,14 +16,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from statistics import median
 
-from dochan.reader import Dochan
-
 
 def _hash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _worker(path, profile=False):
+    from dochan.reader import Dochan
+
     profiler = cProfile.Profile() if profile else None
     if profiler:
         profiler.enable()
@@ -58,6 +58,146 @@ def _worker(path, profile=False):
              "self": item[2], "cumulative": item[3]}
             for key, item in entries[:50]
         ]
+    return result
+
+
+def _profile_stages(stats, compiled_only=False):
+    """자기 시간만 나눈다. 누적 시간과 재귀 호출 시간은 더하지 않는다."""
+    from dochan.pdf.content import ContentScanner, _Line, _Segment
+
+    def method_keys(cls):
+        keys = set()
+        for value in vars(cls).values():
+            value = getattr(value, "__func__", value)
+            code = getattr(value, "__code__", None)
+            if code is not None:
+                keys.add((code.co_filename, code.co_firstlineno, code.co_name))
+        return keys
+
+    scanner_keys = method_keys(ContentScanner)
+    line_keys = method_keys(_Line) | method_keys(_Segment)
+
+    def category(key):
+        filename, _line, name = key
+        filename = filename.replace("\\", "/")
+        module = filename.rsplit("/", 1)[-1]
+        if compiled_only:
+            return ("candidate_modules" if "/pdf/" in filename
+                    and module in ("objects.py", "content.py", "paths.py") else "other")
+        if ("/output/" in filename or "/json/encoder.py" in filename
+                or module == "dataclasses.py" and name in ("asdict", "_asdict_inner")):
+            return "output"
+        if "/pdf/" not in filename:
+            return "other"
+        if module == "filters.py":
+            return "filters"
+        if module in ("objects.py", "structure.py"):
+            return "objects"
+        if module in ("annotations.py", "notes.py"):
+            return "links_notes"
+        if module in ("tables.py", "text_tables.py"):
+            return "tables"
+        if module in ("layout.py", "pagination.py", "running.py"):
+            return "lines_paragraphs"
+        if module == "paths.py":
+            return "graphics_paths"
+        if module == "content.py":
+            if key in scanner_keys:
+                return "scanner"
+            if name in ("_show", "_show_vertical", "_iter_code_chunks", "_iter_codes",
+                        "default_byte_decoder", "metrics", "_numbers"):
+                return "glyphs_decode"
+            if key in line_keys or name in ("assemble_lines", "_assemble_lines",
+                                           "_in_writing_order", "along", "across",
+                                           "writing_direction"):
+                return "lines_paragraphs"
+            return "graphics_paths"
+        if module in ("widths.py", "cmap.py", "cid_unicode.py", "core14.py",
+                      "font_program.py", "truetype.py"):
+            return "glyphs_decode"
+        return "other"
+
+    stages = dict.fromkeys(("filters", "objects", "scanner", "graphics_paths",
+                           "glyphs_decode", "lines_paragraphs", "tables",
+                           "links_notes", "output", "other"), 0.0)
+    if compiled_only:
+        stages = {"candidate_modules": 0.0, "other": 0.0}
+    for key, entry in stats.stats.items():
+        _primitive, _calls, self_time, _cumulative, callers = entry
+        if key[0] == "~" and callers:
+            # C 함수의 자기 시간을 직접 호출자의 자기 시간 비율로 귀속한다.
+            weights = [(caller, values[2]) for caller, values in callers.items()]
+            total = sum(value for _caller, value in weights)
+            if total > 0:
+                for caller, value in weights:
+                    stages[category(caller)] += self_time * value / total
+                continue
+        stages[category(key)] += self_time
+    return stages
+
+
+def _batch(paths, profile=False, backend="dochan", timeout=120):
+    """한 번 import한 뒤 목록을 순회한다. 본문 대신 해시·개수만 저장한다."""
+    import signal
+
+    def expired(_signum, _frame):
+        raise TimeoutError("file deadline exceeded")
+
+    profiler = cProfile.Profile() if profile else None
+    rows = []
+    if backend == "pymupdf":
+        import pymupdf
+    else:
+        __import__("dochan.reader")
+    previous = signal.signal(signal.SIGALRM, expired)
+    try:
+        if profiler:
+            profiler.enable()
+        for index, path in enumerate(paths):
+            signal.alarm(timeout)
+            started = time.perf_counter()
+            try:
+                if backend == "pymupdf":
+                    with pymupdf.open(str(path)) as document:
+                        text = "\n".join(page.get_text() for page in document)
+                    elapsed = time.perf_counter() - started
+                    row = {"total": elapsed, "convert_md": elapsed,
+                           "text_sha256": _hash(text), "text_chars": len(text)}
+                else:
+                    row = _worker(path)
+                    row["convert_md"] = row["parse"] + row["markdown"]
+            except Exception as exc:
+                row = {"failure": type(exc).__name__, "total": time.perf_counter() - started}
+            finally:
+                signal.alarm(0)
+            row["index"] = index
+            rows.append(row)
+    finally:
+        if profiler:
+            profiler.disable()
+        signal.signal(signal.SIGALRM, previous)
+    result = {"rows": rows, "backend": backend,
+              "completed": sum("failure" not in row for row in rows),
+              "total": sum(row["total"] for row in rows)}
+    if backend == "dochan":
+        result["loaded_modules"] = {
+            name: Path(sys.modules["dochan.pdf." + name].__file__).name
+            for name in ("objects", "content", "paths")}
+        if "cscan" in sys.modules:
+            result["loaded_modules"]["cscan"] = Path(sys.modules["cscan"].__file__).name
+        for name in ("dochan.cfb", "dochan.hwp.records.para_text"):
+            if name in sys.modules:
+                result["loaded_modules"][name] = Path(sys.modules[name].__file__).name
+    if profiler:
+        stats = pstats.Stats(profiler)
+        result["profile_total"] = stats.total_tt
+        result["stages"] = _profile_stages(stats)
+        result["compile_scope"] = _profile_stages(stats, compiled_only=True)
+        result["profile_top"] = [
+            {"module": Path(key[0]).name, "function": key[2], "line": key[1],
+             "self": entry[2], "cumulative": entry[3]}
+            for key, entry in sorted(stats.stats.items(), key=lambda item: item[1][3],
+                                     reverse=True)[:30]]
     return result
 
 
@@ -208,7 +348,31 @@ def main():
                         help="공개 표본의 느린 상위 30개만 3회 중앙값 측정")
     parser.add_argument("--alternate-source", type=Path,
                         help="이전 코드 스냅숏 경로. 상위 표본을 이전/현재 교대 측정")
+    parser.add_argument("--batch-list", type=Path,
+                        help="경로 JSON 배열. 한 프로세스에서 순서대로 측정")
+    parser.add_argument("--batch-profile", action="store_true")
+    parser.add_argument("--backend", choices=("dochan", "pymupdf"), default="dochan")
+    parser.add_argument("--accelerator-root", type=Path,
+                        help="격리된 프로토타입 사본. 원본 런타임은 변경하지 않음")
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("timeout must be positive")
+    if args.accelerator_root:
+        if not (args.accelerator_root / "dochan" / "__init__.py").is_file():
+            parser.error("--accelerator-root must contain a dochan package copy")
+        sys.path.insert(0, str(args.accelerator_root.resolve()))
+    if args.batch_list:
+        if args.output is None:
+            parser.error("--batch-list requires --output")
+        paths = json.loads(args.batch_list.read_text())
+        if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+            parser.error("--batch-list must contain a JSON array of paths")
+        result = _batch(paths, args.batch_profile, args.backend, args.timeout)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, ensure_ascii=False, indent=1))
+        print(json.dumps({"files": len(paths), "completed": result["completed"],
+                          "seconds": result["total"]}))
+        return
     if args.worker:
         print(json.dumps(_worker(args.worker, args.profile_worker), ensure_ascii=False))
         return

@@ -45,6 +45,9 @@ class PDFLexer:
         # Content streams only: a stray operator inside an array (e.g.
         # "[(a) 0 Tc (b)] TJ", pdf.js operator-in-TJ-array.pdf) is skipped.
         self.skip_array_operators = False
+        # A dictionary value written as "(text))" leaves one unbalanced ")"
+        # where the next key belongs; _parse_dict skips it and counts it here.
+        self.stray_closers = 0
 
     def _peek(self) -> int:
         if self.pos >= len(self.data):
@@ -260,8 +263,17 @@ class PDFLexer:
             if self._depth > MAX_NESTING_DEPTH:
                 raise PDFSyntaxError("중첩 깊이가 한도를 초과")
             result = {}
+            after_string = False
             while True:
                 self.skip_whitespace()
+                if after_string and self._peek() == 0x29:
+                    # Hancom PDF writes a link target ending in ")" without
+                    # escaping it: "/URI (http://example.test))". The string
+                    # ends at the first ")", so exactly one ")" is left over.
+                    self.pos += 1
+                    self.stray_closers += 1
+                    after_string = False
+                    continue
                 if self.data[self.pos:self.pos + 2] == b">>":
                     self.pos += 2
                     return result
@@ -270,6 +282,8 @@ class PDFLexer:
                 if len(result) >= MAX_COLLECTION_ITEMS:
                     raise PDFSyntaxError("사전 항목 수가 한도를 초과")
                 key = self._parse_name()
+                self.skip_whitespace()
+                after_string = self._peek() == 0x28
                 result[str(key)] = self.parse_object()
         finally:
             self._depth -= 1
@@ -279,11 +293,13 @@ def parse_indirect_object(
     data: bytes,
     offset: int,
     resolve: Optional[Callable[[PDFRef], Any]] = None,
+    recovered: Optional[list] = None,
 ) -> Tuple[int, int, Any]:
     """`num gen obj ... endobj` 를 파싱한다.
 
     resolve: 스트림 /Length 가 간접 참조일 때 정수로 해석하는 콜백.
     /Length 가 틀리거나 없으면 `endstream` 탐색으로 보정한다.
+    recovered: 건너뛴 짝 없는 `)` 가 있으면 그 수를 덧붙일 목록.
     """
     lexer = PDFLexer(data, offset)
     lexer.skip_whitespace()
@@ -295,6 +311,8 @@ def parse_indirect_object(
     if not num_tok.isdigit() or not gen_tok.isdigit() or obj_tok != b"obj":
         raise PDFSyntaxError(f"오프셋 {offset}: 간접 객체 헤더가 아님")
     obj = lexer.parse_object()
+    if recovered is not None and lexer.stray_closers:
+        recovered.append(lexer.stray_closers)
     lexer.skip_whitespace()
     keyword_pos = lexer.pos
     keyword = lexer.read_token()

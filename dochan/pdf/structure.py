@@ -392,8 +392,10 @@ class PDFFile:
         if offset >= len(self.data):
             return None
         self._cache[ref.num] = None  # 순환 참조 가드
+        recovered = []
         try:
-            num, _gen, obj = parse_indirect_object(self.data, offset, resolve=self.resolve)
+            num, _gen, obj = parse_indirect_object(
+                self.data, offset, resolve=self.resolve, recovered=recovered)
         except PDFSyntaxError as e:
             if not self._rescanned and not _HEADER_AT_RE.match(self.data, offset):
                 # A stale xref offset that lands on no object header (e.g. a
@@ -413,6 +415,8 @@ class PDFFile:
                 return self.get_object(ref)
             self.warnings.append(f"WARN: 객체 {ref.num} 오프셋이 {num} 을 가리킴")
             return None
+        if recovered:
+            self.warnings.append(f"WARN: 객체 {ref.num}: 문자열 뒤 짝 없는 ')' 를 건너뜀")
         if self._decryptor is not None:
             obj = self._decrypt_object(ref.num, ref.gen, obj)
         self._cache[ref.num] = obj
@@ -449,6 +453,8 @@ class PDFFile:
         except PDFSyntaxError as e:
             self.warnings.append(f"WARN: ObjStm 내 객체 {num} 파싱 실패: {e}")
             return None
+        if lexer.stray_closers:
+            self.warnings.append(f"WARN: 객체 {num}: 문자열 뒤 짝 없는 ')' 를 건너뜀")
         self._cache[num] = obj
         return obj
 

@@ -41,7 +41,7 @@ from ..model.header_footer import HeaderFooter, Footnote
 from .records.ctrl_header import (
     parse_ctrl_id, identify_control,
     is_field_ctrl_id, parse_field_command_url, CTRL_FIELD_HYPERLINK,
-    CTRL_BOOKMARK,
+    CTRL_BOOKMARK, CTRL_FOOTNOTE, CTRL_ENDNOTE,
 )
 from .records.para_text import parse_para_text
 from .forms import form_text
@@ -107,14 +107,14 @@ def _apply_link_ranges(runs, ranges, *, max_runs=None, on_limit=None):
     return result
 
 
-def _merge_inline_equations(runs, equations):
-    """Merge PARA_TEXT offsets with shaped runs in source order once."""
-    if not equations:
+def _merge_inline_objects(runs, objects):
+    """Merge equation and note anchors at PARA_TEXT offsets in source order."""
+    if not objects:
         return runs
     total = sum(len(run.text) for run in runs)
     # Python's stable sort preserves control order at equal offsets.
-    events = sorted(((max(0, min(position, total)), equation)
-                     for position, equation in equations), key=lambda item: item[0])
+    events = sorted(((max(0, min(position, total)), obj)
+                     for position, obj in objects), key=lambda item: item[0])
     result = []
     event_index = 0
     offset = 0
@@ -124,22 +124,35 @@ def _merge_inline_equations(runs, equations):
         while (event_index < len(events)
                and (events[event_index][0] < end
                     or (run_index == len(runs) - 1 and events[event_index][0] <= end))):
-            position, equation = events[event_index]
+            position, obj = events[event_index]
             position = max(position, cursor)
             if position > cursor:
                 result.append(_dc_replace(run, text=run.text[cursor - offset:position - offset]))
-            result.append(_dc_replace(run, text=equation.latex, equation=equation))
+            if isinstance(obj, Equation):
+                result.append(_dc_replace(run, text=obj.latex, equation=obj))
+            else:
+                result.append(_dc_replace(run, text=obj.text, note_ref=obj.note_ref,
+                                          link='', equation=None))
             cursor = position
             event_index += 1
-        if cursor < end or (not run.text and cursor == offset):
+        if cursor < end:
             result.append(_dc_replace(run, text=run.text[cursor - offset:]))
         offset = end
     while event_index < len(events):
-        _, equation = events[event_index]
+        _, obj = events[event_index]
         source = runs[-1] if runs else TextRun()
-        result.append(_dc_replace(source, text=equation.latex, equation=equation))
+        if isinstance(obj, Equation):
+            result.append(_dc_replace(source, text=obj.latex, equation=obj))
+        else:
+            result.append(_dc_replace(source, text=obj.text, note_ref=obj.note_ref,
+                                      link='', equation=None))
         event_index += 1
     return result
+
+
+def _merge_inline_equations(runs, equations):
+    """Keep the existing equation-only helper used by callers and tests."""
+    return _merge_inline_objects(runs, equations)
 
 
 # Public corpus maximum: 638,984 records in one section. A byte-only
@@ -209,6 +222,7 @@ class SectionParser:
         self._document_error_keys = set()
         self._table_failure_serial = 0
         self._chart_count = 0
+        self._note_seq = 0
         self._font_heading_paragraphs = []
 
     def _document_limit_once(self, key, message):
@@ -552,7 +566,10 @@ class SectionParser:
 
         # 텍스트 문단 생성
         para = None
-        if text_result and text_result['text'].strip():
+        has_note_anchor = bool(text_result and any(
+            ctrl_id in (CTRL_FOOTNOTE, CTRL_ENDNOTE)
+            for _start, _end, ctrl_id in text_result.get('inline_controls', [])))
+        if text_result and (text_result['text'].strip() or has_note_anchor):
             para = Paragraph()
             para_rec = para_node['record']
             if len(para_rec.data) >= 10:
@@ -597,16 +614,19 @@ class SectionParser:
             elements.append(Paragraph(runs=list(bookmark_markers)))
 
         # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
-        equation_offsets = iter(
-            text_result['raw_to_text'][min(start, len(text_result['raw_to_text']) - 1)]
-            for start, _end, ctrl_id in text_result.get('inline_controls', [])
-            if ctrl_id == b'deqe'
-        ) if text_result else iter(())
-        inline_equations = []
+        inline_offsets = {}
+        if text_result:
+            for start, _end, ctrl_id in text_result.get('inline_controls', []):
+                if ctrl_id in (b'deqe', CTRL_FOOTNOTE, CTRL_ENDNOTE):
+                    position = text_result['raw_to_text'][
+                        min(start, len(text_result['raw_to_text']) - 1)]
+                    inline_offsets.setdefault(ctrl_id, []).append(position)
+        inline_offsets = {key: iter(value) for key, value in inline_offsets.items()}
+        inline_objects = []
         for ctrl_node in ctrl_nodes:
             # A failed equation still owns its PARA_TEXT marker.
-            position = (next(equation_offsets, None)
-                        if parse_ctrl_id(ctrl_node['record'].data) == b'deqe' else None)
+            ctrl_id = parse_ctrl_id(ctrl_node['record'].data)
+            position = next(inline_offsets.get(ctrl_id, iter(())), None)
             failure_serial = self._table_failure_serial
             starting_cells = self._section_cells
             starting_document_cells = self._document_cells
@@ -638,12 +658,18 @@ class SectionParser:
                     as_char = (len(data) >= 8 and
                                bool(struct.unpack_from('<I', data, 4)[0] & 1))
                     if as_char and para is not None and position is not None:
-                        inline_equations.append((position, ctrl_elem))
+                        inline_objects.append((position, ctrl_elem))
                         continue
+                if isinstance(ctrl_elem, Footnote) and ctrl_elem.type in ('footnote', 'endnote'):
+                    self._note_seq += 1
+                    ctrl_elem.number = self._note_seq
+                    if para is not None and position is not None:
+                        inline_objects.append((position, TextRun(
+                            text=f'[{self._note_seq}]', note_ref=self._note_seq)))
                 elements.append(ctrl_elem)
 
         if para is not None:
-            para.runs = _merge_inline_equations(para.runs, inline_equations)
+            para.runs = _merge_inline_objects(para.runs, inline_objects)
             if bookmark_markers:
                 marker_size = first_visible_font_size(para.runs)
                 for marker in bookmark_markers:
@@ -1059,7 +1085,7 @@ class SectionParser:
 
     MAX_TABLE_CELLS = 1_000_000  # 1M cells max
 
-    # 표 캡션 위치 코드(개체 공통 속성 표 76) → caption_side 문자열
+    # 표 캡션 속성 하위 2비트(개체 공통 속성 표 76) → caption_side 문자열
     _CAPTION_SIDE = {0: 'LEFT', 1: 'RIGHT', 2: 'TOP', 3: 'BOTTOM'}
 
     def _parse_table(self, ctrl_node):
@@ -1211,7 +1237,7 @@ class SectionParser:
         for cnode in caption_nodes:
             data = cnode['record'].data
             if len(data) >= 12:
-                direction = struct.unpack_from("<I", data, 8)[0]
+                direction = struct.unpack_from("<I", data, 8)[0] & 0x3
                 side = self._CAPTION_SIDE.get(direction, side)
             for sub in cnode['children']:
                 if sub['record'].tag_id == HWPTAG_PARA_HEADER:
@@ -1314,6 +1340,8 @@ class SectionParser:
                     elif isinstance(e, Equation):
                         info['paragraphs'].append(e)
                     elif isinstance(e, ChartReference):
+                        info['paragraphs'].append(e)
+                    elif isinstance(e, Footnote):
                         info['paragraphs'].append(e)
 
         return info

@@ -145,6 +145,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 - **이미지 참조·읽기 순서 · HWPX**: 문단 안 그림은 문단 텍스트 뒤에 원래 순서대로 내며 문장을 나누지 않는다. 공개 HWPX 2,046개에서 기존 수정으로 Markdown 209개와 JSON 213개가 바뀌었고, 구조 골격·이미지 순서·공백 제외 글자 및 한 문단 이내의 그림 이동을 확인했다. 보도자료 HWP·PDF 짝 2개에서도 이어진 문장을 확인했다([검증 기록](benchmarks/2026-10-04-hwpx-picture-flow-real-docs.md)).
 - **각주/미주·읽기 순서 · HWPX**: 문장 안 참조 표지는 런에 남기고 정의 요소는 문단 뒤로 보내 문장을 잇는다. 공개 HWPX와 같은 보도자료 PDF의 전후 대조는 [검증 기록](benchmarks/2026-10-04-hwpx-note-flow-real-docs.md)에 남겼다.
+- **떠 있는 표·읽기 순서 · HWPX (미해결)**: 원본 문단의 앞뒤에 글자가 있는 `treatAsChar=0` 표는 현재 문단을 자른다. 공개 HWPX 2,440개 중 6문서 8곳을 찾았고, HWP 짝 2곳에서 문장이 이어지는 것을 확인했다. 나머지 배치형은 독립 정답이 부족하여 파서를 바꾸지 않았다. `treatAsChar=1` 표 48곳은 현행 배치를 유지한다([조사 기록](benchmarks/2026-10-04-hwpx-float-table-real-docs.md)).
 - **변경 추적 · HWP·HWPX (⬜)**: `revision_mode`(preserve·final·original)로 삽입·삭제 텍스트를 투영한다. 개체·서식 변경 이력은
   재현하지 않는다. 한컴오피스 HWP(Mac)는 변경 추적을 만들 수는 없지만 `hh:trackChange` 의 `hide` 를 바꾼 통제 표본으로 최종본·원본·전체 보기를
   보여 주므로 정답 화면으로 쓸 수 있다(2026-10-03). 공개 `hwpxlib-ChangeTrack.hwpx` 와 `korea-mid-30-7_…(축산원).hwpx`(변경 문단 5개)는 세 모드가

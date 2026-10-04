@@ -1,6 +1,6 @@
 # PDF 보도자료 본문 공백 리뷰 반영 실물 검증
 
-같은 문서의 HWPX 출력을 PDF 공백 비교의 정답 근거로 삼았다. 공개 보도자료 343쌍은 짝수 178쌍과 홀수 165쌍으로 나눴고, 별도의 공개 보류 206쌍을 다시 측정했다. 표의 평균은 `scripts.compare_pdf_pairs`의 `tok_ratio`이며, 새 공백의 정답·오답·판정불가는 감수 측정기 `rv-pdf-press/harness.py`가 HWPX 문맥으로 분류한 수다. 전체 방법과 한계는 [본문 손실 검증 기록](2026-10-04-pdf-press-text-loss.md)에 적었다.
+같은 문서의 HWPX 출력을 PDF 공백 비교의 정답 근거로 삼았다. 공개 보도자료 343쌍은 짝수 178쌍과 홀수 165쌍으로 나눴고, 별도의 공개 보류 206쌍을 다시 측정했다. 표의 평균은 `scripts.compare_pdf_pairs`의 `tok_ratio`이며, 새 공백의 정답·오답·판정불가는 감수 측정기 `scripts/probe_pdf_word_gap.py`(`python -m scripts.probe_pdf_word_gap . <코퍼스> <출력.json>`)가 HWPX 문맥으로 분류한 수다. 전체 방법과 한계는 [본문 손실 검증 기록](2026-10-04-pdf-press-text-loss.md)에 적었다.
 
 | 칸 | 표본 파일 | 정답 근거 | 기대 | 실제 | 판정 |
 |---|---|---|---|---|---|

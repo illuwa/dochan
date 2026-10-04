@@ -42,8 +42,8 @@ python -m pytest tests/test_pdf_reader.py -q   # 단일 파일
   로 `corpus/press-pairs/<newsId>.{hwp,hwpx,pdf}` 에 받는다(2026-10-04 기준 403건, 출처·라이선스·첨부 fileId 는 같은 폴더 `manifest.json`).
   내부 `test_pairs/` 와 같은 한컴 PDF 내보내기라 PDF·HWP 검증의 공개 근거로 쓴다. 수집기는 첨부의 실제 파일 이름이 같은 PDF·HWPX·HWP 만 짝짓는다
   (`--recheck` 로 기존 짝 재검증). newsId·fileId 와 공개 제목은 벤치마크 문서에 인용해도 된다.
-  규칙·상수 조정에 쓰지 않은 보류 검증용 묶음은 `corpus/press-pairs-holdout/`(같은 수집기 `--pages 31-45`, 2026-10-04 기준 217건, `press-pairs` 와 겹치지 않음)이다.
-  새 휴리스틱은 `press-pairs` 로 정하고 이 묶음에서는 한 번만 잰다.
+  규칙·상수 조정에 쓰지 않은 보류 검증용 묶음은 `corpus/press-pairs-holdout/`(같은 수집기 `--pages 31-45`, 217건)과 `corpus/press-pairs-holdout2/`(`--pages 46-60`, 232건)이다
+  (2026-10-04, 서로·`press-pairs` 와 겹치지 않음). 새 휴리스틱은 `press-pairs` 로 정하고 보류 묶음에서는 한 번만 잰다. 한 규칙을 평가한 묶음은 그 규칙의 다음 평가에 다시 쓰지 않는다.
 - 칸별 실물 검증 기록은 `docs/benchmarks/` 에 남긴다(표본 파일·정답 근거·기대·실제·판정).
 
 ## 라이선스 원칙

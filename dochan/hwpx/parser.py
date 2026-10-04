@@ -1083,10 +1083,10 @@ class HWPXParser:
                                 plain_parts.append(ctrl_elem.text)
                             continue
                         if (isinstance(ctrl_elem, Equation) and has_other_text
-                                and ctrl_elem.treat_as_char):
+                                and ctrl_elem._treat_as_char):
                             flush_plain()
-                            source = next((run for run in reversed(runs)
-                                           if run.equation is None and run.text.strip()), TextRun())
+                            # 앞 런 하나만 본다(상수 시간). 앞뒤 글자 서식은 flush_flow 가 다시 맞춘다.
+                            source = runs[-1] if runs else TextRun()
                             equation_run = TextRun(
                                 text=ctrl_elem.latex, equation=ctrl_elem,
                                 bold=source.bold, italic=source.italic,
@@ -1384,7 +1384,7 @@ class HWPXParser:
                 return self._parse_table_elem(child)
             elif tag == 'equation':
                 equation = _parse_equation_elem(child)
-                equation.treat_as_char = _equation_treat_as_char(child)
+                equation._treat_as_char = _equation_treat_as_char(child)
                 return equation
             elif tag == 'pic':
                 return self._parse_picture_elem(child)

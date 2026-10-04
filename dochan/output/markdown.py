@@ -538,7 +538,7 @@ def _runs_to_cell_text(runs: list) -> str:
         if run.equation is not None:
             latex = _inline_latex(run.equation.latex or run.equation.script)
             if latex:
-                parts.append('$' + _escape_cell(latex) + '$')
+                parts.append('$' + latex + '$')  # _cell_text 가 문단 전체를 한 번 이스케이프한다
             index += 1
             continue
         link = getattr(run, 'link', '')

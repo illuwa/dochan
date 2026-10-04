@@ -268,7 +268,9 @@ def test_docx_equation_inherits_enclosing_run_format(tmp_path):
             '<w:t>A</w:t>%s<w:t>B</w:t></w:r></w:p>') % eq
     para, = _docx(tmp_path, body).sections[0].elements
     formula, = [run for run in para.runs if run.equation]
-    assert (formula.bold, formula.font_size_pt) == (True, 14)
+    text = next(run for run in para.runs if run.equation is None and run.text == "A")
+    # DOCX 리더는 글자 크기를 읽지 않는다(제목 판정에 쓰지 않음); 수식 런은 옆 글자 서식을 그대로 따른다.
+    assert (formula.bold, formula.font_size_pt) == (True, text.font_size_pt)
 
 
 def test_hwpx_equation_inherits_enclosing_run_format():
@@ -292,7 +294,9 @@ def test_docx_direct_equation_inherits_neighbour_text_format(tmp_path):
             '<w:t>A</w:t></w:r>%s</w:p>') % eq
     para, = _docx(tmp_path, body).sections[0].elements
     formula, = [run for run in para.runs if run.equation]
-    assert (formula.bold, formula.font_size_pt) == (True, 14)
+    text = next(run for run in para.runs if run.equation is None and run.text == "A")
+    # DOCX 리더는 글자 크기를 읽지 않는다(제목 판정에 쓰지 않음); 수식 런은 옆 글자 서식을 그대로 따른다.
+    assert (formula.bold, formula.font_size_pt) == (True, text.font_size_pt)
 
 
 def test_docx_equation_comment_range_end_keeps_annotation(tmp_path):
@@ -331,3 +335,27 @@ def test_hwpx_control_equation_inherits_following_text_style():
     para, = parser._parse_paragraph_elem(paragraph)
     formula, = [run for run in para.runs if run.equation]
     assert (formula.bold, formula.font_size_pt) == (True, 14)
+
+
+def test_cell_equation_pipe_is_escaped_once():
+    from dochan.model.table import Table, Cell
+    eq = Equation(latex_override=r'\left| x \right|')
+    para = Paragraph(runs=[TextRun('A'), TextRun(eq.latex, equation=eq), TextRun('B')])
+    doc = Document(sections=[Section(elements=[Table(rows=[[Cell(paragraphs=[para])]])])])
+    markdown = to_markdown(doc)
+    assert r'$\left\| x \right\|$' in markdown
+    assert r'\\|' not in markdown
+
+
+def test_hwpx_ctrl_equations_merge_in_linear_time(tmp_path):
+    import time
+    # 21 KB 압축 입력이 수식마다 앞 런을 거꾸로 훑으면 6만 식에 30초 넘게 걸렸다.
+    count = 30_000
+    equation = ('<hp:ctrl><hp:equation><hp:pos treatAsChar="1"/>'
+                '<hp:script>x</hp:script></hp:equation></hp:ctrl>')
+    start = time.perf_counter()
+    doc = _hwpx(tmp_path, '<hp:p><hp:run><hp:t>A</hp:t></hp:run>' + equation * count + '</hp:p>')
+    elapsed = time.perf_counter() - start
+    para = doc.sections[0].elements[0]
+    assert sum(run.equation is not None for run in para.runs) == count
+    assert elapsed < 6.0

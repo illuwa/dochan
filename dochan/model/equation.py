@@ -1,6 +1,6 @@
 """Equation model — 수식"""
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -11,7 +11,8 @@ class Equation:
     latex_override: str = ""
     # Explicit source syntax when supplied by a reader; empty preserves legacy output.
     script_format: str = ""
-    treat_as_char: bool = False
+    # HWPX <hp:ctrl> 경로의 글자처럼 취급 여부(리더 내부 전달용, 출력·비교에 쓰지 않음).
+    _treat_as_char: bool = field(default=False, repr=False, compare=False)
 
     @property
     def latex(self) -> str:

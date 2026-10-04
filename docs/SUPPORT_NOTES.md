@@ -77,7 +77,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 
 ## 수식
 
-- **HWP·HWPX·DOCX 글 속 수식**: 문단에 다른 비공백 글자가 있으면 수식을 해당 위치의 `TextRun` 으로 보존하고 Markdown 에 `$LaTeX$` 로 낸다. 평문과 `Paragraph.text` 에는 LaTeX 문자열이 들어가며 JSON 은 수식 런에 `equation` 필드를 더한다. 수식만 있는 문단, DOCX `m:oMathPara`, HWP·HWPX 의 글자처럼 취급하지 않는 수식은 종전대로 별도 `Equation` 블록(`$$…$$`)이다. 표 셀·각주·글상자도 같은 문단 규칙을 따른다. 리뷰 후 공개 HWP/HWPX 수식 양성 24쌍 중 글 속 수식이 있는 16쌍의 문단별 순서열은 15쌍이 완전히 같고, 1쌍은 원본 문단 분할·보기 문단 순서가 달라 완전 일치하지 않는다. 한 문단 8,000식 합성 입력은 0.218초 중앙값으로 파싱했다. [실물 검증 기록](benchmarks/2026-10-04-inline-equation-real-docs.md)을 참조한다.
+- **HWP·HWPX·DOCX 글 속 수식**: 문단에 다른 비공백 글자가 있으면 수식을 해당 위치의 `TextRun` 으로 보존하고 Markdown 에 `$LaTeX$` 로 낸다. 평문과 `Paragraph.text` 에는 LaTeX 문자열이 들어가며 JSON 은 수식 런에 `equation` 필드를 더한다. 수식만 있는 문단, DOCX `m:oMathPara`, HWP·HWPX 의 글자처럼 취급하지 않는 수식은 종전대로 별도 `Equation` 블록(`$$…$$`)이다. 표 셀·각주·글상자도 같은 문단 규칙을 따른다. 리뷰 후 공개 HWP/HWPX 수식 양성 24쌍 중 글 속 수식이 있는 16쌍의 문단별 순서열은 15쌍이 완전히 같고, 1쌍(`3-10월_교육_통합_2022`)은 원본 `<hp:p>` 하나 안의 떠 있는 표(`treatAsChar=0`, 글자 둘레 배치)에서 HWPX 리더가 문단을 자르고 HWP 리더는 표를 문단 뒤에 두는 기존 차이 때문에 문단 경계가 달라 완전 일치하지 않는다(짝을 맞춘 문단 안의 수식 순서는 같다). 떠 있는 표가 문장 중간을 자르는 문제는 후속 과제다. 한 문단 8,000식 합성 입력은 0.218초 중앙값으로 파싱했다. [실물 검증 기록](benchmarks/2026-10-04-inline-equation-real-docs.md)을 참조한다.
 - **PPTX**: `a14:m` 으로 감싼 OMML 을 DOCX 와 같은 변환기로 LaTeX 로 바꾼다. 실물은 1식, 구조별 변환은 단위 테스트로 검증했다.
 - **DOC·PPT**: 내장 Equation 3.0(MathType MTEF v2/v3/v5) 개체를 LaTeX 로 바꾼다. 공개 실물 변환율 DOC 42/54, PPT 13/18.
   변환하지 못한 식(지원하지 않는 템플릿·행렬 등)은 미리보기 그림으로 남는다.

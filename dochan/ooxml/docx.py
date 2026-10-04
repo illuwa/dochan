@@ -1758,14 +1758,6 @@ class DOCXReader:
                     )
                 if strikeout is not None:
                     run.strikeout = _w_on_off_enabled(strikeout)
-                size = r_pr.find("w:sz", namespaces=NS)
-                if size is not None:
-                    try:
-                        points = int(_w_attr(size, "val")) / 2
-                        if 0 < points <= 1000:
-                            run.font_size_pt = points
-                    except (ValueError, TypeError):
-                        pass
                 vert_align = r_pr.find("w:vertAlign", namespaces=NS)
                 if vert_align is not None:
                     value = _w_attr(vert_align, "val")

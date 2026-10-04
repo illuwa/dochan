@@ -10,7 +10,7 @@ import stat
 import tempfile
 import unicodedata
 from contextlib import contextmanager
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -1009,7 +1009,7 @@ def batch_convert(
     summary = BatchSummary(total=len(work_items))
     logger.info(f"배치 시작: {len(work_items)}개 파일, {max_workers} 워커")
 
-    if max_workers <= 1:
+    if max_workers <= 1 or not work_items:
         for file_path, output_path, relative_path, source_identity in work_items:
             result = _process_single(
                 str(file_path),
@@ -1033,44 +1033,60 @@ def batch_convert(
         logger.info(f"배치 완료: {summary.success}/{summary.total} 성공 ({summary.success_rate:.1f}%)")
         return summary
 
-    # 병렬 처리
+    # 출력 충돌 이름은 경로 순서로 확정한 뒤, 이미 수집한 크기만으로
+    # 큰 입력을 먼저 배분한다. 별도 stat이나 보안 검사 생략은 없다.
+    work_items.sort(key=lambda item: -item[3].source_size)
+    # 전체 파일의 Future를 보관하지 않는다. 작업자당 4개를 대기시켜
+    # 짧은 작업에서도 작업자를 채우고, 부모의 대기 메모리는 O(workers)로 둔다.
+    pending_limit = max_workers * 4
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _process_single,
-                str(file_path),
-                str(output_path),
-                output_format,
-                str(resolved_output),
-                str(resolved_input),
-                str(relative_path),
-                source_identity,
-                include_assets=include_assets,
-                revision_mode=revision_mode,
-            ): str(file_path)
-            for file_path, output_path, relative_path, source_identity in work_items
-        }
+        remaining = iter(work_items)
+        futures = {}
 
-        for future in as_completed(futures):
-            file_path = futures[future]
-            try:
-                result = future.result()
-                summary.results.append(result)
-                if result.success:
-                    summary.success += 1
-                    logger.info(f"✓ {os.path.basename(file_path)}")
-                else:
+        def fill_pending() -> None:
+            while len(futures) < pending_limit:
+                item = next(remaining, None)
+                if item is None:
+                    break
+                file_path, output_path, relative_path, source_identity = item
+                future = executor.submit(
+                    _process_single,
+                    str(file_path),
+                    str(output_path),
+                    output_format,
+                    str(resolved_output),
+                    str(resolved_input),
+                    str(relative_path),
+                    source_identity,
+                    include_assets=include_assets,
+                    revision_mode=revision_mode,
+                )
+                futures[future] = str(file_path)
+
+        fill_pending()
+        while futures:
+            completed, _ = wait(futures, return_when=FIRST_COMPLETED)
+            for future in completed:
+                file_path = futures.pop(future)
+                try:
+                    result = future.result()
+                    summary.results.append(result)
+                    if result.success:
+                        summary.success += 1
+                        logger.info(f"✓ {os.path.basename(file_path)}")
+                    else:
+                        summary.failed += 1
+                        logger.error(f"✗ {os.path.basename(file_path)}: {result.errors}")
+                except Exception as e:
                     summary.failed += 1
-                    logger.error(f"✗ {os.path.basename(file_path)}: {result.errors}")
-            except Exception as e:
-                summary.failed += 1
-                summary.results.append(BatchResult(
-                    file_path=file_path,
-                    success=False,
-                    errors=[str(e)],
-                    error_count=1,
-                ))
-                logger.error(f"✗ {os.path.basename(file_path)}: {e}")
+                    summary.results.append(BatchResult(
+                        file_path=file_path,
+                        success=False,
+                        errors=[str(e)],
+                        error_count=1,
+                    ))
+                    logger.error(f"✗ {os.path.basename(file_path)}: {e}")
+            fill_pending()
 
     logger.info(f"배치 완료: {summary.success}/{summary.total} 성공 ({summary.success_rate:.1f}%)")
     return summary

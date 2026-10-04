@@ -524,6 +524,22 @@ class XLSXReader(SpreadsheetNumberFormatter):
                 max_row = max(max_row, row_idx)
                 row_maps[row_idx] = by_col
 
+        # Comments are related sheet content, even when sheetData has neither
+        # a <c> nor a <row> for their coordinates. Existing cells already carry
+        # their annotation; fill only the missing ones, preserving merge spans.
+        comment_cells = []
+        for cell_ref, comment in comments.items():
+            coordinates = self._validated_cell_coordinates(_bounded_diagnostic_path(cell_ref))
+            if coordinates is None:
+                continue
+            row_idx, col_idx = coordinates
+            if col_idx in row_maps.get(row_idx, {}):
+                continue
+            comment_cells.append((row_idx, col_idx, cell_ref, comment))
+            max_row = max(max_row, row_idx)
+            merge_span = merges.get((row_idx, col_idx), (1, 1))
+            max_col = max(max_col, col_idx + max(merge_span[1], 1) - 1)
+
         rows = []
         if max_row >= 0 and max_col >= 0 and (max_row + 1) * (max_col + 1) > MAX_DENSE_TABLE_CELLS:
             self._errors.append(
@@ -531,6 +547,21 @@ class XLSXReader(SpreadsheetNumberFormatter):
                 f"{(max_row + 1) * (max_col + 1)} > {MAX_DENSE_TABLE_CELLS}"
             )
             return Table()
+        # Check the dense grid before allocating the missing cells or rows.
+        for row_idx, col_idx, cell_ref, comment in comment_cells:
+            provenance = Provenance(
+                source_format="xlsx", sheet=sheet_name, cell=cell_ref, path=sheet_path,
+            )
+            cell = self._empty_or_merged_cell(merges, row_idx, col_idx)
+            cell_text = self._commented_cell_text(
+                self._linked_cell_text("", hyperlinks.get(cell_ref)), comment,
+            )
+            cell.paragraphs = [Paragraph(
+                runs=[TextRun(text=cell_text, provenance=provenance)],
+                provenance=provenance,
+            )]
+            cell.provenance = provenance
+            row_maps.setdefault(row_idx, {})[col_idx] = cell
         for row_idx in range(max_row + 1):
             by_col = row_maps.get(row_idx, {})
             cells = [

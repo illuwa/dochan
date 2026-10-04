@@ -454,6 +454,7 @@ class Dochan:
                     finalize_headings(self.doc)
                 else:
                     finalize_headings()
+            self._warn_preview_only_text(ole, stream_budget)
 
             # 4. BinData 이미지 연결
             bin_items = {}
@@ -491,6 +492,23 @@ class Dochan:
         finally:
             append_recovery_warnings(ole, self.doc.errors)
             ole.close()
+
+    def _warn_preview_only_text(self, ole, stream_budget) -> None:
+        """본문 레코드에서 글자를 못 찾았는데 미리보기에는 글자가 있으면 알린다.
+
+        PrvText 는 문서 앞부분만 담은 미리보기라 본문 대신 내지 않는다.
+        """
+        if to_plain_text(self.doc).strip() or not ole.exists("PrvText"):
+            return
+        try:
+            preview = read_ole_stream(ole, "PrvText", max_bytes=1024 * 1024, budget=stream_budget)
+        except Exception:
+            return
+        # 미리보기는 표 셀을 `<…>` 로 감싼다. 빈 표의 `<>` 표시만 있으면 본문이 없는 것이다.
+        if preview.decode("utf-16-le", errors="ignore").translate({ord("<"): None, ord(">"): None}).strip():
+            self.doc.errors.append(
+                "WARN: HWP 본문 레코드에서 글자를 찾지 못함 — 미리보기(PrvText)에는 글자가 있음"
+                "(비표준 생성기 산출물일 수 있음)")
 
     @staticmethod
     def _hwp_section_indices(

@@ -4,6 +4,12 @@ import zlib
 MAX_DECOMPRESSED_SIZE = 200 * 1024 * 1024  # 200MB
 
 
+def _zlib_header(data: bytes) -> bool:
+    """RFC 1950 CMF/FLG: DEFLATE, 32 KiB 이하 창, 사전 없음, FCHECK 일치."""
+    return (len(data) >= 2 and data[0] & 0x0F == 8 and data[0] >> 4 <= 7
+            and not data[1] & 0x20 and (data[0] << 8 | data[1]) % 31 == 0)
+
+
 def safe_zlib_decompress(
     data: bytes, max_size: int = MAX_DECOMPRESSED_SIZE, *, trailer_validator=None
 ) -> bytes:
@@ -12,13 +18,28 @@ def safe_zlib_decompress(
     출력은 64KiB 단위로 제한하며 예산보다 한 바이트만 더 요청한다.
     실패한 원래 예외의 ``inflated`` 속성으로 이미 해제한 양을 전한다.
     ``trailer_validator`` 는 배포용 AES 패딩처럼 형식별 꼬리를 검증한다.
+    HWP 명세는 압축에 zlib 을 쓴다고만 정한다. 한컴은 raw DEFLATE 로 저장하지만
+    다른 생성기는 RFC 1950 zlib 헤더를 붙인다. raw 해제가 실패하고 zlib 헤더가
+    있을 때만 같은 크기 제한으로 zlib 형식(Adler-32 검사 포함)을 다시 시도한다.
     """
+    try:
+        return _inflate(data, max_size, trailer_validator, -15)
+    except zlib.error as raw_error:
+        if not _zlib_header(data):
+            raise
+        try:
+            return _inflate(data, max_size, trailer_validator, 15)
+        except zlib.error:
+            raise raw_error from None
+
+
+def _inflate(data: bytes, max_size: int, trailer_validator, wbits: int) -> bytes:
     total = 0
     try:
         if not isinstance(max_size, int) or isinstance(max_size, bool) or max_size < 0:
             raise ValueError("max_size must be a non-negative integer")
 
-        decompressor = zlib.decompressobj(-15)
+        decompressor = zlib.decompressobj(wbits)
         chunks = []
         checksum = 0
         chunk_size = 65536

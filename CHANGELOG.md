@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 문서·검증 (PPT·XLS·PPTX 메모)
+
+- 주석/코멘트 행에서 메모 구조가 없는 것으로 적었던 PPT·XLS·PPTX의 `—`를 지원 범위 각주가 있는 ✅로 고쳤다. 독립 원시 해독과 합성 테스트로 PPT 3문서 8/8개, PPTX 메모 목록 5문서의 본문 8/8개, XLS 32문서 509/509개를 확인했고, 암호화 XLS 1개는 POI 테스트 기대값으로 별도 확인했다. PPTX 최신 스레드 메모는 미지원이다([기록](docs/benchmarks/2026-10-04-comment-cells-real-docs.md)).
+- 독립 XML·레코드 프로브와 순서·위치·저장 이력·XML 안전 경계 테스트를 추가했다. 제품 결함은 발견되지 않아 파서를 변경하지 않았다. 공개 PPT·PPTX·XLS 1,484개의 Markdown·JSON 해시와 오류 목록은 변경 전후 모두 같다. 기존 XLS 검증에서 원본 차이로 판정했던 `comments.xlsx`의 두 메모는 원본 XML에는 존재하며 현재 XLSX 출력에서 빠지는 것으로 정정했다.
+
 ### 문서 (속도 비교)
 
 - 같은 파일·같은 환경에서 다른 변환 도구와 속도를 쟀다(`scripts/bench_converters.py`, [기록](docs/benchmarks/2026-10-04-speed-comparison.md), 3회 중앙값):

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 수정 (공개 실물 오류·경고 전수 점검)
+
+- 공개 실물 13,494개(HWP·HWPX·PDF·DOC·DOCX·PPT·PPTX·XLS·XLSX)의 오류·경고를 전수 수집해 유형별로 원인을 판정하고(`scripts/probe_error_sweep.py`, [기록](docs/benchmarks/2026-10-04-error-sweep.md)),
+  정상 파일에서 나던 결함을 고쳤다: DOCX 가 패키지 관계가 지정한 본문 부품(`word/document.xml` 이 아닌 이름)을 읽지 못하던 문제, 유효한 번호 시작값 0 을 오류로 보던 문제,
+  PPT 의 완결된 확장 서식 레코드에 내던 허위 경고, XLS DIMENSION 의 빈 축(시작=끝, [MS-XLS] 끝값은 마지막+1)을 범위 오류로 보던 문제, PDF 숫자 표 셀을 미주 표지로 세어
+  한도 경고를 내던 문제. 바뀐 것은 경고 목록과 DOCX 1개의 본문 복구뿐이고 나머지 출력 해시는 그대로다. 정상처럼 보였던 나머지 후보는 원본 손상(URI 뒤 여분 괄호,
+  ZIP 종료 레코드 없음, 실제로 없는 이미지 부품)으로 확인했다. 처리 중 예외·시간 초과는 0건이다.
+
 ### 추가 (HWPX 열기 암호)
 
 - 열기 암호로 보호된 HWPX 를 `password=`(CLI `--password-stdin`·`DOCHAN_PASSWORD`)로 읽는다. 매니페스트의 AES-256-CBC·PBKDF2-HMAC-SHA1(SHA-256 시작 키)·해제 후 sha256-1k 검사를

@@ -561,6 +561,23 @@ def test_group_label_is_not_picture_alt_text_when_nested_picture_has_no_descript
     assert images[0].alt_text == ""
 
 
+def test_outer_shape_description_is_not_assigned_to_first_of_multiple_pictures():
+    """A shared GSO description does not identify one of its child pictures."""
+    pic_payload = bytes(71) + struct.pack("<H", 1)
+    data = (
+        rec(HWPTAG_PARA_HEADER, 0, bytes(22)) +
+        rec(HWPTAG_PARA_TEXT, 1, para_text_payload("그림 문단")) +
+        rec(HWPTAG_CTRL_HEADER, 1, gso_ctrl_payload("사각형입니다.")) +
+        rec(HWPTAG_SHAPE_COMPONENT, 2, bytes(4)) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 3, pic_payload) +
+        rec(HWPTAG_SHAPE_COMP_PICTURE, 3, pic_payload)
+    )
+
+    images = [e for e in parse_section(data).elements if isinstance(e, Image)]
+    assert len(images) == 2
+    assert [image.alt_text for image in images] == ["", ""]
+
+
 def test_gso_without_description_has_empty_alt_text():
     """설명문 길이 0 이면 alt_text 는 빈 문자열 (회계규칙 두 번째 GSO 실측)."""
     pic_payload = bytes(71) + struct.pack("<H", 1)

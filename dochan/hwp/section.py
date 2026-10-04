@@ -1379,11 +1379,11 @@ class SectionParser:
         if images:
             if caption_paras:
                 images[0].caption = caption_paras
-            if (alt_text and alt_text != '묶음 개체입니다.'
+            if (len(images) == 1 and alt_text and alt_text != '묶음 개체입니다.'
                     and not images[0].alt_text):
                 # 중첩 GSO의 그림 설명문이 있으면 바깥 도형의 일반 설명문으로
-                # 덮지 않는다. 자동 생성된 묶음 개체 명칭은 개별 그림 설명이
-                # 아니므로 붙이지 않고, 나머지 설명만 폴백으로 쓴다.
+                # 덮지 않는다. 여러 그림을 가진 도형의 공통 설명문은 첫
+                # 그림만의 설명이 아니다. 단일 그림일 때만 폴백으로 쓴다.
                 images[0].alt_text = alt_text
         elif caption_paras:
             # 이미지 없는 도형의 캡션은 잃지 않도록 흐름에 남긴다

@@ -60,6 +60,31 @@ def test_reads_simple_docx_paragraph(tmp_path):
     assert doc.sections[0].elements[0].runs[0].provenance.path == "word/document.xml"
 
 
+def test_reads_docx_main_part_named_by_package_relationship(tmp_path):
+    path = tmp_path / "alternate-main.docx"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr(
+            "_rels/.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+            'Target="word/trial.xml"/></Relationships>',
+        )
+        archive.writestr(
+            "word/trial.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body><w:p><w:r><w:t>Alternate main part</w:t></w:r></w:p></w:body>'
+            '</w:document>',
+        )
+
+    doc = DOCXReader().read(str(path))
+
+    assert "Alternate main part" in to_markdown(doc)
+    assert doc.sections[0].elements[0].provenance.path == "word/trial.xml"
+    assert not doc.errors
+
+
 def test_reads_docx_html_alt_chunk_text(tmp_path):
     path = tmp_path / "alt-chunk-html.docx"
     _write_docx(
@@ -1526,6 +1551,35 @@ def test_rejects_docx_numbering_value_above_output_limit(tmp_path, monkeypatch):
 
     assert any("DOCX numbering value limit exceeded" in error for error in doc.errors)
     assert len(doc.sections[0].elements[0].text) < 100
+
+
+@pytest.mark.parametrize("number_format, marker", [("decimal", "0."), ("decimalZero", "00.")])
+def test_docx_numbering_start_zero_is_preserved(tmp_path, number_format, marker):
+    path = tmp_path / "zero-start.docx"
+    _write_docx(
+        path,
+        """
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body><w:p>
+            <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+            <w:r><w:t>First item</w:t></w:r>
+          </w:p></w:body>
+        </w:document>
+        """,
+        numbering_xml="""
+        <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0">
+            <w:start w:val="0"/><w:numFmt w:val="%s"/><w:lvlText w:val="%%1."/>
+          </w:lvl></w:abstractNum>
+          <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+        </w:numbering>
+        """ % number_format,
+    )
+
+    doc = DOCXReader().read(str(path))
+
+    assert not any("numbering value limit exceeded" in error for error in doc.errors)
+    assert marker + " First item" in to_markdown(doc)
 
 
 def test_rejects_docx_numbering_level_above_supported_limit(tmp_path, monkeypatch):

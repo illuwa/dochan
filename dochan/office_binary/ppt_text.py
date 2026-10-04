@@ -209,6 +209,11 @@ def apply_auto_numbers(blocks, data, errors=None):
     try:
         for block in blocks:
             for _start, _end, _level in block.paragraph_levels:
+                # StyleTextProp9Atom may contain extensions for only a prefix
+                # of the base paragraph runs. A complete boundary is not a
+                # truncated property; a partial trailing record still warns.
+                if cursor.pos == len(data):
+                    return
                 if len(block.paragraph_numbers) >= MAX_TEXT_RUNS:
                     raise ValueError('auto-number run limit exceeded')
                 mask = cursor.read('<I')

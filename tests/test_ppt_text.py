@@ -4,7 +4,7 @@ import struct
 from dochan.conversion import Provenance
 from dochan.office_binary.officeart import parse_records
 from dochan.office_binary.ppt_text import (
-    read_hyperlinks, render_text, shape_hyperlink, text_blocks,
+    apply_auto_numbers, read_hyperlinks, render_text, shape_hyperlink, text_blocks,
 )
 
 
@@ -29,6 +29,18 @@ def cf(count, mask=0, props=b''):
 
 def interaction(link_id):
     return rec(4082, rec(4083, struct.pack('<IIBBBBB3x', 0, link_id, 4, 0, 0, 0, 8)), container=True)
+
+
+def test_ppt_style9_complete_prefix_does_not_require_later_base_runs():
+    first = block('A', pf(2) + cf(2))
+    second = block('B', pf(2) + cf(2))
+    errors = []
+
+    apply_auto_numbers([first, second], struct.pack('<III', 0, 0, 0), errors)
+
+    assert first.paragraph_numbers == [None]
+    assert second.paragraph_numbers == []
+    assert not errors
 
 
 def test_ppt_text_preserves_unicode_and_separates_headers():

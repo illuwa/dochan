@@ -258,7 +258,8 @@ class DOCXReader:
         try:
             with OOXMLPackage(file_path) as package:
                 self._package = package
-                root = package.read_xml_part("word/document.xml")
+                self._document_part = self._main_document_part(package)
+                root = package.read_xml_part(self._document_part)
                 self._register_tree(root)
                 self._document_relationships = self._read_document_relationships(package)
                 self._active_relationships = self._document_relationships
@@ -291,7 +292,7 @@ class DOCXReader:
             return doc
 
         section = Section(
-            provenance=Provenance(source_format="docx", section=0, path="word/document.xml")
+            provenance=Provenance(source_format="docx", section=0, path=self._document_part)
         )
         body = root.find("w:body", namespaces=NS)
         if body is None:
@@ -587,11 +588,23 @@ class DOCXReader:
             )
         return elements
 
+    def _main_document_part(self, package: OOXMLPackage) -> str:
+        if package.exists("_rels/.rels"):
+            relationships = package.read_xml_part("_rels/.rels")
+            for rel in relationships.findall("rel:Relationship", namespaces=NS):
+                if (rel.get("Type", "").endswith("/officeDocument")
+                        and rel.get("TargetMode", "").lower() != "external"):
+                    target = self._validated_internal_relationship_target(
+                        "", rel.get("Target", ""), "_rels/.rels", rel.get("Id", ""))
+                    if target:
+                        return target
+        return "word/document.xml"
+
     def _parse_paragraph(
         self,
         p_elem,
         paragraph_index: int,
-        path: str = "word/document.xml",
+        path: str = None,
         structure_depth: int = 0,
         numbering=None,
     ) -> Paragraph:
@@ -600,7 +613,7 @@ class DOCXReader:
                 source_format="docx",
                 section=0,
                 paragraph=paragraph_index,
-                path=path,
+                path=path or self._document_part,
             )
         )
         para._source_element = p_elem
@@ -865,7 +878,6 @@ class DOCXReader:
             or not value.isdigit()
             or len(digits) > len(limit)
             or (len(digits) == len(limit) and digits > limit)
-            or digits == "0"
         ):
             self._record_numbering_limit(context)
             return 1
@@ -993,7 +1005,7 @@ class DOCXReader:
         return style
 
     def _read_document_relationships(self, package: OOXMLPackage) -> Dict[str, str]:
-        rels_path = "word/_rels/document.xml.rels"
+        rels_path = self._relationships_path(self._document_part)
         if not package.exists(rels_path):
             return {}
         root = package.read_xml_part(rels_path)
@@ -1010,25 +1022,25 @@ class DOCXReader:
                 continue
             if rel_type.endswith("/header") or rel_type.endswith("/footer"):
                 resolved = self._validated_internal_relationship_target(
-                    "word", target, rels_path, rel_id,
+                    posixpath.dirname(self._document_part), target, rels_path, rel_id,
                 )
                 if resolved:
                     relationships[rel_id] = resolved
             elif rel_type.endswith("/image") or rel_type.endswith("/chart") or rel_type.endswith("/chartEx") or rel_type.endswith("/diagramData"):
                 resolved = self._validated_internal_relationship_target(
-                    "word", target, rels_path, rel_id,
+                    posixpath.dirname(self._document_part), target, rels_path, rel_id,
                 )
                 if resolved:
                     relationships[rel_id] = resolved
             elif rel_type.endswith("/aFChunk"):
                 resolved = self._validated_internal_relationship_target(
-                    "word", target, rels_path, rel_id,
+                    posixpath.dirname(self._document_part), target, rels_path, rel_id,
                 )
                 if resolved:
                     relationships[rel_id] = resolved
             elif rel_type.endswith("/hyperlink"):
                 resolved = self._validated_internal_relationship_target(
-                    "word", target, rels_path, rel_id,
+                    posixpath.dirname(self._document_part), target, rels_path, rel_id,
                 )
                 if resolved:
                     relationships[rel_id] = resolved
@@ -1306,7 +1318,7 @@ class DOCXReader:
         return posixpath.join(part_dir, "_rels", f"{name}.rels")
 
     def _record_embedded_relationship_assets(self, package: OOXMLPackage):
-        rels_path = "word/_rels/document.xml.rels"
+        rels_path = self._relationships_path(self._document_part)
         if not package.exists(rels_path):
             return
         root = package.read_xml_part(rels_path)
@@ -1323,7 +1335,7 @@ class DOCXReader:
             ):
                 continue
             source_path = self._validated_internal_relationship_target(
-                "word", target, rels_path, rel_id,
+                posixpath.dirname(self._document_part), target, rels_path, rel_id,
             )
             if source_path:
                 self._record_embedded_asset(rel_id, source_path, rel_type)
@@ -1347,7 +1359,7 @@ class DOCXReader:
         count = getattr(self, "_numbering_counts", {}).get((num_id, ilvl))
         if count is None:
             count = level.start
-        if not 1 <= count <= MAX_NUMBERING_VALUE:
+        if not 0 <= count <= MAX_NUMBERING_VALUE:
             self._record_numbering_limit("list counter")
             return
         self._numbering_counts[(num_id, ilvl)] = min(
@@ -1419,11 +1431,13 @@ class DOCXReader:
         return max(level.start, next_count - 1)
 
     def _numbering_marker(self, fmt: str, count: int) -> str:
-        if not 1 <= count <= MAX_NUMBERING_VALUE:
+        if not 0 <= count <= MAX_NUMBERING_VALUE:
             self._record_numbering_limit("generated marker")
             return ""
         if fmt == "decimalZero":
             return str(count).zfill(2)
+        if count == 0:
+            return "0"
         if fmt == "lowerLetter":
             return self._letter_marker(count)
         if fmt == "upperLetter":
@@ -1983,10 +1997,11 @@ class DOCXReader:
         캐시하지 않으면 read_part 가 실패한다. 총량 상한으로 메모리 방어.
         """
         cache = {}
-        if not package.exists("word/_rels/document.xml.rels"):
+        rels_path = self._relationships_path(self._document_part)
+        if not package.exists(rels_path):
             return cache
         try:
-            root = package.read_xml_part("word/_rels/document.xml.rels")
+            root = package.read_xml_part(rels_path)
         except Exception:
             return cache
         total = 0
@@ -1995,7 +2010,8 @@ class DOCXReader:
                 continue
             try:
                 # 제어문자·외부 스킴이 섞인 조작된 대상은 여기서 걸러진다.
-                target = _resolve_internal_target("word", rel.get("Target", ""))
+                target = _resolve_internal_target(
+                    posixpath.dirname(self._document_part), rel.get("Target", ""))
             except ValueError:
                 continue
             if not target or target in cache or total >= _MAX_IMAGE_BYTES_TOTAL:
@@ -2261,7 +2277,7 @@ class DOCXReader:
         return Provenance(
             source_format="docx",
             cell=f"R{row_idx + 1}C{col_idx + 1}",
-            path="word/document.xml",
+            path=self._document_part,
         )
 
     def _row_grid_before(self, tr_elem) -> int:

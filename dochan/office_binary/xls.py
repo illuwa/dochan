@@ -1091,8 +1091,8 @@ def _parse_sheet_records(
             if first_row == last_row == first_col == last_col == 0:
                 sheet.dimension = None
             elif (
-                first_row < last_row <= MAX_BIFF_ROWS
-                and first_col < last_col <= MAX_BIFF_COLUMNS
+                first_row <= last_row <= MAX_BIFF_ROWS
+                and first_col <= last_col <= MAX_BIFF_COLUMNS
             ):
                 sheet.dimension = (first_row, last_row, first_col, last_col)
             else:

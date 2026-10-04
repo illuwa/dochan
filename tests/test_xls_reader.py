@@ -868,15 +868,33 @@ def test_parse_biff_workbook_accepts_empty_dimension_without_diagnostic():
     assert not doc.find_all("table")
 
 
-def test_parse_biff_workbook_rejects_partially_empty_dimension():
+@pytest.mark.parametrize(
+    "first_row,last_row,first_col,last_col",
+    [(0, 0, 0, 1), (16, 16, 4, 4), (0, 0, 0, 256), (0, 65536, 0, 0)],
+)
+def test_parse_biff_workbook_accepts_empty_row_dimension_with_column_endpoint(
+    first_row, last_row, first_col, last_col,
+):
     globals_part = _bof()
-    worksheet = _bof() + _dimension(0, 0, 0, 1) + _eof()
+    worksheet = _bof() + _dimension(first_row, last_row, first_col, last_col) + _eof()
     offset = len(globals_part) + len(_boundsheet(0, "Malformed"))
     workbook = globals_part + _boundsheet(offset, "Malformed") + worksheet
 
     doc = parse_biff_workbook(workbook)
 
-    assert any("dimension range out of bounds" in error.lower() for error in doc.errors)
+    assert not any("dimension range out of bounds" in error.lower() for error in doc.errors)
+    assert not doc.find_all("table")
+
+
+def test_parse_biff_workbook_accepts_empty_column_dimension_with_row_endpoint():
+    globals_part = _bof()
+    worksheet = _bof() + _dimension(0, 2, 0, 0) + _eof()
+    offset = len(globals_part) + len(_boundsheet(0, "Empty"))
+    workbook = globals_part + _boundsheet(offset, "Empty") + worksheet
+
+    doc = parse_biff_workbook(workbook)
+
+    assert not any("dimension range out of bounds" in error.lower() for error in doc.errors)
     assert not doc.find_all("table")
 
 

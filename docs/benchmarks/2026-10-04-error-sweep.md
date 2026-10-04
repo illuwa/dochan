@@ -2,7 +2,7 @@
 
 2026년 10월 4일 공개 코퍼스의 지원 형식 9종을 파일마다 독립 Python 프로세스로 읽었다. 파일당 제한은 120초, 동시 작업자는 10개였다. 입력 루트는 `corpus/hwp-public`, `corpus/press-pairs`, `corpus/press-pairs-holdout`, `corpus/pdfjs-src/test/pdfs`, `corpus/poi-src/test-data`, `corpus/lo-src`, `corpus/tika-test-docs` 순서다. 수집 도구는 `scripts/probe_error_sweep.py`이며 원본 본문은 저장하지 않았다. `.codex-work/error-sweep-before.jsonl`에는 오류 목록과 Markdown SHA-256·문자 수만 저장했다.
 
-13,494개 파일에서 수정 전 메시지 1,037건, 메시지 있는 파일 645개, 프로세스 예외와 시간 초과 각 0건이었다. PDF 수정 후 전체 예상 메시지는 1,031건이고 메시지 있는 파일은 641개다. 수정 후에는 PDF 1,599개만 다시 실행했다. 나머지 형식의 수치는 코드 변경이 없으므로 수정 전 수치와 같다.
+13,494개 파일에서 수정 전 메시지 1,037건, 메시지 있는 파일 645개, 프로세스 예외와 시간 초과 각 0건이었다. 리뷰 수정 후 전체 메시지는 1,010건이고 메시지 있는 파일은 625개다. PDF 1,599개는 앞선 수정 후, DOCX 1,784개·PPT 221개·XLS 721개는 이번 수정 후 같은 수집기로 각각 다시 실행했다. 코드가 바뀌지 않은 형식은 수정 전 수치를 유지했다. 출력 본문은 저장하지 않고 파일별 Markdown SHA-256·문자 수·오류 목록만 비교했다.
 
 ## 형식별 집계
 
@@ -12,10 +12,10 @@
 | HWPX | 2253 | 14→14 | 16→16 |
 | PDF | 1599 | 254→250 | 356→350 |
 | DOC | 492 | 103→103 | 205→205 |
-| DOCX | 1784 | 33→33 | 47→47 |
-| PPT | 221 | 94→94 | 190→190 |
+| DOCX | 1784 | 33→30 | 47→43 |
+| PPT | 221 | 94→87 | 190→182 |
 | PPTX | 545 | 15→15 | 15→15 |
-| XLS | 721 | 96→96 | 162→162 |
+| XLS | 721 | 96→90 | 162→153 |
 | XLSX | 356 | 25→25 | 28→28 |
 
 ## 원인 판정과 수정
@@ -27,9 +27,12 @@
 | DOC·XLS OLE 헤더 오류 | 독립 `file` 식별 결과 `word2.doc`는 WinWord 2.0, `testEXCEL_4.xls`는 구형 Excel Worksheet이며 OLE2 파일이 아니다. LO `CVE-2006-2389-1.doc`는 OpenPGP Public Key로 식별됐다. | 이 세 표본은 미지원 변종 또는 확장자 불일치로, OLE2 오류가 정당하다. 같은 메시지 틀의 다른 표본 전체에는 판정을 확장하지 않았다. | 수정하지 않았다. |
 | OOXML ZIP 실패 | 공개 `clusterfuzz` DOCX·XLSX·PPTX 각 1개를 표준 라이브러리 `zipfile`로 열면 모두 `BadZipFile`이 발생한다. | 확인한 세 표본은 손상 입력이다. 같은 틀의 나머지는 자동으로 확정하지 않았다. | 수정하지 않았다. |
 | PDF 텍스트 없음·이미지 경고 | `bitmap-halftone-skip-grid-template1.pdf`는 독립 `pdftotext` 출력이 1문자(페이지 구분자)이고 `pdfimages -list`에는 JBIG2 이미지가 있다. | 확인한 이 표본은 이미지 기반 경고가 정당하다. 같은 틀 전체 판정은 보류한다. | 수정하지 않았다. |
-| 정상 Office 문서의 잔여 경고 | POI `customGeo.ppt`와 PPTX 짝, `3dFormulas.xls`, `SimpleWithColours.xls`, 그리고 여러 XLS 그림 앵커 표본은 공개 정상 문서다. | PPT 스타일 8건, XLS DIMENSION 9건, 그림 앵커 8건은 결함 후보이나 레코드별 독립 기대값과 전후 출력 검증이 부족하다. | 이번 묶음에서는 수정하지 않았다. |
+| DOCX 주 문서 경로 | LO `tdf104713_undefinedStyles.docx`의 `_rels/.rels`는 `word/trial.xml`을 주 문서로 지정하고, 해당 파트에 `w:document` 본문이 있다. | `word/document.xml` 고정 경로 때문에 유효한 문서 전체가 빠지는 결함이다. | 루트 관계의 내부 대상을 안전하게 확인해 읽는다. 이 파일은 오류 1건이 사라지고 Markdown 0→253자로 복구됐다. 다른 DOCX 1,783개의 출력 해시는 같았다. |
+| DOCX 번호 시작값 0 | LO `tdf123163-1.docx`, `tdf162746.docx`, `tdf57589_hashColor.docx`의 `word/numbering.xml`에 `w:start w:val="0"`이 있다. | 0은 유효한 시작 정수인데 구현이 범위 오류로 처리했다. | 합성 문서에서 첫 표지 `0.`을 검증했다. 공개 3파일의 오류가 사라졌고 출력 해시는 유지됐다. 최대 번호 상한은 유지했다. |
+| PPT 스타일 확장 종료 | POI `customGeo.ppt`, `PictureTypeZero.ppt`에서 스타일 확장 데이터는 완결된 실행 단위 경계에서 끝나며 기본 문단 실행은 더 있다. | 기본 문단마다 확장이 반드시 있다고 가정한 허위 잘림 경고다. | 완결 경계에서 확장이 끝나면 중단하고, 부분 레코드는 계속 경고한다. PPT 221개 중 8개에서 경고가 사라졌고 221개 출력 해시가 모두 같았다. |
+| XLS DIMENSION 끝 경계 | POI `3dFormulas.xls`는 행 0:0·열 0:1, `SimpleWithColours.xls`는 행 0:4·열 0:0을 기록한다. `chartx.xls`는 열 끝 256을 사용한다. | 마지막 다음 위치인 `rwMac`·`colMac`과 빈 축의 같은 양끝을 거부한 결함이다. | 유효한 `처음 ≤ 끝 ≤ 형식 최대치`를 허용한다. 8파일에서 9건이 사라졌고 XLS 721개의 출력 해시가 모두 같았다. |
 
-합성 회귀 테스트 `test_endnote_numeric_table_cells_do_not_exhaust_reference_limit`은 수정 전에 실패하고 수정 뒤 통과했다. 미주 기하 경고의 이름을 바로잡는 테스트와 수집 도구 테스트도 통과했다. 내부 실물 PDF 80개는 수정 전후 메시지 0건·예외 0건으로 동일했다. 전체 테스트 결과는 최종 보고서에 기록한다.
+합성 회귀 테스트는 수정 전에 실패하고 수정 뒤 통과했다. 내부 실물 PDF 80개는 앞선 수정 전후 메시지 0건·예외 0건으로 동일했다. 이번 수정에서 공유 모델·출력 코드는 바꾸지 않았다. 전체 테스트 결과는 최종 보고서에 기록한다.
 
 ## 메시지 틀 전후 빈도
 
@@ -40,10 +43,10 @@
 | 메시지 틀 | 전 | 후 | 상태 | 자동 추출 표본(최대 3개) |
 | --- | ---: | ---: | --- | --- |
 | WARN: HWP [chart:implicit_categories] series #: numbered points from # | 8 | 8 | 미판정 | `corpus/hwp-public/hwp/pr360-edward.hwp`, `corpus/hwp-public/hwp/2022년 국립국어원 업무계획.hwp` |
-| ERR: 문서 파싱 실패: error('Error -# while decompressing data: invalid stored block lengths') | 2 | 2 | 미판정 | `corpus/hwp-public/hwp/hwpers-minimal_base_template.hwp`, `corpus/hwp-public/hwp/hwpers-converted_output.hwp` |
+| ERR: 문서 파싱 실패: error('Error -# while decompressing data: invalid stored block lengths') | 2 | 2 | zlib 래핑 변형·지원 보류 | `corpus/hwp-public/hwp/hwpers-minimal_base_template.hwp`, `corpus/hwp-public/hwp/hwpers-converted_output.hwp` |
 | WARN: HWP embedded CFB size limit or truncated header | 2 | 2 | 미판정 | `corpus/hwp-public/hwp/nts-260121 “나도 모르게 신고되는 소득“ 국세청 「명의도용 안심차단 서비스」로 예방하세요.hwp`, `corpus/hwp-public/hwp/bitmap.hwp` |
 | ERR: 암호화/DRM 문서는 직접 파싱할 수 없음 | 1 | 1 | 보호 후보 | `corpus/hwp-public/hwp/password-12345.hwp` |
-| ERR: 지원하지 않는 ZIP 문서 형식 | 1 | 1 | 미판정 | `corpus/hwp-public/hwpx/ministry-[별표 3] 국가재난관리지원기업 지정 공모 평가 기준 및 평가 방법(제7조 관련)(국가재난관리지원기업 및 국가재난관리물류기업 지정 공모 운영 지침).hwp` |
+| ERR: 지원하지 않는 ZIP 문서 형식 | 1 | 1 | ZIP 중앙 디렉터리 손상 확인 | `corpus/hwp-public/hwpx/ministry-[별표 3] 국가재난관리지원기업 지정 공모 평가 기준 및 평가 방법(제7조 관련)(국가재난관리지원기업 및 국가재난관리물류기업 지정 공모 운영 지침).hwp` |
 | WARN: HWP OLE BinData reference missing | 1 | 1 | 미판정 | `corpus/hwp-public/hwp/rhwp-text_footnote_tail_overpagination.hwp` |
 | WARN: HWP revision partial [bounds]; revision_mode=preserve; unresolved content preserved | 1 | 1 | 미판정 | `corpus/press-pairs/156784212.hwp` |
 | WARN: HWP 그림 #개가 크기 상한을 넘어 생략됨: BinData/BIN#C.bmp | 1 | 1 | 미판정 | `corpus/hwp-public/hwp/2026년 2분기 가축동향조사 결과 보도자료(최종).hwp` |
@@ -54,13 +57,13 @@
 | 메시지 틀 | 전 | 후 | 상태 | 자동 추출 표본(최대 3개) |
 | --- | ---: | ---: | --- | --- |
 | ERR: 암호화된 HWPX 문서 — 암호가 필요함 | 3 | 3 | 보호 후보 | `corpus/hwp-public/hwpx/encrypt.hwpx`, `corpus/press-pairs/156783589.hwpx`, `corpus/press-pairs/156784075.hwpx` |
-| ERR: HWPX 파싱 실패: HWPX mimetype marker is missing | 2 | 2 | 미판정 | `corpus/hwp-public/hwpx/dummy.hwpx`, `corpus/hwp-public/hwpx/sample.hwpx` |
+| ERR: HWPX 파싱 실패: HWPX mimetype marker is missing | 2 | 2 | 두 ZIP에 marker 없음 확인·규격 해석 보류 | `corpus/hwp-public/hwpx/dummy.hwpx`, `corpus/hwp-public/hwpx/sample.hwpx` |
 | WARN: HWPX revision info [duplicate-end] Contents/section#.xml: paragraph##/run##/deleteEnd##; occurrences=#; revision_mode=preserve; adjacent duplicate ignored | 2 | 2 | 미판정 | `corpus/hwp-public/hwpx/korea-mid-30-7_(즉시보도_통전지)농촌진흥청_승용마,_제주_자치경찰단_기마대에_첫_도입(축산원).hwpx`, `corpus/hwp-public/hwpx/admrul-관세조사-운영-훈령.hwpx` |
 | WARN: HWPX revision info [formatting] Contents/header.xml: CharShape does not change text projection; occurrences=#; revision_mode=preserve; text projection unchanged | 2 | 2 | 미판정 | `corpus/press-pairs-holdout/156782881.hwpx`, `corpus/press-pairs-holdout/156782882.hwpx` |
 | [chart:shared_categories] series #: categories taken from another series (Chart/chart#.xml, chart ##) | 2 | 2 | 미판정 | `corpus/hwp-public/hwpx/rhwp-1790387_prep_final_report.hwpx` |
 | 이미지 BinData/image#.bmp 크기 초과: # bytes | 2 | 2 | 미판정 | `corpus/hwp-public/hwpx/2026년 2분기 가축동향조사 결과 보도자료(최종).hwpx`, `corpus/press-pairs/156783682.hwpx` |
 | ERR: HWPX invalid table span value | 1 | 1 | 미판정 | `corpus/hwp-public/hwpx/hwpx-mcp-server-hwpx_mcp_test.hwpx` |
-| ERR: 유효하지 않은 HWPX 파일 | 1 | 1 | 미판정 | `corpus/hwp-public/hwpx/nts-20250512 봄 향기 가득한 날, 성실납세에 아름다운 음악으로 보답.hwpx` |
+| ERR: 유효하지 않은 HWPX 파일 | 1 | 1 | ZIP 중앙 디렉터리 손상 확인 | `corpus/hwp-public/hwpx/nts-20250512 봄 향기 가득한 날, 성실납세에 아름다운 음악으로 보답.hwpx` |
 | WARN: HWPX revision info [formatting] Contents/header.xml: ParaShape does not change text projection; occurrences=#; revision_mode=preserve; text projection unchanged | 1 | 1 | 미판정 | `corpus/hwp-public/hwpx/admrul-관세조사-운영-훈령.hwpx` |
 
 ### PDF
@@ -78,7 +81,7 @@
 | WARN: startxref 를 찾지 못함 — 객체 스캔으로 대체 | 8 | 8 | 미판정 | `corpus/pdfjs-src/test/pdfs/scan-bad.pdf`, `corpus/pdfjs-src/test/pdfs/issue19800.pdf`, `corpus/pdfjs-src/test/pdfs/issue15590.pdf` |
 | WARN: 페이지 트리를 찾지 못함 | 7 | 7 | 미판정 | `corpus/pdfjs-src/test/pdfs/GHOSTSCRIPT-698804-1-fuzzed.pdf`, `corpus/pdfjs-src/test/pdfs/operator_list_cycle.pdf`, `corpus/pdfjs-src/test/pdfs/issue19484_1.pdf` |
 | WARN: PDF 링크 목적지를 페이지로 풀지 못함 | 6 | 6 | 미판정 | `corpus/pdfjs-src/test/pdfs/issue2462.pdf`, `corpus/pdfjs-src/test/pdfs/bug1529502.pdf`, `corpus/pdfjs-src/test/pdfs/issue10640.pdf` |
-| WARN: 객체 # 파싱 실패: 사전 키는 이름이어야 함 | 5 | 5 | 미판정 | `corpus/press-pairs/156784146.pdf`, `corpus/press-pairs-holdout/156782882.pdf`, `corpus/pdfjs-src/test/pdfs/issue11549_reduced.pdf` |
+| WARN: 객체 # 파싱 실패: 사전 키는 이름이어야 함 | 5 | 5 | 두 표본의 중복 닫는 괄호 확인·나머지 미판정 | `corpus/press-pairs/156784146.pdf`, `corpus/press-pairs-holdout/156782882.pdf`, `corpus/pdfjs-src/test/pdfs/issue11549_reduced.pdf` |
 | WARN: 폰트 Type#TTF#: ToUnicode 없는 CID 폰트 — 해당 텍스트를 추출할 수 없음 | 5 | 5 | 미판정 | `corpus/pdfjs-src/test/pdfs/issue11915.pdf` |
 | WARN: PDF 카탈로그(Root)를 찾지 못함 | 4 | 4 | 미판정 | `corpus/pdfjs-src/test/pdfs/issue18986.pdf`, `corpus/pdfjs-src/test/pdfs/poppler-742-0-fuzzed.pdf`, `corpus/pdfjs-src/test/pdfs/REDHAT-1531897-0.pdf` |
 | WARN: FlateDecode 실패: Error -# while decompressing data: incorrect header check | 3 | 3 | 미판정 | `corpus/pdfjs-src/test/pdfs/issue19484_1.pdf`, `corpus/pdfjs-src/test/pdfs/issue19484_2.pdf`, `corpus/pdfjs-src/test/pdfs/REDHAT-1531897-0.pdf` |
@@ -90,7 +93,7 @@
 | WARN: 폰트 TT#: ToUnicode 없는 CID 폰트 — 해당 텍스트를 추출할 수 없음 | 3 | 3 | 미판정 | `corpus/pdfjs-src/test/pdfs/ThuluthFeatures.pdf` |
 | WARN: ASCII#Decode 실패 | 2 | 2 | 손상 의심 | `corpus/pdfjs-src/test/pdfs/PDFBOX-3148-2-fuzzed.pdf`, `corpus/pdfjs-src/test/pdfs/poppler-90-0-fuzzed.pdf` |
 | WARN: FlateDecode 실패: Error -# while decompressing data: incorrect data check | 2 | 2 | 미판정 | `corpus/pdfjs-src/test/pdfs/issue11651.pdf`, `corpus/pdfjs-src/test/pdfs/issue13316_reduced.pdf` |
-| WARN: PDF 스트림이 해제 한도를 초과하여 잘림 | 2 | 2 | 미판정 | `corpus/press-pairs/156783715.pdf`, `corpus/press-pairs-holdout/156783096.pdf` |
+| WARN: PDF 스트림이 해제 한도를 초과하여 잘림 | 2 | 2 | 한 표본의 이미지 스트림 확인·다른 표본 미판정 | `corpus/press-pairs/156783715.pdf`, `corpus/press-pairs-holdout/156783096.pdf` |
 | WARN: 폰트 F#: ToUnicode 없는 CID 폰트 — 일부 문자의 대응을 확인할 수 없음 | 2 | 2 | 미판정 | `corpus/pdfjs-src/test/pdfs/bug920426.pdf`, `corpus/pdfjs-src/test/pdfs/issue11768_reduced.pdf` |
 | ERR: PDF 헤더(%PDF-)를 찾지 못함 | 1 | 1 | 미판정 | `corpus/pdfjs-src/test/pdfs/bug1606566.pdf` |
 | WARN: ASCIIHexDecode 실패 | 1 | 1 | 손상 의심 | `corpus/pdfjs-src/test/pdfs/poppler-90-0-fuzzed.pdf` |
@@ -180,12 +183,12 @@
 
 | 메시지 틀 | 전 | 후 | 상태 | 자동 추출 표본(최대 3개) |
 | --- | ---: | ---: | --- | --- |
-| WARN: DOCX image part not found: word/media/image#.jpg | 14 | 14 | 미판정 | `corpus/lo-src/sw/qa/extras/layout/data/tdf123163-1.docx` |
+| WARN: DOCX image part not found: word/media/image#.jpg | 14 | 14 | ZIP에 이미지 14개 없음 확인 | `corpus/lo-src/sw/qa/extras/layout/data/tdf123163-1.docx` |
 | ERR: DOCX package parse failed: File is not a zip file | 7 | 7 | 손상 의심 | `corpus/poi-src/test-data/document/crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx`, `corpus/poi-src/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5313273089884160.docx`, `corpus/poi-src/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5569740188549120.docx` |
 | ERR: 암호화된 문서 — 암호가 필요하거나 암호가 올바르지 않습니다. | 7 | 7 | 보호 후보 | `corpus/poi-src/test-data/document/bug53475-password-is-solrcell.docx`, `corpus/poi-src/test-data/document/bug53475-password-is-pass.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/Encrypted_MSO2010_abc.docx` |
 | ERR: DOCX package parse failed: Bad magic number for central directory | 6 | 6 | 손상 의심 | `corpus/poi-src/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5166796835258368.docx`, `corpus/poi-src/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-6442791109263360.docx`, `corpus/poi-src/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-4791943399604224.docx` |
-| ERR: DOCX package parse failed: "There is no item named '<name>' in the archive" | 4 | 4 | 미판정 | `corpus/lo-src/sw/qa/extras/uiwriter/data/tdf132596.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf171025_pageAfter.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf171038_pageAfter.docx` |
-| ERR: DOCX numbering value limit exceeded (start value) | 3 | 3 | 미판정 | `corpus/lo-src/sw/qa/extras/layout/data/tdf123163-1.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf162746.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf57589_hashColor.docx` |
+| ERR: DOCX package parse failed: "There is no item named '<name>' in the archive" | 4 | 3 | 주 문서 경로 결함 1건 수정·확장자만 DOCX인 ODT 3건 잔존 | `corpus/lo-src/sw/qa/extras/uiwriter/data/tdf132596.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf171025_pageAfter.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf171038_pageAfter.docx` |
+| ERR: DOCX numbering value limit exceeded (start value) | 3 | 0 | 시작값 0 허용으로 수정 | `corpus/lo-src/sw/qa/extras/layout/data/tdf123163-1.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf162746.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf57589_hashColor.docx` |
 | WARN: DOCX SmartArt text unavailable: word/diagrams/data#.xml | 3 | 3 | 미판정 | `corpus/lo-src/sw/qa/extras/ooxmlexport/data/fdo73227.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/tdf135906.docx`, `corpus/lo-src/sw/qa/extras/ooxmlexport/data/fdo77718.docx` |
 | ERR: DOCX package parse failed: package part could not be decoded: word/styles.xml: Error -# while decompressing data: invalid distance too far back | 1 | 1 | 미판정 | `corpus/lo-src/sw/qa/extras/uiwriter/data/ofz18563.docx` |
 | WARN: DOCX image part not found: word/media/image#.jpeg | 1 | 1 | 미판정 | `corpus/lo-src/sw/qa/extras/uiwriter/data/tdf157131.docx` |
@@ -200,7 +203,7 @@
 | WARN: PPT incomplete structure supplemented with legacy text; slide association unverified | 11 | 11 | 미판정 | `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6032591399288832.ppt`, `corpus/poi-src/test-data/slideshow/missing_core_records.ppt`, `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-4630915954114560.ppt` |
 | WARN: PPT malformed SummaryInformation ignored | 9 | 9 | 손상 의심 | `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6032591399288832.ppt`, `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6710128412590080.ppt`, `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-5962760801091584.ppt` |
 | ERR: PPT OLE 파일 열기 실패: OLE/CFB: not an OLE# structured storage file | 8 | 8 | 미판정 | `corpus/lo-src/sd/qa/unit/data/ppt/fail/CVE-2010-0033-1.ppt`, `corpus/lo-src/sd/qa/unit/data/ppt/pass/CVE-2006-3660-1.ppt`, `corpus/lo-src/sd/qa/unit/data/ppt/pass/EDB-39395-1.ppt` |
-| WARN: PPT text truncated style | 8 | 8 | 미판정 | `corpus/poi-src/test-data/slideshow/PictureTypeZero.ppt`, `corpus/poi-src/test-data/slideshow/customGeo.ppt`, `corpus/poi-src/test-data/slideshow/br.com.diversas.palestras_Nelson_20-_20Temas_20Diversos_20XXXVI_pmrg_462538ba7a204-programa_alianca_12-04-2007.ppt` |
+| WARN: PPT text truncated style | 8 | 0 | 스타일 확장 종료 경계 수정 | `corpus/poi-src/test-data/slideshow/PictureTypeZero.ppt`, `corpus/poi-src/test-data/slideshow/customGeo.ppt`, `corpus/poi-src/test-data/slideshow/br.com.diversas.palestras_Nelson_20-_20Temas_20Diversos_20XXXVI_pmrg_462538ba7a204-programa_alianca_12-04-2007.ppt` |
 | ERR: 암호화된 문서 PPT: 암호가 없거나 올바르지 않거나 암호화 구조가 손상되었습니다 | 6 | 6 | 보호 후보 | `corpus/poi-src/test-data/slideshow/ppt_with_png_encrypted.ppt`, `corpus/poi-src/test-data/slideshow/Password_Protected-np-hello.ppt`, `corpus/poi-src/test-data/slideshow/Password_Protected-hello.ppt` |
 | WARN: PPT Current User stream unavailable: Current User size mismatch: declared=#, read=# bytes | 6 | 6 | 손상 의심 | `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-4983252485210112.ppt`, `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6192650357112832.ppt`, `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-5018229722382336.ppt` |
 | WARN: OLE/CFB 컨테이너 손상 복구: inaccessible directory branch omitted (/) | 5 | 5 | 손상 의심 | `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6032591399288832.ppt`, `corpus/poi-src/test-data/slideshow/clusterfuzz-testcase-minimized-POIHSLFFuzzer-6710128412590080.ppt`, `corpus/lo-src/sd/qa/unit/data/ppt/pass/crash-3.ppt` |
@@ -273,8 +276,8 @@
 | ERR: XLS OLE 파일 열기 실패: OLE/CFB: not an OLE# structured storage file | 26 | 26 | 미판정 | `corpus/poi-src/test-data/spreadsheet/testEXCEL_4.xls`, `corpus/poi-src/test-data/spreadsheet/testEXCEL_3.xls`, `corpus/lo-src/sc/qa/unit/data/xls/tdf158483.xls` |
 | WARN: XLS formula B#: unknown variable function # | 17 | 17 | 미판정 | `corpus/poi-src/test-data/spreadsheet/60405.xls` |
 | WARN: XLS formula A#: unknown variable function # | 13 | 13 | 미판정 | `corpus/poi-src/test-data/spreadsheet/60405.xls` |
-| ERR: XLS DIMENSION range out of bounds: rows=#:#, cols=#:# | 9 | 9 | 미판정 | `corpus/poi-src/test-data/spreadsheet/3dFormulas.xls`, `corpus/poi-src/test-data/spreadsheet/47251_1.xls`, `corpus/poi-src/test-data/spreadsheet/LIBRE_OFFICE-94379-0.zip-57.xls` |
-| WARN: XLS drawing client anchor out of bounds | 8 | 8 | 미판정 | `corpus/poi-src/test-data/spreadsheet/12843-1.xls`, `corpus/poi-src/test-data/spreadsheet/29982.xls`, `corpus/poi-src/test-data/spreadsheet/ar.org.apsme.www_Form%20Inscripcion%20Curso%20NO%20Socios.xls` |
+| ERR: XLS DIMENSION range out of bounds: rows=#:#, cols=#:# | 9 | 0 | 같은 양끝과 마지막 다음 위치 허용으로 수정 | `corpus/poi-src/test-data/spreadsheet/3dFormulas.xls`, `corpus/poi-src/test-data/spreadsheet/47251_1.xls`, `corpus/poi-src/test-data/spreadsheet/LIBRE_OFFICE-94379-0.zip-57.xls` |
+| WARN: XLS drawing client anchor out of bounds | 8 | 8 | 두 표본의 원시 앵커 초과 확인·나머지 미판정 | `corpus/poi-src/test-data/spreadsheet/12843-1.xls`, `corpus/poi-src/test-data/spreadsheet/29982.xls`, `corpus/poi-src/test-data/spreadsheet/ar.org.apsme.www_Form%20Inscripcion%20Curso%20NO%20Socios.xls` |
 | ERR: XLS stream validation failed: Workbook size mismatch: declared=#, read=# bytes | 7 | 7 | 손상 의심 | `corpus/poi-src/test-data/spreadsheet/clusterfuzz-testcase-minimized-POIHSSFFuzzer-6483562584932352.xls`, `corpus/poi-src/test-data/spreadsheet/clusterfuzz-testcase-minimized-POIHSSFFuzzer-5175219985448960.xls`, `corpus/poi-src/test-data/spreadsheet/clusterfuzz-testcase-minimized-POIHSSFFuzzer-4819588401201152.xls` |
 | WARN: XLS chart truncated BIFF record | 7 | 7 | 미판정 | `corpus/poi-src/test-data/spreadsheet/cf9f845e73447b092477d0472402a5baea4b8c9f.xls`, `corpus/poi-src/test-data/spreadsheet/clusterfuzz-testcase-minimized-POIHSSFFuzzer-4657005060816896.xls`, `corpus/poi-src/test-data/spreadsheet/61300.xls` |
 | WARN: XLS chart unsupported BRAI formula without cache | 7 | 7 | 미판정 | `corpus/poi-src/test-data/spreadsheet/52527.xls`, `corpus/poi-src/test-data/spreadsheet/25183.xls`, `corpus/poi-src/test-data/spreadsheet/26100.xls` |
@@ -334,8 +337,26 @@
 | WARN: OLE/CFB 컨테이너 손상 복구: stream size exceeds available sectors (EncryptedPackage) | 1 | 1 | 손상 의심 | `corpus/poi-src/test-data/spreadsheet/crash-9bf3cd4bd6f50a8a9339d363c2c7af14b536865c.xlsx` |
 | WARN: XLSX cell text limit exceeded (# characters, repeated shared strings); later cell text omitted | 1 | 1 | 미판정 | `corpus/poi-src/test-data/spreadsheet/poc-shared-strings.xlsx` |
 
+## 독립 리뷰 A~M 판정
+
+| 후보 | 관찰한 바이트·패키지 근거 | 최종 판정 |
+| --- | --- | --- |
+| A PDF 사전 키 | `156784146.pdf`의 객체 21과 `156782882.pdf`의 객체 270에서 URI 문자열 뒤에 `))`가 있고 다음 토큰은 `/S`다. 문자열 닫는 괄호가 하나 남으므로 ISO 32000 사전 키 구문에 맞지 않는다. | 확인한 두 경고는 정당하다. 같은 틀의 나머지 세 건은 미판정이다. |
+| B PDF 해제 한도 | `156783715.pdf`의 압축 길이 2,734,096바이트인 `/Subtype /Image` 스트림은 RGB 3598×5089×8비트다. 예상 원시 픽셀 54,930,666바이트가 50MiB 한도를 넘는다. PDF Markdown은 2,909자이며 HWPX 짝은 4,235자다. | 제한된 것은 이미지 XObject다. 본문 스트림 잘림의 근거는 없으며 한도는 유지한다. 다른 한 건은 미판정이다. |
+| C 확장자 불일치 ZIP | 해당 `.hwp`는 `PK`로 시작하지만 표준 `zipfile`도 중앙 디렉터리를 찾지 못한다. | 읽을 수 있는 HWPX/OOXML 패키지가 아니므로 현재 실패가 타당하다. XLSB 확장자 불일치도 미지원 변종으로 남긴다. |
+| D HWPX ZIP | 해당 8,639,368바이트 파일에는 ZIP 종료 레코드 `PK 05 06`가 없다. 표준 `zipfile.is_zipfile`도 거짓이다. | 손상된 ZIP으로 판정한다. |
+| E HWPX marker | `dummy.hwpx`와 `sample.hwpx`에는 섹션 XML과 `content.hpf`가 있지만 `mimetype` 엔트리가 없다. | 콘텐츠 일부는 읽을 수 있으나 marker 없는 패키지를 OWPML 정규 패키지로 허용할 명세 근거를 이번 오프라인 조사에서 확인하지 못했다. 관대한 복구는 보류한다. |
+| F HWP 압축 | 두 HWP의 `FileHeader` 압축 비트는 1이다. `DocInfo`와 `BodyText/Section0`은 `78 9c`로 시작하며 zlib 래핑 해제는 되지만 기존 raw DEFLATE 해제는 실패한다. | 다른 생성기의 압축 변형을 확인했다. 한컴 규격의 허용 여부와 문서별 총 해제 예산 설계가 확인되기 전에는 폴백을 추가하지 않는다. |
+| G DOCX 주 부품 | 오류 4건 중 3건은 `mimetype=application/vnd.oasis.opendocument.text`이거나 `content.xml`을 가진 확장자 불일치 ODT다. `tdf104713_undefinedStyles.docx`는 루트 관계가 실제 `word/trial.xml`을 가리킨다. | 유효한 OOXML 한 건을 고쳤다. 나머지 세 건은 DOCX 본문 부품이 없어 유지한다. |
+| H DOCX 번호 시작값 | 세 LO 표본 모두 `word/numbering.xml`에 `w:start w:val="0"`을 담는다. | 0을 허용해 경고 3건을 제거했다. 실제 Markdown 해시는 세 건 모두 같다. |
+| I DOCX 이미지 | `tdf123163-1.docx` 관계는 `word/media/image1.jpg`부터 `image14.jpg`를 참조하지만 ZIP에는 `/media/` 부품이 하나도 없다. | 이 14건의 경고는 대상 부품 부재를 정확히 알린다. 다른 이미지 경고는 미판정이다. |
+| J PPT 스타일 | `customGeo.ppt`와 `PictureTypeZero.ppt`의 StyleTextProp9Atom 읽기는 각각 완결된 12·16·24·28·36·42바이트 경계에서 끝나며 기본 문단 실행만 더 남는다. | 완결 경계는 잘림이 아니다. 수정 뒤 8건이 사라졌고 출력 해시는 모두 같다. |
+| K XLS DIMENSION | `3dFormulas.xls` 등의 `rwMac` 또는 `colMac`은 빈 축에서 시작과 같고 `chartx.xls`의 `colMac`은 256이다. 값은 마지막 사용 위치 다음의 배타적 경계다. | 같은 양끝과 최대 경계를 허용해 9건을 제거했다. 출력 해시는 모두 같다. |
+| L XLS 함수 번호 | `60405.xls`의 번호 32811 등은 `0x8000` 이상의 값이다. 현재 [MS-XLS] Ftab 자료에는 0x0000~0x017B만 있고 POI 테스트는 `Macro1`·`Macro2` 텍스트만 단언한다. | Cetab 명령 번호와 일반 함수의 대응을 확인하지 못해 미판정으로 남긴다. 임의로 상위 비트를 지우지 않는다. |
+| M XLS 그림 앵커 | `29982.xls`의 원시 ClientAnchor에는 `dy=612`가 있어 현재 256 경계를 넘고, `12843-1.xls`의 일부 앵커에는 열 값 2417 이상이 있다. | 두 표본에서 경고 조건은 실제 바이트와 일치한다. Excel의 특수 배치 의미와 나머지 여섯 표본은 미판정이므로 경고를 유지한다. |
+
 ## 판정 한계와 남은 일
 
-이번 실행은 지원 확장자 9종 전체를 수집했지만, 254개 전후 합집합 메시지 틀의 모든 표본 2~3개를 독립 도구와 원시 구조로 열어보지는 못했다. 위의 미판정·후보 상태를 확정 판정으로 사용하면 안 된다. 특히 PDF xref 스트림 대체 16건, PPT 스타일 잘림 8건, XLS DIMENSION 범위 9건, XLS 그림 앵커 8건은 정상 파일 표본과 손상 표본을 나누어 재현해야 한다. PDF 미주 기하 검사 경고가 남은 두 문서는 공간 후보 선별을 개선하되 검사량 상한을 유지해야 한다. README의 Supported Elements 상태는 이 오류 정리만으로 바꾸지 않는다.
+이번 실행은 지원 확장자 9종 전체를 수집했지만, 254개 전후 합집합 메시지 틀의 모든 표본 2~3개를 독립 도구와 원시 구조로 열어보지는 못했다. 위의 미판정·후보 상태를 확정 판정으로 사용하면 안 된다. PDF xref 스트림 대체 16건, XLS 그림 앵커의 나머지 표본, Cetab 함수 번호, marker 없는 HWPX와 zlib 래핑 HWP의 규격 판단이 남았다. PDF 미주 기하 검사 경고가 남은 두 문서는 공간 후보 선별을 개선하되 검사량 상한을 유지해야 한다. README의 Supported Elements 상태는 이 오류 정리만으로 바꾸지 않는다.
 
 수집 파일은 `.codex-work/` 아래에만 있고 저장소에 공개·내부 원본 문서를 복사하지 않았다. 실물 전후 비교는 해시·문자 수·오류 목록으로만 수행했다.

@@ -11,6 +11,7 @@ class Equation:
     latex_override: str = ""
     # Explicit source syntax when supplied by a reader; empty preserves legacy output.
     script_format: str = ""
+    treat_as_char: bool = False
 
     @property
     def latex(self) -> str:

@@ -970,10 +970,26 @@ class HWPXParser:
         elements = []
         # Only text in this paragraph's own runs counts; nested cell/note text
         # must not turn an equation-only host paragraph into inline math.
+        def visible_run_text(part):
+            tag = _local_tag(part.tag)
+            if tag == 't':
+                return _text_of_t(part)
+            if tag == 'compose':
+                return part.get('composeText', '') or ''
+            if tag == 'dutmal':
+                return _dutmal_text(part)
+            if tag in FORM_TAGS:
+                form = self._parse_form_run(part)
+                return form.text if form is not None else ''
+            if tag == 'ctrl':
+                return ''.join(visible_run_text(child) for child in _selected_children(part)
+                               if _local_tag(child.tag) in FORM_TAGS)
+            return ''
+
         has_other_text = any(
-            _text_of_t(part).strip()
+            visible_run_text(part).strip()
             for child in _selected_children(p_elem) if _local_tag(child.tag) == 'run'
-            for part in _selected_children(child) if _local_tag(part.tag) == 't'
+            for part in _selected_children(child)
         )
 
         # 하이퍼링크 상태는 문단 안에서만 유효하다. 중첩 호출(표 셀, 도형)을 위해 저장/복원.
@@ -985,6 +1001,7 @@ class HWPXParser:
             runs = []
             plain_parts = []
             deferred = []
+            direct_equation_ids = set()
 
             def flush_plain():
                 if plain_parts:
@@ -997,6 +1014,24 @@ class HWPXParser:
                 nonlocal runs
                 flush_plain()
                 if runs:
+                    if direct_equation_ids:
+                        next_text = [None] * len(runs)
+                        source = None
+                        for index in range(len(runs) - 1, -1, -1):
+                            next_text[index] = source
+                            run = runs[index]
+                            if run.equation is None and run.text.strip() and not run.note_ref:
+                                source = run
+                        previous = None
+                        for index, run in enumerate(runs):
+                            if id(run) in direct_equation_ids:
+                                source = previous or next_text[index]
+                                if source is not None:
+                                    for field in ('bold', 'italic', 'underline', 'strikeout',
+                                                  'superscript', 'subscript', 'font_size_pt'):
+                                        setattr(run, field, getattr(source, field))
+                            elif run.equation is None and run.text.strip() and not run.note_ref:
+                                previous = run
                     para = self._make_paragraph(runs, p_elem)
                     if para.text.strip():
                         elements.append(para)
@@ -1004,6 +1039,7 @@ class HWPXParser:
                         # 바깥 문단의 대기 목록에 다시 넣지 않는다.
                         self._placed_pictures.update(id(item) for item in deferred)
                     runs = []
+                    direct_equation_ids.clear()
                 elements.extend(deferred)
                 deferred.clear()
 
@@ -1047,9 +1083,17 @@ class HWPXParser:
                                 plain_parts.append(ctrl_elem.text)
                             continue
                         if (isinstance(ctrl_elem, Equation) and has_other_text
-                                and getattr(ctrl_elem, '_treat_as_char', False)):
+                                and ctrl_elem.treat_as_char):
                             flush_plain()
-                            runs.append(TextRun(text=ctrl_elem.latex, equation=ctrl_elem))
+                            source = next((run for run in reversed(runs)
+                                           if run.equation is None and run.text.strip()), TextRun())
+                            equation_run = TextRun(
+                                text=ctrl_elem.latex, equation=ctrl_elem,
+                                bold=source.bold, italic=source.italic,
+                                underline=source.underline, strikeout=source.strikeout,
+                                font_size_pt=source.font_size_pt)
+                            runs.append(equation_run)
+                            direct_equation_ids.add(id(equation_run))
                             continue
                         flush_plain()
                         if isinstance(ctrl_elem, Image):
@@ -1214,7 +1258,11 @@ class HWPXParser:
                 flush()
                 equation = _parse_equation_elem(child)
                 if has_other_text and _equation_treat_as_char(child):
-                    results.append(TextRun(text=equation.latex, equation=equation))
+                    results.append(TextRun(
+                        text=equation.latex, equation=equation,
+                        bold=bold, italic=italic, underline=underline,
+                        strikeout=strikeout, font_size_pt=font_size_pt,
+                        superscript=superscript, subscript=subscript))
                 else:
                     results.append(equation)
             elif tag == 'chart':
@@ -1336,7 +1384,7 @@ class HWPXParser:
                 return self._parse_table_elem(child)
             elif tag == 'equation':
                 equation = _parse_equation_elem(child)
-                equation._treat_as_char = _equation_treat_as_char(child)
+                equation.treat_as_char = _equation_treat_as_char(child)
                 return equation
             elif tag == 'pic':
                 return self._parse_picture_elem(child)

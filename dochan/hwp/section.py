@@ -107,29 +107,38 @@ def _apply_link_ranges(runs, ranges, *, max_runs=None, on_limit=None):
     return result
 
 
-def _insert_inline_equation(runs, position, equation):
-    """Insert at a PARA_TEXT offset while preserving character shape boundaries."""
+def _merge_inline_equations(runs, equations):
+    """Merge PARA_TEXT offsets with shaped runs in source order once."""
+    if not equations:
+        return runs
+    total = sum(len(run.text) for run in runs)
+    # Python's stable sort preserves control order at equal offsets.
+    events = sorted(((max(0, min(position, total)), equation)
+                     for position, equation in equations), key=lambda item: item[0])
     result = []
+    event_index = 0
     offset = 0
-    inserted = False
-    for run in runs:
-        if run.equation is not None:
-            result.append(run)
-            continue
+    for run_index, run in enumerate(runs):
         end = offset + len(run.text)
-        if not inserted and offset <= position <= end:
-            split = position - offset
-            if split:
-                result.append(_dc_replace(run, text=run.text[:split]))
-            result.append(TextRun(text=equation.latex, equation=equation))
-            if split < len(run.text):
-                result.append(_dc_replace(run, text=run.text[split:]))
-            inserted = True
-        else:
-            result.append(run)
+        cursor = offset
+        while (event_index < len(events)
+               and (events[event_index][0] < end
+                    or (run_index == len(runs) - 1 and events[event_index][0] <= end))):
+            position, equation = events[event_index]
+            position = max(position, cursor)
+            if position > cursor:
+                result.append(_dc_replace(run, text=run.text[cursor - offset:position - offset]))
+            result.append(_dc_replace(run, text=equation.latex, equation=equation))
+            cursor = position
+            event_index += 1
+        if cursor < end or (not run.text and cursor == offset):
+            result.append(_dc_replace(run, text=run.text[cursor - offset:]))
         offset = end
-    if not inserted:
-        result.append(TextRun(text=equation.latex, equation=equation))
+    while event_index < len(events):
+        _, equation = events[event_index]
+        source = runs[-1] if runs else TextRun()
+        result.append(_dc_replace(source, text=equation.latex, equation=equation))
+        event_index += 1
     return result
 
 
@@ -579,14 +588,6 @@ class SectionParser:
                 plain_tail = plain_tail or link_tail
             self._document_text_runs += len(para.runs) - int(plain_tail)
 
-            # 책갈피 마커는 문단 앞에 붙인다 (문서 내 앵커 — DOCX 규약과 동일)
-            if bookmark_markers:
-                marker_size = first_visible_font_size(para.runs)
-                if marker_size > 0:
-                    for marker in bookmark_markers:
-                        marker.font_size_pt = marker_size
-                para.runs = bookmark_markers + para.runs
-
             # 제목 감지
             para.heading_level = self._detect_heading_level(para)
 
@@ -601,7 +602,11 @@ class SectionParser:
             for start, _end, ctrl_id in text_result.get('inline_controls', [])
             if ctrl_id == b'deqe'
         ) if text_result else iter(())
+        inline_equations = []
         for ctrl_node in ctrl_nodes:
+            # A failed equation still owns its PARA_TEXT marker.
+            position = (next(equation_offsets, None)
+                        if parse_ctrl_id(ctrl_node['record'].data) == b'deqe' else None)
             failure_serial = self._table_failure_serial
             starting_cells = self._section_cells
             starting_document_cells = self._document_cells
@@ -629,14 +634,21 @@ class SectionParser:
                 elements.extend(ctrl_elem)
             elif ctrl_elem:
                 if isinstance(ctrl_elem, Equation):
-                    position = next(equation_offsets, None)
                     data = ctrl_node['record'].data
                     as_char = (len(data) >= 8 and
                                bool(struct.unpack_from('<I', data, 4)[0] & 1))
                     if as_char and para is not None and position is not None:
-                        para.runs = _insert_inline_equation(para.runs, position, ctrl_elem)
+                        inline_equations.append((position, ctrl_elem))
                         continue
                 elements.append(ctrl_elem)
+
+        if para is not None:
+            para.runs = _merge_inline_equations(para.runs, inline_equations)
+            if bookmark_markers:
+                marker_size = first_visible_font_size(para.runs)
+                for marker in bookmark_markers:
+                    marker.font_size_pt = marker_size
+                para.runs = bookmark_markers + para.runs
 
         return elements
 

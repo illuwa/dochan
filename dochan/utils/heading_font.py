@@ -27,7 +27,7 @@ _BOOKMARK_RUN = re.compile(r'\[bookmark: [^\]\r\n]+\] ')
 
 def _content_runs(runs):
     """리더가 붙인 참조·책갈피 표지를 제목 서식 판정에서 제외한다."""
-    return [run for run in runs if not run.note_ref
+    return [run for run in runs if run.equation is None and not run.note_ref
             and not run.note_reference_type
             and not _BOOKMARK_RUN.fullmatch(run.text)]
 

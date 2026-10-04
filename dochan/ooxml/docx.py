@@ -423,7 +423,11 @@ class DOCXReader:
         elements = []
         runs = []
         images = []
-        has_other_text = any(run.text.strip() and run.equation is None for run in para.runs)
+        has_other_text = any(run.text.strip() and run.equation is None
+                             and not run.note_ref and not run.note_reference_type
+                             and not getattr(run, '_bookmark_annotation', False)
+                             and not getattr(run, '_equation_annotation', False)
+                             for run in para.runs)
 
         def flush():
             if any(r.text.strip() for r in runs):
@@ -1521,6 +1525,7 @@ class DOCXReader:
             return []
         self._register_tree(p_elem)
         runs = []
+        direct_equations = set()
         for child in p_elem:
             if child.tag == f"{{{W_NS}}}r":
                 runs.extend(self._parse_run(child, depth))
@@ -1528,7 +1533,12 @@ class DOCXReader:
                 hyperlink_runs = self._parse_runs(child, depth + 1)
                 target = self._hyperlink_target(child)
                 if target and hyperlink_runs:
-                    hyperlink_runs[-1].text = f"{hyperlink_runs[-1].text} <{target}>"
+                    if hyperlink_runs[-1].equation is not None:
+                        marker = TextRun(text=f" <{target}>")
+                        marker._equation_annotation = True
+                        hyperlink_runs.append(marker)
+                    else:
+                        hyperlink_runs[-1].text = f"{hyperlink_runs[-1].text} <{target}>"
                 runs.extend(hyperlink_runs)
             elif child.tag == f"{{{W_NS}}}bookmarkStart":
                 bookmark_marker = self._bookmark_marker(child)
@@ -1540,7 +1550,11 @@ class DOCXReader:
                 comment_id = _w_attr(child, "id")
                 annotation = self._comment_annotation(comment_id)
                 if annotation:
-                    if runs:
+                    if runs and runs[-1].equation is not None:
+                        marker = TextRun(text=f" {annotation}")
+                        marker._equation_annotation = True
+                        runs.append(marker)
+                    elif runs:
                         runs[-1].text = f"{runs[-1].text} {annotation}"
                     else:
                         runs.append(TextRun(text=annotation))
@@ -1555,8 +1569,10 @@ class DOCXReader:
             elif child.tag == f"{{{W_NS}}}del":
                 continue
             elif child.tag == f"{{{M_NS}}}oMath":
-                runs.extend(TextRun(text=equation.latex, equation=equation)
-                            for equation in self._equations_in(child, include_self=True))
+                for equation in self._equations_in(child, include_self=True):
+                    run = TextRun(text=equation.latex, equation=equation)
+                    direct_equations.add(id(run))
+                    runs.append(run)
             elif child.tag == f"{{{M_NS}}}oMathPara":
                 run = TextRun()
                 run._flow_elements = self._equations_in(child, include_self=True)
@@ -1577,6 +1593,28 @@ class DOCXReader:
         # Resolve textbox spacing only after the text neighbours are final.
         bookmarks = [run for run in runs if getattr(run, '_bookmark_annotation', False)]
         runs = [run for run in runs if not getattr(run, '_bookmark_annotation', False)]
+        if direct_equations:
+            next_text = [None] * len(runs)
+            source = None
+            for index in range(len(runs) - 1, -1, -1):
+                next_text[index] = source
+                run = runs[index]
+                if run.equation is None and run.text.strip() and not run.note_ref \
+                        and not run.note_reference_type \
+                        and not getattr(run, '_equation_annotation', False):
+                    source = run
+            previous = None
+            for index, run in enumerate(runs):
+                if id(run) in direct_equations:
+                    source = previous or next_text[index]
+                    if source is not None:
+                        for field in ('bold', 'italic', 'underline', 'strikeout',
+                                      'superscript', 'subscript', 'font_size_pt'):
+                            setattr(run, field, getattr(source, field))
+                elif run.equation is None and run.text.strip() and not run.note_ref \
+                        and not run.note_reference_type \
+                        and not getattr(run, '_equation_annotation', False):
+                    previous = run
         for previous, current in zip(runs, runs[1:]):
             if (previous.text and current.text and
                     (getattr(previous, "_textbox_end", False) or
@@ -1682,14 +1720,14 @@ class DOCXReader:
         r_pr = r_elem.find("w:rPr", namespaces=NS)
         runs = []
         for text, note_type, note_number in segments:
-            if note_type == "equation":
-                runs.append(TextRun(text=text, equation=note_number))
-                continue
             if note_type == "flow":
                 run = TextRun(text="")
                 run._flow_elements = note_number
                 runs.append(run)
                 continue
+            equation = note_number if note_type == "equation" else None
+            if equation is not None:
+                note_type, note_number = "", None
             textbox_edges = note_number if note_type == "textbox_text" else (False, False)
             if note_type == "textbox_text":
                 note_type, note_number = "", None
@@ -1697,6 +1735,7 @@ class DOCXReader:
                 text=text,
                 note_reference_type=note_type,
                 note_reference_number=note_number,
+                equation=equation,
             )
             run._textbox_start, run._textbox_end = textbox_edges
             # Markdown 렌더러는 note_ref 로 각주 참조를 그린다. 두 표현을 함께 채워
@@ -1719,6 +1758,14 @@ class DOCXReader:
                     )
                 if strikeout is not None:
                     run.strikeout = _w_on_off_enabled(strikeout)
+                size = r_pr.find("w:sz", namespaces=NS)
+                if size is not None:
+                    try:
+                        points = int(_w_attr(size, "val")) / 2
+                        if 0 < points <= 1000:
+                            run.font_size_pt = points
+                    except (ValueError, TypeError):
+                        pass
                 vert_align = r_pr.find("w:vertAlign", namespaces=NS)
                 if vert_align is not None:
                     value = _w_attr(vert_align, "val")

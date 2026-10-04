@@ -61,13 +61,14 @@ def _summary(path):
     paragraphs = 0
     inline = 0
     inline_paragraphs = 0
-    contexts = []
+    inline_paragraph_hashes = []
     for element in _elements(doc):
         if isinstance(element, Equation):
             formulas[element.latex] += 1
         elif isinstance(element, Paragraph):
             paragraphs += 1
             has_inline = False
+            ordered_formulas = []
             for run in element.runs:
                 eq = getattr(run, 'equation', None)
                 if eq is not None:
@@ -75,12 +76,13 @@ def _summary(path):
                     inline_formulas[eq.latex] += 1
                     inline += 1
                     has_inline = True
+                    ordered_formulas.append(eq.latex.replace('\r\n', '\n'))
                 else:
                     other_chars.update(run.text)
             if has_inline:
                 inline_paragraphs += 1
-            if has_inline and len(contexts) < 3:
-                contexts.append(element.text[:120])
+                inline_paragraph_hashes.append(_digest(json.dumps(
+                    ordered_formulas, ensure_ascii=False, separators=(',', ':'))))
     markdown = to_markdown(doc)
     return {
         'paragraphs': paragraphs,
@@ -95,7 +97,7 @@ def _summary(path):
         'markdown_hash': _digest(markdown),
         'markdown_chars': len(markdown),
         'errors': len(doc.errors),
-        'contexts': contexts,
+        'inline_paragraph_hashes': inline_paragraph_hashes,
     }
 
 

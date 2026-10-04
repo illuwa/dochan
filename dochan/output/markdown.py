@@ -250,7 +250,8 @@ def _runs_to_md(runs: list, ctx=None) -> str:
 
 def _run_to_md(run: TextRun) -> str:
     if run.equation is not None:
-        return f"${run.equation.latex}$"
+        latex = _inline_latex(run.equation.latex or run.equation.script)
+        return f"${latex}$" if latex else ""
     # 각주 참조 마커는 서식 대신 Markdown 각주 참조로 렌더한다.
     note_ref = getattr(run, 'note_ref', 0)
     if note_ref:
@@ -534,11 +535,18 @@ def _runs_to_cell_text(runs: list) -> str:
     total = len(runs)
     while index < total:
         run = runs[index]
+        if run.equation is not None:
+            latex = _inline_latex(run.equation.latex or run.equation.script)
+            if latex:
+                parts.append('$' + _escape_cell(latex) + '$')
+            index += 1
+            continue
         link = getattr(run, 'link', '')
         if link:
             end = index
             inner = []
-            while end < total and getattr(runs[end], 'link', '') == link:
+            while (end < total and runs[end].equation is None
+                   and getattr(runs[end], 'link', '') == link):
                 inner.append(runs[end].text)
                 end += 1
             joined = ''.join(inner)
@@ -551,6 +559,10 @@ def _runs_to_cell_text(runs: list) -> str:
         parts.append(f"[^{note_ref}]" if note_ref else run.text)
         index += 1
     return ''.join(parts)
+
+
+def _inline_latex(latex: str) -> str:
+    return ' '.join(latex.splitlines()).strip()
 
 
 def _equation_to_md(eq: Equation) -> str:

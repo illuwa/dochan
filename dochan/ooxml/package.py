@@ -107,14 +107,17 @@ def _sanitize_dtd(data: bytes) -> bytes:
 
 
 class OOXMLPackage:
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, errors=None):
         self.file_path = file_path
+        self.errors = errors if errors is not None else []
         self._zip = None
         self._name_map = {}
         self._strict_parts = set()
 
     def __enter__(self):
-        self._zip = zipfile.ZipFile(self.file_path, "r")
+        from ..utils.zip_salvage import open_document_zip
+
+        self._zip = open_document_zip(self.file_path, self.errors, kind='ooxml')
         self._name_map = {}
         self._strict_parts = set()
         try:
@@ -213,8 +216,10 @@ class OOXMLPackage:
 
 
 def detect_ooxml_format(file_path: str) -> str:
+    from ..utils.zip_salvage import open_document_zip
+
     try:
-        with zipfile.ZipFile(file_path, "r") as zf:
+        with open_document_zip(file_path) as zf:
             if len(zf.filelist) > MAX_ARCHIVE_ENTRIES:
                 return ""
             names = {_validate_part_name(name) for name in zf.namelist()}

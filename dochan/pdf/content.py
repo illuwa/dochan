@@ -485,6 +485,7 @@ class ContentTextExtractor:
                                     track_char_positions=self.track_char_positions or bbox is not None)
                                 child.form_loader = loader
                                 child.resources = resources
+                                child.resolve_resource = getattr(self, 'resolve_resource', lambda value: value)
                                 child.properties = properties
                                 result = child.extract_page(
                                     data, form_ctm, _form_context,
@@ -531,6 +532,18 @@ class ContentTextExtractor:
             elif op == b"w" and operands and isinstance(operands[-1], (int, float)):
                 stroke_width = float(operands[-1])
                 paths.operate(op, [stroke_width], ctm)
+            elif op == b"gs" and operands and isinstance(operands[-1], PDFName):
+                resolve = getattr(self, 'resolve_resource', lambda value: value)
+                try:
+                    resources = getattr(self, 'resources', {})
+                    states = resolve(resources.get('ExtGState')) if isinstance(resources, dict) else None
+                    state = resolve(states.get(str(operands[-1]))) if isinstance(states, dict) else None
+                    width = resolve(state.get('LW')) if isinstance(state, dict) else None
+                except Exception:
+                    width = None
+                if isinstance(width, (int, float)) and math.isfinite(width) and width >= 0:
+                    stroke_width = float(width)
+                    paths.operate(b"w", [stroke_width], ctm)
             elif op == b"Td" and len(operands) >= 2:
                 tx = _num(operands[-2])
                 ty = _num(operands[-1])

@@ -584,6 +584,7 @@ class PDFReader:
     def _configure_form_extractor(self, extractor, pdf, resources, font_cache):
         """Attach Form lookup with document-wide decode and font caches."""
         extractor.resources = resources
+        extractor.resolve_resource = pdf.resolve
         loaded_forms = {}
         # Form 바이트 상한은 페이지 단위다. 분석 결과·거부 목록·글꼴 캐시만 문서 단위로 둔다
         # (문서 전체 누적으로 걸면 서로 다른 Form 을 많이 쓰는 문서의 뒤 페이지 글자가 빠진다).

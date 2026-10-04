@@ -95,6 +95,22 @@ def test_fill_and_stroke_bold_is_per_run(tmp_path, mode, width, expected):
     assert all(not r.bold for p in doc.sections[0].elements[1:] for r in p.runs)
 
 
+def test_extgstate_line_width_overrides_stroke_bold(tmp_path):
+    title = '□ 추진배경'
+    content = _line(title, 680, mode=2, width=0.4).replace(
+        b'0.4 w BT', b'0.4 w /Zero gs BT')
+    content += b''.join(_line(text, 600 - i * 40) for i, text in enumerate(BODY))
+    extra = {
+        2: '<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] '
+           '/Resources << /Font << /F1 20 0 R /F2 21 0 R >> '
+           '/ExtGState << /Zero 30 0 R >> >> >>',
+        30: '<< /LW 0 >>',
+    }
+    para = _pdf(tmp_path, [content], [title] + BODY, extra=extra).sections[0].elements[0]
+    assert not para.runs[0].bold
+    assert para.heading_level == 0
+
+
 def test_key_value_group_is_body(tmp_path):
     titles = ['□ (일시)', '□ (장소)']
     content = b''.join(_line(t, 680 - i * 40, bold=True) for i, t in enumerate(titles))

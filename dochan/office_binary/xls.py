@@ -37,6 +37,11 @@ MAX_SHEET_CELLS = 300_000
 SPARSE_GRID_FACTOR = 4           # 격자가 내용 있는 셀 수의 이 배를 넘으면 대부분이 빈 칸이다
 MAX_SPARSE_GRID_CELLS = 30_000   # 내용이 넓게 흩어진 격자는 더 공격적으로 자른다
 MAX_WORKBOOK_CELLS = 600_000     # 워크북 전체 총량. 시트를 여럿 두는 우회를 막는다
+# One SST string can fill many LABELSST cells, so a small stream could render
+# billions of characters. Total cell text is bounded by the stream size (same
+# rule as the XLSX reader; public workbooks peak near 2.3 million characters).
+MIN_CELL_TEXT_CHARS = 8 * 1024 * 1024
+CELL_TEXT_CHARS_PER_INPUT_BYTE = 4
 MAX_SHEET_COLS = 256          # BIFF8 의 열 상한
 MAX_RANGE_FILL_CELLS = 100_000  # MERGEDCELLS/HLINK 가 선언한 범위로 채울 수 있는 총 셀 수
 MAX_EMPTY_GRID_CELLS = 1_000     # 내용 없는 격자를 표로 만들 최대 크기
@@ -503,6 +508,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
     # 워크북 전체가 실체화할 수 있는 셀 총량. 시트별 상한만으로는 시트를 여럿 두는
     # 우회를 막을 수 없다(실측: 10.7KB 스트림으로 1,920만 셀을 만들 수 있었다).
     workbook_budget = [MAX_WORKBOOK_CELLS]
+    text_limit = max(MIN_CELL_TEXT_CHARS, CELL_TEXT_CHARS_PER_INPUT_BYTE * len(data))
+    text_budget = [text_limit, text_limit, False]  # remaining, limit, reported
     chart_budget = chart_budget if chart_budget is not None else [200000]
     try:
         drawing_reader = (XlsDrawingReader(data, errors=doc.errors)
@@ -529,7 +536,8 @@ def parse_biff_workbook(data: bytes, workbook_stream: str = "Workbook",
                 section.elements.extend(defined_name_elements)
             for paragraph in _sheet_header_footer_elements(sheet, path=sheet_path):
                 section.elements.append(paragraph)
-            table = _sheet_to_table(sheet, path=sheet_path, errors=doc.errors, budget=workbook_budget)
+            table = _sheet_to_table(sheet, path=sheet_path, errors=doc.errors, budget=workbook_budget,
+                                    text_budget=text_budget)
             if table.rows:
                 section.elements.append(table)
         try:
@@ -2169,6 +2177,7 @@ def _sheet_to_table(
     path: str,
     errors: Optional[List[str]] = None,
     budget: Optional[List[int]] = None,
+    text_budget: Optional[list] = None,
 ) -> Table:
     if not sheet.cells and not sheet.row_indices and not sheet.col_indices:
         return Table()
@@ -2254,6 +2263,18 @@ def _sheet_to_table(
             comment = sheet.comments.get((row_idx, col_idx), "")
             if comment:
                 text = f"{text} [comment: {comment}]" if text else f"[comment: {comment}]"
+            limited = False
+            if text_budget is not None and len(text) > text_budget[0]:
+                text = text[:text_budget[0]]
+                limited = True
+                if not text_budget[2]:
+                    text_budget[2] = True
+                    if errors is not None:
+                        errors.append("WARN: XLS cell text limit exceeded "
+                                      f"({text_budget[1]} characters, repeated shared strings); "
+                                      "later cell text omitted")
+            if text_budget is not None:
+                text_budget[0] -= len(text)
             cell_ref = _cell_ref(row_idx, col_idx)
             provenance = Provenance(
                 source_format="xls",
@@ -2266,7 +2287,7 @@ def _sheet_to_table(
             if font_flags:
                 run.bold, run.italic, run.underline, run.strikeout = font_flags
             runs = [run]
-            rich = sheet.cell_rich.get((row_idx, col_idx))
+            rich = None if limited else sheet.cell_rich.get((row_idx, col_idx))
             if rich:
                 runs = []
                 for fragment, flags in rich:

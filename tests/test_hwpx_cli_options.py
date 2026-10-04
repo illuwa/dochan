@@ -250,7 +250,9 @@ def cli_process(*args):
 
 
 def make_partial_hwpx(path, problem):
-    paragraph = lambda text: f'<hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p>'
+    def paragraph(text):
+        return f'<hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p>'
+
     begin = '<hp:deleteBegin Id="d" TcId="2"/>'
     end = '<hp:deleteEnd Id="d" TcId="2" paraend="0"/>'
     changes = '<hh:trackChange id="2" type="Delete"/>'

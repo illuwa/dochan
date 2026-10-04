@@ -65,16 +65,17 @@ class Dochan:
                 revision_mode가 잘못되었거나 비기본 모드에 HWPX가 아닌 입력.
         """
         self.file_path = file_path
+        # ZIP identity is shared by option validation and parser dispatch.
+        # None means unchecked; even a negative result is cached per reader.
+        self._zip_kind = None
         # 옵션 오류는 문서 파싱 오류와 달리 호출자에게 직접 알린다.
         validate_revision_mode(revision_mode)
-        if revision_mode != "preserve" and (
-            not self._is_hwpx_package() or detect_ooxml_format(file_path)
-        ):
+        if revision_mode != "preserve" and not self._is_plain_hwpx():
             raise ValueError("revision_mode other than 'preserve' is supported only for HWPX packages")
         if not include_assets:
             if ocr:
                 raise ValueError("ocr=True cannot be used with include_assets=False")
-            if not self._is_hwpx_package() or detect_ooxml_format(file_path):
+            if not self._is_plain_hwpx():
                 raise ValueError("include_assets=False is supported only for HWPX packages")
         self.doc = Document()
         self._ocr = ocr
@@ -121,8 +122,7 @@ class Dochan:
             return
 
         if magic[:2] == b'PK':
-            ooxml_format = detect_ooxml_format(self.file_path)
-            is_hwpx = self._is_hwpx_package()
+            ooxml_format, is_hwpx = self._classify_zip()
             if ooxml_format and ooxml_format != 'ambiguous' and is_hwpx:
                 self.doc.errors.append("ERR: 모호한 ZIP 문서 형식")
             elif ooxml_format == 'docx':
@@ -173,6 +173,17 @@ class Dochan:
         else:
             self.doc.errors.append(f"ERR: 알 수 없는 파일 형식: {self.file_path}")
 
+    def _classify_zip(self):
+        if self._zip_kind is None:
+            self._zip_kind = (
+                detect_ooxml_format(self.file_path), self._is_hwpx_package(),
+            )
+        return self._zip_kind
+
+    def _is_plain_hwpx(self) -> bool:
+        ooxml_format, is_hwpx = self._classify_zip()
+        return is_hwpx and not ooxml_format
+
     def _is_hwpx_package(self) -> bool:
         import zipfile
 
@@ -209,7 +220,7 @@ class Dochan:
                 self._parse_hwp()
                 return
             if magic[:2] == b'PK':  # ZIP 매직
-                ooxml_format = detect_ooxml_format(self.file_path)
+                ooxml_format, _ = self._classify_zip()
                 if ooxml_format == 'docx':
                     self._parse_docx()
                 elif ooxml_format == 'pptx':

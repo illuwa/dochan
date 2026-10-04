@@ -92,6 +92,30 @@ for eq in doc.find_all('equation'):
 print(doc.metadata)
 ```
 
+### HWPX 옵션과 차트 데이터
+
+HWPX는 이미지 바이너리를 로드하지 않고 참조·대체 텍스트·캡션만 보존할 수 있습니다.
+변경 추적 텍스트는 기본 `preserve`에서 삽입·삭제 내용을 모두 보존하고,
+`final`은 확인된 삭제 범위를, `original`은 확인된 삽입 범위를 제외합니다.
+
+```python
+doc = Dochan("보고서.hwpx", include_assets=False, revision_mode="final")
+print(doc.errors)  # 미확정 변경 범위·서식 변경 등 부분지원 진단 확인
+print(doc.to_markdown())
+```
+
+`include_assets=False`와 비기본 변경 보기는 실제 HWPX 패키지에만 허용합니다.
+이미지 로딩 생략은 `ocr=True`와 함께 사용할 수 없습니다. API는 미확정 변경을
+보존하고 `errors`에 보고하므로, `final`/`original` 결과를 확정본으로 사용하기 전에
+진단을 확인해야 합니다. CLI·배치는 불완전한 `final`/`original` 변환을 실패로
+처리하고 기존 출력 파일을 보존합니다. `preserve`는 변경 이력·작성자 메타데이터를
+출력하는 모드가 아닙니다.
+
+지원 차트는 저장된 XML 캐시의 제목과 계열별 데이터를 기존 문단·표 모델로
+추출합니다. 미지원 유형과 캐시 누락은 진단에 기록하며, 수식 재계산이나 차트 그림
+렌더링은 제공하지 않습니다. 실물 검증 범위는
+[HWPX 구현·검증 기록](docs/benchmarks/hwpx/implementation-progress.md)에 있습니다.
+
 ### CLI
 
 ```bash
@@ -103,6 +127,12 @@ dochan convert 문서.hwp -o output.md
 
 # JSON 출력
 dochan convert 문서.hwpx --format json
+
+# HWPX 이미지 로딩 생략 + 확인된 삭제 텍스트 제외
+dochan convert 문서.hwpx --no-assets --revision-mode final --format json
+
+# HWPX 배치에도 같은 옵션 사용
+dochan batch hwpx_input/ output_dir/ --no-assets --revision-mode original --workers 2
 
 # Word DOCX 변환
 dochan convert 문서.docx
@@ -191,7 +221,7 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 | 페이지 번호 provenance | — | — | — | — | — | — | — | — | ✅ |
 | 현대 PDF(1.5+) xref/객체 스트림 | — | — | — | — | — | — | — | — | ✅ |
 | 표준 암호화(RC4/AES, 빈 암호) | — | — | — | — | — | — | — | — | ✅ |
-| 차트 제목/데이터 | — | — | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | — |
+| 차트 제목/데이터 | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ | — |
 | 여러 시트 | — | — | — | — | ✅ | — | — | ✅ | — |
 | sharedStrings | — | — | — | — | ✅ | — | — | ✅ | — |
 | Boolean/error/formula cached value | — | — | — | — | ✅ | — | — | ✅ | — |
@@ -204,7 +234,10 @@ print(doc.to_markdown())  # 이미지 속 텍스트도 포함
 | 내부 북마크 | ✅ | ✅ | ⬜ | — | — | ✅ | — | — | ✅ |
 | 암호화 문서 | ⬜ | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ✅ |
 
-✅ 지원 &nbsp; ⬜ 미지원 &nbsp; — 해당 없음
+✅ 지원 &nbsp; ⬜ 미지원 또는 부분지원 &nbsp; — 해당 없음
+
+HWPX 변경 추적·차트는 위의 옵션 설명과 검증 기록에 명시한 범위만 부분 지원합니다.
+전체 변경 이력이나 모든 차트 유형의 지원을 뜻하는 ✅는 부여하지 않습니다.
 
 > Legacy Office(.doc/.ppt/.xls)는 현재 OLE/BIFF native 기반의 기초 구조 복원 단계입니다. `.doc`는 WordDocument FIB 텍스트 범위, 0Table/1Table CLX piece table, compressed piece flag, UTF-16/cp1252 compressed 본문 선택, legacy layout 문자와 soft line/page break 정규화, quoted/unquoted/internal HYPERLINK field 표시 텍스트/URL 및 일반 field 결과 텍스트, single-byte smart quote/dash 문장부호, legacy bullet/numbered/parenthesized numbered/alpha/roman outline list marker, legacy checkbox/checklist marker, underline-style heading, 한국어 제목/소제목 label, section break, 명시적 heading/list/table/key-value form 및 전각 콜론 key-value 신호, Word cell marker 및 tab/pipe-delimited/Markdown-style pipe/고정폭 공백·전각 공백 정렬 표 구조를 복원하고, `.ppt`는 slide/notes/comments container, 중첩 notes/comments container의 직전 슬라이드 연결, quoted/unquoted/internal HYPERLINK field 표시 텍스트/URL 및 일반 field 결과 텍스트, cp1252 byte text 문장부호, legacy layout 문자와 soft line/page break 정규화, legacy bullet/numbered/parenthesized numbered/alpha/roman outline list marker, legacy checkbox/checklist marker, underline-style heading, 한국어 제목/소제목 label, tab/pipe-delimited/Markdown-style pipe/고정폭 공백·전각 공백 정렬 표와 key-value form/전각 콜론 key-value 구조, 반복 텍스트 라인, TextHeaderAtom title/center-title/body 신호를 반영하며, `.xls`는 BIFF sheet/table/merged-cell/cell 타입, HEADER/FOOTER 시트 문단과 제어 코드 정규화, cp1252 compressed 문자열 문장부호, BIFF2/3/4 LABEL 셀, BIFF INTEGER 정수 셀, legacy NUMBER 숫자 셀, legacy BOOLERR boolean/error 셀, legacy BLANK 빈 좌표, rich-text/SST CONTINUE shared string, RSTRING rich-text label 셀, 문자열 중간에서 끊긴 SST CONTINUE, HLINK URL, NOTE 코멘트 작성자, DIMENSION used-range, ROW/COLINFO 행·열 범위, BLANK/MULBLANK 빈 좌표, RK/MULRK 압축 숫자, FORMAT/XF 기반 날짜·퍼센트·통화 서식, 이름 정의 대상 문단, RPN 수식·범위·절대/혼합/다른 시트 참조/이름 정의 참조 flag·operand class variant·문자열/boolean/error literal·단항/퍼센트/괄호·지수·IF/AND/OR/NOT/COUNT/ROUND/TRUE/FALSE/가변/다중 인자 고정 함수·비교·문자열 결합 토큰, FORMULA cached boolean/표준 error/blank 결과, SHRFMLA 공유 수식 템플릿/상대 참조 보정과 STRING/legacy STRING/legacy byte STRING 후속 레코드 기반 문자열 수식 결과를 복원합니다.
 
@@ -220,7 +253,9 @@ dochan/
 │   ├── section.py     #   섹션 (레코드 트리 → 모델)
 │   └── records/       #   개별 레코드 파서
 ├── hwpx/              # HWPX (OWPML) XML 파서
-│   └── parser.py
+│   ├── parser.py
+│   ├── revisions.py   #   변경 추적 텍스트 투영·부분지원 진단
+│   └── charts.py      #   저장된 차트 제목·계열 데이터 추출
 ├── ooxml/             # Office Open XML native 파서
 │   ├── package.py     #   안전한 ZIP/XML 패키지 유틸
 │   ├── docx.py        #   DOCX 문단/서식/표 파서

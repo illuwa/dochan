@@ -1,6 +1,7 @@
 # HWPX 구현·검증 진행 기록
 
-확인일: 2026-09-19. 현재 체크아웃의 코드와 테스트를 기준으로 기록한다.
+최종 확인일: 2026-10-04. 현재 체크아웃의 코드와 테스트를 기준으로 기록한다.
+2026-09-19 개발 시점의 검증 수치는 아래에 별도 보존한다.
 [66개 태스크 계획](../../superpowers/plans/hwpx-parallel-implementation-plan.md)의
 일부 범위를 구현한 상태이며, 아래 기능의 존재가 각 태스크의 전체 완료를 뜻하지 않는다.
 
@@ -16,10 +17,53 @@
 | 변경 추적 텍스트·API 연결 | `RevisionProjector`와 parser·reader 연결. `preserve`/`final`/`original` 제공. 미확정 범위는 보존·진단, 하위 본문 흐름 격리 | `tests/test_hwpx_revisions.py`, [변경 추적 검증](revision-validation.md) |
 | 차트 XML·ZIP/API 연결 | `parse_chart_xml`이 제목·계열별 표 반환. parser가 참조 경로·switch·본문 순서·ZIP/문서 예산 처리 | `tests/test_hwpx_charts.py`, `tests/test_hwpx_chart_integration.py`, [차트 통합 검증](chart-integration-validation.md) |
 | I06 변경 보기 옵션 | `--revision-mode` 및 배치 API 전달. preserve 경고는 출력 허용, 불완전 final/original은 실패·기존 출력 보존 | `tests/test_hwpx_cli_options.py`, `tests/test_batch_cli.py`, [옵션 검증](options-validation.md) |
+| ZIP 판별 재사용 | 옵션 검증·파서 선택이 reader 인스턴스의 판별 결과를 공유. HWPX·OOXML 판별기가 각각 최대 3회 호출되던 것을 각각 1회로 축소 | `tests/test_hwpx_assets_option.py`: 기본/이미지 생략/변경 보기/조합 6종 호출 계측, 기본 비ZIP 입력의 판별기 미호출 |
 
 차트 출력은 기존 `Paragraph`/`Table` 모델을 사용하며, 변경 추적은 텍스트 투영이다.
 원 계획의 구조화 변경 메타데이터 모델·공통 위치/진단 모델·범례/서식 렌더링까지
 구현되었다고 해석하지 않는다. `preserve`는 변경 이력까지 표시하는 `all` 모델이 아니다.
+
+## 2026-10-04 브랜치 마무리
+
+기준 커밋은 `f49f826`이며, 이번 수정은 `feat/hwpx-specialization`에서 수행했다.
+Claude의 마지막 HWPX 리뷰 기록에서 언급한 ZIP 중복 판별 수정이 기준 커밋에는
+없어, 현재 코드에서 재현한 뒤 복원했다. 신규 자산 옵션 테스트는 수정 전
+**5 failed, 34 passed**, 수정 후 관련 통합 테스트에서 전부 통과했다.
+기본 동작에서는 두 판별기가 각각 1회였고, 비기본 옵션은 각각 2회,
+이미지 생략+변경 보기 조합은 각각 3회였다. 수정 후 모든 조합은 각각 1회다.
+이 호출 수 검증은 변환 시간이나 RSS 개선율의 측정이 아니다.
+
+README에 API/CLI 사용법과 부분지원 범위를 추가하고 CHANGELOG의 Unreleased에
+브랜치 기능을 정리했다. 기존 CLI 테스트 helper의 E731 lint 오류도 수정했다.
+지원표의 HWPX 차트 표기를 해당 없음에서 부분지원으로 정정했으며,
+변경 추적·차트 전체에 대한 ✅는 추가하지 않았다.
+
+검증 환경: Python 3.9.6, pytest 8.4.2. 아래 명령의 `python`은
+`/Applications/Xcode.app/Contents/Developer/usr/bin/python3`을 가리킨다.
+
+| 실행 범위 | 결과 |
+| --- | --- |
+| 자산 옵션·CLI 옵션·변경 추적·차트 코어/통합·배치·parser hardening | 556 passed, 5 xfailed, 일반 skip 0 |
+| 전체 `python -m pytest tests/ -q --tb=short` | **1,611 passed, 14 xfailed**, 일반 skip·실패 0 (28.22초) |
+| CLI helper lint 수정 후 `tests/test_hwpx_cli_options.py` 재검증 | 89 passed |
+| `ruff check dochan scripts tests` | 통과 |
+| `git diff --check` | 통과 |
+
+첫 행은 아래 7개 파일을 한 번에 실행한 결과다. 테스트 수를 전체 결과와 합산하지 않는다.
+
+```bash
+python -m pytest tests/test_hwpx_assets_option.py tests/test_hwpx_cli_options.py tests/test_hwpx_revisions.py tests/test_hwpx_chart_integration.py tests/test_hwpx_charts.py tests/test_batch_cli.py tests/test_parser_hardening_review.py -q --tb=short
+python -m pytest tests/ -q --tb=short
+ruff check dochan scripts tests
+git diff --check
+```
+
+이번 실행에는 해시로 고정된 로컬 공개 변경 추적·차트·이미지 표본의 API/CLI
+검증이 포함되며 corpus 부재 skip은 없었다. 기존 독립 XML gold와 원본 해시는
+유지했다. 전체 공개 코퍼스 재스캔·UI 재현·정식 성능 측정은 수행하지 않았다.
+14개 xfail은 기준 코드와 동일하며 새 xfail을 추가하지 않았다.
+이 절의 검증은 커밋·푸시 전에 수행했다. main 병합·버전 변경·PyPI 배포는
+이번 브랜치 마무리 범위에 포함하지 않았다.
 
 ## 검증 명령과 기록
 

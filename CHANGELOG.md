@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 문서 (속도 비교)
+
+- 같은 파일·같은 환경에서 다른 변환 도구와 속도를 쟀다(`scripts/bench_converters.py`, [기록](docs/benchmarks/2026-10-04-speed-comparison.md), 3회 중앙값):
+  HWP 는 pyhwp 보다 8.7배, DOCX·XLSX 는 markitdown 보다 약 5배, XLS 는 2.5배 빠르다. PDF 는 pdfplumber·pdfminer.six·pypdf 보다 2.2·1.8·1.1배 빠르지만
+  C 엔진 기반 PyMuPDF 보다는 9.4배 느리다(순수 파이썬 해석 — 개선 작업 진행 중). README 에 Performance 절을 추가했다.
+
 ### 수정 (공개 실물 오류·경고 전수 점검)
 
 - 공개 실물 13,494개(HWP·HWPX·PDF·DOC·DOCX·PPT·PPTX·XLS·XLSX)의 오류·경고를 전수 수집해 유형별로 원인을 판정하고(`scripts/probe_error_sweep.py`, [기록](docs/benchmarks/2026-10-04-error-sweep.md)),

@@ -4,10 +4,15 @@ PDF 32000-1:2008 §7.3 의 객체 문법(불리언, 숫자, 문자열, 이름, �
 사전, 스트림, null, 간접 참조)을 표준 라이브러리만으로 파싱한다.
 """
 from dataclasses import dataclass
+import re
 from typing import Any, Callable, Optional, Tuple
 
 WHITESPACE = b"\x00\t\n\x0c\r "
 DELIMITERS = b"()<>[]{}/%"
+
+# ISO 32000-1 §7.2.2: PDF 공백 여섯 문자와 구분자 열 개를 그대로 사용한다.
+# 문자열·이름·inline image의 내부는 기존 파서가 별도로 처리한다.
+_TOKEN_RE = re.compile(rb"[^\x00\t\n\x0c\r ()<>\[\]{}/%]*")
 
 MAX_COLLECTION_ITEMS = 100_000
 MAX_NESTING_DEPTH = 64
@@ -68,13 +73,19 @@ class PDFLexer:
 
     def read_token(self) -> bytes:
         start = self.pos
-        data, n = self.data, len(self.data)
-        while self.pos < n:
-            ch = data[self.pos]
-            if ch in WHITESPACE or ch in DELIMITERS:
-                break
-            self.pos += 1
-        return data[start:self.pos]
+        if start < 0:  # 손상 오프셋의 기존 음수 인덱싱 동작 보존
+            data, n = self.data, len(self.data)
+            while self.pos < n:
+                ch = data[self.pos]
+                if ch in WHITESPACE or ch in DELIMITERS:
+                    break
+                self.pos += 1
+            return data[start:self.pos]
+        if start >= len(self.data):
+            return b""
+        match = _TOKEN_RE.match(self.data, start)
+        self.pos = match.end()
+        return self.data[start:self.pos]
 
     def parse_object(self) -> Any:
         self.skip_whitespace()

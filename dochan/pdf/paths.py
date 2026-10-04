@@ -29,14 +29,19 @@ def _axis_segment(p0, p1) -> Optional[Segment]:
     """두 점을 잇는 축 정렬 선분. 사선·길이 0·비정상 좌표는 None."""
     x0, y0 = p0
     x1, y1 = p1
-    if not all(isfinite(v) for v in (x0, y0, x1, y1)):
+    if not (isfinite(x0) and isfinite(y0) and isfinite(x1) and isfinite(y1)):
         return None
     dx, dy = abs(x1 - x0), abs(y1 - y0)
-    length = hypot(dx, dy)
     # 1pt 미만도 실제 stroke 조각일 수 있다. 짧은 사선이 기존 0.6pt 축
     # 허용오차에 통째로 들어오지 않도록, 이 크기에서는 정확한 축 정렬만 받는다.
-    if length > 0 and (min(dx, dy) == 0 or (length >= 1 and min(dx, dy) <= 0.6)):
+    if dx == 0:
+        return Segment(x0, y0, x1, y1) if dy > 0 else None
+    if dy == 0:
         return Segment(x0, y0, x1, y1)
+    # 대각선의 대부분은 길이 계산 전에 제외할 수 있다.
+    if dx <= 0.6 or dy <= 0.6:
+        if hypot(dx, dy) >= 1:
+            return Segment(x0, y0, x1, y1)
     return None
 
 

@@ -4,6 +4,7 @@ from math import hypot, isfinite
 from typing import List, Optional
 
 MAX_SEGMENTS = 20_000  # 페이지당 변(edge)·서브패스 수 상한 — 칠하기 없는 m/l 반복의 메모리 폭주 방지
+PATH_WARNING = "WARN: PDF 선분 수 한도(20000) 초과 — 일부 괘선 생략"
 _THIN = 2.0            # 이 두께 이하의 채움 도형은 선으로 본다 (장치 단위)
 _STRAIGHT = 1.0        # 곡선 제어점이 현에서 이만큼 이하로 벗어나면 직선으로 본다
 
@@ -93,7 +94,7 @@ class PathCollector:
 
     def _warn(self) -> None:
         if not self.warnings:
-            self.warnings.append("WARN: PDF 선분 수 한도(20000) 초과 — 일부 괘선 생략")
+            self.warnings.append(PATH_WARNING)
 
     def _move(self, point) -> None:
         if len(self._groups) < MAX_SEGMENTS:

@@ -103,6 +103,19 @@ if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
         CONTENT_SCANNER_BACKEND = "c"
 
 
+_CInterpreter = None
+_CInterpreterBailout = None
+CONTENT_INTERPRETER_BACKEND = "python"
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from ._cinterp import Interpreter as _NativeInterpreter, Bailout as _NativeBailout
+    except ImportError:
+        pass
+    else:
+        _CInterpreter, _CInterpreterBailout = _NativeInterpreter, _NativeBailout
+        CONTENT_INTERPRETER_BACKEND = "c"
+
+
 def default_byte_decoder(raw: bytes) -> str:
     """ToUnicode 가 없는 단순 폰트의 기본 바이트 해석."""
     try:
@@ -420,6 +433,78 @@ class ContentTextExtractor:
 
     def extract_page(self, content: bytes, _initial_ctm=(1, 0, 0, 1, 0, 0),
                      _form_context=None, _initial_text_state=None) -> PageContent:
+        if _CInterpreter is None:
+            return self._extract_page_python(content, _initial_ctm, _form_context, _initial_text_state)
+        # Descendants share one page attempt. Bailout must reach the page root;
+        # retrying at each Form would replay nested descendants exponentially.
+        if _form_context is not None:
+            if _form_context.get("_cinterp_active"):
+                return self._extract_page_accelerated(
+                    content, _initial_ctm, _form_context, _initial_text_state)
+            return self._extract_page_python(content, _initial_ctm, _form_context, _initial_text_state)
+        context = {"active": set(), "cache": {}, "cache_bytes": 0,
+                   "expanded": 0, "operators": 0, "warned": set(),
+                   "char_positions": 200000, "_cinterp_active": True}
+        try:
+            return self._extract_page_accelerated(content, _initial_ctm, context, _initial_text_state)
+        except _CInterpreterBailout:
+            pass
+        finally:
+            context.pop("_cinterp_active", None)
+        # Discard the entire partial attempt, including descendant budgets and
+        # cache. Outside except, pure-path errors have no Bailout context.
+        return self._extract_page_python(content, _initial_ctm, None, _initial_text_state)
+
+    def _extract_page_accelerated(self, content, ctm, context, initial):
+        self._form_context = context
+        self._link_position_reliable = True
+        self._marked_stack = []
+        self._marked_overflow = 0
+        marked_ids, duplicate_marked_ids = set(), set()
+        frags, segments, short_segments, warnings = [], [], [], []
+        if initial is None:
+            initial = (None, 0.0, 0.0, 0.0, 1.0, 0.0, 0, 1.0)
+        elif len(initial) == 6:
+            initial = (*initial, 0, 1.0)
+        interpreter = _CInterpreter(content, self._fonts, ctm, initial, segments, short_segments, warnings)
+        while True:
+            event = interpreter.next()
+            # C runs no glyph callbacks between resets and this yield. Therefore
+            # coalescing BT/Tm/Td/TD/T* resets here preserves their last effect;
+            # even a skipped/malformed reset resets reliability in Python.
+            if interpreter.text_line_reset:
+                self._link_position_reliable = True
+                interpreter.text_line_reset = False
+            if event is None:
+                break
+            op, operands = event
+            if op in (b"BDC", b"BMC"):
+                self._begin_marked(op, operands, warnings, marked_ids, duplicate_marked_ids)
+            elif op == b"EMC":
+                self._end_marked()
+            elif op == b"BI":
+                interpreter.pos = self._skip_inline_image(content, interpreter.pos)
+            elif op == b"Do" and operands and isinstance(operands[-1], PDFName):
+                ctm, tm, tlm, font, fs, tc, tw, th, tl, tr, width = interpreter.state()
+                self._invoke_form(operands, ctm, font, fs, tc, tw, th, tl, tr, width,
+                                  frags, warnings, context)
+            elif op == b"gs" and operands and isinstance(operands[-1], PDFName):
+                interpreter.stroke_width = self._graphics_width(operands, interpreter.stroke_width)
+            elif op in (b"Tj", b"'", b'"', b"TJ"):
+                if op in (b"'", b'"'):
+                    self._link_position_reliable = True
+                ctm, tm, tlm, font, fs, tc, tw, th, tl, tr, width = interpreter.state()
+                tm, tlm, tc, tw = self._text_operator(
+                    op, operands, tm, tlm, font, fs, tc, tw, th, tl, tr, width, frags, ctm)
+                interpreter.resume(tm, tlm, tc, tw, width)
+        safe = [frag for frag in frags if all(math.isfinite(v) for v in
+                (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))]
+        if len(safe) != len(frags):
+            warnings.append("WARN: PDF 비유한 텍스트 좌표 — 해당 조각 건너뜀")
+        return PageContent(safe, segments, warnings, marked_ids, duplicate_marked_ids, short_segments)
+
+    def _extract_page_python(self, content: bytes, _initial_ctm=(1, 0, 0, 1, 0, 0),
+                     _form_context=None, _initial_text_state=None) -> PageContent:
         """그래픽 상태를 유지하며 텍스트와 괘선을 함께 해석한다."""
         if _form_context is None:
             _form_context = {"active": set(), "cache": {}, "cache_bytes": 0,
@@ -468,27 +553,9 @@ class ContentTextExtractor:
                 self._link_position_reliable = True
 
             if op in (b"BDC", b"BMC"):
-                props = operands[-1] if op == b"BDC" and operands else None
-                if isinstance(props, PDFName):
-                    props = getattr(self, "properties", {}).get(str(props))
-                mcid = props.get("MCID") if isinstance(props, dict) else None
-                if type(mcid) is not int or mcid < 0:
-                    mcid = None
-                if len(self._marked_stack) < 64 and not self._marked_overflow:
-                    self._marked_stack.append((mcid, bool(operands and str(operands[0]) == "Artifact")))
-                    if mcid is not None:
-                        if mcid in marked_ids:
-                            duplicate_marked_ids.add(mcid)
-                        marked_ids.add(mcid)
-                else:
-                    self._marked_overflow += 1
-                    if self._marked_overflow == 1:
-                        paths.warnings.append("WARN: PDF marked-content 깊이 한도 초과")
+                self._begin_marked(op, operands, paths.warnings, marked_ids, duplicate_marked_ids)
             elif op == b"EMC":
-                if self._marked_overflow:
-                    self._marked_overflow -= 1
-                elif self._marked_stack:
-                    self._marked_stack.pop()
+                self._end_marked()
             elif op == b"q":
                 if len(stack) < 256:
                     stack.append((ctm, font, fs, tc, tw, th, tl, tr, stroke_width))
@@ -502,92 +569,8 @@ class ContentTextExtractor:
             elif op == b"cm" and len(operands) >= 6:
                 ctm = _matmul(tuple(_num(o) for o in operands[-6:]), ctm)
             elif op == b"Do" and operands and isinstance(operands[-1], PDFName):
-                loader = getattr(self, "form_loader", None)
-                if loader is not None:
-                    loaded = None
-                    try:
-                        if (_form_context["expanded"] >= MAX_FORM_EXPANDED_BYTES or
-                                _form_context["operators"] >= MAX_FORM_OPERATORS):
-                            reason = "확장 한도"
-                            if reason not in _form_context["warned"]:
-                                paths.warnings.append("WARN: PDF Form " + reason + " — 해당 Form 건너뜀")
-                                _form_context["warned"].add(reason)
-                        else:
-                            loaded = loader(str(operands[-1]), getattr(self, "resources", {}))
-                    except Exception:
-                        if "해석 실패" not in _form_context["warned"]:
-                            paths.warnings.append("WARN: PDF Form 해석 실패 — 해당 Form 건너뜀")
-                            _form_context["warned"].add("해석 실패")
-                    if loaded is not None:
-                        key, data, matrix, resources, fonts, properties, op_count, bbox, separate_mcids = loaded
-                        reason = None
-                        try:
-                            form_ctm = _matmul(matrix, ctm)
-                        except OverflowError:
-                            form_ctm = (float("inf"),) * 6
-                        if key in _form_context["active"]:
-                            reason = "순환 참조"
-                        elif len(_form_context["active"]) >= MAX_FORM_DEPTH:
-                            reason = "깊이 한도"
-                        elif (len(data) > MAX_FORM_CACHE_BYTES or
-                              key not in _form_context["cache"] and
-                              _form_context["cache_bytes"] + len(data) > MAX_FORM_CACHE_BYTES):
-                            reason = "디코드 캐시 한도"
-                        elif (not all(math.isfinite(v) and abs(v) <= 1e150 for v in form_ctm) or
-                              not all(math.isfinite(v) for v in matrix)):
-                            reason = "행렬 크기 한도"
-                        elif matrix[0] * matrix[3] - matrix[1] * matrix[2] == 0:
-                            reason = "특이 행렬"
-                        else:
-                            cached = _form_context["cache"].get(key)
-                            if cached is None:
-                                cached = (data, op_count)
-                                _form_context["cache"][key] = cached
-                                _form_context["cache_bytes"] += len(data)
-                            op_count = cached[1]
-                            if (_form_context["expanded"] + len(data) > MAX_FORM_EXPANDED_BYTES or
-                                    _form_context["operators"] + op_count > MAX_FORM_OPERATORS):
-                                reason = "확장 한도"
-                        if reason is not None:
-                            if reason not in _form_context["warned"]:
-                                paths.warnings.append("WARN: PDF Form " + reason + " — 해당 Form 건너뜀")
-                                _form_context["warned"].add(reason)
-                        else:
-                            _form_context["expanded"] += len(data)
-                            _form_context["operators"] += op_count
-                            _form_context["active"].add(key)
-                            try:
-                                child = ContentTextExtractor.from_fonts(
-                                    fonts() if callable(fonts) else fonts,
-                                    track_char_positions=self.track_char_positions or bbox is not None)
-                                child.form_loader = loader
-                                child.resources = resources
-                                child.resolve_resource = getattr(self, 'resolve_resource', lambda value: value)
-                                child.properties = properties
-                                result = child.extract_page(
-                                    data, form_ctm, _form_context,
-                                    (font, fs, tc, tw, th, tl, tr, stroke_width))
-                                child_frags = (_clip_form_fragments(result.fragments, bbox, form_ctm)
-                                               if bbox is not None else result.fragments)
-                                offset = len(frags)
-                                page_mcids = (tuple(item[0] for item in self._marked_stack
-                                                    if item[0] is not None)
-                                              if not self._marked_overflow and not separate_mcids else ())
-                                parent_artifact = any(item[1] for item in self._marked_stack)
-                                for index, frag in enumerate(child_frags):
-                                    frag.order = offset + index
-                                    frag.mcids = page_mcids  # Form MCIDs have their own space.
-                                    frag.artifact = frag.artifact or parent_artifact
-                                frags.extend(child_frags)
-                                # Form vector art is outside this text pass. Adding
-                                # its rules creates empty grids in unrelated artwork.
-                                paths.warnings.extend(result.warnings)
-                            except Exception:
-                                if "해석 실패" not in _form_context["warned"]:
-                                    paths.warnings.append("WARN: PDF Form 해석 실패 — 해당 Form 건너뜀")
-                                    _form_context["warned"].add("해석 실패")
-                            finally:
-                                _form_context["active"].discard(key)
+                self._invoke_form(operands, ctm, font, fs, tc, tw, th, tl, tr, stroke_width,
+                                  frags, paths.warnings, _form_context)
             elif op == b"BT":
                 tm = (1, 0, 0, 1, 0, 0)
                 tlm = (1, 0, 0, 1, 0, 0)
@@ -610,17 +593,7 @@ class ContentTextExtractor:
                 stroke_width = float(operands[-1])
                 paths.operate(op, [stroke_width], ctm)
             elif op == b"gs" and operands and isinstance(operands[-1], PDFName):
-                resolve = getattr(self, 'resolve_resource', lambda value: value)
-                try:
-                    resources = getattr(self, 'resources', {})
-                    states = resolve(resources.get('ExtGState')) if isinstance(resources, dict) else None
-                    state = resolve(states.get(str(operands[-1]))) if isinstance(states, dict) else None
-                    width = resolve(state.get('LW')) if isinstance(state, dict) else None
-                except Exception:
-                    width = None
-                if isinstance(width, (int, float)) and math.isfinite(width) and width >= 0:
-                    stroke_width = float(width)
-                    paths.operate(b"w", [stroke_width], ctm)
+                stroke_width = self._graphics_width(operands, stroke_width)
             elif op == b"Td" and len(operands) >= 2:
                 tx = _num(operands[-2])
                 ty = _num(operands[-1])
@@ -638,33 +611,9 @@ class ContentTextExtractor:
             elif op == b"T*":
                 tlm = _matmul((1, 0, 0, 1, 0, -tl), tlm)
                 tm = tlm
-            elif op == b"Tj":
-                if operands and isinstance(operands[-1], bytes):
-                    shown = len(frags)
-                    tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
-                    _mark_render_style(frags, shown, tr, stroke_width)
-            elif op in (b"'", b'"'):
-                tlm = _matmul((1, 0, 0, 1, 0, -tl), tlm)
-                tm = tlm
-                if op == b'"' and len(operands) >= 3:
-                    tw = _num(operands[-3])
-                    tc = _num(operands[-2])
-                if operands and isinstance(operands[-1], bytes):
-                    shown = len(frags)
-                    tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
-                    _mark_render_style(frags, shown, tr, stroke_width)
-            elif op == b"TJ":
-                if operands and isinstance(operands[-1], list):
-                    shown = len(frags)
-                    for item in operands[-1]:
-                        if isinstance(item, bytes):
-                            tm = self._show(item, tm, font, fs, tc, tw, th, frags, ctm)
-                        elif isinstance(item, (int, float)):
-                            vertical = font is not None and font.wmode == 1
-                            adj = -item / 1000.0 * fs * (1.0 if vertical else th)
-                            tm = _matmul((1, 0, 0, 1, 0 if vertical else adj,
-                                          adj if vertical else 0), tm)
-                    _mark_render_style(frags, shown, tr, stroke_width)
+            elif op in (b"Tj", b"'", b'"', b"TJ"):
+                tm, tlm, tc, tw = self._text_operator(
+                    op, operands, tm, tlm, font, fs, tc, tw, th, tl, tr, stroke_width, frags, ctm)
             elif op == b"BI":
                 scanner.pos = self._skip_inline_image(content, scanner.pos)
             elif op in _PATH_OPS:
@@ -707,6 +656,168 @@ class ContentTextExtractor:
             paths.warnings.append("WARN: PDF 비유한 텍스트 좌표 — 해당 조각 건너뜀")
         return PageContent(safe, paths.segments, paths.warnings, marked_ids,
                            duplicate_marked_ids, paths.short_segments)
+
+    def _begin_marked(self, op, operands, warnings, marked_ids, duplicate_marked_ids):
+        props = operands[-1] if op == b"BDC" and operands else None
+        if isinstance(props, PDFName):
+            props = getattr(self, "properties", {}).get(str(props))
+        mcid = props.get("MCID") if isinstance(props, dict) else None
+        if type(mcid) is not int or mcid < 0:
+            mcid = None
+        if len(self._marked_stack) < 64 and not self._marked_overflow:
+            self._marked_stack.append((mcid, bool(operands and str(operands[0]) == "Artifact")))
+            if mcid is not None:
+                if mcid in marked_ids:
+                    duplicate_marked_ids.add(mcid)
+                marked_ids.add(mcid)
+        else:
+            self._marked_overflow += 1
+            if self._marked_overflow == 1:
+                warnings.append("WARN: PDF marked-content 깊이 한도 초과")
+
+    def _end_marked(self):
+        if self._marked_overflow:
+            self._marked_overflow -= 1
+        elif self._marked_stack:
+            self._marked_stack.pop()
+
+    def _invoke_form(self, operands, ctm, font, fs, tc, tw, th, tl, tr, stroke_width,
+                     frags, warnings, _form_context):
+        loader = getattr(self, "form_loader", None)
+        if loader is not None:
+            loaded = None
+            try:
+                if (_form_context["expanded"] >= MAX_FORM_EXPANDED_BYTES or
+                        _form_context["operators"] >= MAX_FORM_OPERATORS):
+                    reason = "확장 한도"
+                    if reason not in _form_context["warned"]:
+                        warnings.append("WARN: PDF Form " + reason + " — 해당 Form 건너뜀")
+                        _form_context["warned"].add(reason)
+                else:
+                    loaded = loader(str(operands[-1]), getattr(self, "resources", {}))
+            except (_CInterpreterBailout or ()):
+                raise
+            except Exception:
+                if "해석 실패" not in _form_context["warned"]:
+                    warnings.append("WARN: PDF Form 해석 실패 — 해당 Form 건너뜀")
+                    _form_context["warned"].add("해석 실패")
+            if loaded is not None:
+                key, data, matrix, resources, fonts, properties, op_count, bbox, separate_mcids = loaded
+                reason = None
+                try:
+                    form_ctm = _matmul(matrix, ctm)
+                except OverflowError:
+                    form_ctm = (float("inf"),) * 6
+                if key in _form_context["active"]:
+                    reason = "순환 참조"
+                elif len(_form_context["active"]) >= MAX_FORM_DEPTH:
+                    reason = "깊이 한도"
+                elif (len(data) > MAX_FORM_CACHE_BYTES or
+                      key not in _form_context["cache"] and
+                      _form_context["cache_bytes"] + len(data) > MAX_FORM_CACHE_BYTES):
+                    reason = "디코드 캐시 한도"
+                elif (not all(math.isfinite(v) and abs(v) <= 1e150 for v in form_ctm) or
+                      not all(math.isfinite(v) for v in matrix)):
+                    reason = "행렬 크기 한도"
+                elif matrix[0] * matrix[3] - matrix[1] * matrix[2] == 0:
+                    reason = "특이 행렬"
+                else:
+                    cached = _form_context["cache"].get(key)
+                    if cached is None:
+                        cached = (data, op_count)
+                        _form_context["cache"][key] = cached
+                        _form_context["cache_bytes"] += len(data)
+                    op_count = cached[1]
+                    if (_form_context["expanded"] + len(data) > MAX_FORM_EXPANDED_BYTES or
+                            _form_context["operators"] + op_count > MAX_FORM_OPERATORS):
+                        reason = "확장 한도"
+                if reason is not None:
+                    if reason not in _form_context["warned"]:
+                        warnings.append("WARN: PDF Form " + reason + " — 해당 Form 건너뜀")
+                        _form_context["warned"].add(reason)
+                else:
+                    _form_context["expanded"] += len(data)
+                    _form_context["operators"] += op_count
+                    _form_context["active"].add(key)
+                    try:
+                        child = ContentTextExtractor.from_fonts(
+                            fonts() if callable(fonts) else fonts,
+                            track_char_positions=self.track_char_positions or bbox is not None)
+                        child.form_loader = loader
+                        child.resources = resources
+                        child.resolve_resource = getattr(self, 'resolve_resource', lambda value: value)
+                        child.properties = properties
+                        result = child.extract_page(
+                            data, form_ctm, _form_context,
+                            (font, fs, tc, tw, th, tl, tr, stroke_width))
+                        child_frags = (_clip_form_fragments(result.fragments, bbox, form_ctm)
+                                       if bbox is not None else result.fragments)
+                        offset = len(frags)
+                        page_mcids = (tuple(item[0] for item in self._marked_stack
+                                            if item[0] is not None)
+                                      if not self._marked_overflow and not separate_mcids else ())
+                        parent_artifact = any(item[1] for item in self._marked_stack)
+                        for index, frag in enumerate(child_frags):
+                            frag.order = offset + index
+                            frag.mcids = page_mcids  # Form MCIDs have their own space.
+                            frag.artifact = frag.artifact or parent_artifact
+                        frags.extend(child_frags)
+                        # Form vector art is outside this text pass. Adding
+                        # its rules creates empty grids in unrelated artwork.
+                        warnings.extend(result.warnings)
+                    except (_CInterpreterBailout or ()):
+                        raise
+                    except Exception:
+                        if "해석 실패" not in _form_context["warned"]:
+                            warnings.append("WARN: PDF Form 해석 실패 — 해당 Form 건너뜀")
+                            _form_context["warned"].add("해석 실패")
+                    finally:
+                        _form_context["active"].discard(key)
+
+    def _graphics_width(self, operands, stroke_width):
+        resolve = getattr(self, 'resolve_resource', lambda value: value)
+        try:
+            resources = getattr(self, 'resources', {})
+            states = resolve(resources.get('ExtGState')) if isinstance(resources, dict) else None
+            state = resolve(states.get(str(operands[-1]))) if isinstance(states, dict) else None
+            width = resolve(state.get('LW')) if isinstance(state, dict) else None
+        except Exception:
+            width = None
+        if isinstance(width, (int, float)) and math.isfinite(width) and width >= 0:
+            stroke_width = float(width)
+
+        return stroke_width
+
+    def _text_operator(self, op, operands, tm, tlm, font, fs, tc, tw, th, tl, tr,
+                       stroke_width, frags, ctm):
+        if op == b"Tj":
+            if operands and isinstance(operands[-1], bytes):
+                shown = len(frags)
+                tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
+                _mark_render_style(frags, shown, tr, stroke_width)
+        elif op in (b"'", b'"'):
+            tlm = _matmul((1, 0, 0, 1, 0, -tl), tlm)
+            tm = tlm
+            if op == b'"' and len(operands) >= 3:
+                tw = _num(operands[-3])
+                tc = _num(operands[-2])
+            if operands and isinstance(operands[-1], bytes):
+                shown = len(frags)
+                tm = self._show(operands[-1], tm, font, fs, tc, tw, th, frags, ctm)
+                _mark_render_style(frags, shown, tr, stroke_width)
+        elif op == b"TJ":
+            if operands and isinstance(operands[-1], list):
+                shown = len(frags)
+                for item in operands[-1]:
+                    if isinstance(item, bytes):
+                        tm = self._show(item, tm, font, fs, tc, tw, th, frags, ctm)
+                    elif isinstance(item, (int, float)):
+                        vertical = font is not None and font.wmode == 1
+                        adj = -item / 1000.0 * fs * (1.0 if vertical else th)
+                        tm = _matmul((1, 0, 0, 1, 0 if vertical else adj,
+                                      adj if vertical else 0), tm)
+                _mark_render_style(frags, shown, tr, stroke_width)
+        return tm, tlm, tc, tw
 
     @classmethod
     def _count_operators(cls, data: bytes) -> Tuple[int, bool]:

@@ -36,7 +36,7 @@ class Paragraph:
 
     @property
     def text(self) -> str:
-        return ''.join(r.text for r in self.runs)
+        return ''.join([r.text for r in self.runs])
 
     @property
     def is_heading(self) -> bool:

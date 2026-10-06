@@ -2,6 +2,8 @@
 from dataclasses import dataclass, field
 from typing import List, Any, Optional
 
+from .document import Paragraph
+
 # 중첩 표를 평탄화할 때의 재귀 상한. ooxml/docx.py 의 MAX_NESTED_TABLE_DEPTH 와 같은 값.
 MAX_FLATTEN_DEPTH = 32
 
@@ -23,6 +25,12 @@ def flatten_block_texts(blocks, cell_sep: str = '\t', row_sep: str = '\n', _dept
 
     parts = []
     for block in blocks:
+        if type(block) is Paragraph:
+            # 블록 대부분이 문단이다. 아래 속성 판별을 건너뛰고 text 를 한 번만 만든다.
+            text = block.text
+            if text:
+                parts.append(text)
+            continue
         # 각주/미주/머리글은 본문이 아니다. 셀 텍스트 한가운데에 각주 본문이
         # 끼어들면 셀 값이 오염된다. 출력 계층이 따로 렌더한다.
         if hasattr(block, 'paragraphs') and hasattr(block, 'type'):
@@ -54,9 +62,10 @@ def flatten_block_texts(blocks, cell_sep: str = '\t', row_sep: str = '\n', _dept
             text = block.latex or block.script
             if text:
                 parts.append(text)
-        elif hasattr(block, 'text'):  # Paragraph 등
-            if block.text:
-                parts.append(block.text)
+        else:  # text 를 가진 그 밖의 블록 (프로퍼티일 수 있으니 한 번만 읽는다)
+            text = getattr(block, 'text', None)
+            if text:
+                parts.append(text)
     return parts
 
 

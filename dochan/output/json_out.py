@@ -2,18 +2,19 @@
 output/json_out.py — 구조화 JSON 출력
 """
 
-import json
 from copy import deepcopy
+from ..conversion import Provenance
 from ..model.document import Document, Paragraph
 from ..model.table import Table
 from ..model.equation import Equation
 from ..model.image import Image
 from ..model.header_footer import Comment, Footnote, HeaderFooter
+from .json_indent import dumps as _dumps
 
 
 def to_json(doc: Document, indent: int = 2) -> str:
     """Document → JSON 문자열"""
-    return json.dumps(to_dict(doc), ensure_ascii=False, indent=indent)
+    return _dumps(to_dict(doc), indent)
 
 
 def to_dict(doc: Document) -> dict:
@@ -48,6 +49,40 @@ def _section_to_dict(section) -> dict:
 def _provenance_to_dict(provenance) -> dict:
     if provenance is None:
         return {}
+    if type(provenance) is Provenance:
+        # 셀·문단·런마다 불리는 경로다. 아래 일반 경로와 같은 순서·조건을 풀어 쓴다.
+        result = {}
+        value = provenance.source_format
+        if value not in (None, ''):
+            result['source_format'] = value
+        value = provenance.page
+        if value not in (None, ''):
+            result['page'] = value
+        value = provenance.slide
+        if value not in (None, ''):
+            result['slide'] = value
+        value = provenance.sheet
+        if value not in (None, ''):
+            result['sheet'] = value
+        value = provenance.cell
+        if value not in (None, ''):
+            result['cell'] = value
+        value = provenance.section
+        if value not in (None, ''):
+            result['section'] = value
+        value = provenance.paragraph
+        if value not in (None, ''):
+            result['paragraph'] = value
+        value = provenance.path
+        if value not in (None, ''):
+            result['path'] = value
+        value = provenance.visibility
+        if value is not None:
+            result['visibility'] = value
+        value = provenance.hidden
+        if value is not None:
+            result['hidden'] = value
+        return result
     result = {}
     for name in ('source_format', 'page', 'slide', 'sheet', 'cell', 'section', 'paragraph', 'path'):
         value = getattr(provenance, name, None)

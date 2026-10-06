@@ -1,6 +1,6 @@
 """시트 XML의 셀/행 유무와 무관하게 메모의 좌표를 보존한다."""
 import json
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape  # nosemgrep: use-defused-xml -- text escaping helper only; no XML is parsed
 
 import pytest
 

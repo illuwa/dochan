@@ -6,6 +6,7 @@
 """
 from dataclasses import dataclass, field, replace
 import math
+import os
 import re
 import statistics
 from typing import Callable, Dict, List, Optional, Tuple
@@ -32,7 +33,7 @@ MAX_FORM_OPERATORS = 32768
 _LINE_Y_TOLERANCE = 3.0
 
 
-class ContentScanner:
+class _PythonContentScanner:
     """Content stream token scanner; structured objects retain PDFLexer semantics."""
 
     def __init__(self, data: bytes):
@@ -89,6 +90,17 @@ class ContentScanner:
             if token[0] in DELIMITERS:
                 continue
             return "operator", token
+
+
+ContentScanner = _PythonContentScanner
+CONTENT_SCANNER_BACKEND = "python"
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from ._cscan import Scanner as ContentScanner
+    except ImportError:
+        pass
+    else:
+        CONTENT_SCANNER_BACKEND = "c"
 
 
 def default_byte_decoder(raw: bytes) -> str:

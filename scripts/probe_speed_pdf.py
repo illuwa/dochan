@@ -23,6 +23,7 @@ def _hash(value):
 
 def _worker(path, profile=False):
     from dochan.reader import Dochan
+    from dochan.pdf.content import CONTENT_SCANNER_BACKEND
 
     profiler = cProfile.Profile() if profile else None
     if profiler:
@@ -38,6 +39,7 @@ def _worker(path, profile=False):
         profiler.disable()
     errors = json.dumps(doc.errors, ensure_ascii=False)
     result = {
+        "content_scanner_backend": CONTENT_SCANNER_BACKEND,
         "parse": parsed - started,
         "markdown": rendered_md - parsed,
         "json": rendered_json - rendered_md,

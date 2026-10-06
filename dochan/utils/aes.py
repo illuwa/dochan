@@ -9,25 +9,23 @@ from typing import List
 
 
 def _build_sbox() -> bytes:
-    # Rijndael S-box via multiplicative inverse in GF(2^8) + affine transform.
-    def gf_mul(a: int, b: int) -> int:
-        p = 0
-        for _ in range(8):
-            if b & 1:
-                p ^= a
-            hi = a & 0x80
-            a = (a << 1) & 0xFF
-            if hi:
-                a ^= 0x1B
-            b >>= 1
-        return p
+    # Rijndael S-box: GF(2^8) 곱셈 역원 뒤 아핀 변환 (FIPS-197 §5.1.1).
+    # 역원은 생성원 3 의 거듭제곱 표로 구한다: x = 3^k 이면 x^-1 = 3^(255-k).
+    # 255×255 전수 탐색(import 마다 약 27ms)을 255 단계로 줄인다.
+    exp = [0] * 255
+    log = [0] * 256
+    value = 1
+    for power in range(255):
+        exp[power] = value
+        log[value] = power
+        doubled = (value << 1) & 0xFF
+        if value & 0x80:
+            doubled ^= 0x1B
+        value ^= doubled  # value × 3 = value × 2 ⊕ value
 
     inv = [0] * 256
     for x in range(1, 256):
-        for y in range(1, 256):
-            if gf_mul(x, y) == 1:
-                inv[x] = y
-                break
+        inv[x] = exp[(255 - log[x]) % 255]
 
     sbox = [0] * 256
     for x in range(256):
@@ -99,9 +97,16 @@ def _make_tables(inverse: bool):
     )
 
 
-_ENC_TABLES = _make_tables(False)
-_DEC_TABLES = _make_tables(True)
+_TABLES = {}
 _BLOCK = struct.Struct(">4I")
+
+
+def _tables(inverse: bool):
+    """T-테이블은 처음 쓸 때 만든다 — import 때 만들면 암호화 문서가 아니어도 비용을 치른다."""
+    tables = _TABLES.get(inverse)
+    if tables is None:
+        tables = _TABLES[inverse] = _make_tables(inverse)
+    return tables
 
 
 class _RoundKeys(list):
@@ -112,7 +117,7 @@ class _RoundKeys(list):
         self.encrypt = tuple(int.from_bytes(bytes(word), "big") for word in words)
         # Equivalent Inverse Cipher (FIPS-197 §5.3.5): 중간 라운드 키에만
         # InvMixColumns를 적용한다. D-table의 InvSubBytes는 SBOX로 상쇄한다.
-        d0, d1, d2, d3 = _DEC_TABLES
+        d0, d1, d2, d3 = _tables(True)
         self.decrypt = tuple(
             self.encrypt[i] if i < 4 or i >= len(words) - 4 else
             d0[SBOX[word[0]]] ^ d1[SBOX[word[1]]]
@@ -132,7 +137,7 @@ def _add_round_key(state: List[List[int]], round_keys: List[List[int]], round_id
 def _decrypt_block(block: bytes, round_keys: List[List[int]], nr: int = 10) -> bytes:
     keys = round_keys if isinstance(round_keys, _RoundKeys) else _RoundKeys(round_keys)
     rk = keys.decrypt
-    d0, d1, d2, d3 = _DEC_TABLES
+    d0, d1, d2, d3 = _tables(True)
     s0, s1, s2, s3 = _BLOCK.unpack(block)
     offset = nr * 4
     s0, s1, s2, s3 = s0 ^ rk[offset], s1 ^ rk[offset + 1], s2 ^ rk[offset + 2], s3 ^ rk[offset + 3]
@@ -156,7 +161,7 @@ def _decrypt_block(block: bytes, round_keys: List[List[int]], nr: int = 10) -> b
 def _encrypt_block(block: bytes, round_keys: List[List[int]], nr: int) -> bytes:
     keys = round_keys if isinstance(round_keys, _RoundKeys) else _RoundKeys(round_keys)
     rk = keys.encrypt
-    e0, e1, e2, e3 = _ENC_TABLES
+    e0, e1, e2, e3 = _tables(False)
     s0, s1, s2, s3 = _BLOCK.unpack(block)
     s0, s1, s2, s3 = s0 ^ rk[0], s1 ^ rk[1], s2 ^ rk[2], s3 ^ rk[3]
     for round_idx in range(1, nr):

@@ -3,3 +3,4 @@ include dochan/pdf/_cscan.c
 include dochan/pdf/_cinterp.c
 include dochan/pdf/_cinterp_objects.h
 include dochan/pdf/_cinterp_paths.h
+include dochan/pdf/_clines.c

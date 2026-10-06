@@ -102,6 +102,16 @@ if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
     else:
         CONTENT_SCANNER_BACKEND = "c"
 
+_c_assemble_lines = None
+LINE_ASSEMBLY_BACKEND = "python"
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from ._clines import assemble_lines as _c_assemble_lines
+    except ImportError:
+        pass
+    else:
+        LINE_ASSEMBLY_BACKEND = "c"
+
 
 _CInterpreter = None
 _CInterpreterBailout = None
@@ -978,6 +988,10 @@ class ContentTextExtractor:
         생성기가 의도한 그리기 순서를 유지하고, 쓰기 방향이나 줄 간 좌표가
         크게 바뀔 때만 줄을 나눈다. 줄 안에서는 쓰기 축을 따라 정렬한다.
         """
+        if _c_assemble_lines is not None:
+            lines = _c_assemble_lines(frags, _Line, _Segment, Fragment, _LINE_Y_TOLERANCE)
+            if lines is not None:
+                return lines
         if not frags:
             return []
         rows: List[List[Fragment]] = []

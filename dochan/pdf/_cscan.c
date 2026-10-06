@@ -283,6 +283,8 @@ number(const unsigned char *buf, Py_ssize_t size, int *is_float, int *negative)
  * the same interned literals, so sharing the objects makes that an identity test. */
 static PyObject *kind_operand = NULL;
 static PyObject *kind_operator = NULL;
+static PyObject *lexer_pos_name = NULL;
+static int cache_ready;
 
 /* Consumes value's reference on both success and allocation failure. */
 static PyObject *
@@ -342,7 +344,7 @@ scanner_next(Scanner *self, PyObject *unused)
             value = PyLong_FromSsize_t(start);
             if (value == NULL)
                 goto done;
-            if (PyObject_SetAttrString(self->lexer, "pos", value) < 0) {
+            if (PyObject_SetAttr(self->lexer, lexer_pos_name, value) < 0) {
                 Py_CLEAR(value);
                 goto done;
             }
@@ -354,7 +356,7 @@ scanner_next(Scanner *self, PyObject *unused)
                 if (!PyErr_ExceptionMatches(self->syntax_error))
                     goto done;
                 PyErr_Clear();
-                position = PyObject_GetAttrString(self->lexer, "pos");
+                position = PyObject_GetAttr(self->lexer, lexer_pos_name);
                 if (position == NULL)
                     goto done;
                 pos = PyLong_AsSsize_t(position);
@@ -369,7 +371,7 @@ scanner_next(Scanner *self, PyObject *unused)
                 set_position(self, pos + 1);
                 continue;
             } else {
-                PyObject *position = PyObject_GetAttrString(self->lexer, "pos");
+                PyObject *position = PyObject_GetAttr(self->lexer, lexer_pos_name);
                 if (position == NULL || set_pos(self, position, NULL) < 0) {
                     Py_XDECREF(position);
                     Py_CLEAR(value);
@@ -470,19 +472,31 @@ PyInit__cscan(void)
     PyObject *type;
     if (module == NULL)
         return NULL;
-    if (kind_operand == NULL)
+    if (kind_operand == NULL) {
         kind_operand = PyUnicode_InternFromString("operand");
-    if (kind_operator == NULL)
+        if (kind_operand == NULL) goto failed;
+    }
+    if (kind_operator == NULL) {
         kind_operator = PyUnicode_InternFromString("operator");
-    if (kind_operand == NULL || kind_operator == NULL) {
-        Py_DECREF(module);
-        return NULL;
+        if (kind_operator == NULL) goto failed;
+    }
+    if (lexer_pos_name == NULL) {
+        lexer_pos_name = PyUnicode_InternFromString("pos");
+        if (lexer_pos_name == NULL) goto failed;
     }
     type = PyType_FromSpec(&scanner_spec);
     if (type == NULL || PyModule_AddObject(module, "Scanner", type) < 0) {
         Py_XDECREF(type);
-        Py_DECREF(module);
-        return NULL;
+        goto failed;
     }
+    cache_ready = 1;
     return module;
+failed:
+    if (!cache_ready) {
+        Py_CLEAR(kind_operand);
+        Py_CLEAR(kind_operator);
+        Py_CLEAR(lexer_pos_name);
+    }
+    Py_DECREF(module);
+    return NULL;
 }

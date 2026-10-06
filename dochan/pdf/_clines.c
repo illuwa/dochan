@@ -28,10 +28,56 @@ typedef struct {
 } FragmentData;
 
 #ifndef DOCHAN_CLINES_NUMERIC_ONLY
-static const char *numeric_names[] = {
-    "x", "y", "width", "size", "space_width", "dir_x", "dir_y"
+/* Strong process-global references: successful single-phase imports reuse
+ * them; failed first imports release every partially initialized slot. */
+enum {
+    NAME_X, NAME_Y, NAME_WIDTH, NAME_SIZE, NAME_SPACE_WIDTH, NAME_DIR_X, NAME_DIR_Y,
+    NAME_TEXT, NAME_BOLD, NAME_ITALIC, NAME_ORDER, NAME_INVISIBLE, NAME_LINK_SPANS,
+    NAME_COMMENT_MARKERS, NAME_NOTE_REF, NAME_X0, NAME_X1, NAME_RUNS,
+    NAME_FRAGMENT_ORDERS, NAME_DIRECTION, NAME_ALONG_START, NAME_ALONG_END,
+    NAME_ACROSS, NAME_LEFT, NAME_RIGHT, NAME_FIRST_SIZE, NAME_LAST_SIZE,
+    NAME_SEGMENTS, NAME_TRAILING_SPACE, NAME_NEW, NAME_DICT, NAME_ENDSWITH,
+    NAME_STRIP, NAME_ISSPACE, NAME_COUNT
 };
-static const char *direction_names[] = {"ltr", "rtl", "down", "up"};
+static const char *name_strings[NAME_COUNT] = {
+    "x", "y", "width", "size", "space_width", "dir_x", "dir_y", "text", "bold",
+    "italic", "order", "invisible", "link_spans", "comment_markers", "note_ref",
+    "x0", "x1", "runs", "fragment_orders", "direction", "along_start", "along_end",
+    "across", "left", "right", "first_size", "last_size", "segments",
+    "trailing_space", "__new__", "__dict__", "endswith", "strip", "isspace"
+};
+static PyObject *names[NAME_COUNT];
+static PyObject *directions[4], *empty_string, *space_string;
+static int cache_ready;
+
+static void
+clear_string_cache(void)
+{
+    int i;
+    for (i = 0; i < NAME_COUNT; i++) Py_CLEAR(names[i]);
+    for (i = 0; i < 4; i++) Py_CLEAR(directions[i]);
+    Py_CLEAR(empty_string);
+    Py_CLEAR(space_string);
+}
+
+static int
+init_string_cache(void)
+{
+    static const char *direction_strings[] = {"ltr", "rtl", "down", "up"};
+    int i;
+    for (i = 0; i < NAME_COUNT; i++) {
+        names[i] = PyUnicode_InternFromString(name_strings[i]);
+        if (!names[i]) return -1;
+    }
+    for (i = 0; i < 4; i++) {
+        directions[i] = PyUnicode_InternFromString(direction_strings[i]);
+        if (!directions[i]) return -1;
+    }
+    empty_string = PyUnicode_InternFromString("");
+    if (!empty_string) return -1;
+    space_string = PyUnicode_InternFromString(" ");
+    return space_string ? 0 : -1;
+}
 
 static int
 exact_type(PyObject *object, PyObject *type)
@@ -105,7 +151,7 @@ read_fragment(FragmentData *f, PyObject *object, PyObject *fragment_type)
     f->object = object;
     f->plain = 1;
     for (j = 0; j < NUMBERS; j++) {
-        f->number[j] = PyObject_GetAttrString(object, numeric_names[j]);
+        f->number[j] = PyObject_GetAttr(object, names[NAME_X + j]);
         if (f->number[j] == NULL)
             goto error;
         if (!PyFloat_CheckExact(f->number[j])) {
@@ -154,14 +200,14 @@ read_fragment(FragmentData *f, PyObject *object, PyObject *fragment_type)
     }
     if (f->across_object == NULL)
         return -1;
-    if (!(f->text = PyObject_GetAttrString(object, "text")) ||
-            !(f->bold = PyObject_GetAttrString(object, "bold")) ||
-            !(f->italic = PyObject_GetAttrString(object, "italic")) ||
-            !(f->order = PyObject_GetAttrString(object, "order")) ||
-            !(f->invisible = PyObject_GetAttrString(object, "invisible")) ||
-            !(links = PyObject_GetAttrString(object, "link_spans")) ||
-            !(comments = PyObject_GetAttrString(object, "comment_markers")) ||
-            !(note = PyObject_GetAttrString(object, "note_ref")))
+    if (!(f->text = PyObject_GetAttr(object, names[NAME_TEXT])) ||
+            !(f->bold = PyObject_GetAttr(object, names[NAME_BOLD])) ||
+            !(f->italic = PyObject_GetAttr(object, names[NAME_ITALIC])) ||
+            !(f->order = PyObject_GetAttr(object, names[NAME_ORDER])) ||
+            !(f->invisible = PyObject_GetAttr(object, names[NAME_INVISIBLE])) ||
+            !(links = PyObject_GetAttr(object, names[NAME_LINK_SPANS])) ||
+            !(comments = PyObject_GetAttr(object, names[NAME_COMMENT_MARKERS])) ||
+            !(note = PyObject_GetAttr(object, names[NAME_NOTE_REF])))
         goto error;
     /* Python constructs all row groups before calling _Line. An exotic
      * comparator or str method may mutate later fragments. Delegate the
@@ -341,12 +387,12 @@ tracking(FragmentData **row, Py_ssize_t n, double *gaps, double *references)
 #ifndef DOCHAN_CLINES_NUMERIC_ONLY
 /* Install owned temporaries and always release them, including on error. */
 static int
-put_owned(PyObject *dict, const char *name, PyObject *value)
+put_owned(PyObject *dict, PyObject *name, PyObject *value)
 {
     int result;
     if (value == NULL)
         return -1;
-    result = PyDict_SetItemString(dict, name, value);
+    result = PyDict_SetItem(dict, name, value);
     Py_DECREF(value);
     return result;
 }
@@ -354,10 +400,10 @@ put_owned(PyObject *dict, const char *name, PyObject *value)
 static PyObject *
 new_instance(PyObject *type, PyObject **dict)
 {
-    PyObject *instance = PyObject_CallMethod(type, "__new__", "O", type);
+    PyObject *instance = PyObject_CallMethodObjArgs(type, names[NAME_NEW], type, NULL);
     if (!instance)
         return NULL;
-    *dict = PyObject_GetAttrString(instance, "__dict__");
+    *dict = PyObject_GetAttr(instance, names[NAME_DICT]);
     if (!*dict) {
         Py_DECREF(instance);
         return NULL;
@@ -420,11 +466,11 @@ make_segment(PyObject *type, FragmentData *f)
         runs = PyTuple_New(0);
     if (!runs)
         goto error;
-    if (put_owned(dict, "x0", PyFloat_FromDouble(f->along)) < 0 ||
-            put_owned(dict, "x1", PyFloat_FromDouble(f->along + f->value[WIDTH])) < 0 ||
-            PyDict_SetItemString(dict, "text", f->text) < 0 ||
-            PyDict_SetItemString(dict, "space_width", f->number[SPACE]) < 0 ||
-            PyDict_SetItemString(dict, "runs", runs) < 0)
+    if (put_owned(dict, names[NAME_X0], PyFloat_FromDouble(f->along)) < 0 ||
+            put_owned(dict, names[NAME_X1], PyFloat_FromDouble(f->along + f->value[WIDTH])) < 0 ||
+            PyDict_SetItem(dict, names[NAME_TEXT], f->text) < 0 ||
+            PyDict_SetItem(dict, names[NAME_SPACE_WIDTH], f->number[SPACE]) < 0 ||
+            PyDict_SetItem(dict, names[NAME_RUNS], runs) < 0)
         goto error;
     Py_DECREF(dict);
     Py_XDECREF(run);
@@ -488,7 +534,7 @@ make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
         }
         if (i && (gap > threshold || inferred)) {
             /* Exact str methods preserve every Unicode whitespace rule. */
-            suffix = PyObject_CallMethod(row[i - 1]->text, "endswith", "O", space);
+            suffix = PyObject_CallMethodObjArgs(row[i - 1]->text, names[NAME_ENDSWITH], space, NULL);
             if (!suffix)
                 goto error;
             compare = PyObject_IsTrue(suffix);
@@ -515,7 +561,7 @@ make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
     joined = PyUnicode_Join(empty, parts);
     if (!joined)
         goto error;
-    stripped = PyObject_CallMethod(joined, "strip", NULL);
+    stripped = PyObject_CallMethodObjArgs(joined, names[NAME_STRIP], NULL);
     if (!stripped)
         goto error;
     length = PyUnicode_GetLength(joined);
@@ -524,27 +570,27 @@ make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
     last_character = PyUnicode_Substring(joined, length ? length - 1 : 0, length);
     if (!last_character)
         goto error;
-    white = PyObject_CallMethod(last_character, "isspace", NULL);
+    white = PyObject_CallMethodObjArgs(last_character, names[NAME_ISSPACE], NULL);
     if (!white)
         goto error;
     trailing = PyUnicode_GetLength(stripped) != 0 && white == Py_True &&
                row[n - 1]->invisible == Py_False;
-    if (PyDict_SetItemString(dict, "fragment_orders", orders) < 0 ||
-            PyDict_SetItemString(dict, "order", minimum_order) < 0 ||
-            put_owned(dict, "direction", PyUnicode_FromString(direction_names[row[0]->direction])) < 0 ||
-            put_owned(dict, "along_start", PyFloat_FromDouble(minimum_along)) < 0 ||
-            put_owned(dict, "along_end", PyFloat_FromDouble(maximum_end)) < 0 ||
-            put_owned(dict, "across", PyFloat_FromDouble(row[0]->across)) < 0 ||
-            put_owned(dict, "left", PyFloat_FromDouble(minimum_along)) < 0 ||
-            put_owned(dict, "right", PyFloat_FromDouble(maximum_end)) < 0 ||
-            put_owned(dict, "y", PyFloat_FromDouble(row[0]->across)) < 0 ||
-            PyDict_SetItemString(dict, "size", maximum_size) < 0 ||
-            PyDict_SetItemString(dict, "first_size", row[0]->number[SIZE]) < 0 ||
-            PyDict_SetItemString(dict, "last_size", row[n - 1]->number[SIZE]) < 0 ||
-            PyDict_SetItemString(dict, "segments", segments) < 0 ||
-            PyDict_SetItemString(dict, "runs", runs) < 0 ||
-            PyDict_SetItemString(dict, "trailing_space", trailing ? Py_True : Py_False) < 0 ||
-            PyDict_SetItemString(dict, "text", stripped) < 0)
+    if (PyDict_SetItem(dict, names[NAME_FRAGMENT_ORDERS], orders) < 0 ||
+            PyDict_SetItem(dict, names[NAME_ORDER], minimum_order) < 0 ||
+            PyDict_SetItem(dict, names[NAME_DIRECTION], directions[row[0]->direction]) < 0 ||
+            put_owned(dict, names[NAME_ALONG_START], PyFloat_FromDouble(minimum_along)) < 0 ||
+            put_owned(dict, names[NAME_ALONG_END], PyFloat_FromDouble(maximum_end)) < 0 ||
+            put_owned(dict, names[NAME_ACROSS], PyFloat_FromDouble(row[0]->across)) < 0 ||
+            put_owned(dict, names[NAME_LEFT], PyFloat_FromDouble(minimum_along)) < 0 ||
+            put_owned(dict, names[NAME_RIGHT], PyFloat_FromDouble(maximum_end)) < 0 ||
+            put_owned(dict, names[NAME_Y], PyFloat_FromDouble(row[0]->across)) < 0 ||
+            PyDict_SetItem(dict, names[NAME_SIZE], maximum_size) < 0 ||
+            PyDict_SetItem(dict, names[NAME_FIRST_SIZE], row[0]->number[SIZE]) < 0 ||
+            PyDict_SetItem(dict, names[NAME_LAST_SIZE], row[n - 1]->number[SIZE]) < 0 ||
+            PyDict_SetItem(dict, names[NAME_SEGMENTS], segments) < 0 ||
+            PyDict_SetItem(dict, names[NAME_RUNS], runs) < 0 ||
+            PyDict_SetItem(dict, names[NAME_TRAILING_SPACE], trailing ? Py_True : Py_False) < 0 ||
+            PyDict_SetItem(dict, names[NAME_TEXT], stripped) < 0)
         goto error;
     Py_DECREF(dict);
     Py_DECREF(orders);
@@ -638,7 +684,7 @@ static PyObject *
 assemble_lines(PyObject *module, PyObject *args)
 {
     PyObject *fragments, *line_type, *segment_type, *fragment_type, *tolerance_object;
-    PyObject *snapshot = NULL, *result = NULL, *empty = NULL, *space = NULL;
+    PyObject *snapshot = NULL, *result = NULL;
     FragmentData *data = NULL;
     FragmentData **row = NULL, **scratch = NULL;
     double *gaps = NULL, *references = NULL;
@@ -682,9 +728,7 @@ assemble_lines(PyObject *module, PyObject *args)
     scratch = PyMem_Malloc((size_t)n * sizeof(FragmentData *));
     gaps = PyMem_Malloc((size_t)n * sizeof(double));
     references = PyMem_Malloc((size_t)n * sizeof(double));
-    empty = PyUnicode_FromString("");
-    space = PyUnicode_FromString(" ");
-    if (!data || !row || !scratch || !gaps || !references || !empty || !space) {
+    if (!data || !row || !scratch || !gaps || !references) {
         if (!PyErr_Occurred())
             PyErr_NoMemory();
         goto error;
@@ -717,7 +761,7 @@ assemble_lines(PyObject *module, PyObject *args)
             goto error;
         if (!in_row) {
             PyObject *line = make_row(data, first, i, row, scratch, gaps, references,
-                                      line_type, segment_type, empty, space);
+                                      line_type, segment_type, empty_string, space_string);
             if (!line)
                 goto error;
             supported = PyList_Append(result, line);
@@ -732,7 +776,7 @@ assemble_lines(PyObject *module, PyObject *args)
     }
     {
         PyObject *line = make_row(data, first, n, row, scratch, gaps, references,
-                                  line_type, segment_type, empty, space);
+                                  line_type, segment_type, empty_string, space_string);
         if (!line)
             goto error;
         supported = PyList_Append(result, line);
@@ -752,8 +796,6 @@ done:
     PyMem_Free(gaps);
     PyMem_Free(references);
     Py_XDECREF(snapshot);
-    Py_XDECREF(empty);
-    Py_XDECREF(space);
     return result;
 }
 
@@ -769,6 +811,17 @@ static struct PyModuleDef definition = {
 PyMODINIT_FUNC
 PyInit__clines(void)
 {
-    return PyModule_Create(&definition);
+    PyObject *module;
+    if (!cache_ready && init_string_cache() < 0) {
+        clear_string_cache();
+        return NULL;
+    }
+    module = PyModule_Create(&definition);
+    if (!module) {
+        if (!cache_ready) clear_string_cache();
+        return NULL;
+    }
+    cache_ready = 1;
+    return module;
 }
 #endif

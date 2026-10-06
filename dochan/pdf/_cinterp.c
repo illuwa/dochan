@@ -11,6 +11,8 @@
 static PyObject *Bailout;
 static PyObject *PDFLexerType, *PDFSyntaxErrorType, *PDFNameType;
 static PyObject *SegmentType, *HypotFunction, *PathWarning, *PathModule;
+static PyObject *LexerPosName;
+static int cache_ready;
 
 typedef struct { double v; int integer; } Num;
 typedef struct { Num x, y; } Point;
@@ -442,26 +444,35 @@ PyMODINIT_FUNC PyInit__cinterp(void)
 {
     PyObject *m = PyModule_Create(&module), *type;
     if (!m) return NULL;
-    PathModule = PyImport_ImportModule("dochan.pdf.paths");
-    if (!PathModule) goto failed;
-    if (import_attr("dochan.pdf.objects","PDFLexer",&PDFLexerType)<0 ||
-        import_attr("dochan.pdf.objects","PDFSyntaxError",&PDFSyntaxErrorType)<0 ||
-        import_attr("dochan.pdf.objects","PDFName",&PDFNameType)<0 ||
-        import_attr("dochan.pdf.paths","Segment",&SegmentType)<0 ||
-        import_attr("dochan.pdf.paths","PATH_WARNING",&PathWarning)<0 ||
-        import_attr("math","hypot",&HypotFunction)<0) goto failed;
-    Bailout = PyErr_NewException("dochan.pdf._cinterp.Bailout",NULL,NULL);
-    if (!Bailout) goto failed;
+    if (!cache_ready) {
+        LexerPosName = PyUnicode_InternFromString("pos");
+        if (!LexerPosName) goto failed;
+        PathModule = PyImport_ImportModule("dochan.pdf.paths");
+        if (!PathModule) goto failed;
+        if (import_attr("dochan.pdf.objects","PDFLexer",&PDFLexerType)<0 ||
+            import_attr("dochan.pdf.objects","PDFSyntaxError",&PDFSyntaxErrorType)<0 ||
+            import_attr("dochan.pdf.objects","PDFName",&PDFNameType)<0 ||
+            import_attr("dochan.pdf.paths","Segment",&SegmentType)<0 ||
+            import_attr("dochan.pdf.paths","PATH_WARNING",&PathWarning)<0 ||
+            import_attr("math","hypot",&HypotFunction)<0) goto failed;
+        Bailout = PyErr_NewException("dochan.pdf._cinterp.Bailout",NULL,NULL);
+        if (!Bailout) goto failed;
+    }
     Py_INCREF(Bailout); /* The process-global cache owns a strong reference. */
     if (PyModule_AddObject(m,"Bailout",Bailout)<0) { Py_DECREF(Bailout); goto failed; }
     type = PyType_FromSpec(&spec);
     if (!type) goto failed;
     if (PyModule_AddObject(m,"Interpreter",type)<0) { Py_DECREF(type); goto failed; }
+    cache_ready = 1;
     return m;
 failed:
     Py_DECREF(m);
-    Py_CLEAR(Bailout);
-    Py_CLEAR(PDFLexerType); Py_CLEAR(PDFSyntaxErrorType); Py_CLEAR(PDFNameType);
-    Py_CLEAR(SegmentType); Py_CLEAR(HypotFunction); Py_CLEAR(PathWarning); Py_CLEAR(PathModule);
+    /* A failed later PyInit call must not invalidate earlier live instances. */
+    if (!cache_ready) {
+        Py_CLEAR(LexerPosName);
+        Py_CLEAR(Bailout);
+        Py_CLEAR(PDFLexerType); Py_CLEAR(PDFSyntaxErrorType); Py_CLEAR(PDFNameType);
+        Py_CLEAR(SegmentType); Py_CLEAR(HypotFunction); Py_CLEAR(PathWarning); Py_CLEAR(PathModule);
+    }
     return NULL;
 }

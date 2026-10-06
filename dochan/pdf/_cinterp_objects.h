@@ -385,7 +385,7 @@ static int scan_next(ObjScanner *s, PyObject **value)
                 PyObject *position = PyLong_FromSsize_t(start);
                 Py_ssize_t lexer_pos;
                 if (position == NULL) goto done;
-                if (PyObject_SetAttrString(s->lexer, "pos", position) < 0) {
+                if (PyObject_SetAttr(s->lexer, LexerPosName, position) < 0) {
                     Py_DECREF(position); goto done;
                 }
                 Py_DECREF(position);
@@ -393,7 +393,7 @@ static int scan_next(ObjScanner *s, PyObject **value)
                 if (*value == NULL) {
                     if (!PyErr_ExceptionMatches(PDFSyntaxErrorType)) goto done;
                     PyErr_Clear();
-                    position = PyObject_GetAttrString(s->lexer, "pos");
+                    position = PyObject_GetAttr(s->lexer, LexerPosName);
                     if (position == NULL) goto done;
                     lexer_pos = PyLong_AsSsize_t(position);
                     Py_DECREF(position);
@@ -404,7 +404,7 @@ static int scan_next(ObjScanner *s, PyObject **value)
                     s->pos = lexer_pos + 1;
                     continue;
                 }
-                position = PyObject_GetAttrString(s->lexer, "pos");
+                position = PyObject_GetAttr(s->lexer, LexerPosName);
                 if (position == NULL) { Py_CLEAR(*value); goto done; }
                 lexer_pos = PyLong_AsSsize_t(position);
                 Py_DECREF(position);

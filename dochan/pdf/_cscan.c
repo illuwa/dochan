@@ -98,6 +98,7 @@ set_position(Scanner *self, Py_ssize_t pos)
 static PyObject *
 get_pos(Scanner *self, void *closure)
 {
+    (void)closure;
     if (self->external_pos != NULL) {
         Py_INCREF(self->external_pos);
         return self->external_pos;
@@ -108,6 +109,7 @@ get_pos(Scanner *self, void *closure)
 static int
 set_pos(Scanner *self, PyObject *value, void *closure)
 {
+    (void)closure;
     Py_ssize_t pos;
     PyObject *previous;
     if (value == NULL || !PyLong_Check(value)) {
@@ -143,6 +145,7 @@ set_pos(Scanner *self, PyObject *value, void *closure)
 static PyObject *
 get_data(Scanner *self, void *closure)
 {
+    (void)closure;
     if (self->data == NULL) {
         PyErr_SetString(PyExc_AttributeError, "Scanner is not initialized");
         return NULL;
@@ -293,6 +296,7 @@ event(PyObject *kind, PyObject *value)
 static PyObject *
 scanner_next(Scanner *self, PyObject *unused)
 {
+    (void)unused;
     const unsigned char *buf;
     Py_ssize_t size, start, end;
     PyObject *data, *value = NULL, *result = NULL;
@@ -439,13 +443,13 @@ static PyGetSetDef scanner_getset[] = {
 };
 
 static PyType_Slot scanner_slots[] = {
-    {Py_tp_new, PyType_GenericNew},
-    {Py_tp_init, scanner_init},
-    {Py_tp_dealloc, scanner_dealloc},
-    {Py_tp_traverse, scanner_traverse},
-    {Py_tp_clear, scanner_clear},
-    {Py_tp_methods, scanner_methods},
-    {Py_tp_getset, scanner_getset},
+    {Py_tp_new, (void *)PyType_GenericNew},
+    {Py_tp_init, (void *)scanner_init},
+    {Py_tp_dealloc, (void *)scanner_dealloc},
+    {Py_tp_traverse, (void *)scanner_traverse},
+    {Py_tp_clear, (void *)scanner_clear},
+    {Py_tp_methods, (void *)scanner_methods},
+    {Py_tp_getset, (void *)scanner_getset},
     {0, NULL}
 };
 

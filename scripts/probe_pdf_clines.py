@@ -37,7 +37,7 @@ LINE_FIELDS = (
 )
 SEGMENT_FIELDS = ("x0", "x1", "text", "space_width", "runs")
 NUMERIC_FIELDS = ("x", "y", "width", "size", "space_width", "dir_x", "dir_y")
-DEFAULT_CORPUS = Path("/Users/illuwa/dev/personal/dochan/corpus")
+DEFAULT_CORPUS = Path(__file__).resolve().parents[1] / "corpus"
 
 
 class LineMismatch(Exception):

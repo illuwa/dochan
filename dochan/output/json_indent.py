@@ -18,6 +18,9 @@ from json.encoder import encode_basestring as _encode_str
 _INF = float("inf")
 _NONE_TYPE = type(None)
 _CONTAINERS = (list, tuple, dict)
+# 지연 목록의 항목을 하나 쓴 뒤 쌓인 조각이 이보다 많으면 한 문자열로 합친다.
+# 조각마다 붙는 str 객체 머리(약 50바이트)가 큰 표에서 본문만큼 메모리를 쓴다.
+_COMPACT_AFTER = 4096
 _fallbacks = 0
 
 
@@ -40,9 +43,31 @@ class _Unsupported(Exception):
     """자체 직렬화기가 다루지 않는 값 — 표준 라이브러리에 판단을 넘긴다."""
 
 
+class Stream:
+    """길이를 아는 지연 목록 — 직렬화기가 항목을 하나씩 받아 쓰고 버린다.
+
+    문서 전체를 dict 트리로 한꺼번에 만들지 않고도 목록과 같은 JSON 을 낸다.
+    `count` 는 `items` 가 낼 항목 수와 같아야 한다(빈 목록은 `[]` 로 적어야 하므로
+    첫 항목을 받기 전에 알아야 한다). 표준 라이브러리는 이 타입을 모르므로
+    `dumps_indented` 에만 넘긴다.
+    """
+
+    __slots__ = ("items", "count")
+
+    def __init__(self, items, count):
+        self.items = items
+        self.count = count
+
+
 def stdlib_fallbacks() -> int:
     """자체 직렬화기가 표준 라이브러리로 물러난 횟수 (진단용)."""
     return _fallbacks
+
+
+def count_fallback() -> None:
+    """호출 쪽이 지연 직렬화를 포기하고 전체 dict 경로로 물러났음을 기록한다."""
+    global _fallbacks
+    _fallbacks += 1
 
 
 def dumps(payload, indent=2) -> str:
@@ -54,8 +79,7 @@ def dumps(payload, indent=2) -> str:
     except Exception:
         # 지원하지 않는 값·키, 순환 참조, 잘못된 indent — 무엇이든 표준 라이브러리가
         # 같은 입력에서 내는 결과(또는 예외)를 그대로 돌려준다.
-        global _fallbacks
-        _fallbacks += 1
+        count_fallback()
         return json.dumps(payload, ensure_ascii=False, indent=indent)
 
 
@@ -107,6 +131,7 @@ def dumps_indented(payload, indent) -> str:
 
     정확한 내장 타입은 바로 분기하고, 상속 타입(str·int·float 하위 클래스, tuple,
     dict 하위 클래스)은 표준 라이브러리와 같은 isinstance 순서로 처리한다.
+    `Stream` 은 목록과 똑같이 적되 항목을 하나씩 받아 쓴다.
     """
     unit = indent if isinstance(indent, str) else " " * indent
     pads = ["\n"]          # pads[깊이] = 줄바꿈 + 그 깊이의 들여쓰기
@@ -116,8 +141,10 @@ def dumps_indented(payload, indent) -> str:
     get_prefix = prefixes.get
     int_text = int.__repr__
     float_text = _float_text
+    tail = 0               # out[tail:] 이 아직 합치지 않은 조각들
 
     def walk(value, depth):
+        nonlocal tail
         depth += 1
         if depth >= len(pads):
             pads.append("\n" + unit * depth)
@@ -142,7 +169,7 @@ def dumps_indented(payload, indent) -> str:
                     append(lead + prefix + ("true" if item else "false"))
                 elif kind is int:
                     append(lead + prefix + int_text(item))
-                elif kind is dict or kind is list:
+                elif kind is dict or kind is list or kind is Stream:
                     append(lead + prefix)
                     walk(item, depth)
                 elif kind is float:
@@ -161,14 +188,20 @@ def dumps_indented(payload, indent) -> str:
                 lead = sep
             append(pads[depth - 1] + "}")
         else:
-            if not value:
+            lazy = type(value) is Stream
+            if lazy:
+                if not value.count:
+                    append("[]")
+                    return
+                value = value.items
+            elif not value:
                 append("[]")
                 return
             lead = "[" + pad
             sep = "," + pad
             for item in value:
                 kind = type(item)
-                if kind is dict or kind is list:
+                if kind is dict or kind is list or kind is Stream:
                     append(lead)
                     walk(item, depth)
                 elif kind is str:
@@ -191,12 +224,17 @@ def dumps_indented(payload, indent) -> str:
                     else:
                         raise _Unsupported
                 lead = sep
+                if lazy and len(out) - tail > _COMPACT_AFTER:
+                    merged = "".join(out[tail:])
+                    del out[tail:]
+                    append(merged)
+                    tail = len(out)
             append(pads[depth - 1] + "]")
 
     text = _scalar_text(payload)
     if text is not None:
         return text
-    if not isinstance(payload, _CONTAINERS):
+    if not isinstance(payload, _CONTAINERS) and type(payload) is not Stream:
         raise _Unsupported
     walk(payload, 0)
     return "".join(out)

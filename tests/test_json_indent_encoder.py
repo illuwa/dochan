@@ -197,3 +197,91 @@ def test_native_indent_probe_agrees_with_interpreter_behaviour():
     assert isinstance(json_indent.STDLIB_INDENT_IS_NATIVE, bool)
     if sys.implementation.name == "cpython":
         assert json_indent.STDLIB_INDENT_IS_NATIVE == (sys.version_info >= (3, 13))
+
+
+# ── 지연 목록(Stream): 문서 전체의 dict 트리를 만들지 않고 항목을 하나씩 쓰고 버린다 ──
+
+def _stream(values):
+    values = list(values)
+    return json_indent.Stream(iter(values), len(values))
+
+
+@pytest.mark.parametrize("indent", [2, 0, "\t"])
+def test_stream_is_serialized_exactly_like_a_list(indent):
+    rows = [[{"text": f"r{r}c{c}", "n": r * c, "ok": bool(c % 2)} for c in range(3)] for r in range(5)]
+    lazy = {
+        "empty": _stream([]),
+        "scalars": _stream([1, "둘", None, 2.5, True]),
+        "rows": _stream(_stream(row) for row in rows),
+        "tail": {"after": [1]},
+    }
+    eager = {"empty": [], "scalars": [1, "둘", None, 2.5, True], "rows": rows, "tail": {"after": [1]}}
+    assert json_indent.dumps_indented(lazy, indent) == _reference(eager, indent)
+    assert json_indent.dumps_indented(_stream(rows), indent) == _reference(rows, indent)
+
+
+def test_stream_items_are_produced_one_at_a_time():
+    produced = []
+
+    def rows():
+        for index in range(4):
+            produced.append(index)
+            yield {"row": index}
+
+    text = json_indent.dumps_indented({"rows": json_indent.Stream(rows(), 4)}, 2)
+    assert produced == [0, 1, 2, 3]
+    assert text == _reference({"rows": [{"row": index} for index in range(4)]}, 2)
+
+
+def test_large_stream_output_survives_chunk_compaction():
+    # 조각 수가 압축 임계를 여러 번 넘도록 충분히 큰 표를 흘려 보낸다.
+    rows = [[{"text": f"값 {r}-{c}", "row": r, "col": c, "flags": [True, None]} for c in range(8)]
+            for r in range(600)]
+    lazy = {"sections": _stream([{"elements": _stream([{"rows": _stream(rows)}, {"type": "p"}])}])}
+    eager = {"sections": [{"elements": [{"rows": rows}, {"type": "p"}]}]}
+    assert json_indent.dumps_indented(lazy, 2) == _reference(eager, 2)
+
+
+def _many_shapes_document():
+    doc = _sample_document()
+    big = Table(rows=[[Cell(paragraphs=[Paragraph(runs=[TextRun(text=f"{r}행 {c}열")])], row=r, col=c)
+                       for c in range(6)] for r in range(400)])
+    empty_table = Table(rows=[])
+    blank_rows = Table(rows=[[], [Cell()]])
+    header = __import__("dochan.model.header_footer", fromlist=["HeaderFooter"]).HeaderFooter(
+        type="header", paragraphs=[Paragraph(runs=[TextRun(text="머리글")]), Table(rows=[[Cell()]])])
+    doc.sections.append(Section(elements=[big, empty_table, blank_rows, header]))
+    doc.sections.append(Section(elements=[]))
+    return doc
+
+
+@pytest.mark.parametrize("indent", [2, 0, 4, "\t", None])
+def test_to_json_streaming_matches_stdlib_dump_of_to_dict_for_all_shapes(indent):
+    doc = _many_shapes_document()
+    assert to_json(doc, indent=indent) == _reference(to_dict(doc), indent)
+    assert to_json(Document(), indent=indent) == _reference(to_dict(Document()), indent)
+
+
+def test_to_json_does_not_fall_back_for_model_documents():
+    before = json_indent.stdlib_fallbacks()
+    to_json(_many_shapes_document())
+    assert json_indent.stdlib_fallbacks() == before
+
+
+def test_to_json_with_unserializable_asset_metadata_fails_like_stdlib():
+    doc = _sample_document()
+    doc.assets[0].metadata["bad"] = {1, 2}
+    with pytest.raises(TypeError) as expected:
+        _reference(to_dict(doc), 2)
+    with pytest.raises(TypeError) as actual:
+        to_json(doc)
+    assert str(actual.value) == str(expected.value)
+
+
+def test_to_dict_stays_fully_materialized():
+    payload = to_dict(_many_shapes_document())
+    assert type(payload["sections"]) is list
+    assert type(payload["sections"][0]["elements"]) is list
+    table = next(e for e in payload["sections"][2]["elements"] if e["type"] == "table")
+    assert type(table["rows"]) is list and type(table["rows"][0]) is list
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == json.loads(to_json(_many_shapes_document()))

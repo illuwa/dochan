@@ -9,20 +9,38 @@ from ..model.table import Table
 from ..model.equation import Equation
 from ..model.image import Image
 from ..model.header_footer import Comment, Footnote, HeaderFooter
-from .json_indent import dumps as _dumps
+from . import json_indent
+
+
+def _as_list(items, count):
+    return list(items)
 
 
 def to_json(doc: Document, indent: int = 2) -> str:
-    """Document → JSON 문자열"""
-    return _dumps(to_dict(doc), indent)
+    """Document → JSON 문자열 (`json.dumps(to_dict(doc), ensure_ascii=False, indent=indent)` 와 같다)"""
+    if indent is not None and not json_indent.STDLIB_INDENT_IS_NATIVE:
+        try:
+            # 섹션·요소·표의 행을 하나씩 만들어 쓰고 버린다. 문서 전체의 dict 트리를
+            # 한꺼번에 들지 않으므로 큰 표에서 최대 메모리가 크게 준다.
+            return json_indent.dumps_indented(_document_to_dict(doc, json_indent.Stream), indent)
+        except Exception:
+            # 무엇이 잘못됐든 전체 dict 경로가 표준 라이브러리와 같은 결과·예외를 낸다.
+            json_indent.count_fallback()
+    return json_indent.dumps(to_dict(doc), indent)
 
 
 def to_dict(doc: Document) -> dict:
     """Document → dict"""
+    return _document_to_dict(doc, _as_list)
+
+
+def _document_to_dict(doc: Document, seq) -> dict:
+    """`seq(항목 생성기, 개수)` 로 큰 목록을 만든다 — list 면 to_dict, Stream 이면 지연 직렬화."""
+    sections = doc.sections
     return {
         'metadata': doc.metadata,
         'assets': [_asset_to_dict(asset) for asset in doc.assets],
-        'sections': [_section_to_dict(s) for s in doc.sections],
+        'sections': seq((_section_to_dict(s, seq) for s in sections), len(sections)),
     }
 
 
@@ -36,9 +54,10 @@ def _asset_to_dict(asset) -> dict:
     }
 
 
-def _section_to_dict(section) -> dict:
+def _section_to_dict(section, seq=_as_list) -> dict:
+    elements = section.elements
     result = {
-        'elements': [_element_to_dict(e) for e in section.elements],
+        'elements': seq((_element_to_dict(e, seq) for e in elements), len(elements)),
     }
     provenance = _provenance_to_dict(getattr(section, 'provenance', None))
     if provenance:
@@ -96,21 +115,16 @@ def _provenance_to_dict(provenance) -> dict:
     return result
 
 
-def _element_to_dict(elem) -> dict:
+def _element_to_dict(elem, seq=_as_list) -> dict:
     if isinstance(elem, Paragraph):
         return _paragraph_to_dict(elem)
     elif isinstance(elem, Table):
+        rows = elem.rows
         result = {
             'type': 'table',
             'row_count': elem.row_count,
             'col_count': elem.col_count,
-            'rows': [
-                [
-                    _cell_to_dict(cell)
-                    for cell in row
-                ]
-                for row in elem.rows
-            ],
+            'rows': seq(([_cell_to_dict(cell) for cell in row] for row in rows), len(rows)),
         }
         _add_caption(result, elem)
         return result

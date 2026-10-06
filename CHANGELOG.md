@@ -37,6 +37,19 @@ HWP 각주·미주 본문 참조와 표 셀 수식, HWPX 첨자·각주·문단 
 표시가 바뀔 수 있는 항목: HWP·HWPX·PDF 의 제목 판정, 문장 속 수식(`$$…$$` 블록 → 문단 안 `$…$`, JSON 은 문단 `runs[]` 의 `equation` 필드), HWP 본문의 각주·미주 참조 `[^n]`,
 HWPX 위·아래 첨자 `<sup>`·`<sub>`, HWPX 문단 안 그림·각주의 위치, XLS 의 끝 빈 행·열 제거, XLS·DOC·PPT 의 문서 속성 문단(`# 제목`·`Author:`). API·CLI 옵션은 바뀌지 않았다.
 
+### 성능 (PDF 선택적 C 가속 — 기본 배포물은 그대로)
+
+- PDF 내용 스트림의 스캐너·해석기 루프·경로 수집·객체 파싱·줄 조립을 손으로 쓴 C 확장 세 개(`dochan.pdf._cscan`·`_cinterp`·`_clines`,
+  CPython 제한 API·abi3)로 옮겼다. 코드 생성기와 다른 PDF 엔진의 코드는 쓰지 않았다. `DOCHAN_BUILD_ACCEL=1` 로 빌드할 때만 생기고,
+  없거나 `DOCHAN_DISABLE_ACCEL=1` 이면 지금까지의 순수 Python 으로 동작한다. PyPI 의 기본 휠(`py3-none-any`)은 바뀌지 않는다.
+- 출력은 그대로다: 공개·내부 PDF 2,362건의 Markdown·JSON·일반 텍스트·오류 목록 해시가 가속 켬·끔 모두 같다. 파싱 합계는 순수 Python 의
+  2.7배(302.9 → 111.8초), 공개 300개에서 PyMuPDF 글자 추출 대비 8.5배 느리던 것이 3.1배 느림이 됐다. pdfminer.six·pdfplumber·markitdown 보다는
+  약 5~7배, pypdf 보다는 3배 빠르다. PyMuPDF 에 표 복원까지 시키면 dochan 이 4.8배 빠르다
+  ([기록](docs/benchmarks/2026-10-06-pdf-content-interpreter-c.md)).
+- 독립 감수에서 나온 결함을 고쳤다: 중첩 Form 에서 순수 경로로 물러날 때 작업이 깊이마다 두 배가 되던 것(3KB PDF 가 9초),
+  내부 피연산자 수 방어, GC 순회·신호 확인 등. 가속 확장은 CI 의 별도 작업(`accelerators`)에서 Linux 빌드·전체 테스트를 돌리도록 했다
+  (아직 실행 전). 가속 휠을 PyPI 에 올릴지는 정하지 않았다.
+
 ### 수정 (Markdown 강조 — HWP·HWPX·DOCX·PPTX)
 
 - 서식이 같은 인접 런을 Markdown 에서 한 번만 감싼다(PPT·PDF 에만 있던 규칙을 모든 형식에 적용). 글자 크기나 글꼴만 달라 갈린

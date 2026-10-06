@@ -73,3 +73,5 @@ Apple M5 Pro, macOS, Xcode Python 3.9.6, 작업자 8개로 PDF 2,362건을 순�
   그 전에 Linux 에서 sanitizer 로 확장 전체를 돌리는 CI 작업을 두는 것이 맞다. 올리지 않더라도 소스 설치에서
   `DOCHAN_BUILD_ACCEL=1` 로 직접 빌드해 쓸 수 있다.
 - 남은 PDF 시간의 대부분은 해석기 루프의 연산자 분기, 경로 수집, 줄·문단 조립이다. 이 모듈은 스캐너만 옮겼다.
+  (이어진 작업: 해석기 핵심은 `2026-10-06-pdf-content-interpreter-c.md`, 줄 조립은 `2026-10-06-pdf-line-assembly-c.md`.
+  세 가속을 합친 수치와 경쟁 도구 비교도 앞 문서에 있다.)

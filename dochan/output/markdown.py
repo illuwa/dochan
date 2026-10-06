@@ -187,8 +187,16 @@ def _paragraph_to_md(para: Paragraph, ctx=None) -> str:
     return _CODE_FENCE_OPEN.sub(lambda match: match.group(1) + '\\', text)
 
 
-def _ppt_markdown_runs(runs):
-    """PPT/PDF의 크기만 다른 런은 Markdown에서 합치고 원본 런은 보존한다."""
+def _markdown_runs(runs):
+    """서식이 같은 인접 런은 Markdown 에서 한 번만 감싼다. 원본 런은 보존한다.
+
+    문서 형식들은 글자 크기나 글꼴만 달라도 런을 가른다. 런마다 마커를 치면
+    `**제1조(목적)****이 규칙은**` 이 되는데, 구두점 뒤 글자 앞의 `****` 는 CommonMark 에서
+    닫는 구분자가 아니라서 별표가 글자로 남는다. Markdown 에 드러나는 서식과 링크가 같고
+    출처가 같은 런만 합친다. 각주 참조와 수식 런은 경계다.
+    """
+    if len(runs) < 2:
+        return runs
     fields = ('bold', 'italic', 'underline', 'strikeout', 'superscript',
               'subscript', 'link', 'note_ref')
     result = []
@@ -196,8 +204,7 @@ def _ppt_markdown_runs(runs):
     while index < len(runs):
         run = runs[index]
         provenance = getattr(run, 'provenance', None)
-        if (getattr(provenance, 'source_format', '') not in ('ppt', 'pdf') or getattr(run, 'note_ref', 0)
-                or run.equation is not None):
+        if getattr(run, 'note_ref', 0) or run.equation is not None:
             result.append(run)
             index += 1
             continue
@@ -217,7 +224,7 @@ def _ppt_markdown_runs(runs):
 
 def _runs_to_md(runs: list, ctx=None) -> str:
     """런 목록을 Markdown 으로. 연속하는 동일 링크 런은 하나로 묶어 감싼다."""
-    runs = _ppt_markdown_runs(runs)
+    runs = _markdown_runs(runs)
     parts = []
     index = 0
     total = len(runs)
@@ -529,7 +536,7 @@ def _escape_cell(text: str) -> str:
 
 def _runs_to_cell_text(runs: list) -> str:
     """셀용 런 렌더 — 링크와 각주 참조만 적용하고 문자 서식은 평문으로."""
-    runs = _ppt_markdown_runs(runs)
+    runs = _markdown_runs(runs)
     parts = []
     index = 0
     total = len(runs)

@@ -12,6 +12,7 @@ typedef unsigned int Py_UCS4;
 #endif
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 enum { X, Y, WIDTH, SIZE, SPACE, DX, DY, NUMBERS };
 enum { LTR, RTL, DOWN, UP };
@@ -673,7 +674,10 @@ assemble_lines(PyObject *module, PyObject *args)
         PyErr_NoMemory();
         goto error;
     }
-    data = PyMem_Calloc((size_t)n, sizeof(FragmentData));
+    /* PyMem_Calloc is not declared by the 3.9 limited API headers. */
+    data = PyMem_Malloc((size_t)n * sizeof(FragmentData));
+    if (data)
+        memset(data, 0, (size_t)n * sizeof(FragmentData));
     row = PyMem_Malloc((size_t)n * sizeof(FragmentData *));
     scratch = PyMem_Malloc((size_t)n * sizeof(FragmentData *));
     gaps = PyMem_Malloc((size_t)n * sizeof(double));

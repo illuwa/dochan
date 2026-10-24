@@ -238,7 +238,15 @@ def test_false_rejects_ooxml_and_ambiguous_packages(tmp_path, part, hwpx_marker)
         Dochan(path, include_assets=False)
 
 
-def test_reader_classifies_zip_package_once(hwpx_path, monkeypatch):
+@pytest.mark.parametrize("options", [
+    {},
+    {"include_assets": False},
+    {"revision_mode": "final"},
+    {"revision_mode": "original"},
+    {"include_assets": False, "revision_mode": "final"},
+    {"include_assets": False, "revision_mode": "original"},
+])
+def test_reader_classifies_zip_package_once(hwpx_path, monkeypatch, options):
     import dochan.reader as reader_module
 
     calls = {"ooxml": 0, "hwpx": 0}
@@ -255,5 +263,22 @@ def test_reader_classifies_zip_package_once(hwpx_path, monkeypatch):
 
     monkeypatch.setattr(reader_module, "detect_ooxml_format", counting_detect)
     monkeypatch.setattr(Dochan, "_is_hwpx_package", counting_is_hwpx)
-    Dochan(str(hwpx_path), include_assets=False, revision_mode="final")
+    reader = Dochan(str(hwpx_path), **options)
+
+    assert reader.doc.source_format == "hwpx"
+    assert reader.errors == []
     assert calls == {"ooxml": 1, "hwpx": 1}
+
+
+def test_default_non_zip_input_does_not_run_zip_detectors(tmp_path, monkeypatch):
+    import dochan.reader as reader_module
+
+    path = tmp_path / "other.txt"
+    path.write_text("plain text")
+    monkeypatch.setattr(Dochan, "_is_hwpx_package", lambda reader: pytest.fail("ZIP detector"))
+    monkeypatch.setattr(reader_module, "detect_ooxml_format", lambda path: pytest.fail("ZIP detector"))
+
+    reader = Dochan(path)
+
+    assert len(reader.errors) == 1
+    assert "알 수 없는 파일 형식" in reader.errors[0]

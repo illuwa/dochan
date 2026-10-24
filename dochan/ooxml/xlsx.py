@@ -150,9 +150,14 @@ class XLSXReader(SpreadsheetNumberFormatter):
         try:
             return self._read_document(file_path)
         except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+            from ..utils.zip_salvage import ZipSalvageError
+
             return Document(
                 source_format=self.format_name,
-                errors=[f"ERR: XLSX package parse failed: {exc}"],
+                errors=exc.diagnostics if isinstance(exc, ZipSalvageError) else
+                [error for error in getattr(self, '_errors', [])
+                 if error.startswith('WARN: ZIP 중앙 디렉터리')] +
+                [f"ERR: XLSX package parse failed: {exc}"],
             )
 
     def _read_document(self, file_path: str) -> Document:
@@ -172,7 +177,7 @@ class XLSXReader(SpreadsheetNumberFormatter):
         self._document_range_cells_used = 0
         self._document_range_budget_exhausted = False
         self._text_format_cache = {}
-        with OOXMLPackage(file_path) as package:
+        with OOXMLPackage(file_path, doc.errors) as package:
             self._package = package
             core_elements = core_property_elements(read_core_properties(package), "xlsx")
             shared_strings = self._read_shared_strings(package)

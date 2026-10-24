@@ -83,9 +83,14 @@ class PPTXReader:
         try:
             return self._read_document(file_path)
         except (OSError, KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as exc:
+            from ..utils.zip_salvage import ZipSalvageError
+
             return Document(
                 source_format=self.format_name,
-                errors=[f"ERR: PPTX package parse failed: {exc}"],
+                errors=exc.diagnostics if isinstance(exc, ZipSalvageError) else
+                [error for error in getattr(self, '_errors', [])
+                 if error.startswith('WARN: ZIP 중앙 디렉터리')] +
+                [f"ERR: PPTX package parse failed: {exc}"],
             )
         finally:
             self._last_layout_content = ("", None)
@@ -111,7 +116,7 @@ class PPTXReader:
         self._slide_images = {}
         self._image_bytes_total = 0
         self._last_layout_content = ("", None)
-        with OOXMLPackage(file_path) as package:
+        with OOXMLPackage(file_path, doc.errors) as package:
             self._package = package
             self._comment_authors = self._read_comment_authors(package)
             core_elements = core_property_elements(read_core_properties(package), "pptx")

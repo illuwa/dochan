@@ -256,7 +256,7 @@ class DOCXReader:
         self._table_cell_budget = MAX_TABLE_CELLS
         self._active_document_errors = doc.errors
         try:
-            with OOXMLPackage(file_path) as package:
+            with OOXMLPackage(file_path, doc.errors) as package:
                 self._package = package
                 self._document_part = self._main_document_part(package)
                 root = package.read_xml_part(self._document_part)
@@ -288,7 +288,12 @@ class DOCXReader:
         ) as exc:
             self._parents.clear()
             self._sibling_positions.clear()
-            doc.errors.append(f"ERR: DOCX package parse failed: {exc}")
+            from ..utils.zip_salvage import ZipSalvageError
+
+            if isinstance(exc, ZipSalvageError):
+                doc.errors = exc.diagnostics
+            else:
+                doc.errors.append(f"ERR: DOCX package parse failed: {exc}")
             return doc
 
         section = Section(

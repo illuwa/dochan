@@ -231,7 +231,9 @@ class HWPXParser:
         doc.source_format = "hwpx"
 
         try:
-            with zipfile.ZipFile(file_path, 'r') as zf:
+            from ..utils.zip_salvage import ZipSalvageError, open_document_zip
+
+            with open_document_zip(file_path, self.errors, kind='hwpx') as zf:
                 self._chart_archive = zf
                 # 패키지 자체가 폭탄인지 먼저 본다 — 엔트리 수·해제 총량·중복 파트.
                 infos = zf.infolist()
@@ -333,7 +335,9 @@ class HWPXParser:
         except HWPXCryptoError as e:
             self.errors.append(str(e))
         except Exception as e:
-            self.errors.append(f"ERR: HWPX 파싱 실패: {e}")
+            # The ZIP opener has already recorded its exact fatal diagnostic.
+            if not isinstance(e, ZipSalvageError):
+                self.errors.append(f"ERR: HWPX 파싱 실패: {e}")
         finally:
             # No closed ZIP handle, source XML or section nodes escape parse().
             self._chart_archive = None

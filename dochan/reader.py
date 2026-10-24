@@ -8,6 +8,7 @@ reader.py — 통합 진입점 (HWP/HWPX 자동 판별)
 
 import os
 import re
+import zipfile
 
 from dochan import cfb
 from .cfb import append_recovery_warnings
@@ -74,6 +75,8 @@ class Dochan:
             raise TypeError("password must be str or None")
         self.file_path = file_path
         self._zip_kind_cache = None
+        self._zip_source = file_path
+        self._zip_recovery_errors = []
         # 옵션 오류는 문서 파싱 오류와 달리 호출자에게 직접 알린다.
         validate_revision_mode(revision_mode)
         if revision_mode != "preserve" and not self._is_plain_hwpx() and not self._is_plain_hwp():
@@ -97,6 +100,10 @@ class Dochan:
         finally:
             # 파싱이 끝난 리더 객체에 암호를 보관하지 않는다.
             self._password = None
+            for error in self._zip_recovery_errors:
+                if error not in self.doc.errors:
+                    self.doc.errors.append(error)
+            self._zip_source = self.file_path
         if ocr:
             self._run_ocr()
 
@@ -147,6 +154,9 @@ class Dochan:
 
         if magic[:2] == b'PK':
             ooxml_format, is_hwpx = self._zip_kind()
+            if any(error.startswith('ERR:') for error in self._zip_recovery_errors):
+                self.doc.errors.extend(self._zip_recovery_errors)
+                return
             if ooxml_format and ooxml_format != 'ambiguous' and is_hwpx:
                 self.doc.errors.append("ERR: 모호한 ZIP 문서 형식")
             elif ooxml_format == 'docx':
@@ -170,7 +180,10 @@ class Dochan:
             elif ooxml_format:
                 self.doc.errors.append(f"ERR: 아직 지원하지 않는 OOXML 형식: {ooxml_format}")
             else:
-                self.doc.errors.append("ERR: 지원하지 않는 ZIP 문서 형식")
+                if self._zip_recovery_errors:
+                    self.doc.errors.append("ERR: 손상된 ZIP 문서 — 중앙 디렉터리가 없고 본문 부품을 찾지 못함")
+                else:
+                    self.doc.errors.append("ERR: 지원하지 않는 ZIP 문서 형식")
             return
 
         # PDF 는 OLE/ZIP 컨테이너가 아니므로 시그니처로 따로 잡는다.
@@ -200,8 +213,20 @@ class Dochan:
     def _zip_kind(self):
         """(OOXML 형식, HWPX 여부)를 한 번만 판별한다 — 옵션 검증과 분기가 공유."""
         if self._zip_kind_cache is None:
+            from .utils.zip_salvage import ZipSalvageError, open_document_zip
+
+            try:
+                with open_document_zip(self.file_path, self._zip_recovery_errors) as archive:
+                    if archive._zip_salvage_count is not None:
+                        self._zip_source = archive.fp
+            except ZipSalvageError as exc:
+                self._zip_recovery_errors = exc.diagnostics
+                self._zip_kind_cache = ('', False)
+                return self._zip_kind_cache
+            except (OSError, ValueError, zipfile.BadZipFile):
+                pass
             self._zip_kind_cache = (
-                detect_ooxml_format(self.file_path), self._is_hwpx_package(),
+                detect_ooxml_format(self._zip_source), self._is_hwpx_package(),
             )
         return self._zip_kind_cache
 
@@ -213,7 +238,7 @@ class Dochan:
         import zipfile
 
         try:
-            with zipfile.ZipFile(self.file_path, "r") as archive:
+            with zipfile.ZipFile(self._zip_source, "r") as archive:
                 if len(archive.filelist) > 10000:
                     return False
                 try:
@@ -547,7 +572,7 @@ class Dochan:
     def _parse_hwpx(self):
         """HWPX (ZIP/XML) 파싱"""
         parser = HWPXParser()
-        self.doc = parser.parse(self.file_path, include_assets=self._include_assets,
+        self.doc = parser.parse(self._zip_source, include_assets=self._include_assets,
                                 revision_mode=self._revision_mode, password=self._password)
 
     def _parse_xls(self):
@@ -601,15 +626,15 @@ class Dochan:
 
     def _parse_docx(self):
         """DOCX (Office Open XML) 파싱"""
-        self.doc = DOCXReader().read(self.file_path)
+        self.doc = DOCXReader().read(self._zip_source)
 
     def _parse_pptx(self):
         """PPTX (Office Open XML) 파싱"""
-        self.doc = PPTXReader().read(self.file_path)
+        self.doc = PPTXReader().read(self._zip_source)
 
     def _parse_xlsx(self):
         """XLSX (Office Open XML) 파싱"""
-        self.doc = XLSXReader().read(self.file_path)
+        self.doc = XLSXReader().read(self._zip_source)
 
     def _parse_pdf(self):
         """PDF (네이티브 파서) 파싱"""

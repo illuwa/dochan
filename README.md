@@ -56,7 +56,7 @@ print(doc.to_markdown())
 | **OCR (선택)** | Tesseract 연동, 이미지 속 텍스트 추출 |
 | **CLI** | `dochan convert 문서.hwp` 한 줄로 변환 |
 | **배치 처리** | 디렉토리 단위 병렬 변환 |
-| **보안** | Zip Bomb, XXE, Path Traversal, 메모리 폭발 방어 |
+| **보안** | Zip Bomb, XXE, Path Traversal, 메모리 폭발 방어. 손상 ZIP의 중앙 디렉터리 복구와 필수 본문 부품 검증 |
 
 ## Performance
 

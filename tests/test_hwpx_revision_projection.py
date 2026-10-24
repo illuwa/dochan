@@ -264,7 +264,10 @@ def test_public_revision_documents_when_corpus_is_supplied():
         output[mode] = [p.text for p in doc.find_all('paragraph')]
         assert all('[duplicate-end]' in e or '[formatting]' in e for e in doc.errors)
     preserve_hash = hashlib.sha256('\n'.join(output['preserve']).encode()).hexdigest()
-    assert preserve_hash == 'ec5863b402309f855b9307f06c606c1a7f969bc94d7e5855453a22d3bf7deff8'
+    # Since footnote references stay in their run (8491eef), the two spaces that follow
+    # two footnotes in the source <hp:t> stay in their paragraphs instead of being dropped
+    # as a whitespace-only fragment.
+    assert preserve_hash == 'db707843d0ed8b888fb920b5c781d766c2e964358e0d370e4cd0125032107d61'
     baseline = collections.Counter(''.join(output['preserve']))
     for mode in ('final', 'original'):
         assert not collections.Counter(''.join(output[mode])) - baseline

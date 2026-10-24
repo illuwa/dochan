@@ -329,7 +329,8 @@ def test_public_complex_revision_cli_preserves_or_fails_explicitly(flags, succes
         assert result.stdout == Dochan(source, revision_mode=selected_mode).to_plain_text() + "\n"
         paragraphs = reader.find_all("paragraph")
         assert len(paragraphs) == 3654
-        assert sum(len(p.text) for p in paragraphs) == 102740
+        # Includes the two spaces kept after each of two in-place footnote references (8491eef).
+        assert sum(len(p.text) for p in paragraphs) == 102744
         assert "WARN: HWPX revision info" in result.stderr
         assert "ERR:" not in result.stderr
     else:

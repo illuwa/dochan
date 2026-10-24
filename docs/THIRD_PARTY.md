@@ -12,12 +12,12 @@
 | 구분 | 프로젝트와 선언 | 쓰임 | 확인한 고지와 범위 |
 | --- | --- | --- | --- |
 | 필수 | 없음(1.14.0 부터). 1.13.0 까지는 [lxml](https://lxml.de/) `>=4.9`(BSD-3-Clause)였다. | XML 은 표준 라이브러리 expat·ElementTree 위의 `dochan/utils/safe_xml.py` 로 읽는다. | 표준 라이브러리만 쓴다. |
-| OCR 선택 | [pytesseract](https://github.com/madmaze/pytesseract), `>=0.3; python_version >= '3.10'`이다. | 사용자가 설치한 Tesseract를 호출한다. | 설치된 0.3.13의 고지는 Apache-2.0이다. Tesseract 실행파일은 dochan 소스에 포함하지 않는다. |
-| OCR 선택 | [Pillow](https://github.com/python-pillow/Pillow), `>=12.3; python_version >= '3.10'`이다. | OCR 입력 이미지를 처리한다. | 검증 인터프리터의 11.3.0 메타데이터는 MIT-CMU다. 이 버전은 현재 OCR extra의 최소 버전보다 낮으므로 12.3 배포물의 전체 고지 검증을 대신하지 않는다. 이미지 코덱 고지도 배포물에 따라 별도로 확인한다. |
+| OCR 선택 | [pytesseract](https://github.com/madmaze/pytesseract), `>=0.3; python_version >= '3.11'`이다. | 사용자가 설치한 Tesseract를 호출한다. | 설치된 0.3.13의 고지는 Apache-2.0이다. Tesseract 실행파일은 dochan 소스에 포함하지 않는다. |
+| OCR 선택 | [Pillow](https://github.com/python-pillow/Pillow), `>=13.0; python_version >= '3.11'`이다. | OCR 입력 이미지를 처리한다. | PyPI의 13.0.0 메타데이터 라이선스 표현식은 MIT-CMU다. 메타데이터 확인은 13.0 배포물의 전체 고지 검증을 대신하지 않는다. 이미지 코덱 고지도 배포물에 따라 별도로 확인한다. |
 
-일반 문서 파싱은 Python 3.9 이상을 지원한다. OCR extra는 Python 3.10 이상에만
-설치하도록 선언되어 있다. Python 3.9에 기존 OCR 패키지가 설치되어 있는 사실을
-3.9 OCR 지원 보장으로 해석하지 않는다. 표준 라이브러리 `zlib`, `hashlib` 등을
+일반 문서 파싱은 Python 3.9 이상을 지원한다. OCR extra는 Pillow 13 이 요구하는 Python 3.11 이상에만
+설치하도록 선언되어 있다. Python 3.9·3.10에 기존 OCR 패키지가 설치되어 있는 사실을
+그 버전의 OCR 지원 보장으로 해석하지 않는다. 표준 라이브러리 `zlib`, `hashlib` 등을
 사용하며 AES 구현은 저장소의 `dochan/utils/aes.py`를 재사용한다.
 
 OLE 컨테이너는 [MS-CFB] 명세와 원시 바이트 관찰에 근거한 자체

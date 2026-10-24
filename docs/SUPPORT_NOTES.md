@@ -128,7 +128,7 @@ README `Supported Elements` 표의 칸별 범위와 한계다. ✅ 는 단위 �
 ## Legacy Office 세부
 
 - **이미지 참조 · DOC**: BStore(FBSE)·PICF 그림을 복원한다. BLIP 이 없는 빈 그림 정보는 이미지가 아니다. Word 6/95(비복합) 문서는 CHPX→PICF 의 직접 WMF 를 복원한다(공개 실물 1개 바이트 일치, 복합 저장·직접 DIB 는 미지원).
-- **이미지 OCR · DOC·PPT·XLS**: OCR 은 Python 3.10 이상과 Tesseract 가 필요하다. 바이트가 같은 그림의 OCR 결과가 OOXML 판과
+- **이미지 OCR · DOC·PPT·XLS**: OCR 은 Python 3.11 이상과 Tesseract 가 필요하다. 바이트가 같은 그림의 OCR 결과가 OOXML 판과
   같음(PPT 8/8, XLS 16/16)과 DOC 그림의 글자 대조로 검증했다. EMF·WMF 같은 벡터 그림은 OCR 결과가 비어 있다.
 - **차트 · DOC (⬜)**: 내장 Excel·MS Graph 차트를 읽는 경로는 PPT 와 같지만, DOC 안에 차트가 든 공개 실물을 찾지 못했다.
 - **차트 · HWPX**: XML 캐시 차트의 계열·범주·값을 표로 낸다(막대·꺾은선·원형·도넛·영역·방사형·분리 원형·주식형·표면형은 범주+값, 분산형·거품형은 X+Y).

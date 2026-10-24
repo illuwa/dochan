@@ -37,7 +37,7 @@ python -m pytest tests/test_pdf_reader.py -q   # 단일 파일
   Apache POI test-data(`corpus/poi-src`, doc·ppt·xls ↔ OOXML 같은 이름 짝 + POI 테스트 기대값),
   LibreOffice 테스트 문서(`corpus/lo-src`, docx·pptx·doc·ppt + `.cxx` 기대값), pdf.js 테스트 PDF(`corpus/pdfjs-src`),
   Apache Tika 암호 표본(`corpus/tika-test-docs`). legacy ↔ OOXML 짝 비교는 `python -m scripts.compare_office_pairs`.
-  공개 파일명은 벤치마크 문서에 인용해도 된다. 독립 정답지(xlrd)와 OCR 검증(Python 3.10+)은 저장소 밖 venv 에서만 쓴다.
+  공개 파일명은 벤치마크 문서에 인용해도 된다. 독립 정답지(xlrd)와 OCR 검증(Python 3.11+)은 저장소 밖 venv 에서만 쓴다.
 - 공개 HWP·HWPX·PDF 삼중 짝: 정책브리핑(korea.kr) 보도자료 중 공공누리 제1유형만 `python -m scripts.collect_public_press_pairs`
   로 `corpus/press-pairs/<newsId>.{hwp,hwpx,pdf}` 에 받는다(2026-10-04 기준 403건, 출처·라이선스·첨부 fileId 는 같은 폴더 `manifest.json`).
   내부 `test_pairs/` 와 같은 한컴 PDF 내보내기라 PDF·HWP 검증의 공개 근거로 쓴다. 수집기는 첨부의 실제 파일 이름이 같은 PDF·HWPX·HWP 만 짝짓는다

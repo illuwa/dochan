@@ -84,7 +84,7 @@ PDF 는 아직 약점이다. dochan 은 순수 파이썬으로 내용 스트림�
 pip install dochan
 ```
 
-OCR 기능이 필요한 경우(Python 3.10 이상):
+OCR 기능이 필요한 경우(Python 3.11 이상):
 ```bash
 pip install "dochan[ocr]"
 brew install tesseract tesseract-lang  # macOS
@@ -334,7 +334,7 @@ dochan/
     ├── aes.py         #   FIPS-197 AES (표 기반, 외부 의존성 없음)
     ├── bounded_io.py  #   신뢰할 수 없는 OLE 스트림의 상한 읽기
     ├── image_export.py#   이미지 바이너리 저장
-    ├── ocr.py         #   Tesseract OCR (선택, Python 3.10+)
+    ├── ocr.py         #   Tesseract OCR (선택, Python 3.11+)
     └── safe_decompress.py  # Zip Bomb 방어
 ```
 

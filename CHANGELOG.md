@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 보안 (OCR 선택 의존성 Pillow 13.0)
+
+- OCR extra 의 Pillow 하한을 `>=12.3` 에서 `>=13.0` 으로 올렸다. 잠금 파일의 Pillow 12.3.0 에 알려진 취약점 37건이
+  13.0.0 에서 고쳐졌다(CI 의존성 감사 기준).
+
+### 변경 (OCR 은 Python 3.11 이상)
+
+- Pillow 13 이 Python 3.11 이상만 지원해 OCR extra(`pytesseract`·`Pillow`)를 Python 3.11 이상에만 설치한다. Python 3.10 에서
+  `ocr=True` 는 `WARN: OCR은 Python 3.11 이상 필요 — OCR 건너뜀` 을 남기고 OCR 을 건너뛴다. 일반 문서 파싱은 계속
+  Python 3.9 이상을 지원한다.
+
 ## [1.15.0] - 2026-10-08
 
 열기 암호가 걸린 HWPX 를 `password=` 로 읽고(README `암호화 문서 · HWPX` ✅), 동아시아 PDF 의 미리 정의된 CMap·내장 CMap 스트림, HWP 글자 겹침·덧말과 HWPX 덧말,

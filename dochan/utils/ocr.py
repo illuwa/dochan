@@ -13,7 +13,7 @@ logger = logging.getLogger('dochan')
 
 # OCR 사용 가능 여부
 _ocr_available = None
-MIN_OCR_PYTHON = (3, 10)
+MIN_OCR_PYTHON = (3, 11)
 
 # 같은 이미지(로고·머리글·반복 도형)는 문서/배치 안에서 여러 번 나온다.
 # 바이트 해시로 결과를 재사용해 Tesseract 실행을 줄인다 (결과 동일, 크기 상한 LRU).

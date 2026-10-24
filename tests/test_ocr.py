@@ -22,14 +22,14 @@ def test_reader_reports_python_requirement_when_ocr_is_unsupported(monkeypatch):
 
     reader._run_ocr()
 
-    assert reader.doc.errors == ["WARN: OCR은 Python 3.10 이상 필요 — OCR 건너뜀"]
+    assert reader.doc.errors == ["WARN: OCR은 Python 3.11 이상 필요 — OCR 건너뜀"]
 
 
-def test_ocr_dependency_markers_exclude_python_39():
+def test_ocr_dependency_markers_require_python_311():
     project = Path("pyproject.toml").read_text(encoding="utf-8")
 
-    assert '"pytesseract>=0.3; python_version >= \'3.10\'"' in project
-    assert '"Pillow>=12.3; python_version >= \'3.10\'"' in project
+    assert '"pytesseract>=0.3; python_version >= \'3.11\'"' in project
+    assert '"Pillow>=13.0; python_version >= \'3.11\'"' in project
 
 
 def _png_bytes(color):

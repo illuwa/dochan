@@ -1,0 +1,2610 @@
+{
+  "external_available": 1,
+  "rows": {
+    "156782875": {
+      "reference_failed": 0,
+      "reference_text_sha256": "158b3b824342ec23abff53c529424ab7730f24d1d69105dd564c7327a1f4d51e",
+      "seconds": 2.814282709,
+      "sha256": {
+        "hwp": "9a1dcc4d3b27779de1c7f9139bf496fd4b2ef20d2a2fc4a394e25d99ffb9ab5f",
+        "hwpx": "e20fe03b71e886a5e99f26fc1b0fa2000f08cccf4fbc010b34e12a463f51a64a",
+        "pdf": "53310123a939efc2604b92fed17c98c19815872af04571d0f56f67a6fd2dca10"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.2777777777777778,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "e2d84e026e504d2add8a8c998660c15bc6c1ac8c0104dcdfd942f71ee2f91a89",
+          "token_ratio": 0.9509433962264151,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "b07b4d12b8fe8cb2c9448746931e7e9cb9d5d8a236ef49470cb36dad39ee67f4",
+          "token_ratio": 0.4205298013245033,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "6dcfd51b66297a089a3e9e875a95b5a46e7612f5ec075632e8d2514c8b2e77b1",
+          "token_ratio": 0.9847328244274809,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "20a14d00af9e5ed9ed7eb31f6dddee2a83a8ca87b8da5e8bb7ae164ceaa60133",
+          "token_ratio": 0.9769230769230769,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "e6ed536577c872cee1d4214e20df8f6ed6a807296b688584d1bb844fd82ee512",
+          "token_ratio": 0.9652509652509652,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "28c2eb049a171cd021bb7b39ae86c4698c1e891cd9f0d8809bff7ce8a03e44a8",
+          "token_ratio": 1.0,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782883": {
+      "reference_failed": 0,
+      "reference_text_sha256": "7f2b7110802ed675c0b0ea1b0c9f72cf77f9796fc677410b89f3d4964ec797d8",
+      "seconds": 127.291508875,
+      "sha256": {
+        "hwp": "79de4a4b346de032036adb57e6cbe4c5dc19c69d9c8d66f39c4e36c5812a4e87",
+        "hwpx": "0b9de40da3e1ccdeefedf57ce8605c2f35da444f8c383aac676645110ae990e0",
+        "pdf": "e92e81a51732bee6976ca8463a945565474c5b697db07f7acb6fd8edfcaa0249"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 68,
+          "candidate_tables": 98,
+          "cell_hit": 0.12237080373311046,
+          "failed": 0,
+          "reference_headings": 205,
+          "reference_tables": 118,
+          "table_shape_matches": 37,
+          "text_sha256": "f22e96f9d17bcec07bace853068e98ba370cdaaffdf7ca9d850c260ceebac657",
+          "token_ratio": 0.5142842922556241,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 205,
+          "reference_tables": 118,
+          "table_shape_matches": null,
+          "text_sha256": "48d5b07e5f506bed38bc6e2d8c02579bf4e4df737ed45de73777c5355803b049",
+          "token_ratio": 0.6553259738265454,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 205,
+          "reference_tables": 118,
+          "table_shape_matches": null,
+          "text_sha256": "52cd52c9991591494fbd3a64c40c05043a0268162f0ae4a1cae693d98624c8fb",
+          "token_ratio": 0.5077305289563183,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 65,
+          "cell_hit": 0.21151971026605376,
+          "failed": 0,
+          "reference_headings": 205,
+          "reference_tables": 118,
+          "table_shape_matches": 14,
+          "text_sha256": "e17f2de760969f51772c7b753beea0bf34489968ab9bdbf2f9f56a276009bb5d",
+          "token_ratio": 0.9441114373771446,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 51,
+          "cell_hit": 0.16123415517481543,
+          "failed": 0,
+          "reference_headings": 205,
+          "reference_tables": 118,
+          "table_shape_matches": 6,
+          "text_sha256": "5c2e4d11e9dca3ca787d59590db3d33b58b0c7e489600a2c8895d910849ca583",
+          "token_ratio": 0.9589665285149906,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 205,
+          "reference_tables": 118,
+          "table_shape_matches": null,
+          "text_sha256": "c7bf36b44194444242922cb4616be0352f94414278f52f977d51b74c91f56477",
+          "token_ratio": 0.9316930735723518,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782911": {
+      "reference_failed": 0,
+      "reference_text_sha256": "50653067884ff30cd9b36cd184f8682ae1cd38735088ddab30d266d9e88a6fc2",
+      "seconds": 3.223205125,
+      "sha256": {
+        "hwp": "a0ab2e6d7cd2c1bfadadc86a94ecf84c82abba8e5aeff4212161ac288447e915",
+        "hwpx": "b080cfdee8370bc05ea814904a09ea12b6fe913a3e341f5fa7247fe967f6e232",
+        "pdf": "9b6bced3c9948917794e8a4fdfab682eab0aa9b15e08981f9d45eee7c9967896"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "256ebf060b3e486e2b2e21449ad0ba9f11a849f75866f05973f59021fb89c7dc",
+          "token_ratio": 0.9413680781758957,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "1cbd4c4543e07ca5ccb3e439ab0f22ae2e5cb22d7f2fe5207b88fef7cb8320a2",
+          "token_ratio": 0.6047516198704104,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "a6a0071b4645b422e54c0958d6d66f15cd8edeea72a1cf91fbaab7eed92ff714",
+          "token_ratio": 0.9543973941368078,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "e5e67ba4949a7512429ab46fa283a4f15a89cd3b3a31bd79cb6a12e9ea9a6447",
+          "token_ratio": 0.9322314049586777,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "c66b5cfaa7ad9fcd9392890635cb49106f06c9d25e0c851080ccc866ad2b7810",
+          "token_ratio": 0.9588138385502472,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "0e9c631e7a986cc317379766ed8d61a24ada3635342f51c26e9c8ce711fe965c",
+          "token_ratio": 0.9576547231270358,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782914": {
+      "reference_failed": 0,
+      "reference_text_sha256": "6b5939ea6dfd07bf820a16e50e715546f62d72d4e3e67609a31ad651602159c2",
+      "seconds": 3.217047708,
+      "sha256": {
+        "hwp": "414110a03fbdf0bd1f95ca1287944257382c9976fe73a62da4ded0bb1e4f3586",
+        "hwpx": "9cda08e08e201ac9fc76114be34e483a581c0e479062af55cb944e04a69a8543",
+        "pdf": "22d898fe80c5d455aa153a8c3fe205d15e09e7991726cee97f65db2421297105"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.29411764705882354,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 1,
+          "text_sha256": "1de626b2bae7c34d72966c5ec861d774f49ac862384017d6091b8f78bfcbb2d4",
+          "token_ratio": 0.9713541666666666,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "0775a809a2a1b1c09e694c95d8a6a0682edbc05d111c5d275388fd53087868de",
+          "token_ratio": 0.5334346504559271,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "2438042e90b26c2bcbe7bb49945506e6229c1e85aee40c4d9e4897e3772f1b46",
+          "token_ratio": 0.9005102040816326,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "7a3c1101cde5d920de844a5cb01fbf4cf481a8622eecd94430df327075ddde8e",
+          "token_ratio": 0.9002557544757033,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "622bad37bb05ebbbabc2ec8dd6451eafb03eafca739a2a9b3bb484c352840d9d",
+          "token_ratio": 0.9002557544757033,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "e982336bab49653de86194129a5921faa57955c0bc0eab4995e604d3aa48b6c4",
+          "token_ratio": 0.9081632653061225,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782929": {
+      "reference_failed": 0,
+      "reference_text_sha256": "235739755f94cca8b444e51cecf8055a1880c01b702d4ee2e307df66ab53e76f",
+      "seconds": 10.680860542000001,
+      "sha256": {
+        "hwp": "b0ff24b99f706fb37461dddc8746f4f73aecd75225fa0e914476982415dd3c10",
+        "hwpx": "13fa188088624b4436220a4406821af5248e5db3db5a99001b8113a46c49b667",
+        "pdf": "4f9fdb5cfd1968cc5adbf2b37e3bc5f8cd216d045f6abd10a08f5182db712833"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 16,
+          "cell_hit": 0.2809917355371901,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 18,
+          "table_shape_matches": 9,
+          "text_sha256": "b624195cd4e0576d2d7bc47dd9a54716b18076e6916b9893b84ffebf744b83d8",
+          "token_ratio": 0.9612860892388452,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 18,
+          "table_shape_matches": null,
+          "text_sha256": "fe68a8bb3476708ea3b0ceb56b35e21568af0c9d320ce91fc49048a9d226852a",
+          "token_ratio": 0.6388948845240665,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 18,
+          "table_shape_matches": null,
+          "text_sha256": "124bc24c2e1f7eb6536267c0a084c2eb3b55033a42b2de6c56af680e62a56964",
+          "token_ratio": 0.9436163318211277,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 5,
+          "cell_hit": 0.4297520661157025,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 18,
+          "table_shape_matches": 1,
+          "text_sha256": "eaaa6ad122a89a97a2957060d712124b8f2b9f923e404ff18a6fda6f474f9734",
+          "token_ratio": 0.96137617656605,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 4,
+          "cell_hit": 0.30578512396694213,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 18,
+          "table_shape_matches": 0,
+          "text_sha256": "8f061d496dc0e9e9f7336baa1a1c63f7554dd0150cda0104589387bfd5099ed2",
+          "token_ratio": 0.9646448264677262,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 18,
+          "table_shape_matches": null,
+          "text_sha256": "3b52f3b9f8a7ee2692cf041ec4c926a97fa4bc32f23ababdab958c78f8d1440d",
+          "token_ratio": 0.9455128205128205,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782932": {
+      "reference_failed": 0,
+      "reference_text_sha256": "9f1ebd6de23234ce8fa2b1487f04ebc9926f289246ab007265957c4222fa382f",
+      "seconds": 4.1714777089999995,
+      "sha256": {
+        "hwp": "67107f315071524891b1e7a83768a89a56083437eaa51432964851543b55f063",
+        "hwpx": "cfbb7afab7d47926831ab302b072376f27047929e9c8607de7470758a2d3c52a",
+        "pdf": "0e4b6870f73c096e5588c7f2c932599027ee5066dc145f99de82520f0a8e16c2"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 6,
+          "cell_hit": 0.38461538461538464,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 6,
+          "table_shape_matches": 1,
+          "text_sha256": "d289e2420db6357c941dabbd8bb0f800df0e1459197f8f0da74f9870958ffa05",
+          "token_ratio": 0.8398133748055988,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 6,
+          "table_shape_matches": null,
+          "text_sha256": "48ea1237916856c33fc8310c51669b275474c2f836a2284080d72ddd4613ec26",
+          "token_ratio": 0.9158050221565731,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 6,
+          "table_shape_matches": null,
+          "text_sha256": "62f1b2bd1fcff90b2258347f98da4d616a2bb1565f0f4caf1f0a196865e32c44",
+          "token_ratio": 0.9158050221565731,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.2692307692307692,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 6,
+          "table_shape_matches": 0,
+          "text_sha256": "1effaaf5f752776330f4554686724584c9e760a97d4a242e434326f03f019091",
+          "token_ratio": 0.9423929098966026,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.2692307692307692,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 6,
+          "table_shape_matches": 0,
+          "text_sha256": "ad0aa70138ddc8f9baa74297a38416250b26e4bf386aa46106515d2322cf4c7a",
+          "token_ratio": 0.43775100401606426,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 6,
+          "table_shape_matches": null,
+          "text_sha256": "d1eb4289e3ec2bb17eff4b5964e6a54c7ff8fd60f4974dc978f95fed9555748f",
+          "token_ratio": 0.6745362563237775,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782934": {
+      "reference_failed": 0,
+      "reference_text_sha256": "5a1835ba3679a5e3fda4164306cfa42322111ce6c717d6f521412481d40871aa",
+      "seconds": 3.3901757079999997,
+      "sha256": {
+        "hwp": "c0b7d8e1ea0f6f7823ec340fdd6d1f201f48a61726f6eac730b1624c13c82323",
+        "hwpx": "8cdf884c12e53636862165f34e6323897c0fc0af6415f30f85c7ae26f491de1e",
+        "pdf": "7ff6cd3e933bb60f73177f9ee9b2f1299ffc877be960b0a1f918b7c3630283f2"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.125,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "7b2231ac0050f434528d8a7df143d3b77957173fd41f6d6b6978827f6fa1acf4",
+          "token_ratio": 0.7758186397984886,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "5964c19195afa4efbbf6611d23f4932b66c3b3c9b420c57ee9635fbb798e4ed6",
+          "token_ratio": 0.37606837606837606,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "a316b4cac4c037b44853a7234993a1e10ca08f2d4faf3b5b54b0ff11708476c1",
+          "token_ratio": 0.7549019607843137,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.109375,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "fdad6d46ff036ccd98091c5f3b68bde9461582784aa8e4619df7236b010a6a2d",
+          "token_ratio": 0.7549019607843137,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "2edff9206bbb8ccff5539928cad1c329dba79604fc01cf799bea712c38679e71",
+          "token_ratio": 0.297029702970297,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "097b4eb95d97fad35ff9f32bf9aa96b20de45684696f3f1e883ffcacdf067b8f",
+          "token_ratio": 0.5244956772334294,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782950": {
+      "reference_failed": 0,
+      "reference_text_sha256": "b0bdf31ec749c1d1774e0169b11fa392d7c1a61adaf7bb64e53d32ddf5f50842",
+      "seconds": 2.938787207999999,
+      "sha256": {
+        "hwp": "ab66b7fa362dcc031c7e61fbb3e494ca14341dc3371fcf4081f6b77ae09dead8",
+        "hwpx": "19c15487d31fb66b0bb9277407e8a735358b7cbb6e5c46a8fc92ca0f25becea4",
+        "pdf": "7cc70bcf9d399ae8e80272c7f019aea991f62340c6fc226bdfa2984681566b24"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.21739130434782608,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 1,
+          "text_sha256": "81c47ef9a58864d84e6cfb17dde6263a4af81d133dfcb6898c20511ed37265f1",
+          "token_ratio": 0.9576547231270358,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "8b84e90e5023b3f687dc4dc327f01cfc1a1ddc484dad2976c5e6b1f7d2073057",
+          "token_ratio": 0.421875,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "7ce440a879045510019c22dc52101c049c0494d1bf56a8c20b55c45d26938a70",
+          "token_ratio": 0.9315960912052117,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.13043478260869565,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "0d7e91b90f1c478d54d53b90e8979a93aa46508e90928ead5e33f985edefbd6c",
+          "token_ratio": 0.8940397350993378,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.13043478260869565,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "c1a7d67ddfab564793757ecee03ee4d5b65d161723f9442bc6ddfb6446cc66cc",
+          "token_ratio": 0.9205298013245033,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "eba0534645b696981e0e546fef531527c289e257c24506aa8ee2b09b15175a96",
+          "token_ratio": 0.8580441640378549,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782976": {
+      "reference_failed": 0,
+      "reference_text_sha256": "1fa1743108499171c5422cadce4ce798b6d9a3acdbc5e73f19612e11d1be2870",
+      "seconds": 3.602035667,
+      "sha256": {
+        "hwp": "9177a69d00b4fc777c9b0a95d1b962d7341007cf2d6c70aba9fe00b087e696b4",
+        "hwpx": "62f1f41a51e7ade0d19b0c3d8f49127fad33ff2ea1c3e775e3f81547ee10e710",
+        "pdf": "f4791a44268d78275a88a64cef1c4d253473fdd778213ccba36d585e61226ac7"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.29411764705882354,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 1,
+          "text_sha256": "f3095c7cc7f3c5c5c8a44e5aab091773e83262753a0ad1426490a08bf734308b",
+          "token_ratio": 0.843585237258348,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "5904092490e7b55f2b994c5577af891692af2c7ff6e9aaf6f8368796fd961979",
+          "token_ratio": 0.9731543624161074,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "872fff68747962baed4f0f289ac76427666fd7e2a6eae9ed8cd9e64200443120",
+          "token_ratio": 0.9731543624161074,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "0828cfcd860664a949214b8d18b44d15c78e1a7c00b69525e874f857dab0619e",
+          "token_ratio": 0.9696969696969697,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "7614eccc8392511fc58aa18c128c69a2d7f5b9e9b30182443c1c51eb92e6e98c",
+          "token_ratio": 0.1989795918367347,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "0ade613a1516e0148006ee644ec437e04fa129b7a3a5c74b4fc461264e31d400",
+          "token_ratio": 0.6837944664031621,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156782977": {
+      "reference_failed": 0,
+      "reference_text_sha256": "3610e17ea788df9858ab86a3c4161e8d4671ce3f37288644a13a3c5e198ef192",
+      "seconds": 3.6352720000000005,
+      "sha256": {
+        "hwp": "8c0ad7f41cee83e86c11d5fe15fb91f52b0ed9133c40da92e78124d11f8d43de",
+        "hwpx": "446fae7fb3ca5936039e151953a09aa4cbe67bc1cbde370eee382c3a40aac432",
+        "pdf": "660b054f2d14d9abc2b766fd0d2fb58753fef873d3b7e02ac0de06eb9e67b05e"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "34a0a813010de84e80be01c2b92df9b9852cc437c1e283f31c982b95c60dd10d",
+          "token_ratio": 0.9660493827160493,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "ee982d3897ec05a71ab0afd04fdc894bce87cd0924e5bd573322561214e77dbf",
+          "token_ratio": 0.7167630057803468,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "7c4e54c3b16332d58435b56fc41c142b0102e631e2f23dbe2c56701856f2ad2a",
+          "token_ratio": 0.9659442724458205,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.16666666666666666,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "5b23e2375ddc71c468efb0c2606840ecd91c3af93ab098a06c235d1fa3ec1279",
+          "token_ratio": 0.9627329192546584,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.16666666666666666,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "f7238a3ead0ce97cd5386a6fbaecdeefde3267caac1793e8b36b3259549471c0",
+          "token_ratio": 0.9627329192546584,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "caf09051b380449f2632ebba0915c015310353f6f5ab8455b752d6ad474b2363",
+          "token_ratio": 0.9331306990881459,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783050": {
+      "reference_failed": 0,
+      "reference_text_sha256": "afb4af6d8cca0f332d84b818262020f97afbbc2bba4366481e3c9bc194011d65",
+      "seconds": 11.956765959000002,
+      "sha256": {
+        "hwp": "a96e52c18a73c7198072e8736bdac3b768e72f66c36e8948b6aa9b75eb227aed",
+        "hwpx": "799abb2aa9c392c8057b32ce5cb625e9bc89f7a6e494dbfa5b1b5773023353f8",
+        "pdf": "908173991a0d8ccbe4c2c9c6493c4b9e3394a42d620e1e06f49675e4e7631741"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 13,
+          "cell_hit": 0.28888888888888886,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 13,
+          "table_shape_matches": 2,
+          "text_sha256": "f9e563ba27b342f92c58f48d6ddb2abb7f7e7dc206f5fe1b76d8738bdd8e7973",
+          "token_ratio": 0.8355283307810107,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 13,
+          "table_shape_matches": null,
+          "text_sha256": "632437f579d2c0536e072fa2f8a9a45046fe4023f39175f0aedd5d469c7edcdb",
+          "token_ratio": 0.43751987281399046,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 13,
+          "table_shape_matches": null,
+          "text_sha256": "d2b9b441133e833106c2709f2630836d49c5b512b928058be07ee513fe16a45f",
+          "token_ratio": 0.8196629213483146,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 5,
+          "cell_hit": 0.18888888888888888,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 13,
+          "table_shape_matches": 1,
+          "text_sha256": "fa98ad2164db8504cb394358db024a43aa2685684bccd14b06872ce07c623d5e",
+          "token_ratio": 0.8128523111612176,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 4,
+          "cell_hit": 0.18888888888888888,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 13,
+          "table_shape_matches": 1,
+          "text_sha256": "9023eb4eb3a1dde8a4d89ebb0fe32a5d9f79db31fe9cadedabf386465788ef65",
+          "token_ratio": 0.7024077046548957,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 13,
+          "table_shape_matches": null,
+          "text_sha256": "ecee2cd7043fa431b4a3800141ce89f2e2cbdb8755228f4cf9f029f8396de9e1",
+          "token_ratio": 0.7695990424895273,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783055": {
+      "reference_failed": 0,
+      "reference_text_sha256": "7e55358eab6561cc712a6fa105c8ed2aa2e6ae9c67848ed3bd63ec95eacae60b",
+      "seconds": 8.3744775,
+      "sha256": {
+        "hwp": "a570cec50578b23a5d57fbf9fba7458f56d3ec9864fd62ea71973ef83e236d12",
+        "hwpx": "b874206c18675ad643211038edc92d3e93ec8ffb23c692af450fb47d891804f4",
+        "pdf": "c3763b526f964bbcfc8112282ff1702ae95a760bda79d5881b0f01c0101e1877"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 8,
+          "cell_hit": 0.4264705882352941,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 2,
+          "text_sha256": "34fd28cf3ada5f8eabb5b1d5f1ecc82867728eee6702e00acaf39a61e923d154",
+          "token_ratio": 0.9773462783171522,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "6421a7b93559c2a1e11aa7f450100fc42b28b5efa2742219b7b3c97773363399",
+          "token_ratio": 0.48905410987195375,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "1c2f609cdf465839627171e2228722cf6adc1f9776d9738383c9e0a6b317d461",
+          "token_ratio": 0.938610662358643,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.35294117647058826,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 1,
+          "text_sha256": "1298c4e79ebbd8344ffd6bd6e98d44f287fcbbbc3ff863a0611220eb8c68679c",
+          "token_ratio": 0.9642276422764228,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.2647058823529412,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 1,
+          "text_sha256": "398ea483bfabc15984a5e4be6ab29fbf25208e85b2c8724debccf1296e60feb1",
+          "token_ratio": 0.9707317073170731,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "b4649976d77df0402f3562e357a044864a2c22d681f4c29ed7ecca29baf98342",
+          "token_ratio": 0.9333333333333333,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783067": {
+      "reference_failed": 0,
+      "reference_text_sha256": "68efaf0dfe704ff0f0b2f3687673705c58e1d429e41cdcc94a45c00bd97faff1",
+      "seconds": 7.096860666000001,
+      "sha256": {
+        "hwp": "eb25094aad93e6e1d02cff9828fdeb4df7c543695f2b22ab9bab4f9cfcc07734",
+        "hwpx": "3bd359edd701e133fb737bba4c8eb5f43b28630ad141b6f39cb3bb87ac9c34c8",
+        "pdf": "9a44f8aafe08a37157c3f96c897e60faa4b39d0c62a960d165deded429b07ed9"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 7,
+          "cell_hit": 0.2631578947368421,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 11,
+          "table_shape_matches": 3,
+          "text_sha256": "7ab57ded0f77b5fcc4ca7755820aef178401c2dd56a66c737902a06a10a152ab",
+          "token_ratio": 0.9662921348314607,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 11,
+          "table_shape_matches": null,
+          "text_sha256": "f30ec614420b77e86478a794f3511d978c770f2488bfb23c9005227c08d76cf2",
+          "token_ratio": 0.5727969348659003,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 11,
+          "table_shape_matches": null,
+          "text_sha256": "3ddbd008b4ffa117b46f04186ab3ca189d40afeea292dc823e90036268b3eb44",
+          "token_ratio": 0.9767814251401121,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.13157894736842105,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 11,
+          "table_shape_matches": 0,
+          "text_sha256": "6dcbae49db903da3dbd7d68afa80f3fdfbfc647219381537e12cee4b3be41e9e",
+          "token_ratio": 0.9831865492393915,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.13157894736842105,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 11,
+          "table_shape_matches": 0,
+          "text_sha256": "6e363dc405acd1b8c7947c634bfdbf069e23484f308d9cb703cae7ac90f691e5",
+          "token_ratio": 0.9588377723970944,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 11,
+          "table_shape_matches": null,
+          "text_sha256": "fb78c625f995a3fb41361851e9c23877f738ed04c6472290a6d1a772885fe0bf",
+          "token_ratio": 0.9847878302642114,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783087": {
+      "reference_failed": 0,
+      "reference_text_sha256": "ff49a539af556f4ab315b6104679f0aec1af5dbaf4be2601b875cc8b0883645a",
+      "seconds": 3.628935417000001,
+      "sha256": {
+        "hwp": "d8e0bdf62d1e8239e4e972884c09f68c74925845554590d2b7a767312f6c580b",
+        "hwpx": "d51e21dc914b4d3d68e227e27d514b82b3a2ea1ce0181486d464bf989aac3d44",
+        "pdf": "7ca4401f347ce28c58754a04e6975f940ac3715b52f8a175bf7dcba4c6b39a54"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.29411764705882354,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 1,
+          "text_sha256": "024a22d67dd2a1979fff28cfde1e17619e3c623841f83d1a016f0a75ab019e47",
+          "token_ratio": 0.9512195121951219,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "fcfed7fc7cb2275bb36ad9b6d450c6c1bcb5925c8eb9f48f5e24f9b106eebde1",
+          "token_ratio": 0.4370477568740955,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "6dffeb6669a11108dc02066fd3d4b5dbdcf9449be248119d0bb7207cf37b6d73",
+          "token_ratio": 0.9415384615384615,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "2d61cd0ab0111af92d26f4ed955a1e1f41c904e9420f947e3b5cbbbddcbde106",
+          "token_ratio": 0.934984520123839,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "37ef86f0be8396d48b7ec71de319ef34e6a8911aeffc236228c0feb6990c26fa",
+          "token_ratio": 0.934984520123839,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "6365a89a1a2ca3dfd5e97c5cb52246ea20f4836a3a772e7e1a081399d4294a15",
+          "token_ratio": 0.8504398826979472,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783095": {
+      "reference_failed": 0,
+      "reference_text_sha256": "7bbbd29f9c6d7b0921199c0d5c36f349c97b2ab71bebe4ac789a6725151ee88c",
+      "seconds": 64.728702375,
+      "sha256": {
+        "hwp": "6f87a7a4de1e89bab89be40cec8523d106300a259ee953481d3d288f91fd99ad",
+        "hwpx": "a7e3c1fce0e6f6033971c84c9328d45ca9c61e73da98a200c95c9a4447c20338",
+        "pdf": "c4bc26b7b6024f4440008f1d722acce4b636bc302c8d5a2061adefdfb27aa440"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 20,
+          "candidate_tables": 50,
+          "cell_hit": 0.10454396861719516,
+          "failed": 0,
+          "reference_headings": 58,
+          "reference_tables": 58,
+          "table_shape_matches": 8,
+          "text_sha256": "41559d21ef7d85de0adf41e6394704f251af1e0e0ccaa5327dee56126212833f",
+          "token_ratio": 0.2864306284939861,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 58,
+          "reference_tables": 58,
+          "table_shape_matches": null,
+          "text_sha256": "8750fd80318378d6b3e5b72828ea72f7710e8efd58951c9d9cbef9a1661f0b28",
+          "token_ratio": 0.6178443649373881,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 58,
+          "reference_tables": 58,
+          "table_shape_matches": null,
+          "text_sha256": "3eb84e673eb292e842b1356c9e9a646b5a25d0d97ec510aae990c2f7d8b1f6e4",
+          "token_ratio": 0.19427126220444654,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 44,
+          "cell_hit": 0.2521085322000654,
+          "failed": 0,
+          "reference_headings": 58,
+          "reference_tables": 58,
+          "table_shape_matches": 0,
+          "text_sha256": "d1a71c355fa9cd5b57f114d957413540689884d08551a634c2a2ace2d40c7710",
+          "token_ratio": 0.980457943375125,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 45,
+          "cell_hit": 0.11964694344557045,
+          "failed": 0,
+          "reference_headings": 58,
+          "reference_tables": 58,
+          "table_shape_matches": 6,
+          "text_sha256": "6349a93a6c31a4be5384647bf6f4a77ae22b602220f7f95933e72f3ea7bf27ee",
+          "token_ratio": 0.9904812424483541,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 58,
+          "reference_tables": 58,
+          "table_shape_matches": null,
+          "text_sha256": "69effd561649f0719d8456ebd17c1a8e7ce3f58bb4ae50dd145fec2621250710",
+          "token_ratio": 0.9656568026512596,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783096": {
+      "reference_failed": 0,
+      "reference_text_sha256": "1d9a39aa164958058d13888776576f0e117a60628f44e5b25a92bd2724faac07",
+      "seconds": 20.350648624999998,
+      "sha256": {
+        "hwp": "c045441fc2db02e6efad40f42f5c0137874cd5f7c5db9cdfbaf3544f02ab3c64",
+        "hwpx": "d9af888453a15e492f91988be2ffb74c602bbb72db64655972f011184f4583c5",
+        "pdf": "96de4cb3dcb2ab8ce11e337a039cd09acdcd0dcc23a540999ee3f79477839777"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 5,
+          "reference_tables": 22,
+          "table_shape_matches": 0,
+          "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "token_ratio": 0.0,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 5,
+          "reference_tables": 22,
+          "table_shape_matches": null,
+          "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "token_ratio": 0.0,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 5,
+          "reference_tables": 22,
+          "table_shape_matches": null,
+          "text_sha256": "ee3e9571f483c678ab4ec83579e8bef9c1399e8d319a66a073e1d60491f85468",
+          "token_ratio": 0.0,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 5,
+          "reference_tables": 22,
+          "table_shape_matches": 0,
+          "text_sha256": "636159b35205da4142a43bc02d2849d77d3ac07a0946211585cde15a9c6ff21f",
+          "token_ratio": 0.0,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 5,
+          "reference_tables": 22,
+          "table_shape_matches": 0,
+          "text_sha256": "636159b35205da4142a43bc02d2849d77d3ac07a0946211585cde15a9c6ff21f",
+          "token_ratio": 0.0,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 5,
+          "reference_tables": 22,
+          "table_shape_matches": null,
+          "text_sha256": "636159b35205da4142a43bc02d2849d77d3ac07a0946211585cde15a9c6ff21f",
+          "token_ratio": 0.0,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783126": {
+      "reference_failed": 0,
+      "reference_text_sha256": "e2da4b1deeff632f1e53f8051d6458d8e57c2af1f9531634a594b7db6e5845e8",
+      "seconds": 4.855421958000001,
+      "sha256": {
+        "hwp": "fee1eba237e9da2ea429577e52ca9ca6236ac05101ba886d6e9551f701f5bf87",
+        "hwpx": "24488c4bb9819381c8c1b8bba9c6be513ab869b4e6c195c64a41936ee5dc02a9",
+        "pdf": "cfac4ea25c66e125654e0b64f0c5f194adf7cfe7ec1f0ec642198aa966a4668a"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.2222222222222222,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "f86283b5818a462c5f843b810d3c567fcc05846f1b11b253abf66f78ae545c2b",
+          "token_ratio": 0.958904109589041,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "cd03caf7ad8318dd3cece54b318768263a3a8e2975c2848648e4f6068e1c8673",
+          "token_ratio": 0.9707602339181286,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "4db7204144153b549c1d8909727ceb79ecf586c79cc9276b5cd5c69cd7702ba9",
+          "token_ratio": 0.9707602339181286,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.16666666666666666,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "ef640bf899e817aa162dc26aed20aad888eee73a494abaf35e5b3ad0942b65fc",
+          "token_ratio": 0.9785575048732943,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.16666666666666666,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "c5598e4e183461eceed1fbbcf8df58b9183bda2ea804c237ab7c1403d0ef2505",
+          "token_ratio": 0.9785575048732943,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "103de54e71e28cffc7f71d7cf84942983f647fdb2e1f77657d6929d792fcb6a9",
+          "token_ratio": 0.9785575048732943,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783133": {
+      "reference_failed": 0,
+      "reference_text_sha256": "236f84988c89a16bd2850e10f48fd927bc768db31f696f5087ca314c5296a8aa",
+      "seconds": 4.176102999999998,
+      "sha256": {
+        "hwp": "6b2b59f7ce12541561fc60ff5b6af5d1439f097a5db68e0de6441b10bfc9aea2",
+        "hwpx": "1c7cd2ee7a46b4091cb82a30fc54aef2126252d4f41bd4730fdcab16a9bca490",
+        "pdf": "17353bb9a09fdfe544e9247ae05b41a7ae7d77a989e0445f3e2b3ffd76c113ec"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.29411764705882354,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "7390cd525d51148b05e0904e73da0a0e44d90f05f959b52beb87fddfbf9836ce",
+          "token_ratio": 0.9767441860465116,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "b66a95fbabcf80a5554c2d63a602ea8f605417fe95684587f5353686ea1c8ba3",
+          "token_ratio": 0.604735883424408,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "4269273e20ff18026b0b7ac084188654d232787ced2270d06fd34befa394ac8b",
+          "token_ratio": 0.9941176470588236,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.23529411764705882,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "1adb9dd415f94f7cd66c4c102a58b1e946048131501901808f99930bf9fe0567",
+          "token_ratio": 0.9822485207100592,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.23529411764705882,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "74455e4dd2c8dd528fcd977aba0e68af19261d1557a365be9e6eb62853c3aabf",
+          "token_ratio": 0.9822485207100592,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "94ee0cf629d0c3b15e552ef9289ab80eeb34732f581b74f5ecea6a238bb9c135",
+          "token_ratio": 1.0,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783149": {
+      "reference_failed": 0,
+      "reference_text_sha256": "3b2653deee022c3ef29b8adccc1965398f47bb774393649f901bdb448160a702",
+      "seconds": 3.828011332999999,
+      "sha256": {
+        "hwp": "aac9b19637a8e2a480a044f570bd1b179d23909e5a00f2b54ef6b476bb35add0",
+        "hwpx": "b46d9a16c7bc5e5c98be00b37f9538c32a9b7454982d273275ad1a5cef371ea0",
+        "pdf": "8dd5a800c1a06d6afa42cfa1f9b9c02da8c2dd94e49be065f4e1d6f186e5f082"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 4,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 3,
+          "reference_tables": 1,
+          "table_shape_matches": 0,
+          "text_sha256": "96ac1fcd9aa9a6bbb97741c51d33f5c70f993ccc91ec9e0e0b3fd9e94f639f55",
+          "token_ratio": 0.820627802690583,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 3,
+          "reference_tables": 1,
+          "table_shape_matches": null,
+          "text_sha256": "20523898dd33d597fc06a7681c081627c1826a6c616245bf1b5d8ae446b31d8f",
+          "token_ratio": 0.5520833333333334,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 3,
+          "reference_tables": 1,
+          "table_shape_matches": null,
+          "text_sha256": "22bf42df6810a279438ec026a939839bef07d48e239bd249e7055759a578ee56",
+          "token_ratio": 0.9042316258351893,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 3,
+          "reference_tables": 1,
+          "table_shape_matches": 0,
+          "text_sha256": "067769d638710ea7f97d9e903e46f06bfceb32b5379667f91b1a89f10e03a174",
+          "token_ratio": 0.9487750556792873,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 3,
+          "reference_tables": 1,
+          "table_shape_matches": 0,
+          "text_sha256": "868b23b22eaa71b48551dbf58e5cd5750bffd4b59c2feef79c21133cc5868edc",
+          "token_ratio": 0.780373831775701,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 3,
+          "reference_tables": 1,
+          "table_shape_matches": null,
+          "text_sha256": "20ed9792baceb96989af5cfd0f9813e5d69db795b4b67c532fa9082fa0686f7b",
+          "token_ratio": 0.6487695749440716,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783235": {
+      "reference_failed": 0,
+      "reference_text_sha256": "7b2073fd0452d23486639742df345ea95228ca08cb688dfb1dfa20d9f42df995",
+      "seconds": 7.333724416999999,
+      "sha256": {
+        "hwp": "00f34095c1c22d5f97072e2222f17ee68d4d98068afdf0c85cc9cc10ea461f23",
+        "hwpx": "fc7b37fe074b243333c7e18faa6472403c9193fdaf0f6d1a465b4c85c229477f",
+        "pdf": "7b9725c8642761e874e245df7c4750b81992efc02f9758e88228d16ddf919001"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 3,
+          "candidate_tables": 6,
+          "cell_hit": 0.8333333333333334,
+          "failed": 0,
+          "reference_headings": 4,
+          "reference_tables": 10,
+          "table_shape_matches": 5,
+          "text_sha256": "3f77ef4a239a3a8b752d21b92082496bc0a3f38af2d7b4f80084a110dedf76fe",
+          "token_ratio": 0.9020618556701031,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 4,
+          "reference_tables": 10,
+          "table_shape_matches": null,
+          "text_sha256": "ae3a3c32427924966dfa6d5bcf4a203407a4bf90217ca8c372eda87a0c4491d8",
+          "token_ratio": 0.42350134208171786,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 4,
+          "reference_tables": 10,
+          "table_shape_matches": null,
+          "text_sha256": "84078de2a62dbad2a8241c1b9d1d109f874d4d120761e997bbdea1cd8d6a8ca6",
+          "token_ratio": 0.8512241054613936,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 5,
+          "cell_hit": 0.8492063492063492,
+          "failed": 0,
+          "reference_headings": 4,
+          "reference_tables": 10,
+          "table_shape_matches": 3,
+          "text_sha256": "6748bbb5bc430704728439c87f41dba4102dff3e789329e9a9ad777318b53206",
+          "token_ratio": 0.9086261980830671,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 4,
+          "cell_hit": 0.7698412698412699,
+          "failed": 0,
+          "reference_headings": 4,
+          "reference_tables": 10,
+          "table_shape_matches": 3,
+          "text_sha256": "5b203743325f3a1a9110d4d288eae317ba9578f1c668b711e366603e02de7e9c",
+          "token_ratio": 0.8922880815806246,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 4,
+          "reference_tables": 10,
+          "table_shape_matches": null,
+          "text_sha256": "06a82c670d9949df81353101828bf31cef17e0125fcceb0c60f3af9ead7105bf",
+          "token_ratio": 0.8227300802964793,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783248": {
+      "reference_failed": 0,
+      "reference_text_sha256": "db397e97fb35d2362a7314d5eab3f08ee91265ce2869532084f9d992e2903a14",
+      "seconds": 2.948663499999995,
+      "sha256": {
+        "hwp": "f53b3905899c7b05dbc5c6cffc4810610d4af08115184ac85543720686455291",
+        "hwpx": "9935a3e2e1b1a400b677c0ca496ed151fa9121edf6318af831e4be23a8425b0b",
+        "pdf": "06f55a94c3d317748a11490d5288c520cc196d26be9262bed74993815a65a39e"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.2,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "4ed3f9362984c646c6715ad653c7632e82645a46a08864f98625e86424b142c4",
+          "token_ratio": 0.96,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "673786842ee2c1502b339e4c0835e9245c70c09159ddca62b0d1a139189d92b2",
+          "token_ratio": 0.5616291532690246,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "541828f14bba0f2da2c92c8eec669234b3b8052d934a4ab0a7ef08079d1069a6",
+          "token_ratio": 0.9309090909090909,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.17142857142857143,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "50b18a5b3ba2802a54e79960fa09787817bdfbfeb45cf6c89df6477e03354489",
+          "token_ratio": 0.9614678899082569,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17142857142857143,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "a8707de2436c09cc554e376cd17020a67d6da8439c71a57d34411581231cd2d6",
+          "token_ratio": 0.9614678899082569,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "2a7469e278f554e676c57ea26c8f581eaa2974be065cf7f7d7ef56a3abfe380d",
+          "token_ratio": 0.9836660617059891,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783249": {
+      "reference_failed": 0,
+      "reference_text_sha256": "2dbf79cf8ee8beca88681c0ab9f3d68dc1a008106ffecbd140db9352e9d4f18f",
+      "seconds": 3.038067292000001,
+      "sha256": {
+        "hwp": "57d4b04098cfa3d11a5598d34a3aad78109ae6afc4b22a59609fafc3ff16faeb",
+        "hwpx": "8f8b0211c1437a4bae0137387d4f626a585c2807465f45b39d8f332a5dfe830b",
+        "pdf": "e1ec97e59252203e48379e30487a0c8d04c40fa9b6ef471723c55b6572db74f1"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 1,
+          "candidate_tables": 5,
+          "cell_hit": 0.3,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 2,
+          "text_sha256": "bc6a3e823368f381cc34b0434fd2f845844277e541da8a7e8492e72a7ad12308",
+          "token_ratio": 0.9532710280373832,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "033903853049e43368d6d932e3a369e07c289b26efbec714f0c67235457af7ba",
+          "token_ratio": 0.5113553113553113,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "3d803313c0cd81f5800082cd85559be9f80dfb77d272e841a861b0db50e9be72",
+          "token_ratio": 0.9575596816976127,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.15,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 0,
+          "text_sha256": "7a194874e5268703f6194d776b371c7b69990906b0b8ebf4c79603022d6f4ed7",
+          "token_ratio": 0.9361702127659575,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.15,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 0,
+          "text_sha256": "d83e7ca192fe9e624595c2d17a81f6691ca8bdfb1327d930daf132957cea18ac",
+          "token_ratio": 0.953519256308101,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "68b1bc09c56f2aff1f6d82e2459dcb55c67a968f44351b3c65dd6f4832b59e63",
+          "token_ratio": 0.9343832020997376,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783257": {
+      "reference_failed": 0,
+      "reference_text_sha256": "76931c2c04cd2f73864a42ef736c92e111a6d64390875db9d29bf538cd91778e",
+      "seconds": 5.821194292000001,
+      "sha256": {
+        "hwp": "a8ca41671ab114af7916b3fb4fc09f63189294b30831b6a4515e17e81e1e7053",
+        "hwpx": "183d2c953312d8707b2966d440a6aa3bdf746bfd040915fa04b7b434fbe85818",
+        "pdf": "64ead5dd0c04d753c03d9a5b85fd7c0937d79445caeb9f0bbd580b721a19c56a"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 10,
+          "cell_hit": 0.07339449541284404,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 8,
+          "table_shape_matches": 1,
+          "text_sha256": "685ce70e1a1c8bb96a23777366371943aa90325d02e84731db2424ad82bf45f1",
+          "token_ratio": 0.8451848841934173,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 8,
+          "table_shape_matches": null,
+          "text_sha256": "7553aed62ae58c43e06547f9c04f2d3ed0321a174831cf431db6bb3cf7bdbcd7",
+          "token_ratio": 0.42347305389221557,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 8,
+          "table_shape_matches": null,
+          "text_sha256": "620eede27b5164ee840d174d20275e43e89249012c833201a761c974ffdb7dda",
+          "token_ratio": 0.8088,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 6,
+          "cell_hit": 0.045871559633027525,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 8,
+          "table_shape_matches": 1,
+          "text_sha256": "29ec50ff7c1952362ee5ac9438da2b05eeefc5d5d4a4a640768313bc3d7cece2",
+          "token_ratio": 0.7564102564102564,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.045871559633027525,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 8,
+          "table_shape_matches": 0,
+          "text_sha256": "5dd65760d2138dfa0e5ff44714188719193f86d5f98086dadf9c37500638a414",
+          "token_ratio": 0.8898678414096917,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 8,
+          "table_shape_matches": null,
+          "text_sha256": "db612218880d397715ab2e7e4cc9681a99440a41c3e811a6bbe784eeac806ffd",
+          "token_ratio": 0.8912,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783284": {
+      "reference_failed": 0,
+      "reference_text_sha256": "eb180bd8ae8767aa558d4e98292a5e8f545be443b6987066b5558d5fdb949108",
+      "seconds": 3.5210451250000006,
+      "sha256": {
+        "hwp": "54666a761d50e93d323340b1437f12e349797fb2f9ab2ea64a240924c8e66f2f",
+        "hwpx": "6137af81438fd8ed1fefe8ef6a922b9979c413045ed125b7f6b303b40043f91f",
+        "pdf": "9c1f05a91c1775d6fc6653ed1362c606eb59b09883c5fb56312840828cf11281"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 4,
+          "cell_hit": 0.25,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 0,
+          "text_sha256": "eb475090767294aa0a2ec151b817bd88db70a597ed2cc3b2075deb697c99dcc6",
+          "token_ratio": 0.9592760180995475,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "b33c5f171f48bf6a04e207d7c3d33b11e1e4ba8d2f71451f0c1f1c8e985aeec9",
+          "token_ratio": 0.47344461305007585,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "c6b0bfb666789f1ee14a1e80e92c48b8b42c61e3af5d63aefdc66f2e72f38670",
+          "token_ratio": 0.9714285714285714,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.15,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 1,
+          "text_sha256": "58565b0646de52ffc28ab0a0a768733d079048f832c117c7cf38aefbaa94406c",
+          "token_ratio": 0.9532428355957768,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.15,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 0,
+          "text_sha256": "d0d572f7bf4a812cca0a2c6e8ae94589d5304f14b6a5de59d5ed1a3d1bcc643a",
+          "token_ratio": 0.9683257918552036,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "870e51e65e6dc2c477e2f48f4e4280b42a54b642fcc79cf3d5a19136bd411e2a",
+          "token_ratio": 0.9774436090225563,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783291": {
+      "reference_failed": 0,
+      "reference_text_sha256": "c0303f8a397480c74d2752392078ac216d206fddc19b240c1ae57b220f4cdf44",
+      "seconds": 2.8136331249999955,
+      "sha256": {
+        "hwp": "2f86d46232f60d45a1c379892fcb6f682f3477fbaa6657d6c21fce9ca719da0e",
+        "hwpx": "392d7c9c6e04b466533e649a549b4ce4d2b8c046259d720b2105518c9c52b2b2",
+        "pdf": "e9e83b1490573b16ef77ce873ca32fcb57c60a2ac77df7d383439b89dd52b04f"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.29411764705882354,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 1,
+          "text_sha256": "5abc42087c01ce4fe82c91e9aaab841e0399f06f2eb3e0054dd8d23ede901d32",
+          "token_ratio": 0.9847494553376906,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "167c02a215869982bf18e862d50329488b4edd8075c66537945e36b60a479318",
+          "token_ratio": 0.534629404617254,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "78c6806a003afdc96bb75c09fb8348541dffa9e23eb5242fab2afcbc3ae76627",
+          "token_ratio": 0.9650655021834061,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.17647058823529413,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "b0ef5fc389e93398e28ac1574d3bf8ffabf9b28a71bd143b742ad27aa44729af",
+          "token_ratio": 0.967032967032967,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "ededd77a7156c5d7a857faad6b2bbe3b1a08b227ff5d956b94ed905e4f592498",
+          "token_ratio": 0.967032967032967,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "0dd621f7ad0ecc3b786ea9c19458c5ebf1f4d496f23d32f7205be1cfed4ff3bd",
+          "token_ratio": 0.9358974358974359,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783294": {
+      "reference_failed": 0,
+      "reference_text_sha256": "423cd04184fb873d051d35baead88128542e074e18f8479489a6778c3f9249b0",
+      "seconds": 3.2695452079999967,
+      "sha256": {
+        "hwp": "049ae4759bdf17262dfbfa6a537b283f24bed2536cb3757d73cce8fb3c57ba9c",
+        "hwpx": "ff1270e6d51b50af71338a3ba20f3dd55c0160207f83337a4def57a2b5189b3f",
+        "pdf": "57cdd6c83e7b5c5759be1e9af3da79a576543e78a3eb09a6847ad6e1542d7c10"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 1,
+          "candidate_tables": 4,
+          "cell_hit": 0.20833333333333334,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 0,
+          "text_sha256": "86a1d35e375537e574ca96434edb91a3815fc72196b0bae43fc72e104168b09e",
+          "token_ratio": 0.9674620390455532,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "9cc8670663ee3b9900a620de68ff795a711bd7e91c85ab87257dfe6bc23e621b",
+          "token_ratio": 0.7156549520766773,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "515fa10e48e40f11848807d2ea4b0013d83ca4bac1a96d480b4685a6d11b2b39",
+          "token_ratio": 0.9910714285714286,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.125,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 0,
+          "text_sha256": "c8ff6805766ceca17ecc2ff879a982ce28fa346030a9af31952eec125d9656c4",
+          "token_ratio": 1.0,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.125,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 0,
+          "text_sha256": "bad500326d5bd1b46d396e67d91d06c40a5dc6147684a9944dddb19df9cef087",
+          "token_ratio": 0.9797752808988764,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "28d41ecab95061ac348c512cf8bb92e591ea5f780214d4ffc170d9ef8548f4ef",
+          "token_ratio": 0.8711656441717791,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783327": {
+      "reference_failed": 0,
+      "reference_text_sha256": "7df7da2b965965d36dccb8c42a0eaf87712420bba0c5358a5885734b032ff6c7",
+      "seconds": 3.381037874999997,
+      "sha256": {
+        "hwp": "9495f5375461c1c748e5c2a2c548efd97def514d8bf1e38cd3f53f33e9175d24",
+        "hwpx": "0d094a362cb46aa7139aa15bfb6ceeb0e172b2aac9d327f9c259475765c78e74",
+        "pdf": "5bee1e066581b67cc1283d017e990b44b01681a923846e451a6603e6751e2319"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.25806451612903225,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "458111e8fe1b50e2fd735ab406a5bae55b279b75baf2fbb561c68a8bf7b12adb",
+          "token_ratio": 0.9620915032679739,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "53ed1a8c09689d792da82b35e424beb37ebf76c91f1284d939cb544a2e956459",
+          "token_ratio": 0.485968514715948,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "0e62ffc0f3badb723acdc48e447a746c9aa3ab4a8c1e1dcc7223198e2357b468",
+          "token_ratio": 0.8923884514435696,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.24193548387096775,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "3625dd104fd6cda7d2ddb7621da0bc7cd3f191b3e1d14e423d69ed3b2278dc61",
+          "token_ratio": 0.9441489361702128,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.24193548387096775,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": 0,
+          "text_sha256": "8a93ed29dfb4096331d98b31dd4a2153749911a496096111881832398a453d40",
+          "token_ratio": 0.9441489361702128,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 5,
+          "table_shape_matches": null,
+          "text_sha256": "3de9a705ddf3b5a894fec215213066b2c50863a9df87f3ef93a2f4d2dfff421e",
+          "token_ratio": 0.984251968503937,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783330": {
+      "reference_failed": 0,
+      "reference_text_sha256": "686c81e634967952656710bf2bffcd8b508ffcf9b7cdde7eca8536c31c400522",
+      "seconds": 2.6156236659999976,
+      "sha256": {
+        "hwp": "59d23b6632584c94a53bc5b17e8c794dc8ecda395545bf7d1abf6ea7cb7b2e36",
+        "hwpx": "ca867db5f59b7ee2a1c240db052e3f2f5c82ce03793afbd910fb9a62d5022abb",
+        "pdf": "9fa54ca59c6c78904a9f883d2be0e68e004c93999d2059b935819b92f545f0db"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 2,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 2,
+          "reference_tables": 1,
+          "table_shape_matches": 0,
+          "text_sha256": "0588a461a223c29b4ca47e6f5cb75f700fa21aeacdc0102211a8733923cf3850",
+          "token_ratio": 0.5060240963855421,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 2,
+          "reference_tables": 1,
+          "table_shape_matches": null,
+          "text_sha256": "d1e823216e26b22c8abcf956e503ab3b9ac573e05405697196e75fb0438bc5e6",
+          "token_ratio": 0.24770642201834864,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 2,
+          "reference_tables": 1,
+          "table_shape_matches": null,
+          "text_sha256": "760d7347c8c18a9b8555d4e514be816537648a67caeb7aa48b24f529e98828e5",
+          "token_ratio": 0.8641975308641975,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 2,
+          "reference_tables": 1,
+          "table_shape_matches": 0,
+          "text_sha256": "cdc2920cdad0dbeee8d9b8d5086ae161dc04b360e7e6e2f39b7eb9d009f7a392",
+          "token_ratio": 0.9382716049382716,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 0,
+          "cell_hit": 0.0,
+          "failed": 0,
+          "reference_headings": 2,
+          "reference_tables": 1,
+          "table_shape_matches": 0,
+          "text_sha256": "75fd9edbae308017704586a6e16f19e91c7408576487f003317e5bfab222358a",
+          "token_ratio": 0.18181818181818182,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 2,
+          "reference_tables": 1,
+          "table_shape_matches": null,
+          "text_sha256": "54d409134f2e6b4f1ae219add0ab1b1608a6b37e7c29772378eb7a4089ab36d9",
+          "token_ratio": 0.43373493975903615,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783334": {
+      "reference_failed": 0,
+      "reference_text_sha256": "d72b05a06b01acd849c75fcf4d1f3f7b8afbe16a1266bc7fcbb4ffe53d4d8bab",
+      "seconds": 4.545026624999998,
+      "sha256": {
+        "hwp": "bb6004d6efaa66379d5cd55b3eafbac394242e4adc8af26422d8f82c18bc9d90",
+        "hwpx": "5bcfcb973a44d8ec5399fbef31f3a2559e7f7e7a84f674d87a38b3f1fd27b413",
+        "pdf": "df78eefa45e2c71f540076dfa7cb0aa95d6943e0d39eaad0f3ddb0f97ac5dd4c"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 3,
+          "cell_hit": 0.08333333333333333,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 2,
+          "text_sha256": "ce51b504a58a70e0e5124278528b4217e623414fe6d29982e6e88f522c3b06ea",
+          "token_ratio": 0.9677040516735174,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "2dcabc4e7e21f878199971d228fb148ae6b46dbedbed4103e0ca0ee87df45b98",
+          "token_ratio": 0.7802303262955854,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "3cda5c0499e6ff7496965fa4b91b03a3b0c0c5b098e4dcbd53b2dbd095434a11",
+          "token_ratio": 0.9691681210005817,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.08333333333333333,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 0,
+          "text_sha256": "1cc7fd9f44360e7f39fd5d5d014d94491bfbe621dc9948600da0768946e08872",
+          "token_ratio": 0.9549444119368051,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.08333333333333333,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": 0,
+          "text_sha256": "313dd9d186459c62f4e96e00f346b9e6eb68a49e63b29dbd2f3c44bc7e3f9a57",
+          "token_ratio": 0.9393761035903473,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 9,
+          "table_shape_matches": null,
+          "text_sha256": "7d8341ebd3d36a6a52da52ce1bb02346f90f4380ba84af23563a484da618976d",
+          "token_ratio": 0.930045871559633,
+          "version": "6.21.4"
+        }
+      }
+    },
+    "156783345": {
+      "reference_failed": 0,
+      "reference_text_sha256": "aa4f0802a790d9516f6a4740f8528d71b29dfb4a69d0186585fd8acdcc8fd9ae",
+      "seconds": 2.728687041999997,
+      "sha256": {
+        "hwp": "24fa7a674654bb9cf39289d64b15aed96b9a7d2d95605a81359bd9a1f557d778",
+        "hwpx": "ad3fdcdae32b6637eae779b984127d0f40354284b4079bbf798a1ff1d91418fd",
+        "pdf": "6163ec8665b8c481fefc5caced7b486138098cb891401c79ff6904d0acbf8cf8"
+      },
+      "tools": {
+        "dochan": {
+          "candidate_headings": 0,
+          "candidate_tables": 5,
+          "cell_hit": 0.36363636363636365,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 1,
+          "text_sha256": "78acbdc475775e0a766953c5353d1f99277e2e2fd1e93727ad2811d6c3c2c098",
+          "token_ratio": 0.9516129032258065,
+          "version": "1.15.0"
+        },
+        "markitdown": {
+          "candidate_headings": 0,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "c122845f143ca5f60c7f07c280415dc4a7aaca3b6bfe1212401d4797f65c1c29",
+          "token_ratio": 0.5583596214511041,
+          "version": "0.1.9"
+        },
+        "pdfminer": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "10e78739e28abd2e0e75f2ebfe07689c8e72f2fb53e12e9e6d57ac7d79842074",
+          "token_ratio": 0.9728260869565217,
+          "version": "20260107"
+        },
+        "pdfplumber": {
+          "candidate_headings": null,
+          "candidate_tables": 2,
+          "cell_hit": 0.22727272727272727,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 1,
+          "text_sha256": "a1eb7a93ceb79e5389b9ebf0d57caf67158d13f3cac5b343f9ff46fcad4ad8a8",
+          "token_ratio": 0.9672131147540983,
+          "version": "0.11.10"
+        },
+        "pymupdf": {
+          "candidate_headings": null,
+          "candidate_tables": 1,
+          "cell_hit": 0.13636363636363635,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": 0,
+          "text_sha256": "f1c14bd768698bea737c3e24734918e4f755f43f21d7ac879056674f4633eb19",
+          "token_ratio": 0.9505494505494505,
+          "version": "2.0"
+        },
+        "pypdf": {
+          "candidate_headings": null,
+          "candidate_tables": null,
+          "cell_hit": null,
+          "failed": 0,
+          "reference_headings": 0,
+          "reference_tables": 7,
+          "table_shape_matches": null,
+          "text_sha256": "c52f2fc5124db180c4185891c5d21694dac42d39bd3744c3d52972ab0d61f69e",
+          "token_ratio": 0.975609756097561,
+          "version": "6.21.4"
+        }
+      }
+    }
+  },
+  "schema": 1,
+  "split": "holdout",
+  "summary": {
+    "dochan": {
+      "candidate_headings": 99,
+      "candidate_tables": 274,
+      "cell_hit_mean": 0.2399519541209511,
+      "cell_scored_documents": 30,
+      "failures": 0,
+      "reference_headings": 277,
+      "reference_tables_scored": 379,
+      "successes": 30,
+      "table_shape_recall": 0.20580474934036938,
+      "token_mean": 0.8484896066050123,
+      "token_median": 0.9524419656315948
+    },
+    "markitdown": {
+      "candidate_headings": 0,
+      "candidate_tables": null,
+      "cell_hit_mean": null,
+      "cell_scored_documents": 0,
+      "failures": 0,
+      "reference_headings": 277,
+      "reference_tables_scored": 0,
+      "successes": 30,
+      "table_shape_recall": null,
+      "token_mean": 0.5551465967095106,
+      "token_median": 0.5433563689752936
+    },
+    "pdfminer": {
+      "candidate_headings": null,
+      "candidate_tables": null,
+      "cell_hit_mean": null,
+      "cell_scored_documents": 0,
+      "failures": 0,
+      "reference_headings": 277,
+      "reference_tables_scored": 0,
+      "successes": 30,
+      "table_shape_recall": null,
+      "token_mean": 0.8582333934116629,
+      "token_median": 0.9400745619485522
+    },
+    "pdfplumber": {
+      "candidate_headings": null,
+      "candidate_tables": 159,
+      "cell_hit_mean": 0.19462773820867246,
+      "cell_scored_documents": 30,
+      "failures": 0,
+      "reference_headings": 277,
+      "reference_tables_scored": 379,
+      "successes": 30,
+      "table_shape_recall": 0.06068601583113457,
+      "token_mean": 0.9037160273355613,
+      "token_median": 0.9510089456375321
+    },
+    "pymupdf": {
+      "candidate_headings": null,
+      "candidate_tables": 130,
+      "cell_hit_mean": 0.16625876692128563,
+      "cell_scored_documents": 30,
+      "failures": 0,
+      "reference_headings": 277,
+      "reference_tables_scored": 379,
+      "successes": 30,
+      "table_shape_recall": 0.044854881266490766,
+      "token_mean": 0.8163915839361372,
+      "token_median": 0.9520343534287757
+    },
+    "pypdf": {
+      "candidate_headings": null,
+      "candidate_tables": null,
+      "cell_hit_mean": null,
+      "cell_scored_documents": 0,
+      "failures": 0,
+      "reference_headings": 277,
+      "reference_tables_scored": 0,
+      "successes": 30,
+      "table_shape_recall": null,
+      "token_mean": 0.842943256199083,
+      "token_median": 0.9324118863302489
+    }
+  },
+  "timeout": 120,
+  "triples": 30,
+  "workers": 4
+}

@@ -5,7 +5,9 @@ from TreeBuilder.doctype alone does not stop the C parser's entity expansion.
 No parser here installs a resource resolver or performs network/file I/O.
 """
 import codecs
+import os
 import re
+import sys
 from html import unescape
 from weakref import WeakKeyDictionary
 from xml.parsers import expat  # nosemgrep: use-defused-xml -- declaration-rejecting prolog only
@@ -19,6 +21,7 @@ XMLSyntaxError = _ET.ParseError
 ParseError = _ET.ParseError
 MAX_BYTES = 100 * 1024 * 1024
 MAX_DEPTH = 256
+MAX_ELEMENTS = 1_000_000
 MAX_NAMESPACE_WORK = 1000000
 CHUNK_SIZE = 1024 * 1024
 MAX_DTD_SUBSET_BYTES = 64 * 1024
@@ -327,7 +330,7 @@ class _BoundedTree:
         self.elements += 1
         if depth > self.max_depth:
             raise ValueError('XML depth limit exceeded')
-        if self.elements > 1000000:
+        if self.elements > MAX_ELEMENTS:
             raise ValueError('XML element limit exceeded')
         if self.track_namespaces:
             scope = self.scopes[-1]
@@ -364,7 +367,7 @@ class _PlainBoundedTree(_BoundedTree):
         self.elements += 1
         if self.depth > self.max_depth:
             raise ValueError('XML depth limit exceeded')
-        if self.elements > 1000000:
+        if self.elements > MAX_ELEMENTS:
             raise ValueError('XML element limit exceeded')
         node = self.builder.start(tag, attrs)
         if self.root is None:
@@ -377,7 +380,58 @@ class _PlainBoundedTree(_BoundedTree):
         return node
 
 
+_c_structure = None
+if os.environ.get('DOCHAN_DISABLE_ACCEL') != '1':
+    try:
+        from ._cxml import bounded_structure as _c_structure
+    except ImportError:
+        pass
+
+
+def _fast_structure(data, max_depth):
+    """Prove allocation bounds, not validity; uncertainty uses the old target.
+
+    Without the optional scanner, the number of '<' bytes bounds both element
+    count and depth. This deliberately limits the portable path to small parts.
+    """
+    if (type(data) is not bytes or type(max_depth) is not int or
+            not 0 < max_depth <= sys.maxsize or b'\0' in data or
+            b'Requires' in data or b'Choice' in data):
+        return False
+    if _c_structure is not None:
+        return _c_structure(data, max_depth, MAX_ELEMENTS)
+    return (b'<!' not in data and b'<?' not in data and
+            data.count(b'<') <= min(max_depth, MAX_ELEMENTS))
+
+
+class _NamespaceTree(_ET.TreeBuilder):
+    """C element/data methods, with only namespace declarations in Python."""
+    def __init__(self, options, max_namespaces):
+        super().__init__(insert_comments=not options.remove_comments,
+                         insert_pis=not options.remove_pis)
+        self.max_namespaces = max_namespaces
+        self.declarations = 0
+        self.uris = set()
+        self.track_namespaces = False
+
+    start_ns = _BoundedTree.start_ns
+
+
 def _parse_tree(data, options, namespaces, max_namespaces, max_depth, truncate):
+    if not namespaces and _fast_structure(data, max_depth):
+        target = _NamespaceTree(options, max_namespaces)
+        parser = _ET.XMLParser(target=target)  # nosemgrep: use-defused-xml -- prolog and allocation bounds checked before feed
+        try:
+            parser.feed(data)
+            root = parser.close()
+        except XMLSyntaxError:
+            # Recover through the original target: partial text flushing and
+            # the first syntax/limit diagnostic must remain exactly unchanged.
+            pass
+        else:
+            if target.uris:
+                _declared_uris[root] = frozenset(target.uris)
+            return root
     target_class = _BoundedTree if namespaces else _PlainBoundedTree
     target = target_class(options, namespaces, max_namespaces, max_depth, truncate)
     parser = _ET.XMLParser(target=target)  # nosemgrep: use-defused-xml -- prolog rejected; target checks before allocation
@@ -674,7 +728,7 @@ def vml_fromstring(data):
         if not tag:
             continue
         count += 1
-        if count > 1000000:
+        if count > MAX_ELEMENTS:
             raise ValueError('XML element limit exceeded')
         attrs = []
         attribute_text = parts[1] if len(parts) > 1 else ''

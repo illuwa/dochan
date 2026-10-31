@@ -1,4 +1,4 @@
-"""Build the dependency-free PDF C accelerators only when explicitly requested."""
+"""Build the dependency-free C accelerators only when explicitly requested."""
 import os
 
 from setuptools import Extension, setup
@@ -27,6 +27,7 @@ def _extension(name, sources, depends=()):
 extensions = []
 if os.environ.get("DOCHAN_BUILD_ACCEL") == "1":
     extensions = [
+        _extension("dochan.utils._cxml", ["dochan/utils/_cxml.c"]),
         _extension("dochan.pdf._cscan", ["dochan/pdf/_cscan.c"]),
         _extension("dochan.pdf._cinterp", ["dochan/pdf/_cinterp.c"],
                    depends=["dochan/pdf/_cinterp_objects.h", "dochan/pdf/_cinterp_paths.h"]),
@@ -37,7 +38,7 @@ setup(
     ext_modules=extensions,
     cmdclass={"build_ext": AcceleratorBuildExt} if extensions else {},
     # The sdist carries the build source; wheels carry executable packages.
-    exclude_package_data={"dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
+    exclude_package_data={"dochan.utils": ["_cxml.c"], "dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
                                          "_cinterp_paths.h", "_clines.c"]},
     options={"bdist_wheel": {"py_limited_api": "cp39"}} if extensions else {},
 )

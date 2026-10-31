@@ -27,8 +27,8 @@
   Apache POI·LibreOffice 의 Office 실물 4천여 개, pdf.js PDF 983개, 내부 HWP·HWPX·PDF 80쌍. 정답지는 같은 문서의 다른 형식, 한컴오피스·PowerPoint 실측, 공개 테스트 기대값,
   제품 코드와 분리된 독립 해독기, PDF 렌더 판독 라벨이다 — [검증 코퍼스와 정답지](docs/VALIDATION.md), 칸별 기록은 [`docs/benchmarks/`](docs/benchmarks/)
 - 공개 OOXML fixture 50개의 고정 SHA-256 corpus와 형식별 회귀 테스트(5,000개 이상)로 지속 검증
-- 한글·Office 변환이 빠르다: 같은 파일·같은 환경에서 HWP 는 pyhwp 보다 8.7배, DOCX·XLSX 는 markitdown 보다 약 5배 빠르다. PDF 는 순수 파이썬 도구보다 빠르지만
-  C 엔진(PyMuPDF)보다는 아직 9.4배 느리다 — [Performance](#performance)
+- 한글·Office 변환이 빠르다: 같은 파일·같은 환경에서 HWP 는 pyhwp 보다 9.4배, DOCX·XLSX 는 markitdown 보다 약 5배 빠르다. PDF 는 순수 파이썬 도구(pypdf·pdfminer·pdfplumber)보다 3~7배 빠르지만
+  C 엔진(PyMuPDF)보다는 아직 4.6배 느리다(선택적 C 가속 빌드 기준) — [Performance](#performance)
 - 꾸준히 갱신한다: 2026-04 첫 배포 이후 PyPI 에 20회 넘게 배포했고, 배포마다 무엇이 바뀌었고 어떤 실물로 확인했는지 [CHANGELOG](CHANGELOG.md)와 `docs/benchmarks/` 에 남긴다
 
 ```python
@@ -60,23 +60,26 @@ print(doc.to_markdown())
 
 ## Performance
 
-같은 파일을 같은 환경(Apple M5 Pro, Python 3.12, 3회 측정의 중앙값)에서 다른 변환 도구와 함께 쟀다. 배수는 두 도구가 모두 성공한 파일만 합산한 값이다.
+같은 파일을 같은 환경(Apple M5 Pro, Python 3.12, 도구 순서를 바꿔 3회 측정한 중앙값)에서 다른 변환 도구와 함께 쟀다. 배수는 두 도구가 모두 성공한 파일만 합산한 값이다.
+dochan 은 저장소 소스를 `DOCHAN_BUILD_ACCEL=1` 로 빌드한 상태(PDF 내용 스트림·줄 조립과 XML 검사의 선택적 C 확장 포함)다.
 
 | 형식(무작위 표본) | 상대 도구 | dochan | 상대 | dochan 속도 |
 |---|---|---:|---:|---|
-| HWP (300개) | pyhwp | 3.6초 | 31.0초 | 8.7배 빠름 |
-| DOCX (300개) | markitdown | 1.1초 | 5.7초 | 5.0배 빠름 |
-| XLSX (200개) | markitdown | 2.8초 | 14.2초 | 5.1배 빠름 |
-| XLS (200개) | markitdown | 6.6초 | 16.8초 | 2.5배 빠름 |
-| PPTX (200개) | markitdown | 0.9초 | 1.3초 | 1.35배 빠름 |
-| PDF (300개) | pdfplumber / pdfminer.six / pypdf | 20.0초 | 45.3 / 35.6 / 22.0초 | 2.2 / 1.8 / 1.1배 빠름 |
-| PDF (300개) | PyMuPDF | 20.0초 | 2.1초 | **9.4배 느림** |
+| HWP (300개) | pyhwp | 3.1초 | 28.9초 | 9.4배 빠름 |
+| DOCX (300개) | markitdown | 1.0초 | 5.4초 | 5.4배 빠름 |
+| XLSX (200개) | markitdown | 2.5초 | 13.4초 | 5.4배 빠름 |
+| XLS (200개) | markitdown | 4.9초 | 14.9초 | 3.1배 빠름 |
+| PPTX (200개) | markitdown | 0.8초 | 1.2초 | 1.6배 빠름 |
+| PDF (300개) | pypdf / pdfminer.six / pdfplumber / markitdown | 6.8초 | 20.2 / 34.0 / 41.0 / 46.7초 | 3.0 / 5.0 / 6.0 / 6.9배 빠름 |
+| PDF (300개) | PyMuPDF | 6.8초 | 1.5초 | **4.6배 느림** |
 
-파일 하나의 중앙값은 HWP 3.5ms · HWPX 8.2ms · DOCX 2.1ms · PPTX 1.9ms · XLSX 0.9ms · XLS 1.1ms · PDF 5.2ms 다. 이 표본에서 dochan 이 예외로 멈춘 파일은 0개다.
+이 표본에서 dochan 이 예외로 멈춘 파일은 0개다(다른 도구는 2~20개). 2026-10-04 측정에서는 PDF 가 PyMuPDF 보다 9.4배 느렸고, 선택적 C 가속으로 4.6배까지 좁혔다.
 
-PDF 는 아직 약점이다. dochan 은 순수 파이썬으로 내용 스트림을 해석하고 표·제목·링크·각주까지 복원하는 반면 PyMuPDF 는 C 엔진이다(AGPL 이라 가져다 쓸 수 없다).
-벡터 그림이 많은 쪽이나 수백 쪽 문서는 수 초가 걸릴 수 있고, 줄이는 작업을 진행 중이다. 측정 방법·한계·재현 명령은
-[속도 비교 기록](docs/benchmarks/2026-10-04-speed-comparison.md)에 있다(`python -m scripts.bench_converters`).
+PDF 는 아직 약점이다. PyMuPDF 는 C 엔진이고(AGPL 이라 가져다 쓸 수 없다) `get_text()` 는 글자만 뽑는 반면, dochan 은 표·제목·링크·각주까지 복원하고 Markdown 을 만든다.
+글꼴·좌표까지 뽑는 `get_text("dict")` 나 표 복원 `find_tables()` 와 비교하면 순위가 바뀐다. **`pip install dochan` 의 순수 Python 휠은 가속이 없어** PDF 가 PyMuPDF 보다
+약 12배 느리다 — 가속 휠 배포는 진행 중이고, 그 전에는 소스에서 `DOCHAN_BUILD_ACCEL=1 pip install .` 로 빌드하면 위 수치가 된다(`DOCHAN_DISABLE_ACCEL=1` 로 끌 수 있다).
+정확도는 같은 문서의 HWPX 를 정답으로 PDF 도구 6종과 대조했다([기록](docs/benchmarks/2026-10-31-quality-vs-competitors.md)). 측정 방법·한계·재현 명령은
+[속도 비교 기록](docs/benchmarks/2026-10-31-speed-comparison.md)에 있다(`python -m scripts.bench_converters`).
 
 ## Installation
 

@@ -103,3 +103,39 @@ def test_documented_commands_do_not_regress_to_broken_paths_or_shell_globs():
     assert 'pip install "dochan[ocr]"' in readme
     assert "v1.0.0" not in releasing
     assert (ROOT / "tests").is_dir()
+
+
+def test_platform_wheels_gate_publication_and_cover_supported_targets():
+    workflow = _read(".github/workflows/pypi-release.yml")
+    wheels = workflow.split("\n  wheels:\n", 1)[1].split("\n  publish:\n", 1)[0]
+    publish = workflow.split("\n  publish:\n", 1)[1]
+    assert "needs: [test, security, wheels]" in publish
+    assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in publish
+    assert set(re.findall(r"- target: (\w+)", wheels)) == {
+        "manylinux_x86_64", "manylinux_aarch64", "macos_arm64",
+        "macos_x86_64",
+    }
+    assert 'DOCHAN_BUILD_ACCEL: "1"' in wheels
+    assert "scripts/verify_accel_wheel.py" in wheels
+    assert "auditwheel repair" in wheels
+    assert "actions/upload-artifact@" in wheels
+    assert publish.index("Download platform wheels") > publish.index(
+        "Smoke-test installed wheel outside checkout"
+    )
+    assert publish.index("Validate all distributions") < publish.index("Publish to PyPI")
+
+
+def test_platform_wheel_jobs_run_on_pull_requests_with_isolated_builds():
+    workflow = _read(".github/workflows/pypi-release.yml")
+    assert "  pull_request:" in workflow.split("jobs:", 1)[0]
+    for name in ("test", "security", "wheels"):
+        job = workflow.split(f"\n  {name}:\n", 1)[1]
+        job = re.split(r"\n  \w+:\n", job, maxsplit=1)[0]
+        assert not re.search(r"^    if:", job, re.MULTILINE)
+    wheels = workflow.split("\n  wheels:\n", 1)[1].split("\n  publish:\n", 1)[0]
+    assert "needs: [test, security]" in wheels
+    assert wheels.count("python -m build --wheel") == 2
+    assert "--no-isolation" not in wheels
+    assert "--skip-dependency-check" not in wheels
+    assert wheels.count("python scripts/verify_accel_wheel.py") == 2
+    assert 'requires = ["setuptools==82.0.1", "wheel==0.48.0"]' in _read("pyproject.toml")

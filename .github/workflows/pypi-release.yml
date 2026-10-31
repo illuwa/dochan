@@ -142,19 +142,30 @@ jobs:
             --max-target-megabytes 10 \
             "${secret_scan_root}"
 
-  accelerators:
-    # 선택적 C 가속(dochan/pdf/_c*.c)을 Linux 에서 빌드해 켠 상태·끈 상태로 전체 테스트를 돌린다.
-    # 확장은 optional 이라 컴파일이 실패해도 설치는 성공하고 가속 테스트는 조용히 건너뛰어진다.
-    # 그래서 백엔드가 실제로 "c" 인지 먼저 단언한다. publish 의 needs 에는 넣지 않는다(기본 배포물은 순수 Python).
-    name: Build and test optional C accelerators
-    runs-on: ubuntu-latest
+  # Run on pull requests as well as pushes; only publication is tag-gated.
+  wheels:
+    name: Build and verify ${{ matrix.target }} wheel
+    needs: [test, security]
+    runs-on: ${{ matrix.os }}
+    env:
+      DOCHAN_BUILD_ACCEL: "1"
     strategy:
       fail-fast: false
       matrix:
-        accelerator-python:
-          - "3.9"
-          - "3.13"
-
+        include:
+          - target: manylinux_x86_64
+            os: ubuntu-24.04
+            image: quay.io/pypa/manylinux2014_x86_64:latest
+          - target: manylinux_aarch64
+            os: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux2014_aarch64:latest
+          - target: macos_arm64
+            os: macos-14
+          - target: macos_x86_64
+            os: macos-15-intel
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
@@ -162,48 +173,50 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
-          python-version: ${{ matrix.accelerator-python }}
+          python-version: "3.13"
 
-      - name: Install pinned dependency manager
-        run: python -m pip install --disable-pip-version-check "uv==0.12.3"
-
-      - name: Install locked test dependencies
+      - name: Export locked test dependencies
         run: |
-          uv export \
-            --locked \
-            --extra dev \
-            --no-emit-project \
-            --format requirements.txt \
-            --output-file "${RUNNER_TEMP}/test-requirements.txt"
-          python -m pip install \
-            --disable-pip-version-check \
-            --require-hashes \
-            --requirement "${RUNNER_TEMP}/test-requirements.txt"
+          python -m pip install --disable-pip-version-check "uv==0.12.3"
+          uv export --locked --extra dev --no-emit-project --format requirements.txt \
+            --output-file wheel-test-requirements.txt
 
-      - name: Build accelerators in place
-        env:
-          DOCHAN_BUILD_ACCEL: "1"
+      # The manylinux image supplies the glibc baseline, compiler and auditwheel;
+      # no cibuildwheel or new project build/runtime dependency is needed.
+      - name: Build manylinux wheel and verify installed artifact
+        if: startsWith(matrix.target, 'manylinux_')
         run: |
-          python -m pip install --disable-pip-version-check "setuptools==82.0.1" "wheel==0.48.0"
-          python setup.py build_ext --inplace
+          docker run --rm -e DOCHAN_BUILD_ACCEL=1 \
+            -v "${GITHUB_WORKSPACE}:/io" -w /io "${{ matrix.image }}" bash -euc '
+              git config --global --add safe.directory /io
+              export PATH=/opt/python/cp39-cp39/bin:$PATH
+              python -m pip install "build==1.5.0"
+              python -m build --wheel --outdir raw-wheels
+              auditwheel repair raw-wheels/*.whl --wheel-dir wheelhouse
+              python scripts/verify_accel_wheel.py --wheel-dir wheelhouse \
+                --requirements wheel-test-requirements.txt
+            '
 
-      - name: Require the C backends
+      - name: Build native wheel and verify installed artifact
+        if: ${{ !startsWith(matrix.target, 'manylinux_') }}
         run: |
-          python -c "import dochan.pdf.content as c; b = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND); print(b); assert b == ('c', 'c', 'c'), b"
+          python -m pip install --disable-pip-version-check "build==1.5.0"
+          python -m build --wheel --outdir wheelhouse
+          python scripts/verify_accel_wheel.py --wheel-dir wheelhouse \
+            --requirements wheel-test-requirements.txt
 
-      - name: Run tests with accelerators
-        run: python -m pytest tests/
-
-      - name: Run tests with accelerators disabled
-        env:
-          DOCHAN_DISABLE_ACCEL: "1"
-        run: python -m pytest tests/
+      - name: Upload verified platform wheel
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
 
   publish:
     name: Build and publish to PyPI
-    needs: [test, security]
+    needs: [test, security, wheels]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment:
       name: pypi
       url: https://pypi.org/project/dochan/
@@ -290,6 +303,23 @@ jobs:
               artifact-smoke.docx --output artifact-smoke.md
             grep -Fqx "artifact smoke" artifact-smoke.md
           )
+
+      # Download only after the pure-wheel smoke test: pip must not be asked
+      # to install mutually exclusive platform wheels in one environment.
+      - name: Download platform wheels
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: Validate all distributions
+        run: |
+          python scripts/verify_accel_wheel.py --release-dir dist
+          for wheel in dist/*.whl; do
+            python scripts/verify_release_version.py --tag "${GITHUB_REF_NAME}" --wheel "$wheel"
+          done
+          python -m twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1

@@ -201,7 +201,28 @@ def _display_number_with_format(value: float, format_string: str = "", date_1904
     cache = getattr(formatter, "_format_metadata_cache", None)
     if cache is not None and len(cache) >= MAX_NUMBER_FORMAT_CACHE:
         cache.clear()
-    return formatter._format_cell_value(raw, format_string)
+    # BIFF sheets commonly repeat the same numeric value and display format
+    # thousands of times. Cache only the plain formatter used by this reader;
+    # custom subclasses may rely on per-call side effects.
+    if type(formatter) is not SpreadsheetNumberFormatter or not isinstance(format_string, str):
+        return formatter._format_cell_value(raw, format_string)
+    errors = getattr(formatter, "_errors", None)
+    display_cache = getattr(formatter, "_display_value_cache", None)
+    if display_cache is None or getattr(formatter, "_display_value_cache_errors", None) is not errors:
+        display_cache = {}
+        formatter._display_value_cache = display_cache
+        formatter._display_value_cache_errors = errors
+    key = (raw, format_string, getattr(formatter, "_date_1904", date_1904),
+           getattr(formatter, "_format_warning_source", None))
+    if key in display_cache:
+        return display_cache[key]
+    before = len(errors) if errors is not None else 0
+    rendered = formatter._format_cell_value(raw, format_string)
+    if errors is None or len(errors) == before:
+        if len(display_cache) >= MAX_NUMBER_FORMAT_CACHE:
+            display_cache.clear()
+        display_cache[key] = rendered
+    return rendered
 
 
 def _display_text_with_format(value: str, format_string: str, formatter=None) -> str:

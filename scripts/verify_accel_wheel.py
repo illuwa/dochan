@@ -83,6 +83,10 @@ def verify_installed(wheel, requirements):
         environment = Path(temporary) / "venv"
         venv.EnvBuilder(with_pip=True).create(environment)
         python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        # ensurepip in the manylinux images ships pip 23.0.1, which in hash-checking
+        # mode does not match pytest-cov's `coverage[toml]` against the pinned
+        # `coverage==` line and aborts; pip 25.3 (Python >=3.9) resolves it.
+        _run([python, "-m", "pip", "install", "--disable-pip-version-check", "pip==25.3"])
         _run([python, "-m", "pip", "install", "--require-hashes", "-r", requirements])
         _run([python, "-m", "pip", "install", "--no-deps", wheel])
         # The test-only finder also runs in multiprocessing/subprocess children.

@@ -139,3 +139,15 @@ def test_platform_wheel_jobs_run_on_pull_requests_with_isolated_builds():
     assert "--skip-dependency-check" not in wheels
     assert wheels.count("python scripts/verify_accel_wheel.py") == 2
     assert 'requires = ["setuptools==82.0.1", "wheel==0.48.0"]' in _read("pyproject.toml")
+
+
+def test_manylinux_build_python_keeps_cp39_abi3_contract():
+    workflow = _read(".github/workflows/pypi-release.yml")
+    linux = workflow.split("name: Build manylinux wheel", 1)[1].split(
+        "name: Build native wheel", 1
+    )[0]
+    assert "export PATH=/opt/python/cp310-cp310/bin:$PATH" in linux
+    assert '"build==1.5.0"' in linux
+    assert '"py_limited_api": "cp39"' in _read("setup.py")
+    assert '("Py_LIMITED_API", "0x03090000")' in _read("setup.py")
+    assert "python scripts/verify_accel_wheel.py" in linux

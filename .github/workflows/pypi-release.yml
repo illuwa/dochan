@@ -189,7 +189,8 @@ jobs:
           docker run --rm -e DOCHAN_BUILD_ACCEL=1 \
             -v "${GITHUB_WORKSPACE}:/io" -w /io "${{ matrix.image }}" bash -euc '
               git config --global --add safe.directory /io
-              export PATH=/opt/python/cp39-cp39/bin:$PATH
+              # build 1.5 requires newer Python; setup.py retains cp39-abi3.
+              export PATH=/opt/python/cp310-cp310/bin:$PATH
               python -m pip install "build==1.5.0"
               python -m build --wheel --outdir raw-wheels
               auditwheel repair raw-wheels/*.whl --wheel-dir wheelhouse

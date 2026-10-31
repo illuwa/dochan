@@ -21,8 +21,11 @@ def test_accel_wheel_requires_all_three_extensions(tmp_path):
         validate_accel_wheel(wheel)
 
 
-def test_accel_wheel_rejects_wrong_abi(tmp_path):
-    wheel = _wheel(tmp_path / "dochan-1.15.0-cp313-cp313-win_amd64.whl")
+@pytest.mark.parametrize("tag", ["cp313-cp313-win_amd64",
+                                 "cp310-abi3-manylinux2014_x86_64",
+                                 "cp310-abi3-manylinux2014_aarch64"])
+def test_accel_wheel_rejects_wrong_abi(tmp_path, tag):
+    wheel = _wheel(tmp_path / f"dochan-1.15.0-{tag}.whl")
     with pytest.raises(ValueError, match="cp39-abi3"):
         validate_accel_wheel(wheel)
 

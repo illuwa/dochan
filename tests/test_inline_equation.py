@@ -348,14 +348,31 @@ def test_cell_equation_pipe_is_escaped_once():
 
 
 def test_hwpx_ctrl_equations_merge_in_linear_time(tmp_path):
+    """Measure N/2N scaling: an absolute 6s limit failed on a slow CI runner.
+
+    Warm the parser first, then compare median timings to tolerate scheduling
+    noise while rejecting the former quadratic scan of preceding runs.
+    """
+    import statistics
     import time
-    # 21 KB 압축 입력이 수식마다 앞 런을 거꾸로 훑으면 6만 식에 30초 넘게 걸렸다.
+
     count = 30_000
     equation = ('<hp:ctrl><hp:equation><hp:pos treatAsChar="1"/>'
                 '<hp:script>x</hp:script></hp:equation></hp:ctrl>')
-    start = time.perf_counter()
-    doc = _hwpx(tmp_path, '<hp:p><hp:run><hp:t>A</hp:t></hp:run>' + equation * count + '</hp:p>')
-    elapsed = time.perf_counter() - start
-    para = doc.sections[0].elements[0]
-    assert sum(run.equation is not None for run in para.runs) == count
-    assert elapsed < 6.0
+
+    def measure(size):
+        start = time.perf_counter()
+        doc = _hwpx(tmp_path, '<hp:p><hp:run><hp:t>A</hp:t></hp:run>'
+                    + equation * size + '</hp:p>')
+        elapsed = time.perf_counter() - start
+        para = doc.sections[0].elements[0]
+        assert sum(run.equation is not None for run in para.runs) == size
+        return elapsed
+
+    measure(1_000)
+    timings = {count: [], 2 * count: []}
+    for sizes in ((count, 2 * count), (2 * count, count), (count, 2 * count)):
+        for size in sizes:
+            timings[size].append(measure(size))
+    ratio = statistics.median(timings[2 * count]) / statistics.median(timings[count])
+    assert ratio <= 3.0, f"N/2N timings: {timings}; ratio={ratio:.3f}"

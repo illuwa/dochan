@@ -1070,7 +1070,11 @@ class _Line:
 
     @classmethod
     def _hangul_tracking_gaps(cls, frags: List[Fragment]) -> List[Optional[float]]:
-        """절대 좌표 글자의 인근 자간을 추정해 줄 안의 자간 변경을 보존한다."""
+        """절대 좌표 글자의 인근 자간을 추정해 줄 안의 자간 변경을 보존한다.
+
+        바꾸면 `_clines.c`도 같이 바꾸고 차등 테스트에 사례를 더한다.
+        """
+        # Mirror: _clines.c tracking; preserve floating-point operation order.
         if not frags or writing_direction(frags[0]) != 'ltr':
             return []
         gaps = [(along(right) - along(left) - left.width
@@ -1096,6 +1100,11 @@ class _Line:
         return references
 
     def __init__(self, frags: List[Fragment]):
+        """조각을 한 줄로 조립한다.
+
+        바꾸면 `_clines.c`도 같이 바꾸고 차등 테스트에 사례를 더한다.
+        """
+        # Mirror: _clines.c make_plain_line; preserve operation order.
         self.fragment_orders = tuple(f.order for f in frags)
         self.order = min(f.order for f in frags)
         self.direction = writing_direction(frags[0])
@@ -1121,6 +1130,11 @@ class _Line:
             start = along(f)
             gap = (start - prev_end) if prev_end is not None else 0.0
             threshold = max(prev_space, f.space_width) * 0.5
+            # Full-em space metrics occur in subset fonts whose word gaps are
+            # positioned at half an em. Fixed-point positions can round that
+            # gap just below the threshold (e.g. 6.96 vs 7.02 pt).
+            if f.size > 0 and 0.45 * f.size <= threshold <= 0.55 * f.size:
+                threshold -= 0.01 * f.size
             sep = ""
             tracking_gap = (tracking_gaps[index - 1]
                             if index and tracking_gaps else None)

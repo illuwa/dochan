@@ -826,12 +826,14 @@ class PDFReader:
                             break
             if selected_space is not None:
                 space_code = selected_space
-        elif subtype == "Type0" and str(encoding) == "Identity-H" and isinstance(has_unicode_map, dict):
+        elif ((subtype == "Type0" and str(encoding) == "Identity-H")
+              or subtype in ("Type1", "TrueType", "MMType1")) and isinstance(has_unicode_map, dict):
             # CID 32 is not necessarily a space. Use a uniquely identified,
             # explicitly measured U+0020, not the width of an unrelated glyph.
             spaces = [key[1] for key, value in has_unicode_map.items()
                       if value == " " and isinstance(key, tuple) and len(key) == 2
-                      and key[0] == code_bytes and widths.explicit(key[1])]
+                      and key[0] == code_bytes and 0 <= key[1] < 256 ** code_bytes
+                      and widths.explicit(key[1])]
             if len(spaces) == 1:
                 space_code = spaces[0]
         elif subtype == "Type0" and str(encoding) == "Identity-H":

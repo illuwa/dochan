@@ -3,6 +3,7 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field
 from math import isclose
+import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
@@ -221,6 +222,67 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
             for block in merge_lines(group, (left + 0.5, right - 0.5)):
                 events[key].append((block.y, 0, block.order, block.paragraph(page_number)))
     return consumed, events
+
+
+_NUMBER = re.compile(r"[+−-]?\d[\d,]*(?:\.\d+)?%?")
+
+
+def _numeric_row_rules(horizontal, vertical, xs, ys, fragments, tolerance):
+    """Split a ruled band only when three numeric columns agree on every row.
+
+    No prose-based row inference: all text must align with the same baselines,
+    and every internal column edge must be ruled across the complete band.
+    """
+    if (len(xs) < 4 or len(fragments) * len(ys) > MAX_INTERSECTION_CHECKS
+            or len(xs) * len(ys) > MAX_PAGE_CELLS):
+        return horizontal, ys
+    h_runs, v_runs = defaultdict(list), defaultdict(list)
+    for y, lo, hi in horizontal:
+        h_runs[y].append((lo, hi))
+    for x, lo, hi in vertical:
+        v_runs[x].append((lo, hi))
+    additions = []
+    for top, bottom in zip(ys, ys[1:]):
+        if (not _covered(h_runs[top], xs[0], xs[-1], tolerance)
+                or not _covered(h_runs[bottom], xs[0], xs[-1], tolerance)
+                or any(not _covered(v_runs[x], bottom, top, tolerance) for x in xs[1:-1])):
+            continue
+        columns = defaultdict(list)
+        for fragment in fragments:
+            x, y = _reference_point(fragment)
+            if bottom + 0.5 < y < top - 0.5 and xs[0] + 0.5 < x < xs[-1] - 0.5:
+                columns[bisect_right(xs, x) - 1].append(fragment)
+        lines = [assemble_lines(sorted(columns[c], key=lambda f: (-across(f), along(f))))
+                 for c in range(len(xs) - 1)]
+        numeric = [column for column in lines if len(column) >= 2 and all(
+            line.direction == 'ltr' and line.text.split() and all(
+                _NUMBER.fullmatch(word) for word in line.text.split()) for line in column)]
+        if len(numeric) < 3 or len(numeric) * 2 < len(lines):
+            continue
+        reference = numeric[0]
+        if len(reference) > 500:
+            continue
+        row_tolerance = min(tolerance, min(line.size for line in reference) * 0.2)
+        if row_tolerance <= 0 or any(len(column) != len(reference) or any(
+                abs(a.y - b.y) > row_tolerance for a, b in zip(reference, column))
+                for column in numeric):
+            continue
+        baselines = [line.y for line in reference]
+        # Labels may be empty, but a wrapped label or spanning text is ambiguous.
+        if any(line.direction != 'ltr' or not any(abs(line.y - y) <= row_tolerance
+                                                for y in baselines)
+               for column in lines for line in column):
+            continue
+        boundaries = []
+        for upper, lower in zip(reference, reference[1:]):
+            if upper.y - lower.y < max(upper.size, lower.size) * 1.2:
+                break
+            boundaries.append((upper.y + lower.y + lower.size) / 2)
+        else:
+            additions.extend((y, xs[0], xs[-1]) for y in boundaries)
+    if not additions:
+        return horizontal, ys
+    return horizontal + additions, sorted(set(ys) | {y for y, _, _ in additions}, reverse=True)
 
 
 def _shared_extent(values, tolerance, outermost):
@@ -446,6 +508,8 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         _extend_to_rule_extents(xs, hs, tolerance)
         bbox = (xs[0], ys[-1], xs[-1], ys[0])
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
+            hs, ys = _numeric_row_rules(hs, vs, xs, ys,
+                                       _fragments_inside(index, bbox), tolerance)
             components.append((bbox, hs, vs, xs, ys))
     components.sort(key=lambda v: -_area(v[0]))
     remaining = MAX_PAGE_CELLS

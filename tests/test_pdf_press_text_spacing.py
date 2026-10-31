@@ -66,3 +66,31 @@ def test_overprinted_glyphs_do_not_create_word_gaps():
 def test_short_or_mixed_width_line_preserves_existing_gap_rule():
     fragments = _glyphs("한글", [0, 16], width=14)
     assert assemble_lines(fragments)[0].text == "한글"
+
+
+def test_half_em_word_gap_survives_fixed_point_coordinate_rounding():
+    fragments = [Fragment(70.68, 700, 14.04, 14.04, 'word', 14.04, order=0),
+                 Fragment(91.68, 700, 14.04, 14.04, 'next', 14.04, order=1)]
+    assert assemble_lines(fragments)[0].text == 'word next'
+
+
+def test_half_em_rounding_does_not_split_small_tracking_or_narrow_spaces():
+    for space, gap in [(14.04, 6.0), (4.0, 1.99)]:
+        fragments = [Fragment(0, 700, 14.04, 14.04, 'word', space, order=0),
+                     Fragment(14.04 + gap, 700, 14.04, 14.04, 'next', space, order=1)]
+        assert assemble_lines(fragments)[0].text == 'wordnext'
+
+
+def test_fixed_point_word_gap_in_synthetic_pdf(tmp_path):
+    from dochan.pdf.reader import PDFReader
+    from dochan.output.plain_text import to_plain_text
+    from test_pdf_structure import _build_pdf, _minimal_objects
+
+    content = b'BT /F1 14.04 Tf 70.68 700 Td (A) Tj 21 0 Td (B) Tj ET'
+    objects = _minimal_objects(content)
+    objects[4] = ('<< /Type /Font /Subtype /TrueType /BaseFont /Subset '
+                  '/Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 66 '
+                  '/Widths [%s] >>' % ' '.join(['1000'] * 35))
+    path = tmp_path / 'rounding.pdf'
+    path.write_bytes(_build_pdf(objects))
+    assert to_plain_text(PDFReader().read(str(path))).strip() == 'A B'

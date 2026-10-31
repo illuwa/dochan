@@ -343,7 +343,9 @@ comparable(const FragmentData *left, const FragmentData *right)
            fabs(left->value[WIDTH] - right->value[WIDTH]) <= left->value[WIDTH] * 0.02;
 }
 
-/* NaN is used only as the local None sentinel. Nonfinite intermediate values
+/* Mirror: content.py _Line._hangul_tracking_gaps. Change both implementations
+ * together and add differential cases to tests/test_pdf_clines.py.
+ * NaN is used only as the local None sentinel. Nonfinite intermediate values
  * reject a fast row before median sorting (finite input may still overflow). */
 static int
 tracking(FragmentData **row, Py_ssize_t n, double *gaps, double *references)
@@ -484,6 +486,8 @@ error:
     return NULL;
 }
 
+/* Mirror: content.py _Line.__init__. Keep operation order identical;
+ * change both implementations and add differential regression cases. */
 static PyObject *
 make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
                 PyObject *segment_type, PyObject *empty, PyObject *space,
@@ -514,6 +518,9 @@ make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
         double end = f->along + f->value[WIDTH];
         double gap = i ? f->along - prev_end : 0.0;
         double threshold = (f->value[SPACE] > prev_space ? f->value[SPACE] : prev_space) * 0.5;
+        if (f->value[SIZE] > 0.0 && 0.45 * f->value[SIZE] <= threshold &&
+                threshold <= 0.55 * f->value[SIZE])
+            threshold -= 0.01 * f->value[SIZE];
         int inferred = has_tracking && i && !isnan(references[i - 1]) &&
             comparable(row[i - 1], f) && gap > references[i - 1] + f->value[SIZE] * 0.15;
         Py_INCREF(f->order);

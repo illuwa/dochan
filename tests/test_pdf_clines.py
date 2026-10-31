@@ -384,3 +384,29 @@ def test_failed_factories_release_owned_references(failure):
                                   content.Fragment, content._LINE_Y_TOLERANCE)
     gc.collect()
     assert [sys.getrefcount(obj) for obj in objects] == before
+
+
+@pytest.mark.parametrize("size", [1.0, 10.0, 14.04])
+@pytest.mark.parametrize("fraction", [0.49, 0.495, 0.5])
+def test_full_em_half_space_native_parity(size, fraction):
+    fragments = [_f("가", x=-size, width=size, size=size, space_width=size),
+                 _f("나", x=fraction * size, width=size, size=size, space_width=size)]
+    assert _native(fragments) is not None  # Must exercise C, not the fallback.
+    _compare(fragments)
+
+
+@pytest.mark.parametrize("boundary", [0.45, 0.55])
+@pytest.mark.parametrize("position", ["below", "exact", "above"])
+def test_half_space_window_boundaries(boundary, position):
+    size = 10.0
+    threshold = boundary * size
+    if position != "exact":
+        threshold = math.nextafter(threshold, -math.inf if position == "below" else math.inf)
+    inside = (boundary == 0.45 and position != "below") or (
+        boundary == 0.55 and position != "above")
+    fragments = [_f("a", x=-size, width=size, size=size, space_width=2 * threshold),
+                 _f("b", x=threshold - 0.05, width=size, size=size,
+                    space_width=2 * threshold)]
+    assert _pure(fragments)[0].text == ("a b" if inside else "ab")
+    assert _native(fragments) is not None
+    _compare(fragments)

@@ -86,7 +86,9 @@ def measure_file(path):
         record["json_sha256"] = _hash(doc.to_json())
         marks.append(time.perf_counter())
         stage = "text"
-        record["text_sha256"] = _hash(doc.to_plain_text())
+        plain_text = doc.to_plain_text()
+        record["text_sha256"] = _hash(plain_text)
+        record["text_length"] = len(plain_text)
         marks.append(time.perf_counter())
         record["errors_sha256"] = _hash(json.dumps([str(e) for e in doc.errors], ensure_ascii=False))
         if json_indent:

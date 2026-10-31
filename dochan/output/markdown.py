@@ -60,7 +60,20 @@ class _MdContext:
 
 def to_markdown(doc: Document) -> str:
     """Document → Markdown 문자열 변환"""
-    parts = []
+    return '\n\n'.join(_markdown_parts(doc))
+
+
+def write_markdown(doc: Document, fp) -> None:
+    """Write sections incrementally, preserving document-wide footnote state."""
+    first = True
+    for part in _markdown_parts(doc):
+        if not first:
+            fp.write('\n\n')
+        fp.write(part)
+        first = False
+
+
+def _markdown_parts(doc):
     ctx = _MdContext()
     include_sheet_headings = _should_include_sheet_headings(doc)
     force_sheet_headings = include_sheet_headings and any(
@@ -70,6 +83,7 @@ def to_markdown(doc: Document) -> str:
     include_slide_headings = _should_include_slide_headings(doc)
 
     for section in doc.sections:
+        parts = []
         elements = list(section.elements)
         if include_sheet_headings:
             while elements and _is_sheet_preamble(elements[0]):
@@ -88,10 +102,11 @@ def to_markdown(doc: Document) -> str:
             if md:
                 parts.append(md)
 
-    # 각주/미주 정의는 문서 말미에 모은다 — Markdown 에는 페이지 개념이 없다.
-    parts.extend(ctx.definitions())
+        if parts:
+            yield '\n\n'.join(parts)
 
-    return '\n\n'.join(parts)
+    # 각주/미주 정의는 문서 말미에 모은다 — Markdown 에는 페이지 개념이 없다.
+    yield from ctx.definitions()
 
 
 def _should_include_sheet_headings(doc: Document) -> bool:

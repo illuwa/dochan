@@ -167,11 +167,13 @@ def _cmd_convert(args):
         doc = Dochan(args.file, ocr=args.ocr, **options)
 
         if args.format == 'json':
-            content = doc.to_json()
+            content = (doc.write_json if args.output and hasattr(doc, 'write_json')
+                       else doc.to_json())
         elif args.format == 'text':
             content = doc.to_plain_text()
         else:
-            content = doc.to_markdown()
+            content = (doc.write_markdown if args.output and hasattr(doc, 'write_markdown')
+                       else doc.to_markdown())
     except Exception as exc:
         print(f"에러: 변환 실패: {exc}", file=sys.stderr)
         return 1

@@ -29,6 +29,15 @@ def to_json(doc: Document, indent: int = 2) -> str:
     return json_indent.dumps(to_dict(doc), indent)
 
 
+def write_json(doc: Document, fp, indent=2) -> None:
+    """Write JSON to a text file without retaining the result string.
+
+    Rows are streamed on all supported Python versions, including indent=None.
+    """
+    payload = _document_to_dict(doc, json_indent.Stream)
+    json_indent.dump(payload, fp, indent)
+
+
 def to_dict(doc: Document) -> dict:
     """Document → dict"""
     return _document_to_dict(doc, _as_list)

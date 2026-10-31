@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, TextIO, Tuple, Union
 
 from .utils.diagnostics import is_fatal_diagnostic
 
@@ -533,11 +533,14 @@ def _copy_exact_source(source_file, snapshot_file, expected_size: int, label) ->
 
 def _atomic_write_text(
     output_path: str,
-    content: str,
+    content: Union[str, Callable[[TextIO], None]],
     allowed_root: str = "",
     protected_paths: Sequence[str] = (),
 ) -> None:
-    """Write beside the target and atomically publish it with ``os.replace``."""
+    """Write text (or invoke a text-file writer) and atomically publish it.
+
+    Writer exceptions discard the temporary file and preserve the old target.
+    """
     target = Path(output_path)
     if allowed_root:
         _assert_within_root(target, Path(allowed_root))
@@ -688,7 +691,10 @@ def _atomic_write_text(
 
         with os.fdopen(temp_fd, mode='w', encoding='utf-8') as temp_file:
             temp_fd = None
-            temp_file.write(content)
+            if callable(content):
+                content(temp_file)
+            else:
+                temp_file.write(content)
             temp_file.flush()
             os.fsync(temp_file.fileno())
             published_identity = _object_identity(os.fstat(temp_file.fileno()))
@@ -892,7 +898,7 @@ def _process_single(
     result = BatchResult(file_path=file_path)
 
     try:
-        def convert(source_path: str) -> Tuple[str, List[str]]:
+        def convert(source_path: str):
             options = {}
             if not include_assets:
                 options['include_assets'] = False
@@ -901,11 +907,13 @@ def _process_single(
             # 기본 경로에서는 기존 Dochan(source_path) 호출 계약을 유지한다.
             reader = Dochan(source_path, **options)
             if output_format == 'json':
-                rendered = reader.to_json()
+                rendered = (reader.write_json if hasattr(reader, 'write_json')
+                            else reader.to_json())
             elif output_format == 'text':
                 rendered = reader.to_plain_text()
             else:
-                rendered = reader.to_markdown()
+                rendered = (reader.write_markdown if hasattr(reader, 'write_markdown')
+                            else reader.to_markdown())
             return rendered, list(reader.errors)
 
         if source_identity is None:

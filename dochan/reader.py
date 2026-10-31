@@ -697,6 +697,14 @@ class Dochan:
     def to_json(self, indent: int = 2) -> str:
         return to_json(self.doc, indent=indent)
 
+    def write_json(self, fp, indent=2) -> None:
+        from .output.json_out import write_json
+        write_json(self.doc, fp, indent)
+
+    def write_markdown(self, fp) -> None:
+        from .output.markdown import write_markdown
+        write_markdown(self.doc, fp)
+
     def to_dict(self) -> dict:
         return to_dict(self.doc)
 

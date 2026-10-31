@@ -9,7 +9,8 @@ CPython 3.12 이하는 `indent` 를 주면 C 인코더를 쓰지 않고 토큰�
 제너레이터를 거치는 순수 Python 경로(`json.encoder._make_iterencode`)로 떨어진다.
 표가 큰 문서에서는 이 직렬화가 파싱보다 오래 걸린다. 여기서는 같은 판별 순서를
 재귀 함수 하나로 풀어 쓴다. C 인코더가 들여쓰기를 직접 내는 인터프리터(3.13+)에서는
-표준 라이브러리가 더 빠르므로 그대로 위임한다.
+문자열 반환은 표준 라이브러리에 위임한다. 파일 출력은 버전과 관계없이 지연 목록을
+직접 순회하여 전체 결과 문자열을 만들지 않는다.
 """
 
 import json
@@ -39,17 +40,13 @@ def _probe_native_indent() -> bool:
 STDLIB_INDENT_IS_NATIVE = _probe_native_indent()
 
 
-class _Unsupported(Exception):
-    """자체 직렬화기가 다루지 않는 값 — 표준 라이브러리에 판단을 넘긴다."""
-
-
 class Stream:
     """길이를 아는 지연 목록 — 직렬화기가 항목을 하나씩 받아 쓰고 버린다.
 
     문서 전체를 dict 트리로 한꺼번에 만들지 않고도 목록과 같은 JSON 을 낸다.
     `count` 는 `items` 가 낼 항목 수와 같아야 한다(빈 목록은 `[]` 로 적어야 하므로
     첫 항목을 받기 전에 알아야 한다). 표준 라이브러리는 이 타입을 모르므로
-    `dumps_indented` 에만 넘긴다.
+    `dumps_indented` 또는 `dump` 에 넘긴다.
     """
 
     __slots__ = ("items", "count")
@@ -123,38 +120,74 @@ def _key_text(key) -> str:
         return '"null"'
     if isinstance(key, int):
         return _encode_str(int.__repr__(key))
-    raise _Unsupported
+    raise TypeError(
+        f'keys must be str, int, float, bool or None, not {key.__class__.__name__}'
+    )
 
 
-def dumps_indented(payload, indent) -> str:
-    """들여쓰기 JSON 을 직접 조립한다. 다루지 않는 값은 `_Unsupported` 로 알린다.
+def dump(payload, fp, indent=2) -> None:
+    """Write JSON incrementally. A failed write may leave partial output in fp.
+
+    Stream payloads use the same walker on every Python version;
+    unlike dumps, this path never accumulates the final result string.
+    """
+    dumps_indented(payload, indent, _fp=fp)
+
+
+def dumps_indented(payload, indent, _fp=None) -> str:
+    """들여쓰기 JSON 을 조립하거나 파일에 쓴다. 잘못된 값은 표준 JSON 예외로 알린다.
 
     정확한 내장 타입은 바로 분기하고, 상속 타입(str·int·float 하위 클래스, tuple,
     dict 하위 클래스)은 표준 라이브러리와 같은 isinstance 순서로 처리한다.
     `Stream` 은 목록과 똑같이 적되 항목을 하나씩 받아 쓴다.
     """
-    unit = indent if isinstance(indent, str) else " " * indent
-    pads = ["\n"]          # pads[깊이] = 줄바꿈 + 그 깊이의 들여쓰기
+    unit = "" if indent is None else (indent if isinstance(indent, str) else " " * indent)
+    newline = "" if indent is None else "\n"
+    pads = [newline]          # pads[깊이] = 줄바꿈 + 그 깊이의 들여쓰기
     out = []
-    append = out.append
+    if _fp is None:
+        append = out.append
+    else:
+        size = 0
+
+        def append(chunk):
+            nonlocal size
+            out.append(chunk)
+            size += len(chunk)
+            if size >= 65536:
+                _fp.write("".join(out))
+                out.clear()
+                size = 0
     prefixes = {}          # 키 문자열 → '"키": ' (같은 키가 수백만 번 반복된다)
     get_prefix = prefixes.get
     int_text = int.__repr__
     float_text = _float_text
     tail = 0               # out[tail:] 이 아직 합치지 않은 조각들
 
+    active = set()
+
     def walk(value, depth):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("Circular reference detected")
+        active.add(identity)
+        try:
+            return walk_container(value, depth)
+        finally:
+            active.remove(identity)
+
+    def walk_container(value, depth):
         nonlocal tail
         depth += 1
         if depth >= len(pads):
-            pads.append("\n" + unit * depth)
+            pads.append(newline + unit * depth)
         pad = pads[depth]
         if isinstance(value, dict):
             if not value:
                 append("{}")
                 return
             lead = "{" + pad
-            sep = "," + pad
+            sep = ", " if indent is None else "," + pad
             for key, item in value.items():
                 prefix = get_prefix(key)
                 if prefix is None or type(key) is not str:
@@ -184,7 +217,7 @@ def dumps_indented(payload, indent) -> str:
                         append(lead + prefix)
                         walk(item, depth)
                     else:
-                        raise _Unsupported
+                        json.dumps(item, ensure_ascii=False)
                 lead = sep
             append(pads[depth - 1] + "}")
         else:
@@ -198,7 +231,7 @@ def dumps_indented(payload, indent) -> str:
                 append("[]")
                 return
             lead = "[" + pad
-            sep = "," + pad
+            sep = ", " if indent is None else "," + pad
             for item in value:
                 kind = type(item)
                 if kind is dict or kind is list or kind is Stream:
@@ -222,19 +255,29 @@ def dumps_indented(payload, indent) -> str:
                         append(lead)
                         walk(item, depth)
                     else:
-                        raise _Unsupported
+                        json.dumps(item, ensure_ascii=False)
                 lead = sep
-                if lazy and len(out) - tail > _COMPACT_AFTER:
+                if _fp is None and lazy and len(out) - tail > _COMPACT_AFTER:
                     merged = "".join(out[tail:])
                     del out[tail:]
                     append(merged)
                     tail = len(out)
             append(pads[depth - 1] + "]")
 
+    if _fp is None:
+        walk = walk_container
+
     text = _scalar_text(payload)
     if text is not None:
+        if _fp is not None:
+            _fp.write(text)
+            return
         return text
     if not isinstance(payload, _CONTAINERS) and type(payload) is not Stream:
-        raise _Unsupported
+        json.dumps(payload, ensure_ascii=False)
     walk(payload, 0)
+    if _fp is not None:
+        if out:
+            _fp.write("".join(out))
+        return
     return "".join(out)

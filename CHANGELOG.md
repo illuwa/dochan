@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 성능 (2026-11-01 — PDF 대규모 C 이식 2차, 출력 불변·전수 실측)
+
+- **PDF 변환 −15~18%**(공개 PDF 300개, 한가한 장비 교대 3회 중앙값: Python 3.12 4.07 → 3.47초, 3.9 5.48 → 4.52초). 1차와 합쳐 하루 동안 6.8 → 3.5초, PyMuPDF 와의 격차 4.6 → 2.4배,
+  pypdf 5.8배·pdfminer.six 9.7배·pdfplumber 11.8배·markitdown 13.5배 빠름([기록](docs/benchmarks/2026-11-01-speed-comparison-pdf.md)). 공개 PDF 2,064건 4종 출력 해시가 가속 켬·끔 모두
+  변경 전과 같고, 전수 파일별 회귀는 20회 재검사 뒤 0건. 가속 모듈은 열 개가 됐다(`_caes`·`_cnotes`·`_cheadings`·`_cbody` 추가), 모두 `DOCHAN_BUILD_ACCEL=1` 때만 빌드·`DOCHAN_DISABLE_ACCEL=1` 로 끔.
+  - **C 글자 경로 범위 확대**: 기본 바이트 디코더·혼합 길이 ToUnicode·신뢰도 낮은 글꼴을 C 표로 올려 Python 에 남는 글자 연산이 123,237 → 2,625회. 쪽 끝의 조각 유한성 검사도 C 로(경고 문구·조건 그대로,
+    [기록](docs/benchmarks/2026-11-01-pdf-show-coverage-c.md)).
+  - **각주·미주·제목·본문 묶음의 순수 계산을 C 로**(`_cnotes`·`_cheadings`·`_cbody`): 각주 모델 생성·경고·앵커 변경은 Python 에 그대로, 백엔드 스위치·Bailout·예외 때 Python 재실행
+    ([기록](docs/benchmarks/2026-11-01-pdf-layout-c.md)). 독립 감수(최신 Opus)에서 차단 결함 없음, 권고대로 빌려온 참조를 쥐는 방어 코드를 넣었다.
+  - **AES 키 확장·블록·ECB/CBC 의 C 구현** `_caes`(128/192/256, FIPS-197·SP 800-38A 벡터와 CommonCrypto 대조): 암호 PDF 묶음 26건 변환 −93%([기록](docs/benchmarks/2026-11-01-pdf-aes-images.md)).
+    이미지 추출·PNG 지연은 출력·진단이 바이트에 의존해 채택하지 않았다.
+
 ### 성능 (2026-11-01 — PDF 대규모 C 이식 1차, 출력 불변·전수 실측)
 
 - **PDF 변환 −9~12%**(공개 PDF 300개, 한가한 장비 교대 3회 중앙값: Python 3.12 4.56 → 4.13초, 3.9 6.29 → 5.56초). 경쟁 비교: PyMuPDF 와의 격차 3.1 → 2.8배,

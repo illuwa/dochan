@@ -14,6 +14,8 @@
     [1차](docs/benchmarks/2026-11-01-pdf-layout-algo.md)·[2차](docs/benchmarks/2026-11-01-pdf-layout-algo-2.md)).
   - 독립 감수(최신 Opus)에서 찾아 고친 것: 글꼴 표를 Python 왕복마다 다시 만들어 표본 밖 파일이 최대 28배 느려지던 결함, 객체 파서 C 의 연속 숫자 변환 오류 경로.
     합류 조건에 공개 코퍼스 전수 파일별 회귀 0 을 추가했다.
+  - 시도했지만 넣지 않은 것: C 글자 경로의 기본 디코더 글꼴 추가와 유한성 검사 C 이식은 출력 동일·회귀 0 이었지만 −2~3%라 보류(가지 `illuwa/w-pdf-fonts3`,
+    [기록](docs/benchmarks/2026-11-01-pdf-show-coverage-c.md)); 표 복원의 숫자 행 조기 종료는 비용이 셀 배정으로 옮겨가 0%라 철회([기록](docs/benchmarks/2026-11-01-pdf-layout-algo-3.md)).
 
 ### 성능·품질 (2026-10-31 — 공통 계층·경쟁 비교, 모두 전수 실측)
 

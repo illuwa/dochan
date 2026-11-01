@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### 성능 (2026-11-01 — PDF 대규모 C 이식 1차, 출력 불변·전수 실측)
+
+- **PDF 변환 −9~12%**(공개 PDF 300개, 한가한 장비 교대 3회 중앙값: Python 3.12 4.56 → 4.13초, 3.9 6.29 → 5.56초). 공개 PDF 2,064건의 Markdown·JSON·텍스트·진단 해시가
+  가속 켬·끔 모두 변경 전과 같고, 전수 파일별 2회 최솟값에서 1.2배 이상 느려진 파일은 20회 재검사 뒤 0건이다.
+  - **표 복원의 C 이식 `_ctables`**: 격자·셀 배정·숫자 행 규칙·점선 보강·예산까지 손으로 쓴 C 로(표 구간 −17~30%). Python 원본은 `TABLE_BACKEND` 스위치와 Bailout 폴백으로 보존
+    ([기록](docs/benchmarks/2026-11-01-pdf-tables-c.md)). 독립 감수(최신 Opus)가 찾은 두 결함 — 중첩 표의 조각 집합 순회 순서, 예외 때 경고·예산의 부분 변경 불일치 — 를 고쳤다
+    (예외 때는 Python 원본을 다시 실행해 같은 결과를 내고, 원본이 성공하면 `WARN: PDF 표 복원 C 가속 불일치 — Python 결과 사용` 을 남긴다).
+  - **글꼴 준비의 C 이식 `_ccmap`**: ToUnicode·Encoding CMap 파싱, 폭 맵, Differences(글꼴 준비 시간 약 절반, [기록](docs/benchmarks/2026-11-01-pdf-fontprep-c.md)).
+    감수가 찾은 bfrange 토큰 배열의 메모리 증폭(17KB PDF 가 최대 593MB)을 순차 처리로 고쳐 54MB 로 낮췄고, 새 프로세스 RSS 회귀 테스트를 두었다.
+  - **C 모듈 내부 비용**: 글자 경로의 반복 이름 조회 재사용, 정렬된 행의 복사 생략, 선분 목록 선할당, 계측 빌드 `DOCHAN_PROFILE_INTERNALS`(일반 빌드 비용 0)
+    ([기록](docs/benchmarks/2026-11-01-pdf-c-internals.md)).
+  - 가속 모듈은 이제 일곱 개(`_cxml`·`_cscan`·`_cinterp`·`_clines`·`_cobjects`·`_ccmap`·`_ctables`), 모두 `DOCHAN_BUILD_ACCEL=1` 때만 빌드되고 `DOCHAN_DISABLE_ACCEL=1` 로 끈다.
+    가속 휠 검증은 새 모듈도 확인한다.
+
 ## [1.16.3] - 2026-11-01
 
 ### 수정 (긴급 — 1.16.2 macOS 가속 휠이 Python 3.10~3.12 에서 PDF 전부 실패)

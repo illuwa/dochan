@@ -180,8 +180,14 @@ static PyObject *sized_runs(PyObject *self, PyObject *args)
     if (!result) goto done;
     base = pool.n;
     for (i = 0; i < PyList_Size(runs); i++) {
-        PyObject *run = PyList_GetItem(runs, i), *text = attr(&pool, run, "text");
+        PyObject *run = PyList_GetItem(runs, i), *text;
         Py_ssize_t start = position, end, run_base;
+        if (!run) goto done;
+        /* Hold our own reference: replace()/__eq__ below may run user code that mutates `runs`. */
+        Py_INCREF(run);
+        run = keep(&pool, run);
+        if (!run) goto done;
+        text = attr(&pool, run, "text");
         if (!text) goto done;
         if (!PyUnicode_CheckExact(text)) { reject(); goto done; }
         if (position > PY_SSIZE_T_MAX - PyUnicode_GetLength(text)) { reject(); goto done; }

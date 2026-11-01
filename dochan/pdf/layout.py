@@ -132,14 +132,13 @@ _python_paragraph = TextBlock.paragraph
 _original_join = _joins_without_space
 _original_load_model = load_model
 _c_merge_lines = _c_trim_runs = _c_paragraph = None
-_LayoutBailout = None
 LAYOUT_BACKEND = 'python'
 
 if _os.environ.get('DOCHAN_DISABLE_ACCEL') != '1':
     try:
         from ._clayout import (
             merge_lines as _c_merge_lines, trim_runs as _c_trim_runs,
-            paragraph as _c_paragraph, Bailout as _LayoutBailout,
+            paragraph as _c_paragraph,
         )
     except ImportError:
         pass
@@ -153,7 +152,7 @@ def merge_lines(lines, inner_bounds=None):
             and load_model is _original_load_model):
         try:
             return _c_merge_lines(lines, inner_bounds)
-        except _LayoutBailout:
+        except Exception:  # Bailout 과 C 의 변환 오류 모두 Python 원본으로 다시 계산한다
             pass
     return _python_merge_lines(lines, inner_bounds)
 
@@ -162,7 +161,7 @@ def _trim_runs(runs):
     if _c_trim_runs is not None:
         try:
             return _c_trim_runs(runs)
-        except _LayoutBailout:
+        except Exception:  # Bailout 과 C 의 변환 오류 모두 Python 원본으로 다시 계산한다
             pass
     return _python_trim_runs(runs)
 
@@ -171,7 +170,7 @@ def _paragraph(self, page_number=None):
     if _c_paragraph is not None:
         try:
             return _c_paragraph(self, page_number)
-        except _LayoutBailout:
+        except Exception:  # Bailout 과 C 의 변환 오류 모두 Python 원본으로 다시 계산한다
             pass
     return _python_paragraph(self, page_number)
 

@@ -202,7 +202,7 @@ static int ly_cjk(Py_UCS4 c)
 { return (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x3400 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff); }
 static int ly_join(PyObject *lasttext, PyObject *text, PyObject *layout)
 {
-    LyPool pool = {0}; PyObject *last, *first, *loader, *model, *pairs, *ls, *fs, *prior, *pair, *v;
+    LyPool pool = {0}; PyObject *last, *first, *loader, *cls, *model, *pairs, *ls, *fs, *prior, *pair, *v;
     Py_UCS4 a, b; double p, l, f, odds; int result = -1;
     Py_ssize_t n = PyUnicode_GetLength(lasttext);
     if (!n || !PyUnicode_GetLength(text)) return 0;
@@ -210,10 +210,13 @@ static int ly_join(PyObject *lasttext, PyObject *text, PyObject *layout)
     LK(last, PyUnicode_Substring(lasttext, n - 1, n)); LK(first, PyUnicode_Substring(text, 0, 1));
     if (a >= 0xac00 && a <= 0xd7a3 && b >= 0xac00 && b <= 0xd7a3) {
         LK(loader, PyImport_ImportModule("dochan.pdf.spacing"));
+        LK(cls, ly_attr(loader, "SpacingModel"));
         LK(model, ly_attr(loader, "_DEFAULT_MODEL"));
         if (model == Py_None) {
             LK(loader, ly_attr(layout, "load_model")); LK(model, PyObject_CallObject(loader, NULL));
         }
+        /* joins_with_space 를 재정의한 하위 클래스는 표를 직접 읽을 수 없다 — Python 으로 */
+        if ((PyObject *)Py_TYPE(model) != cls) { ly_bail(); goto done; }
         LK(pairs, ly_attr(model, "pairs")); LK(ls, ly_attr(model, "last")); LK(fs, ly_attr(model, "first"));
         LK(prior, ly_attr(model, "prior")); LK(pair, PyUnicode_Concat(last, first));
         if (!PyDict_CheckExact(pairs) || !PyDict_CheckExact(ls) || !PyDict_CheckExact(fs)) { ly_bail(); goto done; }

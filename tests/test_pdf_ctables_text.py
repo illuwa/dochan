@@ -59,3 +59,25 @@ def test_numeric_rows_and_assignment():
     grid, owners, boxes = tables._make_grid(hs, vs, xs, ys, 1.5, 1)
     args = (grid, owners, boxes, xs, ys, fs, 1)
     assert c._assign_text(*args) == tables._assign_text(*args)
+
+
+def test_numeric_rows_reject_empty_y_axis():
+    with pytest.raises(ValueError, match='ys'):
+        native()._numeric_row_rules([], [], [0, 30, 60, 90], [], [], 1.5)
+
+
+def test_short_dashes_reject_tuple():
+    with pytest.raises(TypeError, match='list'):
+        native()._short_dash_runs((), 1.5)
+
+
+def test_assignment_rejects_nonstring_line_direction():
+    from types import SimpleNamespace
+    c = native()
+    xs, ys = [0, 30], [30, 0]
+    hs, vs = [(y, 0, 30) for y in ys], [(x, 0, 30) for x in xs]
+    fs = [fragment()]
+    cache = {tuple(id(f) for f in fs): [SimpleNamespace(direction=42), SimpleNamespace(direction=42)]}
+    grid, owners, boxes = tables._make_grid(hs, vs, xs, ys, 1.5, 1)
+    with pytest.raises(TypeError, match='direction'):
+        c._assign_text(grid, owners, boxes, xs, ys, fs, 1, {0: [15]}, None, cache)

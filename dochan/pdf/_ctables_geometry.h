@@ -486,6 +486,7 @@ static PyObject *ct_short_dash_runs(PyObject *self, PyObject *args)
     GK(axes, PyDict_New()); GK(h, PyObject_CallFunctionObjArgs(defaultdict, listtype, NULL));
     GK(v, PyObject_CallFunctionObjArgs(defaultdict, listtype, NULL)); GK(result, Py_BuildValue("{s:O,s:O}", "h", h, "v", v));
     if (segments == Py_None) { res = result; goto done; }
+    if (!PyList_Check(segments)) { PyErr_SetString(PyExc_TypeError, "segments must be a list or None"); goto done; }
     n = PyList_Size(segments); GC(n); GK(segment_type, geo_tables_attr("Segment"));
     GK(name_x0, PyUnicode_InternFromString("x0")); GK(name_x1, PyUnicode_InternFromString("x1"));
     GK(name_y0, PyUnicode_InternFromString("y0")); GK(name_y1, PyUnicode_InternFromString("y1"));

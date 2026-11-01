@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
 from ..model.table import Cell, Table
+from . import content as _table_content, layout as _table_layout
 from .content import Fragment, assemble_lines, writing_direction
 from .layout import merge_lines
 from .paths import Segment
@@ -690,7 +691,10 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
                  budget: Optional[TableBudget] = None,
                  short_segments: Optional[List[Segment]] = None) -> List[TableCandidate]:
     """Restore a page; unsupported native inputs replay without partial state."""
+    native_error = False
     if (_c_build_tables is not None
+            and _table_content.assemble_lines is _TABLE_CALLBACKS['assemble_lines']
+            and _table_layout.merge_lines is _TABLE_CALLBACKS['merge_lines']
             and all(globals()[name] is original for name, original in _TABLE_CALLBACKS.items())
             and (warnings is None or type(warnings) is list)
             and (budget is None or type(budget) is TableBudget)):
@@ -701,6 +705,10 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
                                      pending_warnings, pending_budget, short_segments)
         except _CTablesBailout:
             pass
+        except Exception:
+            # Replay outside the handler: publish Python partial state and keep
+            # its original exception context if the same page fails there too.
+            native_error = True
         else:
             if warnings is not None:
                 warnings[:] = pending_warnings
@@ -708,5 +716,8 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
                 budget.remaining = pending_budget.remaining
             return result
     # Outside the exception handler: Python errors keep their original context.
-    return _build_tables_python(segments, fragments, tolerance, page_number,
-                                warnings, budget, short_segments)
+    result = _build_tables_python(segments, fragments, tolerance, page_number,
+                                  warnings, budget, short_segments)
+    if native_error:
+        _warn(warnings, "WARN: PDF 표 복원 C 가속 불일치 — Python 결과 사용")
+    return result

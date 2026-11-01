@@ -27,8 +27,10 @@ static PyObject *m_keep(MainPool *p, PyObject *o)
     p->refs[p->n++] = o;
     return o;
 }
+static void m_reset(MainPool *p, Py_ssize_t mark)
+{ while (p->n > mark) Py_DECREF(p->refs[--p->n]); }
 static void m_clear(MainPool *p)
-{ while (p->n) Py_DECREF(p->refs[--p->n]); PyMem_Free(p->refs); }
+{ m_reset(p, 0); PyMem_Free(p->refs); }
 static PyObject *m_attr(MainPool *p, PyObject *o, const char *name)
 {
     static struct { const char *text; PyObject *key; } keys[64];
@@ -191,7 +193,7 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
     PyObject *horizontal, *vertical, *grouped, *dash, *index, *line_cache, *reference_points;
     PyObject *separated, *component_boxes, *split_budget, *components, *nodes, *used_orders;
     PyObject *max_cells_obj, *max_lines_obj, *max_components_obj, *max_depth_obj;
-    Py_ssize_t max_cells, max_lines, max_components, max_depth, remaining, reserved = 0, i, j;
+    Py_ssize_t max_cells, max_lines, max_components, max_depth, remaining, reserved = 0, i, j, mark;
     int has_valid = 0;
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|OOOOO:build_tables", kwlist,
             &segments, &fragments, &tolerance, &page, &warnings, &budget, &shorts)) return NULL;
@@ -232,7 +234,9 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
     M_GET(table_type, M_ATTR(mod, "Table")); M_GET(node_type, M_ATTR(mod, "_TableNode"));
     M_GET(candidate_type, M_ATTR(mod, "TableCandidate"));
     M_GET(horizontal, M_KEEP(PyList_New(0))); M_GET(vertical, M_KEEP(PyList_New(0)));
+    mark = pool.n;
     for (i = 0; i < m_len(segments); i++) {
+        m_reset(&pool, mark);
         PyObject *s = m_at(segments, i), *x0, *x1, *y0, *y1, *dy, *dx, *sum, *coord, *run;
         int aligned; double checked;
         M_GET(x0, M_ATTR(s, "x0")); M_GET(x1, M_ATTR(s, "x1"));
@@ -253,6 +257,7 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
             }
         }
     }
+    m_reset(&pool, mark);
     M_GET(horizontal, M_NATIVE(snap_runs, 2, horizontal, tolerance));
     M_GET(vertical, M_NATIVE(snap_runs, 2, vertical, tolerance));
     M_GET(grouped, M_NATIVE(components, 3, horizontal, vertical, tolerance));
@@ -273,14 +278,19 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
     M_GET(dash, M_NATIVE(short_dash_runs, 2, shorts, tolerance));
     M_GET(index, M_NATIVE(fragment_index, 1, fragments));
     M_GET(line_cache, M_KEEP(PyDict_New())); M_GET(reference_points, M_KEEP(PyDict_New()));
+    mark = pool.n;
     for (i = 0; i < m_len(m_at(index, 0)); i++) {
+        m_reset(&pool, mark);
         PyObject *entry = m_at(m_at(index, 0), i), *id;
         M_GET(id, M_KEEP(PyLong_FromVoidPtr(m_at(entry, 1))));
         M_OK(PyDict_SetItem(reference_points, id, m_at(entry, 0)));
     }
+    m_reset(&pool, mark);
     M_GET(separated, M_KEEP(PyList_New(0))); M_GET(component_boxes, M_KEEP(PyDict_New()));
     M_GET(split_budget, m_call(&pool, M_ATTR(mod, "SplitBudget"), M_TUP(0), NULL));
+    mark = pool.n;
     for (i = 0; i < m_len(grouped); i++) {
+        m_reset(&pool, mark);
         PyObject *pair = m_at(grouped, i), *hs = m_at(pair, 0), *vs = m_at(pair, 1), *xs, *ys, *box, *id, *ignored;
         if (m_len(hs) < 2 || m_len(vs) < 2) continue;
         M_GET(xs, m_axes(&pool, vs, 0)); M_GET(ys, m_axes(&pool, hs, 1));
@@ -288,7 +298,10 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
         M_GET(box, m_bbox(&pool, xs, ys)); M_GET(id, M_KEEP(PyLong_FromSsize_t(i)));
         M_OK(PyDict_SetItem(component_boxes, id, box));
     }
+    m_reset(&pool, mark);
+    mark = pool.n;
     for (i = 0; i < m_len(grouped); i++) {
+        m_reset(&pool, mark);
         PyObject *pair = m_at(grouped, i), *hs = m_at(pair, 0), *vs = m_at(pair, 1), *id, *box, *split;
         int eligible;
         M_GET(id, M_KEEP(PyLong_FromSsize_t(i))); box = PyDict_GetItemWithError(component_boxes, id);
@@ -316,9 +329,12 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
             for (j = 0; j < m_len(split); j++) M_OK(PyList_Append(separated, m_at(split, j)));
         } else M_OK(PyList_Append(separated, pair));
     }
+    m_reset(&pool, mark);
     if (m_len(separated) > m_len(grouped)) {
         Py_ssize_t needed = 0; int too_many;
+        mark = pool.n;
         for (i = 0; i < m_len(separated); i++) {
+            m_reset(&pool, mark);
             PyObject *pair = m_at(separated, i), *hs = m_at(pair, 0), *vs = m_at(pair, 1), *xs, *ys, *ignored;
             if (m_len(hs) < 2 || m_len(vs) < 2) continue;
             M_GET(xs, m_axes(&pool, vs, 0)); M_GET(ys, m_axes(&pool, hs, 0));
@@ -328,6 +344,7 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
             }
             needed += (m_len(xs)-1) * (m_len(ys)-1);
         }
+        m_reset(&pool, mark);
         too_many = m_len(separated) > max_components || needed > max_cells;
         if (!too_many && work_budget != Py_None) {
             PyObject *need, *available;
@@ -337,7 +354,9 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
         if (too_many) separated = grouped;
     }
     M_GET(components, M_KEEP(PyList_New(0)));
+    mark = pool.n;
     for (i = 0; i < m_len(separated); i++) {
+        m_reset(&pool, mark);
         PyObject *pair = m_at(separated, i), *hs = m_at(pair, 0), *vs = m_at(pair, 1), *xs, *ys, *box, *ignored, *w, *h, *near, *rules, *entry;
         int wide, tall;
         if (m_len(hs) < 2 || m_len(vs) < 2) continue;
@@ -354,9 +373,12 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
         hs = m_at(rules, 0); ys = m_at(rules, 1);
         M_GET(entry, M_TUP(5, box, hs, vs, xs, ys)); M_OK(PyList_Append(components, entry));
     }
+    m_reset(&pool, mark);
     M_GET(components, m_sorted(&pool, components, 0)); remaining = max_cells;
     M_GET(nodes, M_KEEP(PyList_New(0)));
+    mark = pool.n;
     for (i = 0; i < m_len(components); i++) {
+        m_reset(&pool, mark);
         PyObject *entry = m_at(components, i), *box = m_at(entry, 0), *hs = m_at(entry, 1), *vs = m_at(entry, 2);
         PyObject *xs = m_at(entry, 3), *ys = m_at(entry, 4), *has, *parent = Py_None, *owner = Py_None;
         PyObject *best_area = NULL, *grid_result, *cells_obj, *depth_obj, *node;
@@ -418,9 +440,12 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
             m_at(grid_result, 2), cells_obj, parent, owner, depth_obj), NULL));
         M_OK(PyList_Append(nodes, node));
     }
+    m_reset(&pool, mark);
     M_GET(used_orders, M_KEEP(PySet_New(NULL))); M_GET(result, M_KEEP(PyList_New(0)));
     M_GET(nodes, m_sorted(&pool, nodes, 1));
+    mark = pool.n;
     for (i = 0; i < m_len(nodes); i++) {
+        m_reset(&pool, mark);
         PyObject *node = m_at(nodes, i), *children, *breaks, *near, *own_frags, *assignment, *own_orders, *events;
         PyObject *grid, *owners, *boxes, *xs, *ys, *box, *parent, *subtree, *cells_obj;
         Py_ssize_t cells, pos; PyObject *key, *blocks; int keep;
@@ -465,10 +490,10 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
         }
         M_GET(subtree, M_KEEP(PySet_New(own_orders)));
         for (j = 0; j < m_len(children); j++) {
-            PyObject *orders, *iter, *order;
-            M_GET(orders, M_ATTR(m_at(children, j), "fragment_orders")); M_GET(iter, M_KEEP(PyObject_GetIter(orders)));
-            while ((order = PyIter_Next(iter))) { int status = PySet_Add(subtree, order); Py_DECREF(order); M_OK(status); }
-            if (PyErr_Occurred()) goto done;
+            PyObject *orders, *merged;
+            M_GET(orders, M_ATTR(m_at(children, j), "fragment_orders"));
+            /* Bulk merging matches set.union's resizing and iteration order. */
+            M_GET(merged, M_KEEP(PyNumber_InPlaceOr(subtree, orders))); (void)merged;
         }
         if (parent == Py_None) keep = PySet_Size(subtree) != 0 || (m_len(xs) >= 3 && m_len(ys) >= 3);
         else {
@@ -539,6 +564,7 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
             } else { PyObject *target; M_GET(target, M_ATTR(parent, "children")); M_OK(PyList_Append(target, node)); }
         }
     }
+    m_reset(&pool, mark);
     M_GET(result, m_sorted(&pool, result, 2));
 commit:
     /* Exact list / dataclass inputs make this commit free of user callbacks. */

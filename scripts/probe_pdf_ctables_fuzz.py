@@ -29,7 +29,7 @@ def exact(value):
     if isinstance(value, dict):
         return tag, tuple((exact(k), exact(v)) for k, v in value.items())
     if isinstance(value, (set, frozenset)):
-        return tag, frozenset(exact(item) for item in value)
+        return tag, tuple(exact(item) for item in value)
     if isinstance(value, (list, tuple)):
         return tag, tuple(exact(item) for item in value)
     return tag, value

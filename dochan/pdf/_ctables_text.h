@@ -343,6 +343,9 @@ static int tx_horizontal_line(PyObject *line, int only_ltr)
 {
     PyObject *direction = tx_getattr(line, "direction"); int ltr, rtl = 0;
     if (!direction) return -1;
+    if (!PyUnicode_Check(direction)) {
+        Py_DECREF(direction); PyErr_SetString(PyExc_TypeError, "line direction must be str"); return -1;
+    }
     ltr = PyUnicode_CompareWithASCIIString(direction, "ltr");
     if (!only_ltr) rtl = PyUnicode_CompareWithASCIIString(direction, "rtl");
     Py_DECREF(direction);
@@ -498,7 +501,8 @@ static PyObject *ct_numeric_row_rules(PyObject *self, PyObject *args)
     if (nx < 4 || checks < 0 || cells < 0 || (ny && nf > checks / ny) || (ny && nx > cells / ny)) {
         result = tx_hold(&a, PyTuple_Pack(2, horizontal, ys)); goto done;
     }
-    if (ny < 1 || tx_double(tolerance, &tol) < 0 || tx_number(xs, 0, &left) < 0 || tx_number(xs, nx - 1, &right) < 0) goto done;
+    if (ny < 1) { PyErr_SetString(PyExc_ValueError, "ys must not be empty"); goto done; }
+    if (tx_double(tolerance, &tol) < 0 || tx_number(xs, 0, &left) < 0 || tx_number(xs, nx - 1, &right) < 0) goto done;
     number = tx_hold(&a, tx_getattr(mod, "_NUMBER"));
     h_runs = tx_hold(&a, PyDict_New()); v_runs = tx_hold(&a, PyDict_New());
     bands = tx_hold(&a, PyDict_New()); additions = tx_hold(&a, PyList_New(0));

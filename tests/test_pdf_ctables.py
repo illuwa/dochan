@@ -24,7 +24,7 @@ def exact(value):
     if isinstance(value, dict):
         return tag, tuple((exact(k), exact(v)) for k, v in value.items())
     if isinstance(value, (set, frozenset)):
-        return tag, frozenset(exact(item) for item in value)
+        return tag, tuple(exact(item) for item in value)
     if isinstance(value, (list, tuple)):
         return tag, tuple(exact(item) for item in value)
     return tag, value
@@ -100,16 +100,68 @@ def test_bailout_replays_with_original_warnings_and_budget(monkeypatch):
     assert budget == expected_budget
 
 
-def test_non_bailout_errors_propagate(monkeypatch):
+@pytest.mark.parametrize('limit_warning', [False, True])
+def test_non_bailout_errors_propagate(monkeypatch, limit_warning):
+    """Replay Python so a caught page error preserves its partial document budget."""
+    c = native()
+    monkeypatch.setattr(tables, '_c_build_tables', c.build_tables)
+    monkeypatch.setattr(tables, '_CTablesBailout', c.Bailout)
+    segments = grid([0, 20, 40], [0, 20, 40]) + grid([100, 200, 300], [100, 200, 300])
+    if limit_warning:
+        monkeypatch.setattr(tables, 'MAX_COMPONENT_LINES', 8)
+        segments += grid([400, 410, 420, 430, 440], [400, 410, 420, 430, 440])
+    fragments = [Fragment(5, 5, 5, 8, 'a', 2, order=0),
+                 Fragment(150, 150, 5, 8, None, 2, order=1)]
+    states = []
+    for fn in (tables._build_tables_python, tables.build_tables):
+        warnings, budget = ['existing'], tables.TableBudget(100)
+        with pytest.raises(TypeError) as error:
+            fn(segments, fragments, 1.5, 1, warnings, budget)
+        assert error.value.__context__ is None
+        states.append((str(error.value), list(warnings), budget.remaining))
+        # reader catches the error and reuses this budget on the next page.
+        states.append(exact(fn(*fixture(), budget=budget, warnings=warnings)))
+    assert states[0][2] == 96
+    assert len(states[0][1]) == 1 + limit_warning
+    assert states[:2] == states[2:]
+
+
+def grid(xs, ys):
+    return ([Segment(xs[0], y, xs[-1], y) for y in ys]
+            + [Segment(x, ys[0], x, ys[-1]) for x in xs])
+
+
+def test_native_error_python_success_warns_and_discards_pending_state(monkeypatch):
     c = native()
 
-    def failed(*args, **kwargs):
-        raise RuntimeError('table accelerator failure')
+    def failed(*args):
+        args[4].append('discarded')
+        args[5].remaining = 0
+        raise RuntimeError('C-only failure')
 
     monkeypatch.setattr(tables, '_c_build_tables', failed)
     monkeypatch.setattr(tables, '_CTablesBailout', c.Bailout)
-    with pytest.raises(RuntimeError, match='table accelerator failure'):
-        tables.build_tables([], [])
+    warnings, budget = [], tables.TableBudget(100)
+    expected = tables._build_tables_python(*fixture())
+    actual = tables.build_tables(*fixture(), warnings=warnings, budget=budget)
+    assert exact(actual) == exact(expected)
+    assert budget.remaining == 91
+    assert warnings == ['WARN: PDF 표 복원 C 가속 불일치 — Python 결과 사용']
+
+
+@pytest.mark.parametrize('module_name,name', [('layout', 'merge_lines'), ('content', 'assemble_lines')])
+def test_definition_module_callback_replacement_uses_python(monkeypatch, module_name, name):
+    c = native()
+    module = importlib.import_module('dochan.pdf.' + module_name)
+    expected = tables._build_tables_python(*fixture())
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('definition-module replacement must bypass native dispatch')
+
+    monkeypatch.setattr(module, name, forbidden)
+    monkeypatch.setattr(tables, '_c_build_tables', forbidden)
+    monkeypatch.setattr(tables, '_CTablesBailout', c.Bailout)
+    assert exact(tables.build_tables(*fixture())) == exact(expected)
 
 
 @pytest.mark.parametrize('disabled', [False, True])
@@ -187,3 +239,38 @@ def test_unrepresentable_coordinate_replays_before_any_mutation():
         tables.build_tables(segments, [])
     assert str(actual.value) == str(expected.value)
     assert actual.value.__context__ is None
+
+
+def test_nested_fragment_set_iteration_matches_python():
+    """Set equality misses resizing differences between add and union."""
+    c = native()
+    segments = [
+        Segment(253.0, 53.0, 307.0, 53.0),
+        Segment(253.0, 87.0, 307.0, 87.0),
+        Segment(253.0, 53.0, 253.0, 87.0),
+        Segment(307.0, 53.0, 307.0, 87.0),
+        Segment(256.0, 56.0, 304.0, 56.0),
+        Segment(256.0, 63.333333333333336, 304.0, 63.333333333333336),
+        Segment(256.0, 67.0, 304.0, 67.0),
+        Segment(256.0, 56.0, 256.0, 67.0),
+        Segment(304.0, 56.0, 304.0, 67.0),
+        Segment(305.499999999, 94.500000001, 305.499999999, 166.999999999),
+        Segment(253.5, 93.5, 306.5, 93.5),
+        Segment(253.5, 118.33333333333333, 306.5, 118.33333333333333),
+        Segment(253.5, 143.16666666666666, 306.5, 143.16666666666666),
+        Segment(253.5, 168.0, 306.5, 168.0),
+        Segment(280.0, 93.5, 280.0, 168.0),
+        Segment(306.5, 93.5, 306.5, 168.0),
+    ]
+    fragments = [
+        Fragment(277.5, 66.5, 10.0, 8.0, '12%', 2.0, order=7, dir_x=1.0, dir_y=0.0, up_x=0.0, up_y=1.0),
+        Fragment(277.5, 58.0, 3, 10.0, '12', 2.0, order=12, dir_x=1.0, dir_y=0.0, up_x=0.0, up_y=1.0),
+        Fragment(277.5, 75.0, 20.0, 8.0, '.5', 2.0, order=14, dir_x=0.0, dir_y=-1.0, up_x=1.0, up_y=0.0),
+        Fragment(277.5, 54.33333333333333, 0.0, 10.0, '-5', 2.0, order=15, dir_x=1.0, dir_y=0.0, up_x=0.0, up_y=1.0),
+        Fragment(277.499999999, 58.0, 20.0, 8.0, 'abc', 2.0, order=16, dir_x=1.0, dir_y=-0.0, up_x=-0.0, up_y=1.0),
+    ]
+    expected = tables._build_tables_python(segments, fragments, budget=tables.TableBudget(8))
+    actual = c.build_tables(segments, fragments, budget=tables.TableBudget(8))
+    assert expected
+    assert [list(t.fragment_orders) for t in actual] == [list(t.fragment_orders) for t in expected]
+    assert exact(actual) == exact(expected)

@@ -136,3 +136,172 @@ def test_truncated_cid_operation_matches_python(monkeypatch, raw):
     expected = owner._extract_page_python(data)
     actual = owner.extract_page(data)
     assert signature([vars(f) for f in actual.fragments]) == signature([vars(f) for f in expected.fragments])
+
+
+def test_font_snapshot_once_across_yields_and_pages(monkeypatch):
+    from dochan.pdf import _show_table
+    monkeypatch.setattr(content, '_CInterpreter', native.Interpreter)
+    calls = []
+    original = _show_table.font_table
+    def counted(font):
+        calls.append(font)
+        return original(font)
+    monkeypatch.setattr(_show_table, 'font_table', counted)
+    font = font_for(2)
+    fonts = {'F': font, 'P': content.FontInfo(content.default_byte_decoder, WidthMap({}, 500))}
+    data = b'/F 10 Tf ' + b'/GS gs <0041> Tj /P 10 Tf (p) Tj /F 10 Tf ' * 50
+    for _ in range(3):
+        owner = content.ContentTextExtractor.from_fonts(fonts)
+        owner.resources = {'ExtGState': {'GS': {'LW': 1}}}
+        assert len(owner.extract_page(data).fragments) == 100
+    assert calls.count(font) == 1
+    assert len(calls) == 2
+
+
+def test_tj_boolean_does_not_bail():
+    font = font_for()
+    data = b'/F 10 Tf [(A) true (B) false (C)] TJ'
+    owner = content.ContentTextExtractor.from_fonts({'F': font})
+    expected = owner._extract_page_python(data)
+    frags = []
+    engine = native.Interpreter(data, {'F': font}, (1, 0, 0, 1, 0, 0),
+                                (None, 0., 0., 0., 1., 0., 0, 1.),
+                                [], [], [], owner, frags, content.Fragment, font_table)
+    assert engine.next() is None
+    assert signature([vars(f) for f in frags]) == signature([vars(f) for f in expected.fragments])
+
+
+def test_native_cache_owns_font_until_interpreter_release():
+    import gc
+    import weakref
+    font = font_for()
+    ref = weakref.ref(font)
+    fonts = {'F': font}
+    owner = content.ContentTextExtractor.from_fonts(fonts)
+    owner._extract_page_python(b'')
+    engine = native.Interpreter(b'/F 10 Tf (A) Tj /GS gs', fonts, (1, 0, 0, 1, 0, 0),
+                                (None, 0., 0., 0., 1., 0., 0, 1.),
+                                [], [], [], owner, [], content.Fragment, font_table)
+    assert engine.next()[0] == b'gs'
+    engine.font = None
+    fonts.clear()
+    del font
+    gc.collect()
+    assert ref() is not None
+    del engine, owner
+    gc.collect()
+    assert ref() is None
+
+
+def test_encoding_snapshot_preserves_parent_notdef_and_byte_boxes():
+    from dochan.pdf.cmap import EncodingCMap
+    from dochan.pdf.objects import PDFStream
+    from dochan.pdf.reader import PDFReader
+    class PDF:
+        warnings = []
+        def resolve(self, value):
+            return value
+        def decode_stream_bytes(self, stream):
+            return stream.raw
+    parent = EncodingCMap(((2, 0x1010, 0x1112),), ((2, 0x1010, 0x1112, 1),))
+    encoding = EncodingCMap((), ((2, 0x1011, 0x1011, 800),),
+                            ((2, 0x1010, 0x1112, 900),), parent=parent)
+    stream = PDFStream({}, b'1 beginbfchar <1010> <0041> endbfchar')
+    decode = PDFReader()._build_font_decoder(PDF(), 'F', {'ToUnicode': stream}, encoding)
+    widths = WidthMap({1: 500, 800: 750, 900: 1000}, 600)
+    font = content.FontInfo(decode, widths, 2, encoding_cmap=encoding)
+    for code in range(0x1000, 0x1120):
+        data = b'/F 10 Tf <' + code.to_bytes(2, 'big').hex().encode() + b'> Tj'
+        owner = content.ContentTextExtractor.from_fonts({'F': font})
+        expected = owner._extract_page_python(data)
+        actual = owner.extract_page(data)
+        assert signature([vars(f) for f in actual.fragments]) == signature([vars(f) for f in expected.fragments])
+
+
+
+def test_uniks_gs_and_forms_build_one_snapshot(monkeypatch):
+    from dochan.pdf import _show_table
+    from dochan.pdf.cmap import predefined_cmap
+    from dochan.pdf.objects import PDFStream
+    from dochan.pdf.reader import PDFReader
+    class PDF:
+        warnings = []
+        def resolve(self, value):
+            return value
+        def decode_stream_bytes(self, stream):
+            return stream.raw
+    encoding = predefined_cmap('UniKS-UCS2-H')
+    stream = PDFStream({}, b'2 beginbfchar <AC00> <AC00> <AC01> <AC01> endbfchar')
+    decode = PDFReader()._build_font_decoder(PDF(), 'F', {'ToUnicode': stream}, encoding)
+    font = content.FontInfo(decode, WidthMap({}, 1000, cid_default=True), 2, encoding_cmap=encoding)
+    calls = []
+    original = _show_table.font_table
+    def counted(value):
+        calls.append(value)
+        return original(value)
+    monkeypatch.setattr(_show_table, 'font_table', counted)
+    monkeypatch.setattr(content, '_CInterpreter', native.Interpreter)
+    fonts = {'F': font}
+    form = b'/F 10 Tf <AC00AC01> Tj'
+    resources = {'ExtGState': {'GS': {'LW': 1}}}
+    def loader(name, resources):
+        return ('form', form, (1, 0, 0, 1, 0, 0), resources, fonts, {}, 2, None, False)
+    data = b'BT /F 10 Tf ' + b'/GS gs <AC00AC01> Tj /X Do ' * 50 + b'ET'
+    for _ in range(2):
+        owner = content.ContentTextExtractor.from_fonts(fonts)
+        owner.resources = resources
+        owner.form_loader = loader
+        assert len(owner.extract_page(data).fragments) == 100
+    assert calls == [font]
+
+
+def test_fixed_encoding_snapshot_does_not_expand_codespace():
+    from dochan.pdf.cmap import EncodingCMap
+    from dochan.pdf.objects import PDFStream
+    from dochan.pdf.reader import PDFReader
+    class PDF:
+        warnings = []
+        def resolve(self, value):
+            return value
+        def decode_stream_bytes(self, stream):
+            return stream.raw
+    encoding = EncodingCMap(((2, 0, 65535),), ((2, 0, 65535, 0),))
+    stream = PDFStream({}, b'1 beginbfchar <0041> <0041> endbfchar')
+    decode = PDFReader()._build_font_decoder(PDF(), 'F', {'ToUnicode': stream}, encoding)
+    table = font_table(content.FontInfo(decode, WidthMap({65: 500}, 600), 2, encoding_cmap=encoding))
+    assert len(table[1]) == 1
+    assert len(table[3]) == 1
+
+
+@pytest.mark.parametrize('preserve', [False, True])
+def test_core14_snapshot_uses_mapping_without_per_byte_decoder(monkeypatch, preserve):
+    original = Core14Decoder.decode
+    calls = []
+    def counted(self, raw):
+        calls.append(raw)
+        return original(self, raw)
+    monkeypatch.setattr(Core14Decoder, 'decode', counted)
+    decoder = Core14Decoder({65: 'A'}, content.default_byte_decoder, preserve_undefined=preserve)
+    font = content.FontInfo(decoder.decode, WidthMap({65: 500}, 600))
+    table = font_table(font)
+    assert ''.join(table[1]) == original(decoder, bytes(range(256)))
+    assert calls == []
+
+
+@pytest.mark.parametrize('mapping,kind,step', [
+    ({True: 500}, 0, 0), ({1: True}, 0, 0), ({1: '500'}, 0, 0),
+    ({'1': 500}, 0, 0), ([], 0, 0), ({1: 1}, 1, 1),
+    ({(2, True): 'A'}, 2, 2), ({(True, 1): 'A'}, 2, 1),
+    ({(1, 2): 'A'}, 2, 2), ({(2, 1, 0): 'A'}, 2, 2),
+    ({(2, 1): 5}, 3, 0), ({(10 ** 100, 1): 'A'}, 2, 2),
+])
+def test_native_snapshot_rejects_non_exact_mapping(mapping, kind, step):
+    assert native._snapshot_map(mapping, kind, step) is False
+
+
+def test_native_snapshot_preserves_width_types_and_normalizes_unicode():
+    widths = {1: 500, 2: -0.0, 3: 1 << 100}
+    assert signature(native._snapshot_map(widths, 0, 0)) == signature(widths)
+    mapping = {(2, 1): 'ffi', (2, 2): '', (2, 3): '\ufffd'}
+    assert native._snapshot_map(mapping, 2, 2) == {1: 'ffi', 2: '', 3: '\ufffd'}
+    assert native._snapshot_map(mapping, 3, 0) is mapping

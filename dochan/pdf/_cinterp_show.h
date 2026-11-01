@@ -2,24 +2,60 @@
 #ifdef DOCHAN_PROFILE_SHOW
 #include <time.h>
 static double ShowTimes[4];
-static unsigned long long ShowCalls, ShowGlyphs;
+static unsigned long long ShowCalls, ShowGlyphs, ShowCompleted, ShowYielded;
+#define SHOW_OPERATOR_RESULT(handled) ((handled) ? ShowCompleted++ : ShowYielded++)
 #define SHOW_START clock_t show_stamp = clock(); ShowCalls++
 #define SHOW_PHASE(i) do { clock_t now = clock(); ShowTimes[i] += (double)(now - show_stamp) / CLOCKS_PER_SEC; show_stamp = now; } while (0)
 #define SHOW_GLYPHS(n) (ShowGlyphs += (unsigned long long)(n))
 static PyObject *show_profile(PyObject *self, PyObject *unused)
 {
     (void)self; (void)unused;
-    return Py_BuildValue("{s:d,s:d,s:d,s:d,s:K,s:K}",
+    return Py_BuildValue("{s:d,s:d,s:d,s:d,s:K,s:K,s:K,s:K}",
         "decode_widths", ShowTimes[0], "positions", ShowTimes[1],
         "size_space", ShowTimes[2], "fragment", ShowTimes[3],
-        "shows", ShowCalls, "glyphs", ShowGlyphs);
+        "shows", ShowCalls, "glyphs", ShowGlyphs,
+        "completed_operators", ShowCompleted, "yielded_operators", ShowYielded);
 }
 #else
 #define SHOW_START ((void)0)
 #define SHOW_PHASE(i) ((void)0)
 #define SHOW_GLYPHS(n) ((void)0)
+#define SHOW_OPERATOR_RESULT(handled) ((void)0)
 #endif
 static PyObject *ShowFields[22];
+/* Validate repository dictionaries without a Python generator per entry.
+ * kind: 0 widths, 1 byte Unicode, 2 fixed ToUnicode (normalize keys),
+ * 3 Encoding ToUnicode (retain tuple keys). */
+static PyObject *show_snapshot_map(PyObject *self, PyObject *args)
+{
+    (void)self;
+    PyObject *mapping, *key, *value, *result = NULL;
+    int kind, step;
+    if (!PyArg_ParseTuple(args, "Oii", &mapping, &kind, &step)) return NULL;
+    if (!PyDict_CheckExact(mapping) || kind < 0 || kind > 3) Py_RETURN_FALSE;
+    if (kind == 2) { result = PyDict_New(); if (!result) return NULL; }
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(mapping, &pos, &key, &value)) {
+        PyObject *code = key;
+        if (kind >= 2) {
+            if (!PyTuple_CheckExact(key) || PyTuple_Size(key) != 2 ||
+                !PyLong_CheckExact(PyTuple_GetItem(key, 0))) goto invalid;
+            code = PyTuple_GetItem(key, 1);
+            if (kind == 2) {
+                long size = PyLong_AsLong(PyTuple_GetItem(key, 0));
+                if (PyErr_Occurred()) { PyErr_Clear(); goto invalid; }
+                if (size != step) goto invalid;
+            }
+        }
+        if (!PyLong_CheckExact(code) ||
+            (kind == 0 ? !PyLong_CheckExact(value) && !PyFloat_CheckExact(value) : !PyUnicode_CheckExact(value))) goto invalid;
+        if (result && PyDict_SetItem(result, code, value) < 0) { Py_DECREF(result); return NULL; }
+    }
+    if (result) return result;
+    Py_INCREF(mapping); return mapping;
+invalid:
+    Py_XDECREF(result); Py_RETURN_FALSE;
+}
 static int show_fields_init(void)
 {
     static const char *names[] = {"x","y","width","size","text","space_width","bold","italic","order","dir_x","dir_y","up_x","up_y","char_offsets","link_spans","note_ref","link_geometry_reliable","comment_spans","comment_markers","mcids","artifact","invisible"};
@@ -39,25 +75,29 @@ static int show_enter(Interpreter *s)
     if (!value) return -1;
     s->link_reliable = PyObject_IsTrue(value); Py_DECREF(value);
     if (s->link_reliable < 0) return -1;
-    /* A Python fallback may mutate fonts/widths. Never retain snapshots across
-     * a yield; the hot loop has no arbitrary callbacks. */
-    if (s->invalidate_tables) PyDict_Clear(s->tables);
-    s->invalidate_tables = 0; s->show_table = NULL; s->show_font = NULL;
+    s->show_table = NULL; s->show_font = NULL;
     return 0;
 }
 static int show_get_table(Interpreter *s)
 {
-    if (s->show_table && s->show_font == s->font) return 1;
+    if (s->show_table && s->show_font == s->font) {
+        s->glyph_yield_safe = 0;
+        return 1;
+    }
     PyObject *key = PyLong_FromVoidPtr(s->font);
     if (!key) return -1;
-    PyObject *table = PyDict_GetItemWithError(s->tables, key);
+    PyObject *entry = PyDict_GetItemWithError(s->tables, key);
+    PyObject *table = entry ? PyTuple_GetItem(entry, 1) : NULL;
     if (!table && !PyErr_Occurred()) {
         table = PyObject_CallFunctionObjArgs(s->table_builder, s->font, NULL);
         if (!table) { Py_DECREF(key); return -1; }
-        int ok = PyDict_SetItem(s->tables, key, table);
+        entry = PyTuple_Pack(2, s->font, table);
+        int ok = entry ? PyDict_SetItem(s->tables, key, entry) : -1;
+        Py_XDECREF(entry);
         Py_DECREF(table);
         if (ok < 0) { Py_DECREF(key); return -1; }
-        table = PyDict_GetItemWithError(s->tables, key);
+        entry = PyDict_GetItemWithError(s->tables, key);
+        table = entry ? PyTuple_GetItem(entry, 1) : NULL;
     }
     Py_DECREF(key);
     if (!table) return -1;
@@ -68,8 +108,10 @@ static int show_get_table(Interpreter *s)
     if (!PyLong_CheckExact(step)) return bail("invalid glyph step");
     long n = PyLong_AsLong(step);
     if (PyErr_Occurred()) return -1;
+    int sparse = PyTuple_CheckExact(PyTuple_GetItem(table, 11));
     if ((n != 1 && n != 2) ||
-        (n == 1 && (!PyTuple_CheckExact(mapping) || PyTuple_Size(mapping) != 256)) ||
+        (sparse && (!PyDict_CheckExact(mapping) || PyTuple_Size(PyTuple_GetItem(table, 11)) != 3)) ||
+        (!sparse && n == 1 && (!PyTuple_CheckExact(mapping) || PyTuple_Size(mapping) != 256)) ||
         (n == 2 && !PyDict_CheckExact(mapping)) ||
         !PyUnicode_CheckExact(PyTuple_GetItem(table, 2)) ||
         !PyDict_CheckExact(PyTuple_GetItem(table, 3))) return bail("invalid glyph mapping");
@@ -79,7 +121,7 @@ static int show_get_table(Interpreter *s)
             return bail("invalid glyph flags");
     }
     if ((PyTuple_GetItem(table, 10) != Py_True && PyTuple_GetItem(table, 10) != Py_False) ||
-        (PyTuple_GetItem(table, 11) != Py_None && !PyFrozenSet_CheckExact(PyTuple_GetItem(table, 11))))
+        (PyTuple_GetItem(table, 11) != Py_None && !sparse && !PyFrozenSet_CheckExact(PyTuple_GetItem(table, 11))))
         return bail("invalid glyph reliability");
     s->show_table = table; s->show_font = s->font;
     return 1;
@@ -95,6 +137,54 @@ static int show_number(PyObject *dict, const char *key, Num n)
 {
     return show_set(dict, key, num_obj(n));
 }
+/* Sparse fixed Encoding CMaps: byte-wise codespace boxes and normalized,
+ * non-overlapping intervals, child before parent, all normal before notdef.
+ * Return 0 for a missing code so the original operation emits its warnings. */
+static int show_cid(Interpreter *s, unsigned code, long *cid)
+{
+    PyObject *meta = PyTuple_GetItem(s->show_table, 11);
+    PyObject *spaces = PyTuple_GetItem(meta, 0);
+    if (!PyTuple_CheckExact(spaces)) return bail("invalid codespace table");
+    int valid = 0;
+    for (Py_ssize_t i = 0; i < PyTuple_Size(spaces); i++) {
+        PyObject *box = PyTuple_GetItem(spaces, i);
+        if (!PyTuple_CheckExact(box) || PyTuple_Size(box) != 2) return bail("invalid codespace box");
+        PyObject *a = PyTuple_GetItem(box, 0), *b = PyTuple_GetItem(box, 1);
+        if (!PyLong_CheckExact(a) || !PyLong_CheckExact(b)) return bail("invalid codespace bound");
+        long lo = PyLong_AsLong(a), hi = PyLong_AsLong(b);
+        if (PyErr_Occurred()) return -1;
+        if ((long)(code >> 8) >= (lo >> 8) && (long)(code >> 8) <= (hi >> 8) &&
+            (long)(code & 255) >= (lo & 255) && (long)(code & 255) <= (hi & 255)) { valid = 1; break; }
+    }
+    if (!valid) return 0;
+    for (int kind = 1; kind <= 2; kind++) {
+        PyObject *layers = PyTuple_GetItem(meta, kind);
+        if (!PyTuple_CheckExact(layers)) return bail("invalid CID layers");
+        for (Py_ssize_t layer = 0; layer < PyTuple_Size(layers); layer++) {
+            PyObject *rows = PyTuple_GetItem(layers, layer);
+            if (!PyList_CheckExact(rows)) return bail("invalid CID ranges");
+            Py_ssize_t left = 0, right = PyList_Size(rows);
+            while (left < right) {
+                Py_ssize_t mid = left + (right - left) / 2;
+                PyObject *row = PyList_GetItem(rows, mid);
+                if (!PyTuple_CheckExact(row) || PyTuple_Size(row) != 3) return bail("invalid CID range");
+                PyObject *a = PyTuple_GetItem(row, 0), *b = PyTuple_GetItem(row, 1), *c = PyTuple_GetItem(row, 2);
+                if (!PyLong_CheckExact(a) || !PyLong_CheckExact(b) || !PyLong_CheckExact(c)) return bail("invalid CID number");
+                long lo = PyLong_AsLong(a), hi = PyLong_AsLong(b), start = PyLong_AsLong(c);
+                if (PyErr_Occurred()) return -1;
+                if ((long)code < lo) right = mid;
+                else if ((long)code > hi) left = mid + 1;
+                else {
+                    /* ISO CID values are bounded; do not overflow signed C. */
+                    if (lo < 0 || hi > 65535 || start < 0 || start > 65535) return bail("invalid CID bounds");
+                    *cid = kind == 2 ? start : start + (long)code - lo;
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
 static int show_width(Interpreter *s, PyObject *code, double *out, int *explicit_width)
 {
     PyObject *t = s->show_table, *widths = PyTuple_GetItem(t, 3);
@@ -103,7 +193,7 @@ static int show_width(Interpreter *s, PyObject *code, double *out, int *explicit
     if (explicit_width) {
         Num c;
         if (num_from(code, &c) < 0) return -1;
-        if (PyTuple_GetItem(t, 11) != Py_None) {
+        if (PyFrozenSet_CheckExact(PyTuple_GetItem(t, 11))) {
             *explicit_width = PySet_Contains(PyTuple_GetItem(t, 11), code);
             if (*explicit_width < 0) return -1;
         } else *explicit_width = PyTuple_GetItem(t, 5) == Py_True &&
@@ -202,6 +292,7 @@ static int show_raw(Interpreter *s, PyObject *raw)
     PyObject *pieces = PyList_New(count), *text = NULL, *offsets = NULL;
     PyObject *context = NULL, *budget = NULL, *tracking = NULL, *stripped = NULL;
     PyObject *mapping = PyTuple_GetItem(s->show_table, 1), *missing = PyTuple_GetItem(s->show_table, 2);
+    int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11));
     double *widths = NULL, total = 0.0, xs, ys, sw, size;
     Num start[6], trans[6], end[6], p, q, det;
     int result = -1, explicit_all = s->link_reliable && PyTuple_GetItem(s->show_table, 10) == Py_True;
@@ -215,13 +306,25 @@ static int show_raw(Interpreter *s, PyObject *raw)
         if (step == 2) code = (code << 8) | data[i * step + 1];
         PyObject *key = PyLong_FromUnsignedLong(code);
         if (!key) goto done;
-        PyObject *piece = step == 1 ? PyTuple_GetItem(mapping, code) : PyDict_GetItemWithError(mapping, key);
+        PyObject *map_key = sparse ? PyTuple_Pack(2, PyTuple_GetItem(s->show_table, 0), key) : NULL;
+        if (sparse && !map_key) { Py_DECREF(key); goto done; }
+        PyObject *piece = sparse ? PyDict_GetItemWithError(mapping, map_key) :
+            step == 1 ? PyTuple_GetItem(mapping, code) : PyDict_GetItemWithError(mapping, key);
+        Py_XDECREF(map_key);
         if (!piece && PyErr_Occurred()) { Py_DECREF(key); goto done; }
         if (!piece) piece = missing;
         if (!PyUnicode_CheckExact(piece)) { Py_DECREF(key); bail("invalid glyph text"); goto done; }
         /* Own the piece before any width lookup: a direct extension caller
          * can supply a dict whose equality callback mutates the mapping. */
         Py_INCREF(piece); PyList_SetItem(pieces, i, piece);
+        if (sparse) {
+            long cid;
+            int found = show_cid(s, code, &cid);
+            Py_DECREF(key);
+            if (found <= 0) { if (!found) bail("CID changed after preflight"); goto done; }
+            key = PyLong_FromLong(cid);
+            if (!key) goto done;
+        }
         int explicit_width;
         double w;
         if (show_width(s, key, &w, &explicit_width) < 0) { Py_DECREF(key); goto done; }
@@ -317,11 +420,18 @@ static int show_can_decode(Interpreter *s, PyObject *raw)
     Py_ssize_t n = PyBytes_Size(raw);
     if (n % step) return 0;
     if (PyTuple_GetItem(s->show_table, 11) == Py_None) return 1;
+    int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11));
     PyObject *map = PyTuple_GetItem(s->show_table, 1);
     const unsigned char *data = (const unsigned char *)PyBytes_AsString(raw);
     for (Py_ssize_t i = 0; i < n; i += step) {
         unsigned code = data[i];
         if (step == 2) code = (code << 8) | data[i+1];
+        if (sparse) {
+            long cid;
+            int found = show_cid(s, code, &cid);
+            if (found <= 0) return found;
+            continue;
+        }
         if (step == 1) { if (PyTuple_GetItem(map, code) == Py_None) return 0; }
         else {
             PyObject *key = PyLong_FromUnsignedLong(code);
@@ -361,7 +471,8 @@ static int show_operator(Interpreter *s, const char *op, Py_ssize_t size)
                 if (PyBytes_CheckExact(item)) { if (show_raw(s, item) < 0) return -1; }
                 else if (PyLong_Check(item) || PyFloat_Check(item)) {
                     Num n, trans[6];
-                    if (num_from(item, &n) < 0) return -1;
+                    if (PyBool_Check(item)) n = ni(item == Py_True);
+                    else if (num_from(item, &n) < 0) return -1;
                     identity(trans); trans[4] = nf(num_neg(n).v / 1000.0 * s->fs.v * s->th.v);
                     if (!isfinite(trans[4].v)) return bail("non-finite TJ advance");
                     if (matrix_mul(trans, s->tm, s->tm) < 0) return -1;

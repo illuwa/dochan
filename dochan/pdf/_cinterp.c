@@ -141,7 +141,7 @@ typedef struct {
     PyObject *owner, *frags, *fragment_type, *fragment_template, *table_builder, *tables;
     PyObject *show_font;
     PyObject *show_table; /* borrowed from tables, only within next() */
-    int link_reliable, invalidate_tables, glyph_yield_safe, pure_fallbacks;
+    int link_reliable, glyph_yield_safe, pure_fallbacks;
 } Interpreter;
 
 static int interp_clear(Interpreter *s)
@@ -223,7 +223,6 @@ static int interp_init(Interpreter *s, PyObject *args, PyObject *kwargs)
         Py_INCREF(fragment_type); s->fragment_type = fragment_type;
         Py_INCREF(table_builder); s->table_builder = table_builder;
         s->pure_fallbacks = pure_fallbacks;
-        s->invalidate_tables = 1;
         s->tables = PyDict_New();
         if (!s->tables) { s->busy = 0; return -1; }
     }
@@ -361,6 +360,7 @@ static PyObject *interp_next_inner(Interpreter *s)
         if (s->owner && text_op) {
             int handled = show_operator(s, op, size);
             if (handled < 0) { Py_DECREF(value); return NULL; }
+            SHOW_OPERATOR_RESULT(handled);
             if (handled) {
                 Py_DECREF(value);
                 if (PyList_SetSlice(s->operands, 0, PyList_Size(s->operands), NULL) < 0) return NULL;
@@ -369,7 +369,6 @@ static PyObject *interp_next_inner(Interpreter *s)
         }
         if (text_op || OP("Do") || OP("BDC") || OP("BMC") ||
             OP("EMC") || OP("gs") || OP("BI")) {
-            s->invalidate_tables = (text_op && !(s->glyph_yield_safe && s->pure_fallbacks)) || OP("Do") || OP("gs");
             PyObject *empty = PyList_New(0), *result;
             if (!empty) { Py_DECREF(value); return NULL; }
             result = PyTuple_Pack(2, value, s->operands); Py_DECREF(value);
@@ -478,7 +477,11 @@ static PyType_Slot slots[] = {
 };
 static PyType_Spec spec = {"dochan.pdf._cinterp.Interpreter",sizeof(Interpreter),0,
                           Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,slots};
-static struct PyModuleDef module = {PyModuleDef_HEAD_INIT,"_cinterp",NULL,-1,NULL,NULL,NULL,NULL,NULL};
+static PyMethodDef module_methods[] = {
+    {"_snapshot_map",show_snapshot_map,METH_VARARGS,NULL},
+    {NULL,NULL,0,NULL}
+};
+static struct PyModuleDef module = {PyModuleDef_HEAD_INIT,"_cinterp",NULL,-1,module_methods,NULL,NULL,NULL,NULL};
 static int import_attr(const char *module_name, const char *name, PyObject **target)
 {
     PyObject *m = PyImport_ImportModule(module_name);

@@ -476,12 +476,12 @@ class ContentTextExtractor:
             initial = (None, 0.0, 0.0, 0.0, 1.0, 0.0, 0, 1.0)
         elif len(initial) == 6:
             initial = (*initial, 0, 1.0)
-        from ._show_table import font_table
+        from ._show_table import cached_font_table
         pure_callbacks = (type(self) is ContentTextExtractor
                           and getattr(self._show, '__func__', None) is _NATIVE_SHOW_IMPL
                           and getattr(self._text_operator, '__func__', None) is _NATIVE_TEXT_IMPL)
         args = (content, self._fonts, ctm, initial, segments, short_segments, warnings)
-        interpreter = (_CInterpreter(*args, self, frags, Fragment, font_table, True)
+        interpreter = (_CInterpreter(*args, self, frags, Fragment, cached_font_table, True)
                        if pure_callbacks else _CInterpreter(*args))
         while True:
             event = interpreter.next()

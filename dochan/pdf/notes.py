@@ -206,6 +206,12 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
                       if frag.y > bottom + (top - bottom) * 0.25]
     if not body_fragments:
         return empty
+    # Body sizes are rounded fragment/line maxima; no body estimate can exceed
+    # this bound. A definition's line is at least as large as its ')' fragment.
+    # Assembly only inserts whitespace, so split markers obey the same bound.
+    definition_limit = round(max(frag.size for frag in horizontal), 3) * 0.9
+    if not any(')' in frag.text and frag.size < definition_limit for frag in horizontal):
+        return empty
     lines = assemble_lines(horizontal)
     # 짧은 차트 라벨과 표 셀은 조각 수가 많아도 본문 글자 크기를 대표하지
     # 않는다. 긴 줄의 문자량으로 크기 분포를 만들고, 작은 표/차트 글자가
@@ -358,21 +364,31 @@ def endnote_references(fragments, warnings=None, *, _horizontal=None):
     horizontal = (_horizontal if _horizontal is not None else
                   [f for f in fragments if _finite_fragment(f) and f.size > 0
                    and writing_direction(f) == "ltr"])
-    markers = [(f, _ENDNOTE_MARKER.fullmatch(f.text)) for f in horizontal
-               if not f.note_ref]
-    markers = [(f, m) for f, m in markers if m]
+    markers = [(f, match) for f in horizontal
+               if not f.note_ref and (match := _ENDNOTE_MARKER.fullmatch(f.text))]
     hosts = sorted(horizontal, key=lambda f: f.y)
     ys = [f.y for f in hosts]
     max_size = max((f.size for f in hosts), default=0)
     budget = [MAX_NOTE_GEOMETRY_CHECKS]
     result = []
+    previous_key = None
+    vertical_hosts = []
+    nearby_count = 0
     for marker, match in markers:
-        nearby = hosts[bisect_left(ys, marker.y - max_size):bisect_right(ys, marker.y)]
-        if not _spend(budget, len(nearby), warnings, "미주"):
+        # Adjacent numeric table cells commonly share baseline and size.
+        # Keep just the last query, so storage stays linear even on hostile input.
+        key = (marker.y, marker.size)
+        if key != previous_key:
+            lo, hi = bisect_left(ys, marker.y - max_size), bisect_right(ys, marker.y)
+            nearby_count = hi - lo
+            vertical_hosts = [h for h in hosts[lo:hi] if marker.size <= h.size * .8
+                              and .15 * h.size <= marker.y - h.y
+                              <= max(.30 * h.size, h.size - marker.size) + 1e-6]
+            previous_key = key
+        if not _spend(budget, nearby_count, warnings, "미주"):
             return []
-        valid = [h for h in nearby if marker.size <= h.size * .8
-                 and .15 * h.size <= marker.y - h.y <= max(.30 * h.size, h.size - marker.size) + 1e-6
-                 and -.1 * h.size <= marker.x - h.x - h.width <= .5 * h.size]
+        valid = [h for h in vertical_hosts
+                 if -.1 * h.size <= marker.x - h.x - h.width <= .5 * h.size]
         # 커닝으로 나뉜 마지막 글자와 문장부호는 같은 기준선의 한 호스트다.
         if (valid and max(h.y for h in valid) - min(h.y for h in valid) <= .1
                 and max(h.size for h in valid) - min(h.size for h in valid) <= .1):

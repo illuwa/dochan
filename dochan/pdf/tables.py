@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..conversion import Provenance
 from ..model.table import Cell, Table
-from .content import Fragment, across, along, assemble_lines
+from .content import Fragment, assemble_lines, writing_direction
 from .layout import merge_lines
 from .paths import Segment
 from .connected_tables import SplitBudget, split_connected
@@ -190,7 +190,30 @@ def _make_grid(horizontal, vertical, xs, ys, tolerance, page_number):
     return grid, owners, boxes
 
 
-def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=None, reference_points=None):
+def _reading_key(frag):
+    direction = writing_direction(frag)
+    if direction == 'ltr':
+        return -frag.y, frag.x
+    if direction == 'rtl':
+        return frag.y, -frag.x
+    if direction == 'down':
+        return -frag.x, -frag.y
+    return frag.x, frag.y
+
+
+def _cell_lines(fragments, cache):
+    """Reuse identical ordered inputs; callers only read the cached lines."""
+    key = tuple(id(frag) for frag in fragments)
+    if cache is not None and key in cache:
+        return cache[key]
+    lines = assemble_lines(sorted(fragments, key=_reading_key))
+    if cache is not None:
+        cache[key] = lines
+    return lines
+
+
+def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=None, reference_points=None,
+                 line_cache=None):
     by_cell = defaultdict(list)
     cols = len(xs) - 1
     ascending_y = list(reversed(ys))
@@ -210,7 +233,7 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
     events = defaultdict(list)
     for key, frags in by_cell.items():
         # 읽기 순서: 줄 간 좌표 내림차순, 줄 안은 쓰기 축 순 (가로쓰기의 (-y, x) 와 같고 세로쓰기도 맞다)
-        lines = assemble_lines(sorted(frags, key=lambda f: (-across(f), along(f))))
+        lines = _cell_lines(frags, line_cache)
         left, _, right, _ = boxes[key]
         groups = [[]]
         for line in lines:
@@ -229,7 +252,7 @@ _NUMBER = re.compile(r"[+−-]?\d[\d,]*(?:\.\d+)?%?")
 
 
 def _numeric_row_rules(horizontal, vertical, xs, ys, fragments, tolerance,
-                       reference_points=None):
+                       reference_points=None, line_cache=None):
     """Split a ruled band only when three numeric columns agree on every row.
 
     No prose-based row inference: all text must align with the same baselines,
@@ -264,7 +287,7 @@ def _numeric_row_rules(horizontal, vertical, xs, ys, fragments, tolerance,
         columns = defaultdict(list)
         for column, fragment in bands[band]:
             columns[column].append(fragment)
-        lines = [assemble_lines(sorted(columns[c], key=lambda f: (-across(f), along(f))))
+        lines = [_cell_lines(columns[c], line_cache)
                  for c in range(len(xs) - 1)]
         numeric = [column for column in lines if len(column) >= 2 and all(
             line.direction == 'ltr' and line.text.split() and all(
@@ -357,17 +380,22 @@ def _area(bbox):
     return (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
 
 
-def _reference_point(frag):
-    """조각의 셀 배정 기준점 — 쓰기 축으로 폭의 절반, 글자 위쪽 축으로 크기의 0.35 만큼 이동한 점.
-
-    위쪽 축은 텍스트 행렬의 두 번째 기저(up_x, up_y)다. 쓰기 축을 90° 돌린 벡터를 쓰면 좌우
-    반사 행렬에서 부호가 뒤집힌다.
-    """
+def _reference_axes(frag):
     scale = (frag.dir_x ** 2 + frag.dir_y ** 2) ** 0.5
     dx, dy = (frag.dir_x / scale, frag.dir_y / scale) if scale else (1.0, 0.0)
     up_x, up_y = getattr(frag, 'up_x', 0.0), getattr(frag, 'up_y', 1.0)
     up_scale = (up_x ** 2 + up_y ** 2) ** 0.5
     ux, uy = (up_x / up_scale, up_y / up_scale) if up_scale else (-dy, dx)
+    return dx, dy, ux, uy
+
+
+def _reference_point(frag, axes=None):
+    """조각의 셀 배정 기준점 — 쓰기 축으로 폭의 절반, 글자 위쪽 축으로 크기의 0.35 만큼 이동한 점.
+
+    위쪽 축은 텍스트 행렬의 두 번째 기저(up_x, up_y)다. 쓰기 축을 90° 돌린 벡터를 쓰면 좌우
+    반사 행렬에서 부호가 뒤집힌다.
+    """
+    dx, dy, ux, uy = _reference_axes(frag) if axes is None else axes
     return (frag.x + dx * frag.width / 2 + ux * 0.35 * frag.size,
             frag.y + dy * frag.width / 2 + uy * 0.35 * frag.size)
 
@@ -377,7 +405,16 @@ def _fragment_index(fragments):
 
     기준점을 여기서 한 번만 계산해 두므로 후보마다 조각 좌표를 다시 셈하지 않는다.
     """
-    points = sorted(((_reference_point(frag), frag) for frag in fragments), key=lambda item: item[0][1])
+    points = []
+    previous_key = None
+    axes = None
+    for frag in fragments:
+        key = (frag.dir_x, frag.dir_y, getattr(frag, 'up_x', 0.0), getattr(frag, 'up_y', 1.0))
+        if key != previous_key:
+            axes = _reference_axes(frag)
+            previous_key = key
+        points.append((_reference_point(frag, axes), frag))
+    points.sort(key=lambda item: item[0][1])
     return points, [point[1] for point, _ in points]
 
 
@@ -404,12 +441,12 @@ def _short_dash_runs(segments, tolerance):
     """일정 길이와 두 번 이상 반복되는 양의 간격이 있는 stroke만 보강한다."""
     axes = defaultdict(set)
     for segment in segments or ():
-        if not 0 < segment.length < 1:
-            continue
         if segment.x0 == segment.x1:
-            axes[('v', segment.x0)].add((segment.y0, segment.y1))
+            if 0 < segment.length < 1:
+                axes[('v', segment.x0)].add((segment.y0, segment.y1))
         elif segment.y0 == segment.y1:
-            axes[('h', segment.y0)].add((segment.x0, segment.x1))
+            if 0 < segment.length < 1:
+                axes[('h', segment.y0)].add((segment.x0, segment.x1))
     result = {'h': defaultdict(list), 'v': defaultdict(list)}
     for (axis, coord), parts in axes.items():
         run = []
@@ -473,7 +510,6 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             vertical.append(((s.x0 + s.x1) / 2, s.y0, s.y1))
     horizontal = _snap_runs(horizontal, tolerance)
     vertical = _snap_runs(vertical, tolerance)
-    dash_runs = _short_dash_runs(short_segments, tolerance)
     components = []
     grouped = _components(horizontal, vertical, tolerance)
     if grouped is None:
@@ -481,7 +517,11 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         return []
     if not grouped:
         return []
+    if not any(len(hs) >= 2 and len(vs) >= 2 for hs, vs in grouped):
+        return []
+    dash_runs = _short_dash_runs(short_segments, tolerance)
     index = _fragment_index(fragments)
+    line_cache = {}
     reference_points = {id(frag): point for point, frag in index[0]}
     separated = []
     component_boxes = {}
@@ -524,7 +564,8 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         bbox = (xs[0], ys[-1], xs[-1], ys[0])
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             hs, ys = _numeric_row_rules(hs, vs, xs, ys,
-                                       _fragments_inside(index, bbox), tolerance, reference_points)
+                                       _fragments_inside(index, bbox), tolerance, reference_points,
+                                       line_cache)
             components.append((bbox, hs, vs, xs, ys))
     components.sort(key=lambda v: -_area(v[0]))
     remaining = MAX_PAGE_CELLS
@@ -577,7 +618,7 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             node.grid, node.owners, node.boxes, node.xs, node.ys,
             [frag for frag in _fragments_inside(index, node.bbox)
              if frag.order not in used_orders],
-            page_number, breaks, reference_points)
+            page_number, breaks, reference_points, line_cache)
         for child in node.children:
             events[child.owner_key].append((child.bbox[3], 1, child.anchor_order,
                                             Table(rows=child.grid)))

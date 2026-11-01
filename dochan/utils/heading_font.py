@@ -77,14 +77,26 @@ def _sample_exclusions(doc):
     """본문 추정에서만 제외할 중첩 문단 ID를 모은다."""
     if doc is None:
         return None, set()
-    reachable = {id(para) for para in doc.find_all('paragraph')}
+    from ..model.document import Paragraph
+    from ..model.header_footer import Footnote, HeaderFooter
+    from ..model.image import Image
+    from ..model.table import Table
+
+    # Reuse the model's cycle/depth guards, with one shared visited set.
+    elements, seen = [], set()
+    for section in doc.sections:
+        doc._find_recursive(section.elements, (Paragraph, HeaderFooter, Footnote, Table, Image),
+                            elements, seen)
+    reachable = set()
     excluded = set()
-    for kind in ('header_footer', 'note'):
-        for container in doc.find_all(kind):
-            excluded.update(id(para) for para in container.paragraphs)
-    for kind in ('table', 'image'):
-        for container in doc.find_all(kind):
-            excluded.update(id(para) for para in container.caption)
+    for element in elements:
+        if isinstance(element, Paragraph):
+            reachable.add(id(element))
+        if (isinstance(element, HeaderFooter) or isinstance(element, Footnote)
+                and element.type in ('footnote', 'endnote', 'comment')):
+            excluded.update(id(para) for para in element.paragraphs)
+        if isinstance(element, (Table, Image)):
+            excluded.update(id(para) for para in element.caption)
     return reachable, excluded
 
 

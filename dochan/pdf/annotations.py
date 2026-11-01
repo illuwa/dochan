@@ -394,6 +394,8 @@ _NEIGHBOR_CHECK_LIMIT = 2000000
 
 
 def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
+    if not regions:
+        return
     checks = 0
     spans = []
     matched = set()

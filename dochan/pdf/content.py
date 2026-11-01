@@ -476,12 +476,17 @@ class ContentTextExtractor:
             initial = (None, 0.0, 0.0, 0.0, 1.0, 0.0, 0, 1.0)
         elif len(initial) == 6:
             initial = (*initial, 0, 1.0)
-        interpreter = _CInterpreter(content, self._fonts, ctm, initial, segments, short_segments, warnings)
+        from ._show_table import font_table
+        pure_callbacks = (type(self) is ContentTextExtractor
+                          and getattr(self._show, '__func__', None) is _NATIVE_SHOW_IMPL
+                          and getattr(self._text_operator, '__func__', None) is _NATIVE_TEXT_IMPL)
+        args = (content, self._fonts, ctm, initial, segments, short_segments, warnings)
+        interpreter = (_CInterpreter(*args, self, frags, Fragment, font_table, True)
+                       if pure_callbacks else _CInterpreter(*args))
         while True:
             event = interpreter.next()
-            # C runs no glyph callbacks between resets and this yield. Therefore
-            # coalescing BT/Tm/Td/TD/T* resets here preserves their last effect;
-            # even a skipped/malformed reset resets reliability in Python.
+            # Native glyphs apply resets immediately; legacy interpreters still
+            # expose the coalesced flag for callers without a glyph context.
             if interpreter.text_line_reset:
                 self._link_position_reliable = True
                 interpreter.text_line_reset = False
@@ -1214,3 +1219,9 @@ class _Line:
 
 def _num(value) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+# Freeze callback identities before callers can replace them. Pure fallback
+# operations may retain native font snapshots only with these implementations.
+_NATIVE_SHOW_IMPL = ContentTextExtractor._show
+_NATIVE_TEXT_IMPL = ContentTextExtractor._text_operator

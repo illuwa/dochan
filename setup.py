@@ -30,7 +30,8 @@ if os.environ.get("DOCHAN_BUILD_ACCEL") == "1":
         _extension("dochan.utils._cxml", ["dochan/utils/_cxml.c"]),
         _extension("dochan.pdf._cscan", ["dochan/pdf/_cscan.c"]),
         _extension("dochan.pdf._cinterp", ["dochan/pdf/_cinterp.c"],
-                   depends=["dochan/pdf/_cinterp_objects.h", "dochan/pdf/_cinterp_paths.h"]),
+                   depends=["dochan/pdf/_cinterp_objects.h", "dochan/pdf/_cinterp_paths.h",
+                            "dochan/pdf/_cinterp_show.h"]),
         _extension("dochan.pdf._cobjects", ["dochan/pdf/_cobjects.c"]),
         _extension("dochan.pdf._clines", ["dochan/pdf/_clines.c"]),
     ]
@@ -40,6 +41,6 @@ setup(
     cmdclass={"build_ext": AcceleratorBuildExt} if extensions else {},
     # The sdist carries the build source; wheels carry executable packages.
     exclude_package_data={"dochan.utils": ["_cxml.c"], "dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
-                                         "_cinterp_paths.h", "_clines.c", "_cobjects.c"]},
+                                         "_cinterp_paths.h", "_cinterp_show.h", "_clines.c", "_cobjects.c"]},
     options={"bdist_wheel": {"py_limited_api": "cp39"}} if extensions else {},
 )

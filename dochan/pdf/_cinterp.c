@@ -138,11 +138,17 @@ typedef struct {
     Py_ssize_t depth, overflow;
     int initialized, text_line_reset, busy;
     PathState paths;
+    PyObject *owner, *frags, *fragment_type, *fragment_template, *table_builder, *tables;
+    PyObject *show_font;
+    PyObject *show_table; /* borrowed from tables, only within next() */
+    int link_reliable, invalidate_tables, glyph_yield_safe, pure_fallbacks;
 } Interpreter;
 
 static int interp_clear(Interpreter *s)
 {
     s->initialized = 0;
+    Py_CLEAR(s->owner); Py_CLEAR(s->frags); Py_CLEAR(s->fragment_type); Py_CLEAR(s->fragment_template);
+    Py_CLEAR(s->table_builder); Py_CLEAR(s->tables); s->show_table = NULL; s->show_font = NULL;
     path_clear(&s->paths);
     objscan_clear(&s->scanner);
     Py_CLEAR(s->fonts); Py_CLEAR(s->font); Py_CLEAR(s->segments);
@@ -154,6 +160,8 @@ static int interp_clear(Interpreter *s)
 static int interp_traverse(Interpreter *s, visitproc visit, void *arg)
 {
     Py_VISIT(Py_TYPE(s));
+    Py_VISIT(s->owner); Py_VISIT(s->frags); Py_VISIT(s->fragment_type); Py_VISIT(s->fragment_template);
+    Py_VISIT(s->table_builder); Py_VISIT(s->tables);
     Py_VISIT(s->fonts); Py_VISIT(s->font); Py_VISIT(s->segments);
     Py_VISIT(s->short_segments); Py_VISIT(s->warnings); Py_VISIT(s->operands);
     for (Py_ssize_t i = 0; i < s->depth; i++) Py_VISIT(s->stack[i].font);
@@ -169,12 +177,14 @@ static void interp_dealloc(Interpreter *s)
 }
 static int interp_init(Interpreter *s, PyObject *args, PyObject *kwargs)
 {
-    static char *kw[] = {"data", "fonts", "ctm", "text_state", "segments", "short_segments", "warnings", NULL};
+    static char *kw[] = {"data", "fonts", "ctm", "text_state", "segments", "short_segments", "warnings", "owner", "fragments", "fragment_type", "table_builder", "pure_fallbacks", NULL};
     PyObject *data, *fonts, *ctm, *state, *segments, *shorts, *warnings;
     Num m[6], scalars[7];
+    PyObject *owner = NULL, *frags = NULL, *fragment_type = NULL, *table_builder = NULL;
+    int pure_fallbacks = 0;
     if (s->busy) return bail("reentrant interpreter initialization");
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOOOOOO:Interpreter", kw,
-                                    &data, &fonts, &ctm, &state, &segments, &shorts, &warnings)) return -1;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOOOOOO|OOOOp:Interpreter", kw,
+                                    &data, &fonts, &ctm, &state, &segments, &shorts, &warnings, &owner, &frags, &fragment_type, &table_builder, &pure_fallbacks)) return -1;
     if (!PyBytes_CheckExact(data) || !PyDict_CheckExact(fonts) || !PyList_CheckExact(segments) ||
         !PyList_CheckExact(shorts) || !PyList_CheckExact(warnings) ||
         !PyTuple_CheckExact(state) || PyTuple_Size(state) != 8) return bail("unsupported constructor types");
@@ -206,6 +216,17 @@ static int interp_init(Interpreter *s, PyObject *args, PyObject *kwargs)
     s->fs = scalars[0]; s->tc = scalars[1]; s->tw = scalars[2]; s->th = scalars[3];
     s->tl = scalars[4]; s->tr = scalars[5]; s->stroke_width = scalars[6];
     path_init(&s->paths, segments, shorts, warnings);
+    if (owner) {
+        if (!frags || !PyList_CheckExact(frags) || !fragment_type || !PyType_Check(fragment_type) ||
+            !table_builder || !PyCallable_Check(table_builder)) { s->busy = 0; return bail("invalid glyph context"); }
+        Py_INCREF(owner); s->owner = owner; Py_INCREF(frags); s->frags = frags;
+        Py_INCREF(fragment_type); s->fragment_type = fragment_type;
+        Py_INCREF(table_builder); s->table_builder = table_builder;
+        s->pure_fallbacks = pure_fallbacks;
+        s->invalidate_tables = 1;
+        s->tables = PyDict_New();
+        if (!s->tables) { s->busy = 0; return -1; }
+    }
     s->text_line_reset = 0; s->initialized = 1; s->busy = 0;
     return 0;
 }
@@ -228,7 +249,10 @@ static int operate(Interpreter *s, const char *op, Py_ssize_t size)
     Py_ssize_t count = PyList_Size(s->operands);
     Num v[64];
     if (count < 0) return -1;
-    if (OP("BT") || OP("Tm") || OP("Td") || OP("TD") || OP("T*")) s->text_line_reset = 1;
+    if (OP("BT") || OP("Tm") || OP("Td") || OP("TD") || OP("T*")) {
+        if (s->owner) s->link_reliable = 1;
+        else s->text_line_reset = 1;
+    }
     if (OP("q")) {
         if (s->depth < 256) {
             SavedState *q = &s->stack[s->depth++];
@@ -308,6 +332,9 @@ static int operate(Interpreter *s, const char *op, Py_ssize_t size)
     }
     return 0;
 }
+
+#include "_cinterp_show.h"
+
 static PyObject *interp_next_inner(Interpreter *s)
 {
     unsigned int operators = 0;
@@ -330,8 +357,19 @@ static PyObject *interp_next_inner(Interpreter *s)
             Py_DECREF(value);
             return NULL;
         }
-        if (OP("Tj") || OP("'") || OP("\"") || OP("TJ") || OP("Do") || OP("BDC") || OP("BMC") ||
+        int text_op = OP("Tj") || OP("'") || OP("\"") || OP("TJ");
+        if (s->owner && text_op) {
+            int handled = show_operator(s, op, size);
+            if (handled < 0) { Py_DECREF(value); return NULL; }
+            if (handled) {
+                Py_DECREF(value);
+                if (PyList_SetSlice(s->operands, 0, PyList_Size(s->operands), NULL) < 0) return NULL;
+                continue;
+            }
+        }
+        if (text_op || OP("Do") || OP("BDC") || OP("BMC") ||
             OP("EMC") || OP("gs") || OP("BI")) {
+            s->invalidate_tables = (text_op && !(s->glyph_yield_safe && s->pure_fallbacks)) || OP("Do") || OP("gs");
             PyObject *empty = PyList_New(0), *result;
             if (!empty) { Py_DECREF(value); return NULL; }
             result = PyTuple_Pack(2, value, s->operands); Py_DECREF(value);
@@ -348,7 +386,12 @@ static PyObject *interp_next(Interpreter *s, PyObject *unused)
     (void)unused;
     PyObject *result;
     if (s->busy) { bail("reentrant interpreter next"); return NULL; }
-    s->busy = 1; result = interp_next_inner(s); s->busy = 0;
+    s->busy = 1;
+    if (s->owner && show_enter(s) < 0) { s->busy = 0; return NULL; }
+    result = interp_next_inner(s);
+    if (s->owner && result && PyObject_SetAttrString(s->owner, "_link_position_reliable",
+                                                    s->link_reliable ? Py_True : Py_False) < 0) Py_CLEAR(result);
+    s->busy = 0;
     return result;
 }
 /* Bulk reads/writes keep Python callbacks inexpensive; scalar properties are
@@ -420,6 +463,9 @@ static PyGetSetDef attributes[] = {
     {NULL,NULL,NULL,NULL,NULL}
 };
 static PyMethodDef methods[] = {
+#ifdef DOCHAN_PROFILE_SHOW
+    {"show_profile",(PyCFunction)show_profile,METH_NOARGS,NULL},
+#endif
     {"next",(PyCFunction)interp_next,METH_NOARGS,NULL},
     {"state",(PyCFunction)interp_state,METH_NOARGS,NULL},
     {"resume",(PyCFunction)interp_resume,METH_VARARGS,NULL},

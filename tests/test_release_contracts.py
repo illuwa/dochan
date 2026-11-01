@@ -165,10 +165,16 @@ def test_c_sources_avoid_size_t_hash_formats():
     import pathlib
     import re
     root = pathlib.Path(__file__).resolve().parents[1] / "dochan"
-    pattern = re.compile(r'(Py_BuildValue|Py_VaBuildValue|PyArg_Parse\w*|PyObject_Call(?:Function|Method)\w*)\s*\(\s*"[^"]*#')
+    # Any call that takes a format string, with the string anywhere in the argument list
+    # (PyArg_ParseTuple(args, "y#...") puts it second), possibly across line breaks.
+    # The format string is the first, second (PyArg_ParseTuple(args, ...)) or third
+    # (PyObject_CallMethod(obj, "name", ...)) argument; only that literal is inspected.
+    pattern = re.compile(
+        r'(Py_BuildValue|Py_VaBuildValue|PyArg_Parse\w*|PyArg_VaParse\w*|PyObject_Call(?:Function|Method)\w*)'
+        r'\s*\(\s*(?:(?:[^",;()]*|"[^"]*"),\s*){0,2}"[^"]*#', re.DOTALL)
     offenders = []
     for path in list(root.rglob("*.c")) + list(root.rglob("*.h")):
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.search(line):
-                offenders.append(f"{path.relative_to(root.parent)}:{number}")
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            offenders.append(f"{path.relative_to(root.parent)}:{text.count(chr(10), 0, match.start()) + 1}")
     assert offenders == [], offenders

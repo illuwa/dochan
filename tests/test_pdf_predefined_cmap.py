@@ -402,10 +402,17 @@ def test_usecmap_chain_shares_one_codespace_index():
                          for index in range(100)) +
                 b"endcodespacerange")
         parent = parse_encoding_cmap(data, parent_cmap=parent)
+    single = parse_encoding_cmap(data)  # same shape, no parent chain: the reference cost
+    start = time.monotonic()
+    list(single.iter_codes(b"\xff\xfe" * 10000))
+    baseline = time.monotonic() - start
     start = time.monotonic()
     chunks = list(parent.iter_codes(b"\xff\xfe" * 10000))
+    chained = time.monotonic() - start
     assert sum(len(raw) for raw, _cid in chunks) == 20000
-    assert time.monotonic() - start < 3.0
+    # Relative, not absolute: slow CI runners took 3s+ for the single pass. A chain that
+    # re-scanned every level would cost about nine baselines.
+    assert chained < 3 * baseline + 0.5, (chained, baseline)
     assert len(parent._boxes) <= 100
 
 

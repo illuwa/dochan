@@ -83,12 +83,21 @@ static void cipher(uint8_t *s, const uint8_t *rk, int nr, int decrypt) {
     shift_sub(s, decrypt); add(s, rk + (decrypt ? 0 : nr * 16));
 }
 
+/* No "#" formats: a wheel built with 3.13 headers would bind the plain PyArg_ParseTuple,
+ * which rejects "#" on 3.10-3.12 runtimes (see tests/test_release_contracts.py). */
+static int bytes_arg(PyObject *o, const char **p, Py_ssize_t *n) {
+    if (!PyBytes_Check(o)) { PyErr_SetString(PyExc_TypeError, "a bytes object is required"); return -1; }
+    return PyBytes_AsStringAndSize(o, (char **)p, n);
+}
+
 static PyObject *block(PyObject *self, PyObject *args) {
+    PyObject *input_obj, *keys_obj;
     const char *input, *keys;
     Py_ssize_t n, k;
     int nr, decrypt;
     (void)self;
-    if (!PyArg_ParseTuple(args, "y#y#ii", &input, &n, &keys, &k, &nr, &decrypt)) return NULL;
+    if (!PyArg_ParseTuple(args, "OOii", &input_obj, &keys_obj, &nr, &decrypt)) return NULL;
+    if (bytes_arg(input_obj, &input, &n) < 0 || bytes_arg(keys_obj, &keys, &k) < 0) return NULL;
     if (n != 16 || (nr != 10 && nr != 12 && nr != 14) || k != 16 * (nr + 1)) {
         PyErr_SetString(PyExc_ValueError, "Invalid AES block or round keys"); return NULL;
     }
@@ -97,11 +106,13 @@ static PyObject *block(PyObject *self, PyObject *args) {
 }
 
 static PyObject *aes_crypt(PyObject *self, PyObject *args) {
+    PyObject *key_obj, *iv_obj, *data_obj;
     const char *key, *iv, *data;
     Py_ssize_t k, v, n;
     int decrypt, cbc;
     (void)self;
-    if (!PyArg_ParseTuple(args, "y#y#y#ii", &key, &k, &iv, &v, &data, &n, &decrypt, &cbc)) return NULL;
+    if (!PyArg_ParseTuple(args, "OOOii", &key_obj, &iv_obj, &data_obj, &decrypt, &cbc)) return NULL;
+    if (bytes_arg(key_obj, &key, &k) < 0 || bytes_arg(iv_obj, &iv, &v) < 0 || bytes_arg(data_obj, &data, &n) < 0) return NULL;
     if ((k != 16 && k != 24 && k != 32) || v != 16 || n % 16) {
         PyErr_SetString(PyExc_ValueError, "Invalid AES key, IV or data length"); return NULL;
     }

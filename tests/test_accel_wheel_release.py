@@ -6,7 +6,7 @@ import pytest
 from scripts.verify_accel_wheel import validate_accel_wheel, validate_release
 
 
-def _wheel(path, extensions=("_cscan", "_cinterp", "_clines")):
+def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects")):
     with zipfile.ZipFile(path, "w") as archive:
         for name in extensions:
             archive.writestr(f"dochan/pdf/{name}.abi3.so", b"test")
@@ -81,3 +81,10 @@ def test_release_does_not_mistake_another_linux_arch_for_x86_64(tmp_path):
     (tmp_path / "dochan-1.15.0.tar.gz").touch()
     with pytest.raises(ValueError, match="platform"):
         validate_release(tmp_path)
+
+
+def test_accel_wheel_requires_object_parser(tmp_path):
+    wheel = _wheel(tmp_path / "dochan-1.15.0-cp39-abi3-macosx_11_0_arm64.whl",
+                   ("_cscan", "_cinterp", "_clines"))
+    with pytest.raises(ValueError, match="_cobjects"):
+        validate_accel_wheel(wheel)

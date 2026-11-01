@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .crypto import StandardSecurityHandler, UnsupportedEncryption
 from .filters import PredictorBudget, decode_stream
-from .objects import PDFLexer, PDFName, PDFRef, PDFStream, PDFSyntaxError, parse_indirect_object
+from .objects import PDFLexer, PDFName, PDFRef, PDFStream, PDFSyntaxError, parse_indirect_object, parse_object_stream
 
 MAX_XREF_SECTIONS = 32
 MAX_OBJECTS = 500_000
@@ -55,6 +55,7 @@ class PDFFile:
         # PDF 1.5+ 압축 객체: 객체 번호 → (ObjStm 객체 번호, 스트림 내 인덱스)
         self._compressed: Dict[int, Tuple[int, int]] = {}
         self._objstm_cache: Dict[int, Tuple[list, Optional[bytes], int]] = {}
+        self._objstm_parsed = {}
         self._decryptor: Optional[StandardSecurityHandler] = None
         self._encrypt_ref_num: Optional[int] = None
         self._parse_structure()
@@ -296,6 +297,7 @@ class PDFFile:
         self._cache = {}
         self._compressed = {}
         self._objstm_cache = {}
+        self._objstm_parsed = {}
         count = 0
         for match in _OBJ_RE.finditer(self.data):
             # 파일 뒤쪽 정의가 최신(증분 갱신)이므로 덮어쓴다
@@ -447,6 +449,13 @@ class PDFFile:
         if offset is None or first + offset >= len(data):
             self.warnings.append(f"WARN: ObjStm {objstm_num} 에서 객체 {num} 을 찾지 못함")
             return None
+        parsed = self._objstm_parsed.get(objstm_num, {}).pop(offset, None)
+        if parsed is not None:
+            obj, stray = parsed
+            if stray:
+                self.warnings.append(f"WARN: 객체 {num}: 문자열 뒤 짝 없는 ')' 를 건너뜀")
+            self._cache[num] = obj
+            return obj
         lexer = PDFLexer(data, first + offset)
         try:
             obj = lexer.parse_object()
@@ -473,16 +482,8 @@ class PDFFile:
         if not data or not isinstance(n, int) or not isinstance(first, int) \
                 or n < 0 or n > MAX_OBJECTS or first < 0:
             return empty
-        lexer = PDFLexer(data)
-        pairs = []
-        for _ in range(n):
-            lexer.skip_whitespace()
-            obj_tok = lexer.read_token()
-            lexer.skip_whitespace()
-            off_tok = lexer.read_token()
-            if not obj_tok.isdigit() or not off_tok.isdigit():
-                break
-            pairs.append((int(obj_tok), int(off_tok)))
+        pairs, parsed = parse_object_stream(data, n, first)
+        self._objstm_parsed[objstm_num] = parsed
         result = (pairs, data, first)
         self._objstm_cache[objstm_num] = result
         return result

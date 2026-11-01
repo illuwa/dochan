@@ -4,6 +4,7 @@ PDF 32000-1:2008 §7.3 의 객체 문법(불리언, 숫자, 문자열, 이름, �
 사전, 스트림, null, 간접 참조)을 표준 라이브러리만으로 파싱한다.
 """
 from dataclasses import dataclass
+import os
 import re
 from typing import Any, Callable, Optional, Tuple
 
@@ -300,7 +301,7 @@ class PDFLexer:
             self._depth -= 1
 
 
-def parse_indirect_object(
+def _parse_indirect_python(
     data: bytes,
     offset: int,
     resolve: Optional[Callable[[PDFRef], Any]] = None,
@@ -312,7 +313,7 @@ def parse_indirect_object(
     /Length 가 틀리거나 없으면 `endstream` 탐색으로 보정한다.
     recovered: 건너뛴 짝 없는 `)` 가 있으면 그 수를 덧붙일 목록.
     """
-    lexer = PDFLexer(data, offset)
+    lexer = _PythonPDFLexer(data, offset)
     lexer.skip_whitespace()
     num_tok = lexer.read_token()
     lexer.skip_whitespace()
@@ -336,23 +337,158 @@ def parse_indirect_object(
         length = obj.get("Length")
         if resolve is not None and isinstance(length, PDFRef):
             length = resolve(length)
-        raw = None
-        if isinstance(length, int) and 0 <= length <= len(data) - start:
-            candidate_end = start + length
-            tail = data[candidate_end:candidate_end + 20]
-            if tail.lstrip(WHITESPACE).startswith(b"endstream"):
-                raw = data[start:candidate_end]
-        if raw is None:
-            end = data.find(b"endstream", start)
-            if end < 0:
-                raise PDFSyntaxError("endstream 누락")
-            raw = data[start:end]
-            # 스트림 끝의 EOL 은 구분자 하나만 제거 — 전부 지우면 0x0A 로 끝나는
-            # 이진 payload 가 손상된다
-            if raw.endswith(b"\r\n"):
-                raw = raw[:-2]
-            elif raw.endswith((b"\n", b"\r")):
-                raw = raw[:-1]
+        raw = _stream_bytes_python(data, start, length)
         return int(num_tok), int(gen_tok), PDFStream(obj, raw)
     lexer.pos = keyword_pos
     return int(num_tok), int(gen_tok), obj
+
+
+# Keep the complete reference implementation available for differential tests
+# and transactional replay (no recursive C retries after a bailout).
+_PythonPDFLexer = PDFLexer
+_cobjects = None
+OBJECT_PARSER_BACKEND = "python"
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from . import _cobjects
+    except ImportError:
+        pass
+    else:
+        OBJECT_PARSER_BACKEND = "c"
+
+
+class _AcceleratedPDFLexer(_PythonPDFLexer):
+    def _python(self, method):
+        lexer = _PythonPDFLexer(self.data, self.pos)
+        lexer._depth = self._depth
+        lexer.skip_array_operators = self.skip_array_operators
+        lexer.stray_closers = self.stray_closers
+        try:
+            return getattr(lexer, method)()
+        finally:
+            self.pos = lexer.pos
+            self._depth = lexer._depth
+            self.stray_closers = lexer.stray_closers
+
+    def _can_accelerate(self):
+        return (type(self.data) is bytes and type(self.pos) is int
+                and 0 <= self.pos <= len(self.data))
+
+    def parse_object(self):
+        if self._can_accelerate() and 0 <= self._depth <= 64:
+            try:
+                value, pos, stray = _cobjects.parse(
+                    self.data, self.pos, self._depth, self.skip_array_operators,
+                    min(MAX_NESTING_DEPTH, 64), min(MAX_COLLECTION_ITEMS, 100000))
+            except _cobjects.Bailout:
+                pass
+            else:
+                self.pos = pos
+                self.stray_closers += stray
+                return value
+        # Outside except: original errors must not acquire Bailout context.
+        return self._python("parse_object")
+
+    def skip_whitespace(self):
+        if self._can_accelerate():
+            try:
+                pos = _cobjects.scan(self.data, self.pos, True)
+            except _cobjects.Bailout:
+                pass
+            else:
+                self.pos = pos
+                return
+        return self._python("skip_whitespace")
+
+    def read_token(self):
+        if self._can_accelerate():
+            try:
+                value, pos = _cobjects.scan(self.data, self.pos, False)
+            except _cobjects.Bailout:
+                pass
+            else:
+                self.pos = pos
+                return value
+        return self._python("read_token")
+
+
+if _cobjects is not None:
+    PDFLexer = _AcceleratedPDFLexer
+
+
+def parse_object_stream(data, n, first):
+    """Read header and eagerly parse objects in one C call when available.
+
+    Failed spellings are left for the original lazy loader, so unused broken
+    objects never add warnings and diagnostics retain their original order.
+    """
+    if _cobjects is not None:
+        try:
+            return _cobjects.batch(data, n, min(first, len(data)),
+                                   min(MAX_NESTING_DEPTH, 64), min(MAX_COLLECTION_ITEMS, 100000))
+        except _cobjects.Bailout:
+            pass
+    lexer = _PythonPDFLexer(data)
+    pairs = []
+    for _ in range(n):
+        lexer.skip_whitespace()
+        obj_tok = lexer.read_token()
+        lexer.skip_whitespace()
+        off_tok = lexer.read_token()
+        if not obj_tok.isdigit() or not off_tok.isdigit():
+            break
+        pairs.append((int(obj_tok), int(off_tok)))
+    return pairs, {}
+
+
+def _stream_bytes_python(data, start, length):
+    raw = None
+    if isinstance(length, int) and 0 <= length <= len(data) - start:
+        candidate_end = start + length
+        tail = data[candidate_end:candidate_end + 20]
+        if tail.lstrip(WHITESPACE).startswith(b"endstream"):
+            raw = data[start:candidate_end]
+    if raw is None:
+        end = data.find(b"endstream", start)
+        if end < 0:
+            raise PDFSyntaxError("endstream 누락")
+        raw = data[start:end]
+        # 스트림 끝의 EOL 은 구분자 하나만 제거 — 전부 지우면 0x0A 로 끝나는
+        # 이진 payload 가 손상된다
+        if raw.endswith(b"\r\n"):
+            raw = raw[:-2]
+        elif raw.endswith((b"\n", b"\r")):
+            raw = raw[:-1]
+    return raw
+
+
+def parse_indirect_object(
+    data: bytes,
+    offset: int,
+    resolve: Optional[Callable[[PDFRef], Any]] = None,
+    recovered: Optional[list] = None,
+) -> Tuple[int, int, Any]:
+    """Parse an indirect object, retaining Python recovery and callback semantics."""
+    if (_cobjects is not None and type(data) is bytes and type(offset) is int
+            and 0 <= offset <= len(data)):
+        try:
+            num, gen, obj, start, stray = _cobjects.indirect(
+                data, offset, min(MAX_NESTING_DEPTH, 64), min(MAX_COLLECTION_ITEMS, 100000))
+        except _cobjects.Bailout:
+            pass
+        else:
+            if recovered is not None and stray:
+                recovered.append(stray)
+            if start is not None:
+                length = obj.get("Length")
+                if resolve is not None and isinstance(length, PDFRef):
+                    length = resolve(length)
+                try:
+                    raw = _cobjects.stream(data, start, length)
+                except _cobjects.Bailout:
+                    raw = None
+                if raw is None:
+                    raw = _stream_bytes_python(data, start, length)
+                obj = PDFStream(obj, raw)
+            return num, gen, obj
+    return _parse_indirect_python(data, offset, resolve, recovered)

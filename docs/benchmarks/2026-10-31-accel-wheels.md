@@ -10,7 +10,7 @@ Linux 소스 가속 테스트의 성공 여부를 게시 조건에 포함하지 
 | --- | --- | --- |
 | Linux x86_64 | ubuntu-24.04 | manylinux2014_x86_64 이미지, CPython 3.9 |
 | Linux aarch64 | ubuntu-24.04-arm | manylinux2014_aarch64 이미지, CPython 3.9 |
-| macOS arm64 | macos-14 | CPython 3.13, setuptools/wheel |
+| macOS arm64 | macos-15 (macos-14 는 2026-11-02 퇴역) | CPython 3.13, setuptools/wheel |
 | macOS x86_64 | macos-15-intel | CPython 3.13, setuptools/wheel |
 
 `DOCHAN_BUILD_ACCEL=1`로 빌드하며 Linux는 manylinux 이미지에 포함된 auditwheel로 repair한다.

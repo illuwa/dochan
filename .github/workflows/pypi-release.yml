@@ -160,7 +160,7 @@ jobs:
             os: ubuntu-24.04-arm
             image: quay.io/pypa/manylinux2014_aarch64:latest
           - target: macos_arm64
-            os: macos-14
+            os: macos-15
             arch: arm64
             host_platform: macosx-11.0-arm64
           - target: macos_x86_64

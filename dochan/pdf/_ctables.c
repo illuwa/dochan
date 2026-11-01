@@ -188,7 +188,8 @@ static int table_segment_list(PyObject *value)
     if (PyList_CheckExact(value) || value == Py_None) return 0;
     if (!table_segments_api) {
         table_segments_api = PyCapsule_Import(SEGMENT_CAPSULE, 0);
-        if (!table_segments_api) return -1;
+        /* 해석기 모듈이 없으면 보통 입력(list·tuple)으로 본다 — 예외로 두면 거짓 '불일치' 경고가 붙는다 */
+        if (!table_segments_api) { PyErr_Clear(); return 0; }
     }
     return Py_TYPE(value) == table_segments_api->type;
 }

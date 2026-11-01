@@ -136,9 +136,10 @@ static int marked_width(Interpreter *s)
     PyObject *operand = PyList_GetItem(s->operands, count - 1);
     int is_name = PyObject_IsInstance(operand, PDFNameType);
     if (is_name <= 0) return is_name;
+    Py_INCREF(operand);  /* 콜백(resolve_resource)이 operands 를 비울 수 있다 */
     PyObject *resolve = PyObject_GetAttrString(s->owner, "resolve_resource");
     if (!resolve) {
-        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return -1;
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) { Py_DECREF(operand); return -1; }
         PyErr_Clear();
     }
     PyObject *resources = marked_optional_attr(s->owner, "resources");
@@ -181,7 +182,7 @@ caught:
     if (PyErr_ExceptionMatches(PyExc_Exception)) { PyErr_Clear(); result = 0; }
 done:
     Py_XDECREF(resolve); Py_XDECREF(resources); Py_XDECREF(states);
-    Py_XDECREF(state); Py_XDECREF(width); Py_XDECREF(name);
+    Py_XDECREF(state); Py_XDECREF(width); Py_XDECREF(name); Py_DECREF(operand);
     return result;
 }
 

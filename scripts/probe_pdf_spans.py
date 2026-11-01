@@ -112,7 +112,7 @@ def audit_tables(answer, candidate, geometry):
                 result['equal_text_candidates_with_raw_geometry'] += 1
                 for edge in _boundaries(source) - _boundaries(target):
                     key = ('missing_boundary_with_raw_segment' if
-                           _raw_rule_present(edge, tc, segments + short_segments) else
+                           _raw_rule_present(edge, tc, list(segments) + list(short_segments)) else
                            'missing_boundary_without_raw_segment')
                     result[key] += 1
         elif source_text & target_text:

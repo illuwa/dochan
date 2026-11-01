@@ -72,7 +72,7 @@ def capture_pages(roots, max_pages):
 
     def capture(segments, fragments, *args, **kwargs):
         if segments and fragments and len(pages) < max_pages:
-            pages.append(copy.deepcopy((segments, fragments, kwargs.get('short_segments') or [])))
+            pages.append(copy.deepcopy((list(segments), fragments, list(kwargs.get('short_segments') or []))))
         return tables._build_tables_python(segments, fragments, *args, **kwargs)
 
     reader.build_tables = capture

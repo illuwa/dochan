@@ -99,15 +99,32 @@ static int segment_append_record(PyObject *o, SegmentRecord record)
     s->records[s->size] = record; s->cache[s->size++] = NULL;
     return 0;
 }
+/* copy/deepcopy/pickle and `+` behave like a list (감수 M: 저장소 도구 두 개가 list 연산을 썼다). */
+static PyObject *segment_reduce(PyObject *self, PyObject *unused)
+{
+    (void)unused;
+    PyObject *items = PySequence_List(self);
+    if (!items) return NULL;
+    return Py_BuildValue("(O(N))", (PyObject *)&PyList_Type, items);
+}
+static PyObject *segment_concat(PyObject *self, PyObject *other)
+{
+    PyObject *items = PySequence_List(self);
+    if (!items) return NULL;
+    PyObject *out = PySequence_InPlaceConcat(items, other);
+    Py_DECREF(items);
+    return out;
+}
 static PyMethodDef segment_methods[] = {
-    {"clear", (PyCFunction)segment_clear, METH_NOARGS, NULL}, {NULL,NULL,0,NULL}
+    {"clear", (PyCFunction)segment_clear, METH_NOARGS, NULL},
+    {"__reduce__", (PyCFunction)segment_reduce, METH_NOARGS, NULL}, {NULL,NULL,0,NULL}
 };
 static PyType_Slot segment_slots[] = {
     {Py_tp_new, (void *)PyType_GenericNew}, {Py_tp_dealloc, (void *)segment_dealloc},
     {Py_tp_traverse, (void *)segment_traverse}, {Py_tp_clear, (void *)segment_clear_gc},
     {Py_tp_richcompare, (void *)segment_compare},
     {Py_tp_methods, segment_methods}, {Py_sq_length, (void *)segment_len},
-    {Py_sq_item, (void *)segment_item}, {Py_mp_length, (void *)segment_len},
+    {Py_sq_item, (void *)segment_item}, {Py_sq_concat, (void *)segment_concat}, {Py_mp_length, (void *)segment_len},
     {Py_mp_subscript, (void *)segment_subscript}, {0,NULL}
 };
 static PyType_Spec segment_spec = {"dochan.pdf._cinterp.SegmentList", sizeof(SegmentList), 0,

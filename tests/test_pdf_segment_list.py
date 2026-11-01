@@ -323,3 +323,39 @@ def test_c_sequence_api_normalizes_negative_indices_once():
     assert get_item(segments, -2) is segments[0]
     with pytest.raises(IndexError):
         get_item(segments, -3)
+
+
+def test_copy_pickle_and_concat_behave_like_list():
+    """저장소 도구가 쓰는 deepcopy·pickle·`+` 가 list 와 같이 동작한다(감수 M)."""
+    import copy
+    import pickle
+    segments, shorts = collect(b'0 0 m 10 0 l S 2 3 m 2 9 l S 5 5 m 5.2 5 l S')
+    assert copy.deepcopy(segments) == list(segments)
+    assert copy.copy(segments) == list(segments)
+    assert pickle.loads(pickle.dumps(segments)) == list(segments)
+    assert segments + shorts == list(segments) + list(shorts)
+    assert segments + [None] == list(segments) + [None]
+
+
+def test_tables_without_interpreter_module_keep_plain_inputs_silent():
+    """해석기 모듈을 못 가져오는 새 프로세스에서 list 입력은 거짓 '불일치' 경고를 내지 않는다(감수 M)."""
+    import subprocess
+    import sys
+    pytest.importorskip('dochan.pdf._ctables')
+    code = (
+        "import sys\n"
+        "sys.modules['dochan.pdf._cinterp'] = None\n"
+        "from dochan.pdf import tables\n"
+        "from dochan.pdf.paths import Segment\n"
+        "from dochan.pdf.content import Fragment\n"
+        "segs = [Segment(0., 0., 100., 0.), Segment(0., 20., 100., 20.), Segment(0., 0., 0., 20.), Segment(100., 0., 100., 20.)]\n"
+        "frags = [Fragment(x=5., y=8., width=5., size=8., text='a', space_width=2.)]\n"
+        "warnings = []\n"
+        "tables.build_tables(tuple(segs), frags, warnings=warnings)\n"
+        "assert tables.TABLE_BACKEND == 'c', tables.TABLE_BACKEND\n"
+        "assert not warnings, warnings\n"
+        "print('OK')\n")
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,  # nosemgrep: dangerous-subprocess-use-audit
+                            timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'OK'

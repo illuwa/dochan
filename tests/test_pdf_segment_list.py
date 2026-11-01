@@ -339,9 +339,11 @@ def test_copy_pickle_and_concat_behave_like_list():
 
 def test_tables_without_interpreter_module_keep_plain_inputs_silent():
     """해석기 모듈을 못 가져오는 새 프로세스에서 list 입력은 거짓 '불일치' 경고를 내지 않는다(감수 M)."""
+    import os
     import subprocess
     import sys
     pytest.importorskip('dochan.pdf._ctables')
+    env = {k: v for k, v in os.environ.items() if k != 'DOCHAN_DISABLE_ACCEL'}  # 새 프로세스는 가속 켬
     code = (
         "import sys\n"
         "sys.modules['dochan.pdf._cinterp'] = None\n"
@@ -356,6 +358,6 @@ def test_tables_without_interpreter_module_keep_plain_inputs_silent():
         "assert not warnings, warnings\n"
         "print('OK')\n")
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,  # nosemgrep: dangerous-subprocess-use-audit
-                            timeout=120)
+                            timeout=120, env=env)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'OK'

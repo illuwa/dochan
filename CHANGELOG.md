@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 성능 (2026-11-01 — PDF 대규모 C 이식 3차, 출력 불변·전수 실측)
+
+- **PDF 변환 −6~9%**(공개 PDF 300개, 한가한 장비 교대 3회 중앙값: Python 3.12 3.57 → 3.34초, 3.9 4.60 → 4.21초). 경쟁 비교: PyMuPDF 와의 격차 2.4 → 2.3배,
+  pypdf 6.0배·pdfminer.six 10.1배·pdfplumber 12.4배·markitdown 14.1배 빠름([기록](docs/benchmarks/2026-11-01-speed-comparison-pdf.md)). 공개 PDF 2,064건 4종 출력 해시가 가속 켬·끔 모두 변경 전과 같고,
+  전수 파일별 2회 최솟값 합계 −8.0%, 1.2배 이상 느려진 파일은 20회 재검사 뒤 0건.
+  - **괘선 선분을 Python 객체 없이 전달**: 해석기 C 가 선분을 C 배열(`SegmentList`, 지연 생성 시퀀스)로 모으고 표 복원 C 가 캡슐로 직접 읽는다(`Segment` 생성 395,206 → 2,682회). 마킹 내용(BDC/BMC/EMC)과
+    선 굵기(`gs`)도 C 가 처리해 해석기 왕복이 40,784 → 6,102회([기록](docs/benchmarks/2026-11-01-pdf-segments-c.md)).
+  - **표 셀 글 조립 콜백의 C 이식 `_clayout`**(줄 병합·문단·공백 다듬기·숫자 행 판정, Python 콜백 26,916 → 1,813회). Python 3.12 이상의 `sum` 은 보정 합산이라 그대로 둔다.
+    독립 감수(최신 Opus)의 권고로 띄어쓰기 모델 하위 클래스는 Bailout, 래퍼는 C 의 모든 예외에서 Python 원본을 다시 계산한다([기록](docs/benchmarks/2026-11-01-pdf-cells-c.md)).
+  - **레이아웃 잔여 Python 축소**: 제목 C 의 `dataclasses.replace` 콜백(42,041회) 제거, 각주 본문 크기·반복 머리글·쪽 나눔·링크의 임시 객체 감소([기록](docs/benchmarks/2026-11-01-pdf-layout-rest-c.md)).
+  - xref 파싱 C·Markdown 출력 다듬기는 출력 불변이었지만 이득이 0 이라 채택하지 않았다([기록](docs/benchmarks/2026-11-01-structure-output-speed.md)). 가속 모듈은 열한 개.
+
 ## [1.17.0] - 2026-11-01
 
 1.16.3 뒤의 PDF 대규모 C 이식 1·2차를 묶은 속도 릴리스다. 출력은 바뀌지 않는다. 가속 휠에 새 모듈 여섯 개(`_ccmap`·`_ctables`·`_caes`·`_cnotes`·`_cheadings`·`_cbody`)와

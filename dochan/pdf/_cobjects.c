@@ -372,8 +372,9 @@ static PyObject *batch(PyObject *module, PyObject *args)
         if (gap(&s) < 0 || token(&s, &a, &alen) < 0 || gap(&s) < 0 || token(&s, &b, &blen) < 0) goto done;
         if (!digits(s.b + a, alen) || !digits(s.b + b, blen)) break;
         num = number(&s, a, alen, &real, &negative);
+        if (!num) goto done;
         off = number(&s, b, blen, &real, &negative);
-        if (!num || !off) goto done;
+        if (!off) goto done;
         pair = PyTuple_Pack(2, num, off);
         if (!pair || PyList_Append(pairs, pair) < 0) goto done;
         Py_CLEAR(pair); Py_CLEAR(num); Py_CLEAR(off);
@@ -431,8 +432,9 @@ static PyObject *indirect(PyObject *module, PyObject *args)
         bail(&s); goto done;
     }
     num = number(&s, a, alen, &real, &negative);
+    if (!num) goto done;  /* a failed conversion leaves Bailout pending; never call PyLong on top */
     gen = number(&s, b, blen, &real, &negative);
-    if (!num || !gen) goto done;
+    if (!gen) goto done;
     value = object(&s);
     if (!value || gap(&s) < 0 || token(&s, &c, &clen) < 0) goto done;
     if (clen == 6 && !memcmp(s.b + c, "stream", 6) && PyDict_Check(value)) {

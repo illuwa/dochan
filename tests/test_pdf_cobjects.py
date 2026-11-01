@@ -162,3 +162,52 @@ def test_rescan_discards_eager_cache():
     pdf._objstm_parsed[99] = {0: ({'old': True}, 0)}
     pdf._scan_objects()
     assert pdf._objstm_parsed == {}
+
+
+_OVERLONG_PAIR = b'1' * 5000 + b' ' + b'9' * 20 + b' '
+_FRESH_PROCESS = '''
+import struct, sys
+from dochan.pdf import objects
+def frozen(value):
+    if isinstance(value, float):
+        return (type(value).__name__, struct.pack("!d", value))
+    if isinstance(value, (list, tuple)):
+        return (type(value).__name__, tuple(map(frozen, value)))
+    if isinstance(value, dict):
+        return (type(value).__name__, tuple((frozen(k), frozen(v)) for k, v in value.items()))
+    return (type(value).__name__, value)
+def run(function, *args):
+    try:
+        return ("ok", frozen(function(*args)))
+    except Exception as error:
+        return ("error", type(error).__name__)
+pair = b"1" * 5000 + b" " + b"9" * 20 + b" "
+assert objects.OBJECT_PARSER_BACKEND == "c", objects.OBJECT_PARSER_BACKEND
+first = run(objects.parse_indirect_object, pair + b"obj 1 endobj", 0)
+accel = objects._cobjects
+objects._cobjects = None
+expected = run(objects._parse_indirect_python, pair + b"obj 1 endobj", 0)
+objects._cobjects = accel
+assert first == expected, (first, expected)
+stream = pair + b"1"
+first = run(objects.parse_object_stream, stream, 1, len(stream) - 1)
+objects._cobjects = None
+expected = run(objects.parse_object_stream, stream, 1, len(stream) - 1)
+assert first == expected, (first, expected)
+print("same")
+'''
+
+
+@pytest.mark.skipif(objects.OBJECT_PARSER_BACKEND != 'c', reason='C object parser not built')
+def test_overlong_number_pair_in_fresh_process():
+    """A first number too long to convert must not leave a half-set error for the second.
+
+    The leak only shows in a fresh interpreter: once int(bytes) has run anywhere, the stale
+    error state is masked, so the check runs in a subprocess.
+    """
+    import subprocess
+    import sys
+    # nosemgrep: dangerous-subprocess-use-audit
+    completed = subprocess.run([sys.executable, '-c', _FRESH_PROCESS], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    assert completed.stdout.strip() == 'same'

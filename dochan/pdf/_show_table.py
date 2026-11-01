@@ -4,6 +4,11 @@ Only exact repository decoder implementations are accepted. Core14 iterates
 bytes independently; a fixed-length ToUnicode map consumes exactly one code at
 a time. Mixed lengths, encoding CMaps requiring warning side effects, custom
 callables/metrics and unreliable/Type3 fonts retain the Python operation.
+
+The snapshot is attached to the FontInfo for its lifetime and is derived from
+the font alone. Mutating a FontInfo (bold, space_code, wmode, the width map)
+after its first text operator leaves the native loop on the stale snapshot;
+build a new FontInfo instead.
 """
 from types import CodeType, FunctionType, MethodType
 from functools import lru_cache

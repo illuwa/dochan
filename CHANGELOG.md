@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### 성능 (2026-11-01 — PDF 2차, 모두 출력 불변·전수 실측)
+
+- **PDF 변환 −33%**: 공개 PDF 300개(가속 빌드, Python 3.12) 6.77 → 4.53초. PyMuPDF 와의 격차 4.6배 → 3.1배, pypdf 4.5배·pdfminer.six 7.6배·pdfplumber 9.2배·markitdown 10.6배 빠름.
+  순수 Python 도 18.4 → 16.7초([기록](docs/benchmarks/2026-11-01-speed-comparison-pdf.md)). 공개 PDF 2,281건의 Markdown·JSON·텍스트·진단 해시가 가속 켬·끔 모두 변경 전과 같다.
+  - 글자 연산(Tj·TJ·'·")을 C 해석기가 Python 으로 돌아오지 않고 끝까지 실행한다(글꼴 표·폭·행렬·Fragment 생성까지, 실측 77%의 글자 연산). 세로·Type3·사용자 디코더 글꼴은 Python 경로
+    ([기록](docs/benchmarks/2026-11-01-pdf-show-full-c.md)).
+  - 문서 객체 파서(사전·배열·이름·숫자·참조·문자열·간접 객체·스트림 경계)의 C 거울 `_cobjects` 와 객체 스트림 일괄 파싱([기록](docs/benchmarks/2026-11-01-pdf-objects-c.md)).
+    새 가속 모듈도 `DOCHAN_BUILD_ACCEL=1` 때만 빌드되고 `DOCHAN_DISABLE_ACCEL=1` 로 끈다.
+  - 레이아웃 단계 두 차례 알고리즘 개선(표 좌표·줄 조립 재사용, 각주 분류·미주 후보 재사용, CMap 캐시, 제목 글꼴 표본을 한 번 순회 — HWP·Office 6,109건 출력도 동일,
+    [1차](docs/benchmarks/2026-11-01-pdf-layout-algo.md)·[2차](docs/benchmarks/2026-11-01-pdf-layout-algo-2.md)).
+  - 독립 감수(최신 Opus)에서 찾아 고친 것: 글꼴 표를 Python 왕복마다 다시 만들어 표본 밖 파일이 최대 28배 느려지던 결함, 객체 파서 C 의 연속 숫자 변환 오류 경로.
+    합류 조건에 공개 코퍼스 전수 파일별 회귀 0 을 추가했다.
+
 ### 성능·품질 (2026-10-31 — 공통 계층·경쟁 비교, 모두 전수 실측)
 
 - **안전 XML 파서 요소 콜백 C 이식** (HWPX·DOCX·PPTX·XLSX 공통): 네임스페이스 스코프가 필요 없는 파트는 손으로 쓴 C 검사기(`dochan/utils/_cxml.c`)가 트리 할당 전에
@@ -21,7 +34,7 @@
   **표시가 바뀔 수 있는 항목**: PDF 의 단어 사이 공백, 괘선 없는 숫자 표의 행 구성.
 - **가속 휠 빌드·검증 CI**: Linux x86_64·aarch64(manylinux2014), macOS arm64·x86_64 의 cp39-abi3 휠을 빌드해 설치본으로 전체 테스트를 돌리고, 태그 때 순수 휠·sdist 와 함께 게시한다
   (`scripts/verify_accel_wheel.py`, [기록](docs/benchmarks/2026-10-31-accel-wheels.md)). 다음 릴리스부터 `pip install dochan` 이 지원 플랫폼에서 가속 휠을 받는다.
-- 시도했지만 넣지 않은 것: PDF 글자 그리기(`_show`)의 C 이식은 출력 동일·테스트 통과였지만 교대 3회에서 −2.9%라 보류했다(가지 `illuwa/w-pdf-show-c`).
+- 시도했지만 넣지 않은 것: PDF 글자 그리기(`_show`)의 부분 C 이식(수치 커널만)은 −2.9%라 보류했다 — 11-01 의 전체 이식으로 대체.
 
 ### 성능 (PDF 선택적 C 가속 — 기본 배포물은 그대로)
 

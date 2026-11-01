@@ -94,3 +94,76 @@ def test_flatten_custom_flag_keeps_python_evaluation():
 
     with pytest.raises(ValueError, match='custom flag'):
         cmap._flatten_ranges([(0, 1, 2)], Flag())
+
+
+@pytest.mark.skipif(__import__('sys').platform not in ('darwin', 'linux'),
+                    reason='ru_maxrss requires macOS or Linux')
+def test_bfrange_pdf_peak_rss(tmp_path):
+    """Measure complete PDF reads in fresh processes, including decompression."""
+    import json
+    import subprocess
+    import sys
+    import zlib
+    from pathlib import Path
+
+    from test_pdf_structure import _build_pdf, _minimal_objects
+
+    pytest.importorskip('dochan.pdf._ccmap')
+    data = (b'begincmap 1 begincodespacerange <00><ff> endcodespacerange '
+            b'1 beginbfrange ' + b'[' * (16 * 1024 * 1024 - 200)
+            + b' endbfrange endcmap')
+    compressed = zlib.compress(data, 9)
+    objects = _minimal_objects(b'BT /F1 12 Tf 72 720 Td (AB) Tj ET')
+    objects[4] = (b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica '
+                  b'/ToUnicode 6 0 R >>')
+    objects[6] = (b'<< /Length %d /Filter /FlateDecode >>stream\n' % len(compressed)
+                   + compressed + b'\nendstream')
+    path = tmp_path / 'bracket-tounicode.pdf'
+    path.write_bytes(_build_pdf(objects))
+    code = '''
+import json, resource, sys
+from dochan.pdf import cmap
+from dochan.pdf.reader import PDFReader
+PDFReader().read(sys.argv[1])
+rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+print(json.dumps({'rss': rss * (1024 if sys.platform == 'linux' else 1),
+                  'backend': cmap.CMAP_BACKEND}))
+'''
+    measurements = {}
+    for mode in ('python', 'c'):
+        env = dict(os.environ)
+        env['DOCHAN_DISABLE_ACCEL'] = '1' if mode == 'python' else '0'
+        # nosemgrep: dangerous-subprocess-use-audit
+        result = subprocess.run([sys.executable, '-c', code, str(path)],
+                                cwd=Path(__file__).resolve().parents[1], env=env,
+                                capture_output=True, text=True, check=True, timeout=60)
+        measurements[mode] = json.loads(result.stdout)
+        assert measurements[mode]['backend'] == mode
+    assert measurements['c']['rss'] <= measurements['python']['rss'] * 1.2, measurements
+
+
+@pytest.mark.parametrize('body', [
+    b'[[<01><02><0041>]<03><03>[<0043>]',
+    b'<02><01>[<01><01><0041>',
+    b'<01><01>[<0041>[<0042>] <02><02><0042>',
+    b'<01><02>[<0041>[<0042>] <03><03><0043>',
+    b'<01><01>[<0041><0042><0043>',
+    b'<01><01><0041><02><02>',
+    b'<01><01>[',
+])
+def test_streaming_bfrange_recovery(body):
+    native = pytest.importorskip('dochan.pdf._ccmap')
+    data = b'beginbfrange ' + body + b' endbfrange'
+    expected = cmap._parse_tounicode_python(data)
+    mapping, lengths, truncated = native.tounicode(data)
+    assert list(mapping.items()) == list(expected.mapping.items())
+    assert lengths == expected.code_lengths
+    assert truncated == expected.truncated
+
+
+def test_streaming_ignored_tail_preserves_bailout():
+    native = pytest.importorskip('dochan.pdf._ccmap')
+    # Nested '[' aborts mapping, but the old whole-block scan still bailed on
+    # a long token after it. Keep that transactional fallback contract.
+    with pytest.raises(native.Bailout):
+        native.tounicode(b'beginbfrange <01><02>[[<0000000000000000> endbfrange')

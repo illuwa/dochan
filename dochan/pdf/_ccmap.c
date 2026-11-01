@@ -74,42 +74,48 @@ static int full(PyObject *map, int *truncated) {
 }
 static int unicode_block(PyObject *self, int kind, const char *s, Py_ssize_t n,
                          PyObject *map, PyObject *lengths, int *truncated) {
-    Token *tokens = NULL, t; Py_ssize_t count = 0, capacity = 0, pos = 0, i = 0; int rc;
-    while ((rc = next(s, n, &pos, &t, kind == 2)) > 0) {
-        if (count == capacity) {
-            Token *grown;
-            capacity = capacity ? capacity * 2 : 64;
-            grown = PyMem_Realloc(tokens, (size_t)capacity * sizeof(Token));
-            if (!grown) { PyErr_NoMemory(); goto error; }
-            tokens = grown;
-        }
-        tokens[count++] = t;
-    }
-    if (rc < 0) { bail(self); goto error; }
+    Token tokens[3], t; Py_ssize_t pos = 0; int count = 0, rc;
+    /* Validate the whole block first, including ignored tails. This preserves
+     * transactional Bailout for long hex spellings without retaining tokens. */
+    while ((rc = next(s, n, &pos, &t, kind == 2)) > 0) {}
+    if (rc < 0) { bail(self); return -1; }
+    pos = 0;
     if (kind == 0) {
-        for (i = 0; i < count; i++) if (addlength(lengths, tokens[i].n) < 0) goto error;
-    } else if (kind == 1) {
-        for (i = 0; i + 1 < count; i += 2) {
+        while (next(s, n, &pos, &t, 0) > 0)
+            if (addlength(lengths, t.n) < 0) return -1;
+        return 0;
+    }
+    if (kind == 1) {
+        while (next(s, n, &pos, &tokens[0], 0) > 0 &&
+               next(s, n, &pos, &tokens[1], 0) > 0) {
             if (full(map, truncated)) break;
-            if (addlength(lengths, tokens[i].n) < 0 ||
-                put(map, tokens[i].n, tokens[i].v, hextext(tokens[i + 1])) < 0) goto error;
+            if (addlength(lengths, tokens[0].n) < 0 ||
+                put(map, tokens[0].n, tokens[0].v, hextext(tokens[1])) < 0) return -1;
         }
-    } else while (i + 2 < count) {
-        Token lo = tokens[i], hi = tokens[i + 1], dst = tokens[i + 2];
-        if (lo.bracket || hi.bracket) { i++; continue; }
-        if (hi.v < lo.v || hi.v - lo.v >= 65536 || dst.bracket == ']') { i += 3; continue; }
-        if (addlength(lengths, lo.n) < 0) goto error;
+        return 0;
+    }
+    for (;;) {
+        /* A sliding three-token window mirrors i += 1 recovery. Array
+         * destinations are consumed directly, so memory is input-independent. */
+        while (count < 3 && next(s, n, &pos, &tokens[count], 1) > 0) count++;
+        if (count < 3) break;
+        Token lo = tokens[0], hi = tokens[1], dst = tokens[2];
+        if (lo.bracket || hi.bracket) {
+            tokens[0] = tokens[1]; tokens[1] = tokens[2]; count = 2; continue;
+        }
+        count = 0;
+        if (hi.v < lo.v || hi.v - lo.v >= 65536 || dst.bracket == ']') continue;
+        if (addlength(lengths, lo.n) < 0) return -1;
         if (dst.bracket == '[') {
-            Py_ssize_t j = i + 3; uint64_t code = lo.v;
-            while (j < count && tokens[j].bracket != ']') {
+            uint64_t code = lo.v;
+            while (next(s, n, &pos, &t, 1) > 0 && t.bracket != ']') {
                 if (code <= hi.v && !full(map, truncated)) {
                     /* A nested '[' raises ValueError; caller skips rest of block. */
-                    if (tokens[j].bracket) { PyMem_Free(tokens); return 0; }
-                    if (put(map, lo.n, code, hextext(tokens[j])) < 0) goto error;
+                    if (t.bracket) return 0;
+                    if (put(map, lo.n, code, hextext(t)) < 0) return -1;
                 }
-                code++; j++;
+                code++;
             }
-            i = j + 1;
         } else {
             uint64_t last = dst.v + hi.v - lo.v;
             int scalar = dst.n <= 4 && (last < 0xd800 || (dst.v >= 0xe000 && last <= 0xffff));
@@ -117,15 +123,13 @@ static int unicode_block(PyObject *self, int kind, const char *s, Py_ssize_t n,
                 PyObject *text;
                 if (full(map, truncated)) break;
                 text = scalar ? PyUnicode_FromOrdinal((int)(dst.v + k)) : inttext(dst.v + k, dst.n);
-                if (put(map, lo.n, lo.v + k, text) < 0) goto error;
+                if (put(map, lo.n, lo.v + k, text) < 0) return -1;
             }
-            i += 3;
         }
     }
-    PyMem_Free(tokens); return 0;
-error:
-    PyMem_Free(tokens); return -1;
+    return 0;
 }
+
 static const char *kinds[] = {"codespacerange", "bfchar", "bfrange", "cidrange", "cidchar", "notdefrange", "notdefchar"};
 /* Regex (begin|end)(kind...) has no word boundaries, including in comments. */
 static int block_token(const char *s, Py_ssize_t n, Py_ssize_t *p, int encoding, int *begin, int *kind) {

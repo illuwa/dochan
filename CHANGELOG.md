@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-11-01
+
+PDF 가 빨라지고 가속 휠이 함께 배포된다. 10-04 비교에서 PyMuPDF 보다 9.4배 느렸던 PDF 변환이 선택적 C 가속(내용 스트림 스캐너·해석기·글자 연산·문서 객체 파서·줄 조립)과
+순수 Python 최적화로 3.1배 느림까지 좁혀졌고(공개 PDF 300개 6.8 → 4.5초, pypdf 4.5배·pdfminer.six 7.6배·pdfplumber 9.2배·markitdown 10.6배 빠름), Linux x86_64·aarch64 와
+macOS arm64·x86_64 용 cp39-abi3 가속 휠이 순수 휠·sdist 와 함께 PyPI 에 올라가 `pip install dochan` 만으로 적용된다(휠이 없는 환경은 순수 Python 자동 폴백, 출력 동일).
+전 형식 공통으로 안전 XML 파서의 C 검사기(HWPX·DOCX·PPTX·XLSX 4~10%), JSON 직렬화 2.75배, import 96 → 64ms, XLS 숫자 서식 캐시(−10%), 파일로 흘려 쓰는 `write_json`/`write_markdown`
+(큰 표의 최대 메모리 1,389 → 381MB) 이 들어갔다. 품질은 경쟁 도구와 같은 지표로 대조하는 정확도 대조표(`scripts/bench_quality.py`)를 더하고 그 결과로 PDF 글자 손실 사례를 고쳤다
+(개발 346쌍 평균 0.922 → 0.932, 보류 212쌍 0.934 → 0.942). Markdown 강조 런 병합, OCR extra 의 Pillow 13(Python 3.11 이상), HWP 표·머리말 읽기 순서도 포함한다.
+표시가 바뀔 수 있는 항목: PDF 의 단어 사이 공백과 괘선 없는 숫자 표의 행 구성, Markdown 의 인접 강조 런 병합, HWP 의 표·머리말·꼬리말 위치. API 는 추가만 있다(`write_json`·`write_markdown`).
+
 ### 성능 (2026-11-01 — PDF 2차, 모두 출력 불변·전수 실측)
 
 - **PDF 변환 −33%**: 공개 PDF 300개(가속 빌드, Python 3.12) 6.77 → 4.53초. PyMuPDF 와의 격차 4.6배 → 3.1배, pypdf 4.5배·pdfminer.six 7.6배·pdfplumber 9.2배·markitdown 10.6배 빠름.

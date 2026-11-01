@@ -12,7 +12,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
     <a href="https://github.com/illuwa/dochan/stargazers"><img src="https://img.shields.io/github/stars/illuwa/dochan?style=social" alt="GitHub Stars"></a>
   </p>
-    <p align="center"><strong>Current stable version: 1.15.0</strong></p>
+    <p align="center"><strong>Current stable version: 1.16.0</strong></p>
 </p>
 
 ---
@@ -77,7 +77,7 @@ dochan 은 저장소 소스를 `DOCHAN_BUILD_ACCEL=1` 로 빌드한 상태(PDF �
 
 PDF 는 아직 약점이다. PyMuPDF 는 C 엔진이고(AGPL 이라 가져다 쓸 수 없다) `get_text()` 는 글자만 뽑는 반면, dochan 은 표·제목·링크·각주까지 복원하고 Markdown 을 만든다.
 글꼴·좌표까지 뽑는 `get_text("dict")` 나 표 복원 `find_tables()` 와 비교하면 순위가 바뀐다. **`pip install dochan` 의 순수 Python 휠은 가속이 없어** PDF 가 PyMuPDF 보다
-약 11배 느리다 — 가속 휠 배포는 진행 중이고, 그 전에는 소스에서 `DOCHAN_BUILD_ACCEL=1 pip install .` 로 빌드하면 위 수치가 된다(`DOCHAN_DISABLE_ACCEL=1` 로 끌 수 있다).
+약 11배 느리다. 1.16.0 부터는 Linux x86_64·aarch64 와 macOS arm64·x86_64 에 가속 휠이 함께 배포되어 `pip install dochan` 만으로 위 수치가 되고, 휠이 없는 환경은 순수 Python 으로 자동 폴백한다(`DOCHAN_DISABLE_ACCEL=1` 로 끌 수 있다).
 정확도는 같은 문서의 HWPX 를 정답으로 PDF 도구 6종과 대조했다([기록](docs/benchmarks/2026-10-31-quality-vs-competitors.md)). 측정 방법·한계·재현 명령은
 [속도 비교 기록](docs/benchmarks/2026-10-31-speed-comparison.md)과 [PDF 재측정](docs/benchmarks/2026-11-01-speed-comparison-pdf.md)에 있다(`python -m scripts.bench_converters`).
 

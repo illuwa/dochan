@@ -1,5 +1,5 @@
 """dochan — HWP/HWPX 문서 파서, AI/LLM 최적 Markdown 변환"""
-__version__ = "1.16.3"
+__version__ = "1.17.0"
 
 from .reader import Dochan
 

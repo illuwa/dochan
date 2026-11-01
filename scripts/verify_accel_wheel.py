@@ -8,7 +8,8 @@ import venv
 import zipfile
 
 
-EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables", "_caes")
+EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables", "_caes",
+              "_cnotes", "_cheadings", "_cbody")
 TARGETS = {"manylinux_x86_64", "manylinux_aarch64", "macos_arm64", "macos_x86_64"}
 
 
@@ -107,12 +108,16 @@ from dochan.pdf.objects import OBJECT_PARSER_BACKEND
 from dochan.pdf.cmap import CMAP_BACKEND
 from dochan.pdf.tables import TABLE_BACKEND
 from dochan.utils.aes import AES_BACKEND
+from dochan.pdf.notes import NOTES_BACKEND
+from dochan.pdf.headings import HEADING_BACKEND
+from dochan.pdf.reader import BODY_GROUPS_BACKEND
 location = pathlib.Path(dochan.__file__).resolve()
 assert location.is_relative_to(pathlib.Path(sys.prefix).resolve()), location
-backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND, CMAP_BACKEND, TABLE_BACKEND, AES_BACKEND)
+backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND, CMAP_BACKEND, TABLE_BACKEND,
+            AES_BACKEND, NOTES_BACKEND, HEADING_BACKEND, BODY_GROUPS_BACKEND)
 expected = "python" if os.environ.get("DOCHAN_DISABLE_ACCEL") == "1" else "c"
 print("Installed:", location, "backends:", backends, flush=True)
-assert backends == (expected,) * 7, backends
+assert backends == (expected,) * 10, backends
 '''
         for disabled in (False, True):
             env = os.environ.copy()

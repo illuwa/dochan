@@ -2,6 +2,7 @@
 from dataclasses import replace
 from bisect import bisect_left, bisect_right
 import math
+import os
 import re
 from types import SimpleNamespace
 
@@ -27,7 +28,7 @@ def horizontal_bounds(pdf, page):
     return None
 
 
-def sized_runs(paragraph, lines, sizes):
+def _sized_runs_python(paragraph, lines, sizes):
     """조립된 런의 문자·링크·주석을 유지하고 조각 경계의 실제 크기를 복원한다."""
     spans = []
     paragraph_text = paragraph.text
@@ -86,6 +87,34 @@ def _append_size_span(spans, start, end, size):
         spans[-1] = (spans[-1][0], end, size)
     else:
         spans.append((start, end, size))
+
+
+_c_sized_runs = None
+_CHeadingsBailout = None
+HEADING_BACKEND = "python"
+_HEADING_REPLACE = replace
+_HEADING_APPEND = _append_size_span
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from ._cheadings import sized_runs as _c_sized_runs, Bailout as _CHeadingsBailout
+    except ImportError:
+        pass
+    else:
+        HEADING_BACKEND = "c"
+
+
+def sized_runs(paragraph, lines, sizes):
+    """Use native sizing when available, replaying Python on unsupported inputs."""
+    if (_c_sized_runs is not None and replace is _HEADING_REPLACE
+            and _append_size_span is _HEADING_APPEND):
+        try:
+            return _c_sized_runs(paragraph, lines, sizes)
+        except _CHeadingsBailout:
+            pass
+        except Exception:
+            pass
+    # Outside the handler: preserve Python's exception and its context.
+    return _sized_runs_python(paragraph, lines, sizes)
 
 
 def candidate_geometry(block, bounds, rotation, median, table_tops=(), baselines=()):

@@ -7,13 +7,25 @@ PDF에는 일반적인 각주/미주 번호 관계가 남지 않으므로, 세 �
 from bisect import bisect_left, bisect_right
 from collections import Counter
 import math
+import os
 import re
 
 from ..conversion import Provenance
 from ..model.document import Paragraph, TextRun
 from ..model.header_footer import Footnote
-from .content import assemble_lines, writing_direction
+from .content import Fragment, assemble_lines, writing_direction
 from .pagination import HEADER_FOOTER_ZONE
+
+_cnotes = None
+NOTES_BACKEND = "python"
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from . import _cnotes
+    except ImportError:
+        pass
+    else:
+        NOTES_BACKEND = "c"
+_NATIVE_WRITING_DIRECTION = writing_direction
 
 MAX_NOTE_FRAGMENTS = 50000
 MAX_NOTE_MARKERS = 1000
@@ -37,7 +49,10 @@ def _finite_fragment(frag):
             and math.isfinite(frag.width) and math.isfinite(frag.size))
 
 
-def horizontal_note_fragments(fragments):
+_NATIVE_FINITE_FRAGMENT = _finite_fragment
+
+
+def _horizontal_note_fragments_python(fragments):
     """Share direction classification after extract_page's finite-coordinate filter.
 
     Both content extraction paths filter non-finite geometry. Standalone note
@@ -46,6 +61,53 @@ def horizontal_note_fragments(fragments):
     if len(fragments) > MAX_NOTE_FRAGMENTS:
         return []
     return [frag for frag in fragments if frag.size > 0 and writing_direction(frag) == "ltr"]
+
+
+def horizontal_note_fragments(fragments):
+    """Use the read-only native classifier for ordinary Fragment lists."""
+    if len(fragments) > MAX_NOTE_FRAGMENTS:
+        return []
+    if _cnotes is not None and writing_direction is _NATIVE_WRITING_DIRECTION:
+        try:
+            return _cnotes.horizontal(fragments, Fragment)
+        except Exception:
+            pass
+    return _horizontal_note_fragments_python(fragments)
+
+
+_NATIVE_HORIZONTAL_NOTE_FRAGMENTS = horizontal_note_fragments
+
+
+def _prepare_notes_python(fragments, bounds, horizontal):
+    if horizontal is None and not all(_finite_fragment(frag) for frag in fragments):
+        return None
+    if not all(math.isfinite(value) for value in bounds):
+        return None
+    horizontal = (horizontal_note_fragments(fragments)
+                  if horizontal is None else horizontal)
+    if not horizontal:
+        return None
+    bottom, top = bounds
+    body_fragments = [frag for frag in horizontal
+                      if frag.y > bottom + (top - bottom) * 0.25]
+    if not body_fragments:
+        return None
+    definition_limit = round(max(frag.size for frag in horizontal), 3) * 0.9
+    if not any(')' in frag.text and frag.size < definition_limit for frag in horizontal):
+        return None
+    return horizontal, body_fragments
+
+
+def _prepare_notes(fragments, bounds, horizontal):
+    if (_cnotes is not None and writing_direction is _NATIVE_WRITING_DIRECTION
+            and horizontal_note_fragments is _NATIVE_HORIZONTAL_NOTE_FRAGMENTS
+            and _finite_fragment is _NATIVE_FINITE_FRAGMENT):
+        try:
+            return _cnotes.prepare(fragments, bounds, horizontal, Fragment)
+        except Exception:
+            pass
+    # Outside the handler: reproduce Python exceptions without C context.
+    return _prepare_notes_python(fragments, bounds, horizontal)
 
 
 def _spend(budget, count, warnings, label="각주"):
@@ -194,24 +256,11 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
         if warnings is not None:
             warnings.append("WARN: PDF 각주 조각 수 한도(50000) 초과 — 각주 복원 생략")
         return empty
-    if _horizontal is None and not all(_finite_fragment(frag) for frag in fragments):
+    prepared = _prepare_notes(fragments, bounds, _horizontal)
+    if prepared is None:
         return empty
-    if not all(math.isfinite(value) for value in bounds):
-        return empty
-    horizontal = horizontal_note_fragments(fragments) if _horizontal is None else _horizontal
-    if not horizontal:
-        return empty
+    horizontal, body_fragments = prepared
     bottom, top = bounds
-    body_fragments = [frag for frag in horizontal
-                      if frag.y > bottom + (top - bottom) * 0.25]
-    if not body_fragments:
-        return empty
-    # Body sizes are rounded fragment/line maxima; no body estimate can exceed
-    # this bound. A definition's line is at least as large as its ')' fragment.
-    # Assembly only inserts whitespace, so split markers obey the same bound.
-    definition_limit = round(max(frag.size for frag in horizontal), 3) * 0.9
-    if not any(')' in frag.text and frag.size < definition_limit for frag in horizontal):
-        return empty
     lines = assemble_lines(horizontal)
     # 짧은 차트 라벨과 표 셀은 조각 수가 많아도 본문 글자 크기를 대표하지
     # 않는다. 긴 줄의 문자량으로 크기 분포를 만들고, 작은 표/차트 글자가
@@ -355,7 +404,7 @@ MAX_ENDNOTE_LINES = 200000
 MAX_ENDNOTE_CHARACTERS = 4 * 1024 * 1024
 
 
-def endnote_references(fragments, warnings=None, *, _horizontal=None):
+def _endnote_references_python(fragments, warnings=None, *, _horizontal=None):
     """앞 페이지의 확실한 위첨자 후보만 보존한다. 본문 전체를 중복 보관하지 않는다."""
     if len(fragments) > MAX_NOTE_FRAGMENTS:
         if warnings is not None:
@@ -400,6 +449,30 @@ def endnote_references(fragments, warnings=None, *, _horizontal=None):
                     warnings.append("WARN: PDF 미주 표지 수 한도 초과 — 참조 복원 생략")
                 return []
     return result
+
+
+_NATIVE_ENDNOTE_MARKER = _ENDNOTE_MARKER
+_NATIVE_SPEND = _spend
+
+
+def endnote_references(fragments, warnings=None, *, _horizontal=None):
+    """Mirror the geometry in C when the reader supplies validated horizontals."""
+    if (_cnotes is not None and _horizontal is not None
+            and len(fragments) <= MAX_NOTE_FRAGMENTS
+            and _ENDNOTE_MARKER is _NATIVE_ENDNOTE_MARKER and _spend is _NATIVE_SPEND):
+        try:
+            result, warning = _cnotes.endnotes(
+                _horizontal, Fragment, _ENDNOTE_MARKER,
+                MAX_NOTE_GEOMETRY_CHECKS, MAX_NOTE_MARKERS)
+        except Exception:
+            pass
+        else:
+            if warning and warnings is not None:
+                warnings.append(
+                    "WARN: PDF 미주 기하 검사 수 한도(200000) 초과 — 미주 복원 생략"
+                    if warning == 1 else "WARN: PDF 미주 표지 수 한도 초과 — 참조 복원 생략")
+            return result
+    return _endnote_references_python(fragments, warnings, _horizontal=_horizontal)
 
 
 def _endnote_reference_runs(line, order, number, original_runs=None):

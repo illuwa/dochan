@@ -13,3 +13,6 @@ include dochan/pdf/_ctables.c
 include dochan/pdf/_ctables_geometry.h
 include dochan/pdf/_ctables_text.h
 include dochan/utils/_caes.c
+include dochan/pdf/_cnotes.c
+include dochan/pdf/_cheadings.c
+include dochan/pdf/_cbody.c

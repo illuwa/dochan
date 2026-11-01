@@ -12,7 +12,7 @@ from ..conversion import AssetRef, Provenance
 from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
 from .content import (MAX_FORM_CACHE_BYTES, ContentTextExtractor, FontInfo,
-                      VerticalMetrics, assemble_lines, default_byte_decoder)
+                      VerticalMetrics, Fragment, assemble_lines, default_byte_decoder)
 from .cmap import _ccmap, encoding_wmode, parse_tounicode, parse_encoding_cmap, predefined_cmap
 from .cid_unicode import (CIDDecoder, MAX_FONT_BYTES, adobe_cid, adobe_space_cid,
                           reverse_truetype_cmap)
@@ -23,7 +23,7 @@ from .structure import PDFFile
 from .widths import WidthMap
 from .core14 import Core14Decoder, canonical_font, glyph_names
 from .core14_metrics import GLYPH_WIDTHS
-from .tables import TableBudget, build_tables
+from .tables import TableBudget, TableCandidate, build_tables
 from .text_tables import detect_text_tables
 from .layout import merge_lines
 from .headings import (candidate_geometry, finalize_emphasized_headings,
@@ -34,6 +34,15 @@ from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, 
 from .notes import detect_notes, detect_endnotes, endnote_references, horizontal_note_fragments
 from .running import detect_running
 from .annotations import CommentExtractor, DestinationResolver, attach_comments, attach_links, link_regions, text_string
+
+_BODY_ASSEMBLE_LINES = assemble_lines
+_cbody = None
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from . import _cbody
+    except ImportError:
+        pass
+BODY_GROUPS_BACKEND = "c" if _cbody is not None else "python"
 
 # 글자 표시(Tj·TJ·'·")와 중첩 Form(Do) 연산자 바이트. 없으면 Form 연산자 세기를 건너뛴다.
 _FORM_TEXT_OR_NESTED = re.compile(rb"Tj|TJ|Do|['\"]")
@@ -510,6 +519,25 @@ class PDFReader:
 
     @staticmethod
     def _body_groups(extractor, fragments, tables, boundaries=()):
+        if _cbody is not None and assemble_lines is _BODY_ASSEMBLE_LINES:
+            try:
+                prepared = _cbody.partition(fragments, tables, boundaries, Fragment, TableCandidate)
+            except Exception:
+                pass
+            else:
+                groups, anchors, singles = prepared
+                for table, order in anchors:
+                    table.anchor_order = order
+                result = [assemble_lines(group) for group in groups]
+                if singles is not None:
+                    result = [assemble_lines([fragment]) for fragment in singles]
+                return result
+        # Replay outside the exception handler: preserve Python exception context
+        # and the anchors written before an original-path failure.
+        return PDFReader._body_groups_python(extractor, fragments, tables, boundaries)
+
+    @staticmethod
+    def _body_groups_python(extractor, fragments, tables, boundaries=()):
         """표를 경계로 본문 흐름을 나누고 빈 표의 앵커를 정한다."""
         groups = []
         consumed = set().union(*(t.fragment_orders for t in tables))

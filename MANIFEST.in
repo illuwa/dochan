@@ -12,3 +12,4 @@ include dochan/pdf/_ccmap.c
 include dochan/pdf/_ctables.c
 include dochan/pdf/_ctables_geometry.h
 include dochan/pdf/_ctables_text.h
+include dochan/utils/_caes.c

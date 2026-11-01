@@ -8,7 +8,7 @@ import venv
 import zipfile
 
 
-EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables")
+EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables", "_caes")
 TARGETS = {"manylinux_x86_64", "manylinux_aarch64", "macos_arm64", "macos_x86_64"}
 
 
@@ -18,7 +18,8 @@ def validate_accel_wheel(wheel):
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         for extension in EXTENSIONS:
-            if not any(name.startswith(f"dochan/pdf/{extension}.")
+            package = "utils" if extension == "_caes" else "pdf"
+            if not any(name.startswith(f"dochan/{package}/{extension}.")
                        and name.endswith((".so", ".pyd")) for name in names):
                 raise ValueError(f"Missing {extension} in {wheel.name}")
 
@@ -105,12 +106,13 @@ import dochan.pdf.content as c
 from dochan.pdf.objects import OBJECT_PARSER_BACKEND
 from dochan.pdf.cmap import CMAP_BACKEND
 from dochan.pdf.tables import TABLE_BACKEND
+from dochan.utils.aes import AES_BACKEND
 location = pathlib.Path(dochan.__file__).resolve()
 assert location.is_relative_to(pathlib.Path(sys.prefix).resolve()), location
-backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND, CMAP_BACKEND, TABLE_BACKEND)
+backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND, CMAP_BACKEND, TABLE_BACKEND, AES_BACKEND)
 expected = "python" if os.environ.get("DOCHAN_DISABLE_ACCEL") == "1" else "c"
 print("Installed:", location, "backends:", backends, flush=True)
-assert backends == (expected,) * 6, backends
+assert backends == (expected,) * 7, backends
 '''
         for disabled in (False, True):
             env = os.environ.copy()

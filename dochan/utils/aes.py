@@ -4,6 +4,7 @@ SubBytes·ShiftRows·MixColumns를 32비트 표로 합쳐 문서 크기에 비�
 GF(2^8) 곱셈 반복을 없앤다. 일반 목적 암호화 라이브러리는 아니며,
 표 참조 기반 구현이므로 상수 시간 실행을 보장하지 않는다.
 """
+import os
 import struct
 from typing import List
 
@@ -63,7 +64,9 @@ def _key_expansion(key: bytes) -> List[List[int]]:
         elif nk > 6 and i % nk == 4:
             temp = [SBOX[b] for b in temp]
         w.append([w[i - nk][j] ^ temp[j] for j in range(4)])
-    return _RoundKeys(w)
+    keys = _RoundKeys(w)
+    keys._native_standard = type(key) is bytes and len(key) in (16, 24, 32)
+    return keys
 
 
 def _gmul(a: int, b: int) -> int:
@@ -124,6 +127,13 @@ class _RoundKeys(list):
             ^ d2[SBOX[word[2]]] ^ d3[SBOX[word[3]]]
             for i, word in enumerate(words)
         )
+
+        self._native_encrypt = self.encrypt
+        self._native_decrypt = self.decrypt
+        self._native_packed = None
+        # Arbitrary word lists need the Python mirror's exact error semantics.
+        # Only our key expansion certifies a standard FIPS-197 schedule.
+        self._native_standard = False
 
 
 def _add_round_key(state: List[List[int]], round_keys: List[List[int]], round_idx: int) -> None:
@@ -192,7 +202,7 @@ def aes128_ecb_decrypt(key: bytes, data: bytes) -> bytes:
     round_keys = _key_expansion(key)
     out = bytearray(len(data))
     for i in range(0, len(data), 16):
-        out[i:i + 16] = _decrypt_block(data[i:i + 16], round_keys)
+        out[i:i + 16] = _decrypt_block_python(data[i:i + 16], round_keys)
     return bytes(out)
 
 
@@ -206,7 +216,7 @@ def aes_cbc_decrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:
     prev = iv
     for i in range(0, len(data), 16):
         block = data[i:i + 16]
-        dec = _decrypt_block(block, round_keys, nr)
+        dec = _decrypt_block_python(block, round_keys, nr)
         out.extend(a ^ b for a, b in zip(dec, prev))
         prev = block
     return bytes(out)
@@ -222,7 +232,78 @@ def aes_cbc_encrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:
     prev = iv
     for i in range(0, len(data), 16):
         block = bytes(a ^ b for a, b in zip(data[i:i + 16], prev))
-        enc = _encrypt_block(block, round_keys, nr)
+        enc = _encrypt_block_python(block, round_keys, nr)
         out.extend(enc)
         prev = enc
     return bytes(out)
+
+
+# Keep exact Python mirrors for unsupported objects and differential validation.
+_encrypt_block_python = _encrypt_block
+_decrypt_block_python = _decrypt_block
+_aes128_ecb_decrypt_python = aes128_ecb_decrypt
+_aes_cbc_encrypt_no_pad_python = aes_cbc_encrypt_no_pad
+_aes_cbc_decrypt_no_pad_python = aes_cbc_decrypt_no_pad
+
+_caes = None
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from . import _caes
+    except ImportError:
+        pass
+AES_BACKEND = "c" if _caes is not None else "python"
+
+
+def _native_block(block, round_keys, nr, decrypt):
+    # Preserve Python's permissive buffer/word-list behavior and malformed-input
+    # exceptions. Only immutable bytes and an unmodified native schedule qualify.
+    if (_caes is not None and type(block) is bytes and len(block) == 16
+            and type(round_keys) is _RoundKeys and round_keys._native_standard
+            and type(nr) is int
+            and nr in (10, 12, 14) and len(round_keys.encrypt) == 4 * (nr + 1)
+            and round_keys.encrypt is round_keys._native_encrypt
+            and round_keys.decrypt is round_keys._native_decrypt):
+        packed = round_keys._native_packed
+        if packed is None:
+            packed = b"".join(word.to_bytes(4, "big") for word in round_keys.encrypt)
+            round_keys._native_packed = packed
+        return _caes.block(block, packed, nr, decrypt)
+    operation = _decrypt_block_python if decrypt else _encrypt_block_python
+    return operation(block, round_keys, nr)
+
+
+def _encrypt_block(block: bytes, round_keys: List[List[int]], nr: int) -> bytes:
+    return _native_block(block, round_keys, nr, False)
+
+
+def _decrypt_block(block: bytes, round_keys: List[List[int]], nr: int = 10) -> bytes:
+    return _native_block(block, round_keys, nr, True)
+
+
+def aes128_ecb_decrypt(key: bytes, data: bytes) -> bytes:
+    if (_caes is not None and type(key) is bytes and type(data) is bytes
+            and len(key) == 16 and len(data) % 16 == 0):
+        _tables(True)
+        return _caes.crypt(key, bytes(16), data, True, False)
+    return _aes128_ecb_decrypt_python(key, data)
+
+
+def _native_cbc(key, iv, data, decrypt):
+    if (_caes is not None and type(key) is bytes and type(iv) is bytes
+            and type(data) is bytes and len(key) in (16, 32)
+            and len(iv) == 16 and len(data) % 16 == 0):
+        # Preserve the existing lazy table introspection contract.
+        _tables(True)
+        if not decrypt and data:
+            _tables(False)
+        return _caes.crypt(key, iv, data, decrypt, True)
+    operation = _aes_cbc_decrypt_no_pad_python if decrypt else _aes_cbc_encrypt_no_pad_python
+    return operation(key, iv, data)
+
+
+def aes_cbc_encrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:
+    return _native_cbc(key, iv, data, False)
+
+
+def aes_cbc_decrypt_no_pad(key: bytes, iv: bytes, data: bytes) -> bytes:
+    return _native_cbc(key, iv, data, True)

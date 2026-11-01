@@ -349,7 +349,18 @@ static PyObject *scan(PyObject *module, PyObject *args)
         return PyLong_FromSsize_t(s.p);
     }
     if (token(&s, &start, &size) < 0) return NULL;
-    return Py_BuildValue("y#n", s.b + start, size, s.p);
+    /* No "#" formats: a wheel built with 3.13 headers (where PY_SSIZE_T_CLEAN is a
+     * no-op) calls the plain Py_BuildValue, which rejects "#" on 3.10-3.12 runtimes. */
+    {
+        PyObject *bytes = PyBytes_FromStringAndSize((const char *)s.b + start, size);
+        PyObject *end, *pair;
+        if (!bytes) return NULL;
+        end = PyLong_FromSsize_t(s.p);
+        if (!end) { Py_DECREF(bytes); return NULL; }
+        pair = PyTuple_Pack(2, bytes, end);
+        Py_DECREF(bytes); Py_DECREF(end);
+        return pair;
+    }
 }
 /* Batch results are keyed by OFFSET, never by object number. This preserves
  * first-match duplicate numbers and the caller's xref-index fallback. Failed

@@ -137,7 +137,8 @@ def test_platform_wheel_jobs_run_on_pull_requests_with_isolated_builds():
     assert wheels.count("python -m build --wheel") == 2
     assert "--no-isolation" not in wheels
     assert "--skip-dependency-check" not in wheels
-    assert wheels.count("python scripts/verify_accel_wheel.py") == 2
+    # Each platform verifies the same abi3 wheel on two runtimes (build runtime + a second one).
+    assert wheels.count("python scripts/verify_accel_wheel.py") == 4
     assert 'requires = ["setuptools==82.0.1", "wheel==0.48.0"]' in _read("pyproject.toml")
 
 
@@ -151,3 +152,23 @@ def test_manylinux_build_python_keeps_cp39_abi3_contract():
     assert '"py_limited_api": "cp39"' in _read("setup.py")
     assert '("Py_LIMITED_API", "0x03090000")' in _read("setup.py")
     assert "python scripts/verify_accel_wheel.py" in linux
+
+
+def test_c_sources_avoid_size_t_hash_formats():
+    """abi3 wheels built with 3.13 headers must not use "#" formats.
+
+    With Py_LIMITED_API=0x03090000 and PY_SSIZE_T_CLEAN, headers up to 3.12 route
+    Py_BuildValue/PyArg_* to the _SizeT variants, but 3.13 headers make the macro a
+    no-op, so a wheel built there calls the plain functions and 3.10-3.12 runtimes
+    reject "#" with SystemError (1.16.2 macOS wheels broke every PDF this way).
+    """
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).resolve().parents[1] / "dochan"
+    pattern = re.compile(r'(Py_BuildValue|Py_VaBuildValue|PyArg_Parse\w*|PyObject_Call(?:Function|Method)\w*)\s*\(\s*"[^"]*#')
+    offenders = []
+    for path in list(root.rglob("*.c")) + list(root.rglob("*.h")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{path.relative_to(root.parent)}:{number}")
+    assert offenders == [], offenders

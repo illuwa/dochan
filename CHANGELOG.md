@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
-## [1.16.2] - 2026-11-01
+## [1.16.3] - 2026-11-01
+
+### 수정 (긴급 — 1.16.2 macOS 가속 휠이 Python 3.10~3.12 에서 PDF 전부 실패)
+
+- 1.16.2 의 macOS 휠(arm64·x86_64)은 Python 3.13 헤더로 빌드됐는데, 3.13 헤더에서는 `PY_SSIZE_T_CLEAN` 이 아무 일도 하지 않아 C 객체 파서의 `Py_BuildValue("y#n")` 이
+  일반 `Py_BuildValue` 로 컴파일되고, 그 abi3 휠을 3.10~3.12 에서 실행하면 `SystemError: PY_SSIZE_T_CLEAN macro must be defined for '#' formats` 로 PDF 구조 파싱이 모두
+  `ERR:` 로 끝나 출력이 비었다(3.9·3.13 런타임과 Linux 휠은 영향 없음, 순수 Python 휠도 정상). **1.16.2 의 macOS 사용자(Python 3.10~3.12)는 1.16.3 으로 올려야 한다.**
+- C 소스에서 `#` 포맷을 없애고(`PyBytes_FromStringAndSize`·`PyTuple_Pack`), C 소스에 `#` 포맷이 다시 들어오면 실패하는 계약 테스트를 추가했다.
+- 휠 검증 CI 가 같은 abi3 휠을 **두 번째 런타임**(macOS 3.10, manylinux cp313)에서도 설치해 전체 테스트를 돌린다. 1.16.2 는 빌드 런타임(3.13)에서만 검증해 잡지 못했다.
+
+## [1.16.2] - 2026-11-01 (macOS 휠 결함 — 1.16.3 으로 대체)
 
 1.16.0·1.16.1 과 같은 내용이다. 1.16.1 은 `ARCHFLAGS` 만으로는 macOS 휠 태그가 `universal2` 로 남아 다시 게시 검증에 걸렸다.
 러너별로 `_PYTHON_HOST_PLATFORM` 을 고정해 `macosx_11_0_arm64`·`macosx_10_13_x86_64` 휠이 따로 나오는 것을 PR 가지의 산출물로 확인한 뒤 게시한다.

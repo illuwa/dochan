@@ -121,7 +121,8 @@ static int show_get_table(Interpreter *s)
     if (!PyLong_CheckExact(step)) return bail("invalid glyph step");
     long n = PyLong_AsLong(step);
     if (PyErr_Occurred()) return -1;
-    int sparse = PyTuple_CheckExact(PyTuple_GetItem(table, 11));
+    int mixed = PyTuple_CheckExact(PyTuple_GetItem(table, 11)) && PyTuple_Size(PyTuple_GetItem(table, 11)) == 2;
+    int sparse = PyTuple_CheckExact(PyTuple_GetItem(table, 11)) && !mixed;
     if ((n != 1 && n != 2) ||
         (sparse && (!PyDict_CheckExact(mapping) || PyTuple_Size(PyTuple_GetItem(table, 11)) != 3)) ||
         (!sparse && n == 1 && (!PyTuple_CheckExact(mapping) || PyTuple_Size(mapping) != 256)) ||
@@ -134,7 +135,7 @@ static int show_get_table(Interpreter *s)
             return bail("invalid glyph flags");
     }
     if ((PyTuple_GetItem(table, 10) != Py_True && PyTuple_GetItem(table, 10) != Py_False) ||
-        (PyTuple_GetItem(table, 11) != Py_None && !sparse && !PyFrozenSet_CheckExact(PyTuple_GetItem(table, 11))))
+        (PyTuple_GetItem(table, 11) != Py_None && PyTuple_GetItem(table, 11) != Py_True && !sparse && !mixed && !PyFrozenSet_CheckExact(PyTuple_GetItem(table, 11))))
         return bail("invalid glyph reliability");
     s->show_table = table; s->show_font = s->font;
     return 1;
@@ -324,7 +325,7 @@ static int show_raw(Interpreter *s, PyObject *raw)
     PyObject *pieces = PyList_New(count), *text = NULL, *offsets = NULL;
     PyObject *context = NULL, *budget = NULL, *tracking = NULL, *stripped = NULL;
     PyObject *mapping = PyTuple_GetItem(s->show_table, 1), *missing = PyTuple_GetItem(s->show_table, 2);
-    int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11));
+    int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11)) && PyTuple_Size(PyTuple_GetItem(s->show_table, 11)) == 3;
     double *widths = NULL, total = 0.0, xs, ys, sw, size;
     Num start[6], trans[6], end[6], p, q, det;
     int result = -1, explicit_all = s->link_reliable && PyTuple_GetItem(s->show_table, 10) == Py_True;
@@ -463,7 +464,39 @@ static int show_can_decode(Interpreter *s, PyObject *raw)
     Py_ssize_t n = PyBytes_Size(raw);
     if (n % step) return 0;
     if (PyTuple_GetItem(s->show_table, 11) == Py_None) return 1;
-    int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11));
+    /* cp1252 errors change the entire string to latin-1 in Python. Never
+     * consume even the first item of a TJ containing such an operand. */
+    if (PyTuple_GetItem(s->show_table, 11) == Py_True) {
+        const unsigned char *raw_data = (const unsigned char *)PyBytes_AsString(raw);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            unsigned c = raw_data[i];
+            if (c == 0x81 || c == 0x8d || c == 0x8f || c == 0x90 || c == 0x9d) return 0;
+        }
+        return 1;
+    }
+    PyObject *meta = PyTuple_GetItem(s->show_table, 11);
+    if (PyTuple_CheckExact(meta) && PyTuple_Size(meta) == 2) {
+        PyObject *mapping = PyTuple_GetItem(meta, 1);
+        if (!PyDict_CheckExact(mapping)) return bail("invalid mixed Unicode table");
+        const unsigned char *data = (const unsigned char *)PyBytes_AsString(raw);
+        for (Py_ssize_t i = 0; i < n; i += step) {
+            int consumed = 1;
+            for (int size = 2; size >= 1; size--) {
+                if (size > n - i) continue;
+                unsigned code = data[i];
+                if (size == 2) code = (code << 8) | data[i + 1];
+                PyObject *key = Py_BuildValue("(iI)", size, code);
+                if (!key) return -1;
+                int found = PyDict_Contains(mapping, key);
+                Py_DECREF(key);
+                if (found < 0) return -1;
+                if (found) { consumed = size; break; }
+            }
+            if (consumed != step) return 0;
+        }
+        return 1;
+    }
+    int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11)) && PyTuple_Size(PyTuple_GetItem(s->show_table, 11)) == 3;
     PyObject *map = PyTuple_GetItem(s->show_table, 1);
     const unsigned char *data = (const unsigned char *)PyBytes_AsString(raw);
     for (Py_ssize_t i = 0; i < n; i += step) {

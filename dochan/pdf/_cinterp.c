@@ -506,9 +506,40 @@ static PyType_Slot slots[] = {
 };
 static PyType_Spec spec = {"dochan.pdf._cinterp.Interpreter",sizeof(Interpreter),0,
                           Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,slots};
+/* Inspect every final fragment, including Python callbacks and clipped Forms.
+ * Filtering at page completion preserves fragment order and warning timing. */
+static PyObject *finite_fragments(PyObject *self, PyObject *frags)
+{
+    (void)self;
+    static const int fields[] = {0, 1, 2, 3, 9, 10, 11, 12};
+    if (!PyList_CheckExact(frags)) {
+        PyErr_SetString(PyExc_TypeError, "fragments must be a list"); return NULL;
+    }
+    if (show_fields_init() < 0) return NULL;
+    PyObject *safe = PyList_New(0);
+    if (!safe) return NULL;
+    for (Py_ssize_t i = 0; i < PyList_Size(frags); i++) {
+        PyObject *frag = PyList_GetItem(frags, i);
+        Py_INCREF(frag);
+        int valid = 1;
+        for (int j = 0; j < 8; j++) {
+            PyObject *value = PyObject_GetAttr(frag, ShowFields[fields[j]]);
+            if (!value) { Py_DECREF(frag); Py_DECREF(safe); return NULL; }
+            double number = PyFloat_AsDouble(value);
+            Py_DECREF(value);
+            if (PyErr_Occurred()) { Py_DECREF(frag); Py_DECREF(safe); return NULL; }
+            if (!isfinite(number)) { valid = 0; break; }
+        }
+        int ok = valid ? PyList_Append(safe, frag) : 0;
+        Py_DECREF(frag);
+        if (ok < 0) { Py_DECREF(safe); return NULL; }
+    }
+    return safe;
+}
 static PyMethodDef module_methods[] = {
     INTERNAL_METHOD
     {"_snapshot_map",show_snapshot_map,METH_VARARGS,NULL},
+    {"_finite_fragments",finite_fragments,METH_O,NULL},
     {NULL,NULL,0,NULL}
 };
 static struct PyModuleDef module = {PyModuleDef_HEAD_INIT,"_cinterp",NULL,-1,module_methods,NULL,NULL,NULL,NULL};

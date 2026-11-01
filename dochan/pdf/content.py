@@ -113,12 +113,14 @@ if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
         LINE_ASSEMBLY_BACKEND = "c"
 
 
+_c_finite_fragments = None
 _CInterpreter = None
 _CInterpreterBailout = None
 CONTENT_INTERPRETER_BACKEND = "python"
 if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
     try:
-        from ._cinterp import Interpreter as _NativeInterpreter, Bailout as _NativeBailout
+        from ._cinterp import (Interpreter as _NativeInterpreter, Bailout as _NativeBailout,
+                               _finite_fragments as _c_finite_fragments)
     except ImportError:
         pass
     else:
@@ -512,8 +514,9 @@ class ContentTextExtractor:
                 tm, tlm, tc, tw = self._text_operator(
                     op, operands, tm, tlm, font, fs, tc, tw, th, tl, tr, width, frags, ctm)
                 interpreter.resume(tm, tlm, tc, tw, width)
-        safe = [frag for frag in frags if all(math.isfinite(v) for v in
-                (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))]
+        safe = (_c_finite_fragments(frags) if _c_finite_fragments is not None else
+                [frag for frag in frags if all(math.isfinite(v) for v in
+                 (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))])
         if len(safe) != len(frags):
             warnings.append("WARN: PDF 비유한 텍스트 좌표 — 해당 조각 건너뜀")
         return PageContent(safe, segments, warnings, marked_ids, duplicate_marked_ids, short_segments)

@@ -2,8 +2,9 @@
 
 Only exact repository decoder implementations are accepted. Core14 iterates
 bytes independently; a fixed-length ToUnicode map consumes exactly one code at
-a time. Mixed lengths, encoding CMaps requiring warning side effects, custom
-callables/metrics and unreliable/Type3 fonts retain the Python operation.
+a time. Mixed lengths use an operand preflight to prove compositional decoding.
+Encoding CMaps requiring warning side effects and custom callables/metrics
+retain the Python operation. Unreliable geometry keeps its original flag.
 
 The snapshot is attached to the FontInfo for its lifetime and is derived from
 the font alone. Mutating a FontInfo (bold, space_code, wmode, the width map)
@@ -62,7 +63,6 @@ def font_table(font):
     from .content import FontInfo, default_byte_decoder
 
     if (type(font) is not FontInfo or font.wmode != 0
-            or (font.encoding_cmap is None and not font.link_metrics_reliable)
             or type(font.link_metrics_reliable) is not bool
             or type(font.widths) is not WidthMap or font.code_bytes not in (1, 2)):
         return _safe_fallback(font)
@@ -76,16 +76,30 @@ def font_table(font):
     if font.encoding_cmap is not None:
         return _encoding_table(font)
     decode = font.decode
-    if type(decode) is not MethodType:
-        return _safe_fallback(font)
-    owner = decode.__self__
     step = font.code_bytes
-    if (type(owner) is ToUnicodeCMap and decode.__func__ is ToUnicodeCMap.decode
+    mixed = None
+    byte_default = decode is default_byte_decoder and step == 1
+    if not byte_default and type(decode) is not MethodType:
+        return _safe_fallback(font)
+    owner = None if byte_default else decode.__self__
+    if byte_default:
+        mapping = _byte_defaults()
+        missing = "\ufffd"
+    elif (type(owner) is ToUnicodeCMap and decode.__func__ is ToUnicodeCMap.decode
             and owner.code_lengths == {step} and type(owner.mapping) is dict):
         mapping = _snapshot_map(owner.mapping, 2, step)
         if mapping is False:
             return _safe_fallback(font)
         missing = '\ufffd'
+    elif (type(owner) is ToUnicodeCMap and decode.__func__ is ToUnicodeCMap.decode
+          and type(owner.code_lengths) is set and owner.code_lengths == {1, 2}
+          and all(type(size) is int for size in owner.code_lengths)
+          and _snapshot_map(owner.mapping, 3, 0) is not False):
+        # Preflight every operand: the longest-match decoder must consume the
+        # same chunks as the width loop. Otherwise yield the complete operator.
+        mapping = {code: value for (size, code), value in owner.mapping.items() if size == step}
+        missing = '\ufffd'
+        mixed = ((2, 1), owner.mapping)
     elif (step == 1 and type(owner) is Core14Decoder
           and decode.__func__ is Core14Decoder.decode
           and type(owner._preserve_undefined) is bool
@@ -104,7 +118,7 @@ def font_table(font):
         mapping = tuple(mapping.get(code, missing) for code in range(256))
     return (step, mapping, missing, widths._widths, widths._default,
             widths.reliable, widths._cid_default, font.space_code, font.bold, font.italic,
-            font.link_metrics_reliable, None)
+            font.link_metrics_reliable, True if byte_default else mixed)
 
 
 def _safe_fallback(font):

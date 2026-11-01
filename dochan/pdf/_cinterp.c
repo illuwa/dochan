@@ -15,7 +15,8 @@ static PyObject *SegmentType, *HypotFunction, *PathWarning, *PathModule;
 static PyObject *LexerPosName;
 static int cache_ready;
 
-typedef struct { double v; int integer; } Num;
+#include "_csegments.h"
+typedef SegmentNumber Num;
 typedef struct { Num x, y; } Point;
 #define INT_LIMIT INT64_C(9007199254740992)
 
@@ -124,6 +125,7 @@ static void identity(Num m[6])
 }
 
 #include "_cinterp_objects.h"
+#include "_cinterp_segments.h"
 #include "_cinterp_paths.h"
 
 typedef struct {
@@ -140,6 +142,7 @@ typedef struct {
     int initialized, text_line_reset, busy;
     PathState paths;
     PyObject *owner, *frags, *fragment_type, *fragment_template, *table_builder, *tables;
+    PyObject *marked_ids, *duplicate_marked_ids;
     PyObject *show_font;
     PyObject *show_table; /* borrowed from tables, only within next() */
     int link_reliable, glyph_yield_safe, pure_fallbacks;
@@ -148,6 +151,7 @@ typedef struct {
 static int interp_clear(Interpreter *s)
 {
     s->initialized = 0;
+    Py_CLEAR(s->marked_ids); Py_CLEAR(s->duplicate_marked_ids);
     Py_CLEAR(s->owner); Py_CLEAR(s->frags); Py_CLEAR(s->fragment_type); Py_CLEAR(s->fragment_template);
     Py_CLEAR(s->table_builder); Py_CLEAR(s->tables); s->show_table = NULL; s->show_font = NULL;
     path_clear(&s->paths);
@@ -161,6 +165,7 @@ static int interp_clear(Interpreter *s)
 static int interp_traverse(Interpreter *s, visitproc visit, void *arg)
 {
     Py_VISIT(Py_TYPE(s));
+    Py_VISIT(s->marked_ids); Py_VISIT(s->duplicate_marked_ids);
     Py_VISIT(s->owner); Py_VISIT(s->frags); Py_VISIT(s->fragment_type); Py_VISIT(s->fragment_template);
     Py_VISIT(s->table_builder); Py_VISIT(s->tables);
     Py_VISIT(s->fonts); Py_VISIT(s->font); Py_VISIT(s->segments);
@@ -186,8 +191,8 @@ static int interp_init(Interpreter *s, PyObject *args, PyObject *kwargs)
     if (s->busy) return bail("reentrant interpreter initialization");
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOOOOOO|OOOOp:Interpreter", kw,
                                     &data, &fonts, &ctm, &state, &segments, &shorts, &warnings, &owner, &frags, &fragment_type, &table_builder, &pure_fallbacks)) return -1;
-    if (!PyBytes_CheckExact(data) || !PyDict_CheckExact(fonts) || !PyList_CheckExact(segments) ||
-        !PyList_CheckExact(shorts) || !PyList_CheckExact(warnings) ||
+    if (!PyBytes_CheckExact(data) || !PyDict_CheckExact(fonts) || (!PyList_CheckExact(segments) && !segment_check(segments)) ||
+        (!PyList_CheckExact(shorts) && !segment_check(shorts)) || !PyList_CheckExact(warnings) ||
         !PyTuple_CheckExact(state) || PyTuple_Size(state) != 8) return bail("unsupported constructor types");
     /* Mutable Python limits are also used by existing callers/tests. An
      * altered configuration is delegated rather than silently frozen in C. */
@@ -224,6 +229,8 @@ static int interp_init(Interpreter *s, PyObject *args, PyObject *kwargs)
         Py_INCREF(fragment_type); s->fragment_type = fragment_type;
         Py_INCREF(table_builder); s->table_builder = table_builder;
         s->pure_fallbacks = pure_fallbacks;
+        s->marked_ids = PySet_New(NULL); s->duplicate_marked_ids = PySet_New(NULL);
+        if (!s->marked_ids || !s->duplicate_marked_ids) { s->busy = 0; return -1; }
         s->tables = PyDict_New();
         if (!s->tables) { s->busy = 0; return -1; }
     }
@@ -348,6 +355,7 @@ static int operate(Interpreter *s, const char *op, Py_ssize_t size)
 
 
 #include "_cinterp_show.h"
+#include "_cinterp_marked.h"
 
 static PyObject *interp_next_inner(Interpreter *s)
 {
@@ -370,6 +378,13 @@ static PyObject *interp_next_inner(Interpreter *s)
         if (++operators % 1024 == 0 && PyErr_CheckSignals() < 0) {
             Py_DECREF(value);
             return NULL;
+        }
+        int marked = marked_operator(s, op, size);
+        if (marked < 0) { Py_DECREF(value); return NULL; }
+        if (marked) {
+            Py_DECREF(value);
+            if (PyList_SetSlice(s->operands, 0, PyList_Size(s->operands), NULL) < 0) return NULL;
+            continue;
         }
         int text_op = OP("Tj") || OP("'") || OP("\"") || OP("TJ");
         if (s->owner && text_op) {
@@ -455,6 +470,11 @@ static PyObject *interp_resume(Interpreter *s, PyObject *args)
 static PyObject *get_attr(Interpreter *s, void *closure)
 {
     intptr_t field = (intptr_t)closure;
+    if (field == 13 || field == 14) {
+        PyObject *value = field == 13 ? s->marked_ids : s->duplicate_marked_ids;
+        if (!value) Py_RETURN_NONE;
+        Py_INCREF(value); return value;
+    }
     if (field < 3) return matrix_obj(field == 0 ? s->ctm : field == 1 ? s->tm : s->tlm);
     if (field == 3) { PyObject *f = s->font ? s->font : Py_None; Py_INCREF(f); return f; }
     if (field == 11) return PyLong_FromSsize_t(s->scanner.pos);
@@ -488,6 +508,8 @@ static int set_attr(Interpreter *s, PyObject *value, void *closure)
 static PyGetSetDef attributes[] = {
     ATTR("ctm",0),ATTR("tm",1),ATTR("tlm",2),ATTR("font",3),ATTR("fs",4),ATTR("tc",5),ATTR("tw",6),
     ATTR("th",7),ATTR("tl",8),ATTR("tr",9),ATTR("stroke_width",10),ATTR("pos",11),ATTR("text_line_reset",12),
+    {"marked_ids",(getter)get_attr,NULL,NULL,(void *)13},
+    {"duplicate_marked_ids",(getter)get_attr,NULL,NULL,(void *)14},
     {NULL,NULL,NULL,NULL,NULL}
 };
 static PyMethodDef methods[] = {
@@ -573,6 +595,7 @@ PyMODINIT_FUNC PyInit__cinterp(void)
     type = PyType_FromSpec(&spec);
     if (!type) goto failed;
     if (PyModule_AddObject(m,"Interpreter",type)<0) { Py_DECREF(type); goto failed; }
+    if (segment_register(m) < 0) goto failed;
     cache_ready = 1;
     return m;
 failed:

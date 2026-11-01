@@ -9,7 +9,7 @@ import math
 import os
 import re
 import statistics
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .objects import DELIMITERS, WHITESPACE, PDFLexer, PDFName, PDFSyntaxError
 from .widths import WidthMap
@@ -116,11 +116,12 @@ if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
 _c_finite_fragments = None
 _CInterpreter = None
 _CInterpreterBailout = None
+_CSegmentList = list
 CONTENT_INTERPRETER_BACKEND = "python"
 if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
     try:
         from ._cinterp import (Interpreter as _NativeInterpreter, Bailout as _NativeBailout,
-                               _finite_fragments as _c_finite_fragments)
+                               _finite_fragments as _c_finite_fragments, SegmentList as _CSegmentList)
     except ImportError:
         pass
     else:
@@ -290,11 +291,11 @@ def across(frag: Fragment) -> float:
 class PageContent:
     """페이지 텍스트·괘선과 한도 경고."""
     fragments: List[Fragment]
-    segments: List[Segment]
+    segments: Sequence[Segment]
     warnings: List[str] = field(default_factory=list)
     marked_ids: set = field(default_factory=set)
     duplicate_marked_ids: set = field(default_factory=set)
-    short_segments: List[Segment] = field(default_factory=list)
+    short_segments: Sequence[Segment] = field(default_factory=list)
 
 
 def _matmul(m1, m2):
@@ -395,6 +396,22 @@ def _clip_form_fragments(fragments, bbox, ctm):
             while end < count and accepted[end]:
                 end += 1
             shift = offsets[start]
+            # Reusing a complete run also avoids rebuilding all dataclass fields.
+            # Keep the arithmetic path for integer tags and signed zero: even
+            # adding a zero shift can change their type or IEEE representation.
+            if (start == 0 and end == count and type(offsets) is tuple
+                    and type(shift) is float and shift.hex() == '0x0.0p+0'
+                    and math.isfinite(direction)
+                    and type(frag.x) is float and 0 < abs(frag.x) < math.inf
+                    and type(frag.y) is float and 0 < abs(frag.y) < math.inf
+                    and type(frag.width) is float and frag.width > 0
+                    and frag.width == offsets[-1]
+                    and all(type(value) is float
+                            and (value > 0 or value.hex() == '0x0.0p+0')
+                            for value in offsets)):
+                kept.append(frag)
+                start = end
+                continue
             kept.append(replace(
                 frag, text=frag.text[start:end], x=frag.x + ux * shift,
                 y=frag.y + uy * shift, width=offsets[end] - shift,
@@ -473,7 +490,7 @@ class ContentTextExtractor:
         self._marked_stack = []
         self._marked_overflow = 0
         marked_ids, duplicate_marked_ids = set(), set()
-        frags, segments, short_segments, warnings = [], [], [], []
+        frags, segments, short_segments, warnings = [], _CSegmentList(), _CSegmentList(), []
         if initial is None:
             initial = (None, 0.0, 0.0, 0.0, 1.0, 0.0, 0, 1.0)
         elif len(initial) == 6:
@@ -481,7 +498,10 @@ class ContentTextExtractor:
         from ._show_table import cached_font_table
         pure_callbacks = (type(self) is ContentTextExtractor
                           and getattr(self._show, '__func__', None) is _NATIVE_SHOW_IMPL
-                          and getattr(self._text_operator, '__func__', None) is _NATIVE_TEXT_IMPL)
+                          and getattr(self._text_operator, '__func__', None) is _NATIVE_TEXT_IMPL
+                          and getattr(self._begin_marked, '__func__', None) is _NATIVE_BEGIN_MARKED_IMPL
+                          and getattr(self._end_marked, '__func__', None) is _NATIVE_END_MARKED_IMPL
+                          and getattr(self._graphics_width, '__func__', None) is _NATIVE_GRAPHICS_WIDTH_IMPL)
         args = (content, self._fonts, ctm, initial, segments, short_segments, warnings)
         interpreter = (_CInterpreter(*args, self, frags, Fragment, cached_font_table, True)
                        if pure_callbacks else _CInterpreter(*args))
@@ -514,6 +534,9 @@ class ContentTextExtractor:
                 tm, tlm, tc, tw = self._text_operator(
                     op, operands, tm, tlm, font, fs, tc, tw, th, tl, tr, width, frags, ctm)
                 interpreter.resume(tm, tlm, tc, tw, width)
+        if pure_callbacks:
+            marked_ids = interpreter.marked_ids
+            duplicate_marked_ids = interpreter.duplicate_marked_ids
         safe = (_c_finite_fragments(frags) if _c_finite_fragments is not None else
                 [frag for frag in frags if all(math.isfinite(v) for v in
                  (frag.x, frag.y, frag.width, frag.size, frag.dir_x, frag.dir_y, frag.up_x, frag.up_y))])
@@ -1228,3 +1251,7 @@ def _num(value) -> float:
 # operations may retain native font snapshots only with these implementations.
 _NATIVE_SHOW_IMPL = ContentTextExtractor._show
 _NATIVE_TEXT_IMPL = ContentTextExtractor._text_operator
+
+_NATIVE_BEGIN_MARKED_IMPL = ContentTextExtractor._begin_marked
+_NATIVE_END_MARKED_IMPL = ContentTextExtractor._end_marked
+_NATIVE_GRAPHICS_WIDTH_IMPL = ContentTextExtractor._graphics_width

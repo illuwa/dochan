@@ -204,8 +204,10 @@ path_line(PathState *s, Point p, int emit, Point *extras, int nextras)
                             if (path_append_edge(s, g, edge)) return -1;
                         } else {
                             s->short_disabled = 1;
-                            if (PyList_SetSlice(s->short_segments, 0,
-                                                PyList_Size(s->short_segments), NULL)) return -1;
+                            if (segment_check(s->short_segments))
+                                segment_clear_gc((SegmentList *)s->short_segments);
+                            else if (PyList_SetSlice(s->short_segments, 0,
+                                                     PyList_Size(s->short_segments), NULL)) return -1;
                         }
                     }
                 } else if (s->edge_count < PATH_MAX_SEGMENTS) {
@@ -253,6 +255,11 @@ path_curve(PathState *s, Point *controls, int ncontrols, Point end)
 static int
 path_emit_segment(PathState *s, PathEdge *edge, int short_segment)
 {
+    PyObject *target = short_segment ? s->short_segments : s->segments;
+    if (segment_check(target)) {
+        SegmentRecord record = {edge->x0, edge->y0, edge->x1, edge->y1};
+        return segment_append_record(target, record);
+    }
     PyObject *x0 = NULL, *y0 = NULL, *x1 = NULL, *y1 = NULL, *segment;
     int result = -1;
     x0 = num_obj(edge->x0);
@@ -294,7 +301,7 @@ path_paint(PathState *s, int stroke)
                 if (!s->short_disabled && path_emit_segment(s, edge, 1)) return -1;
                 continue;
             }
-            if (PyList_Size(s->segments) >= PATH_MAX_SEGMENTS) return path_warn(s);
+            if (PyObject_Length(s->segments) >= PATH_MAX_SEGMENTS) return path_warn(s);
             if (path_emit_segment(s, edge, 0)) return -1;
         }
     }

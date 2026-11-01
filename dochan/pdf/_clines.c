@@ -159,7 +159,11 @@ read_fragment(FragmentData *f, PyObject *object, PyObject *fragment_type)
         if (f->number[j] == NULL)
             goto error;
         if (!PyFloat_CheckExact(f->number[j])) {
-            f->plain = 0;
+            /* Direction components only select an enum; their numeric tags
+             * never become output fields. Small exact ints are equally safe
+             * here, unlike coordinates/metrics whose tags must survive. */
+            if (j != DX && j != DY)
+                f->plain = 0;
             if (!PyLong_CheckExact(f->number[j]))
                 return 0;
         }

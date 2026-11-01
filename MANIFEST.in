@@ -3,6 +3,9 @@ include dochan/pdf/_cscan.c
 include dochan/pdf/_cinterp.c
 include dochan/pdf/_cinterp_objects.h
 include dochan/pdf/_cinterp_paths.h
+include dochan/pdf/_csegments.h
+include dochan/pdf/_cinterp_segments.h
+include dochan/pdf/_cinterp_marked.h
 include dochan/pdf/_cinterp_show.h
 include dochan/pdf/_cinterp_profile.h
 include dochan/pdf/_clines.c

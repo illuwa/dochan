@@ -21,6 +21,10 @@ cinterp = pytest.importorskip("dochan.pdf._cinterp")
 
 def _signature(value):
     """Include every dataclass field, container type and signed floating zero."""
+    # SegmentList intentionally changes the container representation only.
+    # Materialize to retain every original element/type/IEEE-bit assertion.
+    if isinstance(value, cinterp.SegmentList):
+        value = list(value)
     identity = (type(value).__module__, type(value).__qualname__)
     if isinstance(value, float):
         return identity, struct.pack("!d", value).hex()

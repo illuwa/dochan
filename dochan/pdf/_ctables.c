@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <string.h>
+#include "_csegments.h"
 
 static PyObject *ct_bailout;
 #include "_ctables_geometry.h"
@@ -180,6 +181,139 @@ unsupported:
 #define M_GET(var, expr) do { (var) = (expr); if (!(var)) goto done; } while (0)
 #define M_OK(expr) do { if ((expr) < 0) goto done; } while (0)
 
+/* Import lazily: ordinary list callers do not need the interpreter module. */
+static SegmentAPI *table_segments_api;
+static int table_segment_list(PyObject *value)
+{
+    if (PyList_CheckExact(value) || value == Py_None) return 0;
+    if (!table_segments_api) {
+        table_segments_api = PyCapsule_Import(SEGMENT_CAPSULE, 0);
+        if (!table_segments_api) return -1;
+    }
+    return Py_TYPE(value) == table_segments_api->type;
+}
+static PyObject *table_segment_number(SegmentNumber n)
+{ return n.integer ? PyLong_FromLongLong((int64_t)n.v) : PyFloat_FromDouble(n.v); }
+/* Cached elements are mutable Python dataclasses. Observe user changes rather
+ * than reading stale coordinates once an element has escaped to Python. */
+static int table_segment_coords(MainPool *pool, SegmentList *list, Py_ssize_t i,
+                                PyObject **x0, PyObject **y0, PyObject **x1, PyObject **y1)
+{
+    uint64_t generation = list->generation;
+    if (i >= list->size) { PyErr_SetString(ct_bailout, "changed native segment input"); return -1; }
+    SegmentRecord r = list->records[i];
+    PyObject *cached = list->cache[i];
+    if (cached) {
+        Py_INCREF(cached);
+        if (!m_keep(pool, cached)) return -1;
+    }
+    *x0 = cached ? m_attr(pool, cached, "x0") : m_keep(pool, table_segment_number(r.x0));
+    *y0 = cached ? m_attr(pool, cached, "y0") : m_keep(pool, table_segment_number(r.y0));
+    *x1 = cached ? m_attr(pool, cached, "x1") : m_keep(pool, table_segment_number(r.x1));
+    *y1 = cached ? m_attr(pool, cached, "y1") : m_keep(pool, table_segment_number(r.y1));
+    if (list->generation != generation) {
+        PyErr_SetString(ct_bailout, "changed native segment input"); return -1;
+    }
+    return *x0 && *y0 && *x1 && *y1 ? 0 : -1;
+}
+
+#define GK(v, expr) do { (v) = geo_keep(&pool, (expr)); if (!(v)) goto done; } while (0)
+#define GC(expr) do { if ((expr) < 0) goto done; } while (0)
+#define GI(seq, i) PyTuple_GetItem((seq), (i))
+static PyObject *table_native_short_dash_runs(PyObject *self, PyObject *args)
+{
+    GeoPool pool = {0}; PyObject *segments, *axes, *result, *h, *v, *segment, *x0, *x1, *y0, *y1;
+    PyObject *axis, *coord, *key, *parts, *part, *ordered, *bucket, *span, *loobj, *hiobj, *startobj = NULL, *endobj = NULL, *res = NULL;
+    PyObject *collections, *defaultdict, *listtype;
+    PyObject *name_x0, *name_x1, *name_y0, *name_y1, *axis_h, *axis_v;
+    Py_ssize_t i, j, n, pos, iter_start, run = 0; double tolerance, len, lo, hi, ax, bx, ay, by, prev_hi = 0, first_len = 0, gap = 0; int has_gap, equal, cmp;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "Od", &segments, &tolerance)) return NULL;
+    GK(collections, PyImport_ImportModule("collections")); GK(defaultdict, PyObject_GetAttrString(collections, "defaultdict"));
+    GK(part, PyList_New(0)); GK(listtype, PyObject_Type(part));
+    GK(axes, PyDict_New()); GK(h, PyObject_CallFunctionObjArgs(defaultdict, listtype, NULL));
+    GK(v, PyObject_CallFunctionObjArgs(defaultdict, listtype, NULL)); GK(result, Py_BuildValue("{s:O,s:O}", "h", h, "v", v));
+    if (segments == Py_None) { res = result; goto done; }
+    n = ((SegmentList *)segments)->size; GC(n);
+    uint64_t generation = ((SegmentList *)segments)->generation;
+    GK(name_x0, PyUnicode_InternFromString("x0")); GK(name_x1, PyUnicode_InternFromString("x1"));
+    GK(name_y0, PyUnicode_InternFromString("y0")); GK(name_y1, PyUnicode_InternFromString("y1"));
+    GK(axis_h, PyUnicode_InternFromString("h")); GK(axis_v, PyUnicode_InternFromString("v"));
+    iter_start = pool.size;
+    for (i = 0; i < n; i++) {
+        /* Axis maps retain selected values; release rejected stroke temporaries
+         * before processing the next stroke instead of retaining the page. */
+        while (pool.size > iter_start) Py_DECREF(pool.items[--pool.size]);
+        SegmentList *list = (SegmentList *)segments;
+        if (list->generation != generation || i >= list->size) {
+            PyErr_SetString(ct_bailout, "changed native short segment input"); goto done;
+        }
+        segment = list->cache[i];
+        if (segment) { Py_INCREF(segment); GK(segment, segment); }
+        SegmentRecord r = list->records[i];
+        GK(x0, segment ? PyObject_GetAttr(segment, name_x0) : table_segment_number(r.x0));
+        GK(x1, segment ? PyObject_GetAttr(segment, name_x1) : table_segment_number(r.x1));
+        GK(y0, segment ? PyObject_GetAttr(segment, name_y0) : table_segment_number(r.y0));
+        GK(y1, segment ? PyObject_GetAttr(segment, name_y1) : table_segment_number(r.y1));
+        if (list->generation != generation) {
+            PyErr_SetString(ct_bailout, "changed native short segment input"); goto done;
+        }
+        cmp = PyObject_RichCompareBool(x0, x1, Py_EQ); GC(cmp);
+        if (cmp) { axis = axis_v; coord = x0; loobj = y0; hiobj = y1; }
+        else {
+            cmp = PyObject_RichCompareBool(y0, y1, Py_EQ); GC(cmp);
+            if (!cmp) continue;
+            axis = axis_h; coord = y0; loobj = x0; hiobj = x1;
+        }
+        GC(geo_double(x0, &ax)); GC(geo_double(x1, &bx));
+        GC(geo_double(y0, &ay)); GC(geo_double(y1, &by));
+        /* One difference is exactly zero for these axis-aligned strokes.
+         * hypot therefore has the same exact magnitude as Segment.length. */
+        len = hypot(bx - ax, by - ay);
+        if (!(0 < len && len < 1)) continue;
+        GK(key, PyTuple_Pack(2, axis, coord)); parts = PyDict_GetItemWithError(axes, key);
+        if (!parts) {
+            if (PyErr_Occurred()) goto done;
+            GK(parts, PySet_New(NULL)); GC(PyDict_SetItem(axes, key, parts));
+        }
+        GK(part, PyTuple_Pack(2, loobj, hiobj)); GC(PySet_Add(parts, part));
+    }
+    while (pool.size > iter_start) Py_DECREF(pool.items[--pool.size]);
+    pos = 0;
+    while (PyDict_Next(axes, &pos, &key, &parts)) {
+        PyObject *target = PyDict_GetItemWithError(result, GI(key, 0)); if (!target) goto done;
+        coord = GI(key, 1); GK(ordered, geo_sorted(parts)); run = 0; has_gap = 0;
+        for (j = 0; j <= PyList_Size(ordered); j++) {
+            double next_gap = 0;
+            int sentinel = j == PyList_Size(ordered);
+            loobj = hiobj = NULL; lo = hi = 0;
+            if (!sentinel) {
+                part = PyList_GetItem(ordered, j); loobj = GI(part, 0); hiobj = GI(part, 1);
+                GC(geo_double(loobj, &lo)); GC(geo_double(hiobj, &hi)); next_gap = lo - prev_hi;
+            }
+            equal = !sentinel && run && 0 < next_gap && next_gap <= tolerance && geo_isclose(hi - lo, first_len) && (!has_gap || geo_isclose(next_gap, gap));
+            if (!equal) {
+                if (run >= 3) {
+                    bucket = geo_bucket(target, coord); if (!bucket) goto done;
+                    GK(span, PyTuple_Pack(2, startobj, endobj)); GC(PyList_Append(bucket, span));
+                }
+                run = 0; has_gap = 0;
+            }
+            if (!sentinel) {
+                if (run) { gap = next_gap; has_gap = 1; }
+                else { startobj = loobj; first_len = hi - lo; }
+                endobj = hiobj; prev_hi = hi; run++;
+            }
+        }
+    }
+    res = result;
+done: return geo_finish(&pool, res);
+}
+
+#undef GK
+#undef GC
+#undef GI
+
 static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwargs)
 {
     static char *kwlist[] = {"segments", "fragments", "tolerance", "page_number", "warnings", "budget", "short_segments", NULL};
@@ -194,9 +328,12 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
     PyObject *separated, *component_boxes, *split_budget, *components, *nodes, *used_orders;
     PyObject *max_cells_obj, *max_lines_obj, *max_components_obj, *max_depth_obj;
     Py_ssize_t max_cells, max_lines, max_components, max_depth, remaining, reserved = 0, i, j, mark;
-    int has_valid = 0;
+    int has_valid = 0, native_segments;
+    double numeric_tolerance;
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|OOOOO:build_tables", kwlist,
             &segments, &fragments, &tolerance, &page, &warnings, &budget, &shorts)) return NULL;
+    native_segments = table_segment_list(segments);
+    if (native_segments < 0) goto done;
     M_GET(mod, M_KEEP(PyImport_ImportModule("dochan.pdf.tables")));
     if (!tolerance) M_GET(tolerance, M_KEEP(PyFloat_FromDouble(1.5)));
     if ((!PyFloat_CheckExact(tolerance) && !PyLong_CheckExact(tolerance)) ||
@@ -204,13 +341,13 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
         PyErr_SetString(ct_bailout, "unsupported table options"); goto done;
     }
     {
-        double numeric_tolerance = PyFloat_AsDouble(tolerance);
+        numeric_tolerance = PyFloat_AsDouble(tolerance);
         if (PyErr_Occurred() || !isfinite(numeric_tolerance) || fabs(numeric_tolerance) > 1e100) {
             PyErr_Clear(); PyErr_SetString(ct_bailout, "unsupported table tolerance"); goto done;
         }
     }
     { PyObject *type;
-      M_GET(type, M_ATTR(mod, "Segment")); M_OK(m_preflight(segments, type, segment_names));
+      M_GET(type, M_ATTR(mod, "Segment")); if (!native_segments) M_OK(m_preflight(segments, type, segment_names));
     }
     M_GET(work_warnings, M_KEEP(warnings == Py_None ? PyList_New(0) : PySequence_List(warnings)));
     work_budget = Py_None;
@@ -235,12 +372,48 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
     M_GET(candidate_type, M_ATTR(mod, "TableCandidate"));
     M_GET(horizontal, M_KEEP(PyList_New(0))); M_GET(vertical, M_KEEP(PyList_New(0)));
     mark = pool.n;
-    for (i = 0; i < m_len(segments); i++) {
+    Py_ssize_t segment_count = native_segments ? ((SegmentList *)segments)->size : m_len(segments);
+    uint64_t generation = native_segments ? ((SegmentList *)segments)->generation : 0;
+    for (i = 0; i < segment_count; i++) {
         m_reset(&pool, mark);
-        PyObject *s = m_at(segments, i), *x0, *x1, *y0, *y1, *dy, *dx, *sum, *coord, *run;
+        if (native_segments && ((SegmentList *)segments)->generation != generation) {
+            PyErr_SetString(ct_bailout, "changed native segment input"); goto done;
+        }
+        PyObject *s = native_segments ? NULL : m_at(segments, i), *x0, *x1, *y0, *y1, *dy, *dx, *sum, *coord, *run;
         int aligned; double checked;
-        M_GET(x0, M_ATTR(s, "x0")); M_GET(x1, M_ATTR(s, "x1"));
-        M_GET(y0, M_ATTR(s, "y0")); M_GET(y1, M_ATTR(s, "y1"));
+        if (native_segments && !((SegmentList *)segments)->cache[i]) {
+            SegmentRecord r = ((SegmentList *)segments)->records[i];
+            /* Bound both integer sums/differences below 2**53. In this
+             * domain double arithmetic exactly mirrors Python integers;
+             * floats retain the original subtraction/addition/division order.
+             * Exotic or previously exposed coordinates use the object path. */
+            const double exact_half = 4503599627370495.0;
+            if (fabs(r.x0.v) <= exact_half && fabs(r.x1.v) <= exact_half &&
+                fabs(r.y0.v) <= exact_half && fabs(r.y1.v) <= exact_half) {
+                SegmentNumber low, high;
+                double center;
+                PyObject *target;
+                if (fabs(r.y1.v - r.y0.v) <= numeric_tolerance) {
+                    center = (r.y0.v + r.y1.v) / 2.0;
+                    low = r.x0; high = r.x1; target = horizontal;
+                } else if (fabs(r.x1.v - r.x0.v) <= numeric_tolerance) {
+                    center = (r.x0.v + r.x1.v) / 2.0;
+                    low = r.y0; high = r.y1; target = vertical;
+                } else continue;
+                M_GET(coord, M_KEEP(PyFloat_FromDouble(center)));
+                M_GET(x0, M_KEEP(table_segment_number(low)));
+                M_GET(x1, M_KEEP(table_segment_number(high)));
+                M_GET(run, M_TUP(3, coord, x0, x1));
+                M_OK(PyList_Append(target, run));
+                continue;
+            }
+        }
+        if (native_segments) {
+            M_OK(table_segment_coords(&pool, (SegmentList *)segments, i, &x0, &y0, &x1, &y1));
+        } else {
+            M_GET(x0, M_ATTR(s, "x0")); M_GET(x1, M_ATTR(s, "x1"));
+            M_GET(y0, M_ATTR(s, "y0")); M_GET(y1, M_ATTR(s, "y1"));
+        }
         M_OK(geo_double(x0, &checked)); M_OK(geo_double(x1, &checked));
         M_OK(geo_double(y0, &checked)); M_OK(geo_double(y1, &checked));
         M_GET(dy, M_KEEP(PyNumber_Subtract(y1, y0))); M_GET(dy, M_KEEP(PyNumber_Absolute(dy)));
@@ -272,10 +445,16 @@ static PyObject *ct_build_tables(PyObject *self, PyObject *args, PyObject *kwarg
      * the Python path. Defer the same checks until a candidate exists. */
     { PyObject *type;
       M_GET(type, M_ATTR(mod, "Segment"));
-      if (shorts != Py_None) M_OK(m_preflight(shorts, type, segment_names));
+      int native_shorts = table_segment_list(shorts);
+      if (native_shorts < 0) goto done;
+      if (shorts != Py_None && !native_shorts) M_OK(m_preflight(shorts, type, segment_names));
       M_GET(type, M_ATTR(mod, "Fragment")); M_OK(m_preflight(fragments, type, fragment_names));
     }
-    M_GET(dash, M_NATIVE(short_dash_runs, 2, shorts, tolerance));
+    if (table_segment_list(shorts)) {
+        M_GET(dash, m_native(&pool, self, table_native_short_dash_runs, M_TUP(2, shorts, tolerance)));
+    } else {
+        M_GET(dash, M_NATIVE(short_dash_runs, 2, shorts, tolerance));
+    }
     M_GET(index, M_NATIVE(fragment_index, 1, fragments));
     M_GET(line_cache, M_KEEP(PyDict_New())); M_GET(reference_points, M_KEEP(PyDict_New()));
     mark = pool.n;

@@ -67,7 +67,11 @@ def heading_level_from_style_name(name):
 
 def first_visible_font_size(runs):
     """공백뿐인 선행 런을 건너뛴 첫 글자 런의 포인트 크기."""
-    for run in _content_runs(runs):
+    return _first_visible_content_size(_content_runs(runs))
+
+
+def _first_visible_content_size(runs):
+    for run in runs:
         if run.text.strip():
             return run.font_size_pt
     return 0
@@ -116,7 +120,7 @@ def body_font_size(paragraphs, doc=None):
             continue
         if text.startswith(_BODY_EXCLUDED_PREFIXES):
             continue
-        size = first_visible_font_size(content_runs)
+        size = _first_visible_content_size(content_runs)
         if size <= 0:
             continue
         count += 1
@@ -129,7 +133,7 @@ def body_font_size(paragraphs, doc=None):
 def relative_heading_level(runs, body_size):
     """본문 크기보다 뚜렷이 큰 첫 글자 런만 H1~H3로 판정한다."""
     content_runs = _content_runs(runs)
-    size = first_visible_font_size(content_runs)
+    size = _first_visible_content_size(content_runs)
     text = ''.join(run.text for run in content_runs).strip()
     if len(text) > MAX_FONT_HEADING_LENGTH or text.startswith(_BODY_EXCLUDED_PREFIXES):
         # 주석(※·*·주:)·단위 줄은 글꼴이 커도 제목이 아니다.

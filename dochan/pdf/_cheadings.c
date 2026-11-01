@@ -5,7 +5,7 @@
 #include <Python.h>
 #include <stdint.h>
 
-static PyObject *bailout, *replace_fn;
+static PyObject *bailout, *run_fields, *run_names;
 static PyObject *paragraph_type, *run_type, *line_type, *segment_type, *namespace_type;
 static int exact_type(PyObject *o, PyObject *expected)
 {
@@ -92,11 +92,24 @@ static int append_span(Spans *spans, Py_ssize_t start, Py_ssize_t end, PyObject 
 }
 static PyObject *replacement(Pool *p, PyObject *run, PyObject *text, PyObject *size)
 {
-    PyObject *args = keep(p, PyTuple_Pack(1, run));
+    /* Exact TextRun only: copy declared init fields, as dataclasses.replace
+     * does, without calling its Python field loop. Keep the constructor and
+     * equality hooks: their semantics are part of the model contract. */
     PyObject *kwargs = keep(p, PyDict_New());
-    if (!args || !kwargs || PyDict_SetItemString(kwargs, "text", text) < 0) return NULL;
+    PyObject *args = keep(p, PyTuple_New(0));
+    Py_ssize_t i;
+    if (!kwargs || !args || PyDict_SetItemString(kwargs, "text", text) < 0) return NULL;
     if (size && PyDict_SetItemString(kwargs, "font_size_pt", size) < 0) return NULL;
-    return keep(p, PyObject_Call(replace_fn, args, kwargs));
+    for (i = 0; i < PyList_Size(run_names); i++) {
+        PyObject *name = PyList_GetItem(run_names, i);
+        PyObject *value;
+        int present = PyDict_Contains(kwargs, name);
+        if (present < 0) return NULL;
+        if (present) continue;
+        value = keep(p, PyObject_GetAttr(run, name));
+        if (!value || PyDict_SetItem(kwargs, name, value) < 0) return NULL;
+    }
+    return keep(p, PyObject_Call(run_type, args, kwargs));
 }
 static PyObject *sized_runs(PyObject *self, PyObject *args)
 {
@@ -107,6 +120,26 @@ static PyObject *sized_runs(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "OOO:sized_runs", &paragraph, &lines, &sizes)) return NULL;
     if (!exact_type(paragraph, paragraph_type)
             || !PyList_CheckExact(lines) || !PyDict_CheckExact(sizes)) { reject(); return NULL; }
+    /* A changed dataclass schema is unsupported; never reuse stale field names. */
+    {
+        PyObject *fields = attr(&pool, run_type, "__dataclass_fields__");
+        PyObject *name, *field;
+        Py_ssize_t pos = 0, field_index = 0;
+        int equal;
+        if (!fields) goto done;
+        if (!PyDict_CheckExact(fields)) { reject(); goto done; }
+        equal = PyObject_RichCompareBool(fields, run_fields, Py_EQ);
+        if (equal < 0) goto done;
+        if (!equal) { reject(); goto done; }
+        while (PyDict_Next(fields, &pos, &name, &field)) {
+            PyObject *init = attr(&pool, field, "init");
+            if (!init) goto done;
+            equal = PyObject_RichCompareBool(name, PyList_GetItem(run_names, field_index++), Py_EQ);
+            if (equal < 0) goto done;
+            if (!equal) { reject(); goto done; }
+            if (init != Py_True) { reject(); goto done; }
+        }
+    }
     runs = attr(&pool, paragraph, "runs");
     if (!runs) goto done;
     if (!PyList_CheckExact(runs)) { reject(); goto done; }
@@ -248,12 +281,8 @@ static PyObject *import_type(const char *module_name, const char *name)
 }
 PyMODINIT_FUNC PyInit__cheadings(void)
 {
-    PyObject *m = PyModule_Create(&module), *dataclasses;
+    PyObject *m = PyModule_Create(&module);
     if (!m) return NULL;
-    dataclasses = PyImport_ImportModule("dataclasses");
-    if (!dataclasses) { Py_DECREF(m); return NULL; }
-    replace_fn = PyObject_GetAttrString(dataclasses, "replace");
-    Py_DECREF(dataclasses);
     paragraph_type = import_type("dochan.model.document", "Paragraph");
     run_type = import_type("dochan.model.document", "TextRun");
     line_type = import_type("dochan.pdf.content", "_Line");
@@ -262,8 +291,16 @@ PyMODINIT_FUNC PyInit__cheadings(void)
     if (!paragraph_type || !run_type || !line_type || !segment_type || !namespace_type) {
         Py_DECREF(m); return NULL;
     }
+    {
+        PyObject *fields = PyObject_GetAttrString(run_type, "__dataclass_fields__");
+        if (!fields) { Py_DECREF(m); return NULL; }
+        run_fields = PyDict_Copy(fields);
+        run_names = PyDict_Keys(fields);
+        Py_DECREF(fields);
+        if (!run_fields || !run_names) { Py_DECREF(m); return NULL; }
+    }
     bailout = PyErr_NewException("dochan.pdf._cheadings.Bailout", PyExc_Exception, NULL);
-    if (!replace_fn || !bailout) { Py_DECREF(m); return NULL; }
+    if (!bailout) { Py_DECREF(m); return NULL; }
     Py_INCREF(bailout);
     if (PyModule_AddObject(m, "Bailout", bailout) < 0) { Py_DECREF(bailout); Py_DECREF(m); return NULL; }
     return m;

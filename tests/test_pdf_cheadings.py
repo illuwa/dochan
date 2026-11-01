@@ -98,3 +98,79 @@ def test_native_used_custom_size_bails():
     native = pytest.importorskip('dochan.pdf._cheadings')
     with pytest.raises(native.Bailout):
         native.sized_runs(Paragraph(runs=[TextRun('abc')]), [line(['abc'])], {0: object()})
+
+
+def test_native_does_not_call_dataclasses_replace():
+    import dataclasses
+    import sys
+    native = pytest.importorskip('dochan.pdf._cheadings')
+    para = Paragraph(runs=[TextRun('abc'), TextRun('def', bold=True)])
+    calls = []
+
+    def profile(frame, event, arg):
+        if event == 'call' and frame.f_code is dataclasses.replace.__code__:
+            calls.append(1)
+
+    previous = sys.getprofile()
+    try:
+        sys.setprofile(profile)
+        actual = native.sized_runs(para, [line(['abc', 'def'])], {0: 12, 1: 10})
+    finally:
+        sys.setprofile(previous)
+    assert actual == headings._sized_runs_python(para, [line(['abc', 'def'])], {0: 12, 1: 10})
+    assert calls == []
+
+
+def test_native_preserves_every_declared_run_field():
+    from dataclasses import fields
+    native = pytest.importorskip('dochan.pdf._cheadings')
+    values = dict(char_shape_id=7, bold=True, italic=True, underline=True,
+                  strikeout=True, superscript=True, subscript=True,
+                  font_size_pt=-0.0, link='https://example.test', note_ref=9,
+                  provenance={'origin': 'public'}, note_reference_type='endnote',
+                  note_reference_number=3, equation=None)
+    assert set(values) == {field.name for field in fields(TextRun)} - {'text'}
+    para = Paragraph(runs=[TextRun('ab', **values), TextRun('cd', **values)])
+    args = (para, [line(['a', 'b', 'c', 'd'])], {0: 8, 1: 8.0, 2: -0.0, 3: 12})
+    assert native.sized_runs(*args) == headings._sized_runs_python(*args)
+
+
+def test_native_changed_dataclass_fields_bail(monkeypatch):
+    native = pytest.importorskip('dochan.pdf._cheadings')
+    fields = dict(TextRun.__dataclass_fields__)
+    fields.pop('bold')
+    monkeypatch.setattr(TextRun, '__dataclass_fields__', fields)
+    with pytest.raises(native.Bailout):
+        native.sized_runs(Paragraph(runs=[TextRun('a')]), [line(['a'])], {})
+
+
+def test_native_constructor_keyword_order_matches_replace(monkeypatch):
+    native = pytest.importorskip('dochan.pdf._cheadings')
+    para = Paragraph(runs=[TextRun('ab'), TextRun('cd')])
+    args = (para, [line(['ab', 'cd'])], {0: 12, 1: 10})
+    original = TextRun.__init__
+    calls = []
+
+    def init(self, **kwargs):
+        calls.append(tuple(kwargs))
+        original(self, **kwargs)
+
+    monkeypatch.setattr(TextRun, '__init__', init)
+    native.sized_runs(*args)
+    actual = list(calls)
+    calls.clear()
+    headings._sized_runs_python(*args)
+    assert actual == calls
+
+
+def test_native_rejects_custom_schema_without_comparison(monkeypatch):
+    native = pytest.importorskip('dochan.pdf._cheadings')
+    para = Paragraph(runs=[TextRun('a')])
+
+    class UnknownSchema:
+        def __eq__(self, other):
+            raise AssertionError('unsupported metadata must not run user code')
+
+    monkeypatch.setattr(TextRun, '__dataclass_fields__', UnknownSchema())
+    with pytest.raises(native.Bailout):
+        native.sized_runs(para, [line(['a'])], {})

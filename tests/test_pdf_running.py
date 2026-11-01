@@ -223,3 +223,32 @@ def test_outlier_title_size_is_preserved():
     assert [hf.text for _, hf in emitted] == ["Running"]
     assert not drops[1]
     assert len(drops[2]) == len(drops[3]) == 1
+
+
+def test_readability_only_checks_edge_candidates(monkeypatch):
+    from dochan.pdf import running
+    checked = []
+    original = running._readable_line
+
+    def readable(item):
+        checked.append(item.y)
+        return original(item)
+
+    monkeypatch.setattr(running, '_readable_line', readable)
+    lines = [line('body', 100), line('header', 195), line('footer', 5)]
+    assert edge_block(lines, (0, 200), 'header') == [lines[1]]
+    assert edge_block(lines, (0, 200), 'footer') == [lines[2]]
+    assert checked == [195, 5]
+
+
+def test_readability_unicode_controls_and_whitespace():
+    import unicodedata
+    from dochan.pdf.running import _readable_line
+    # C0/C1 includes controls Python treats as whitespace; discard them first.
+    for code in list(range(256)) + [0x1680, 0x2003, 0x2028, 0x2029, 0x3000, 0xFFFD, 0xD800, 0x10FFFF]:
+        for padding in ('', 'a', 'ab', '한글', '\t\u2003'):
+            text = chr(code) + padding
+            visible = [char for char in text if not char.isspace()]
+            unreadable = sum(char == '\ufffd' or unicodedata.category(char) == 'Cc'
+                             for char in visible)
+            assert _readable_line(line(text, 0)) == bool(visible and unreadable * 2 < len(visible))

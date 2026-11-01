@@ -15,6 +15,8 @@ EDGE_FRACTION_RUNNING = 0.12
 MARGIN_GAP_FACTOR = 2.0  # 가장자리 블록과 본문 사이 최소 간격 (글자 크기 배수)
 _WHITESPACE = re.compile(r"\s+")
 _DIGITS = re.compile(r"\d+")
+# Unicode Cc consists of C0/C1 controls; whitespace is removed before counting.
+_UNREADABLE = re.compile(r"[\x00-\x1f\x7f-\x9f\ufffd]")
 _PAGE_NUMBER = re.compile(
     r"(?:[-–—]\s*)?(?:\d{1,4}|[(\[]\d{1,4}[)\]]|"
     r"\d{1,4}\s*/\s*\d{1,4}|"
@@ -57,11 +59,10 @@ def _table_like(line) -> bool:
 
 def _readable_line(line) -> bool:
     """Unmapped font control codes are not a running header or footer."""
-    visible = [char for char in line.text if not char.isspace()]
+    visible = "".join(line.text.split())
     if not visible:
         return False
-    unreadable = sum(char == "\ufffd" or unicodedata.category(char) == "Cc"
-                     for char in visible)
+    unreadable = len(_UNREADABLE.findall(visible))
     return unreadable * 2 < len(visible)
 
 
@@ -70,12 +71,12 @@ def edge_block(lines, bounds, zone: str) -> list:
     span = (top - bottom) * EDGE_FRACTION_RUNNING
     if zone == "header":
         candidates = heapq.nlargest(
-            3, (line for line in lines if line.direction == "ltr" and _readable_line(line)
-                and top - span <= line.y <= top), key=lambda line: line.y)
+            3, (line for line in lines if line.direction == "ltr" and top - span <= line.y <= top
+                and _readable_line(line)), key=lambda line: line.y)
     else:
         candidates = heapq.nsmallest(
-            3, (line for line in lines if line.direction == "ltr" and _readable_line(line)
-                and bottom <= line.y <= bottom + span), key=lambda line: line.y)
+            3, (line for line in lines if line.direction == "ltr" and bottom <= line.y <= bottom + span
+                and _readable_line(line)), key=lambda line: line.y)
     block = []
     for line in candidates:
         if block and abs(line.y - block[-1].y) > 1.5 * block[-1].size:

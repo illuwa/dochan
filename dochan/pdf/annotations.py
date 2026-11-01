@@ -511,11 +511,15 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
         vx, vy = frag.up_x / up, frag.up_y / up
         # Broad phase: all tested character points lie on this baseline-parallel
         # segment. Disjoint regions cannot select or cut any glyph in the run.
-        ends = [(frag.x + ux * d + vx * frag.size * 0.5,
-                 frag.y + uy * d + vy * frag.size * 0.5)
-                for d in (min(frag.char_offsets), max(frag.char_offsets))]
-        left, right = min(x for x, _ in ends), max(x for x, _ in ends)
-        bottom, top = min(y for _, y in ends), max(y for _, y in ends)
+        # Only two endpoints: retain arithmetic/min ordering without four
+        # generator objects and an intermediate list of coordinate tuples.
+        first, last = min(frag.char_offsets), max(frag.char_offsets)
+        x0 = frag.x + ux * first + vx * frag.size * 0.5
+        y0 = frag.y + uy * first + vy * frag.size * 0.5
+        x1 = frag.x + ux * last + vx * frag.size * 0.5
+        y1 = frag.y + uy * last + vy * frag.size * 0.5
+        left, right = min(x0, x1), max(x0, x1)
+        bottom, top = min(y0, y1), max(y0, y1)
         candidates = []
         for low, region_index, x0, x1, high in bounds[:bisect_right(lower_edges, top + 1e-7)]:
             checks += 1

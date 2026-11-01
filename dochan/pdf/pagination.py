@@ -73,8 +73,10 @@ def page_rotation(pdf, page: dict) -> int:
 
 def body_between(fragments, consumed, y_low: float, y_high: float) -> bool:
     """표 밖의 비어 있지 않은 본문 조각이 세로 구간에 있는지 확인."""
-    return any(frag.order not in consumed and y_low < frag.y < y_high
-               and frag.text.strip() for frag in fragments)
+    for frag in fragments:
+        if frag.order not in consumed and y_low < frag.y < y_high and frag.text.strip():
+            return True
+    return False
 
 
 def same_columns(xs_a, xs_b, tolerance: float = 1.5) -> bool:

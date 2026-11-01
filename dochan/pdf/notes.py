@@ -271,7 +271,7 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
     for line in lines:
         if line.y > bottom + (top - bottom) * 0.25:
             if len(line.text.strip()) >= MIN_BODY_LINE_CHARACTERS:
-                weight = min(sum(not char.isspace() for char in line.text), MAX_BODY_LINE_WEIGHT)
+                weight = min(len("".join(line.text.split())), MAX_BODY_LINE_WEIGHT)
                 size = round(line.size, 3)
                 line_sizes[size] += weight
                 line_counts[size] += 1

@@ -522,6 +522,10 @@ def _attach_unique_links(fragments, regions, warnings, allow_clipped_edges):
                 return
             if high + 1e-7 >= bottom and x1 + 1e-7 >= left and x0 - 1e-7 <= right:
                 candidates.append((region_index, regions[region_index]))
+        # No glyph can hit a region outside the broad-phase bounds. This skips
+        # only zero-check work; geometry/neighbor budgets keep their old counts.
+        if not candidates:
+            continue
         targets = []
         for index, char in enumerate(frag.text):
             # 폰트 코드 폭으로 계산한 진행 중앙과 글자 높이 중앙이다.

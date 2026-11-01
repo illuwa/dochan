@@ -18,8 +18,11 @@ class Segment:
     y1: float
 
     def __post_init__(self):
-        self.x0, self.x1 = sorted((self.x0, self.x1))
-        self.y0, self.y1 = sorted((self.y0, self.y1))
+        # Match the stable two-item sort, including equal values and NaNs.
+        if self.x1 < self.x0:
+            self.x0, self.x1 = self.x1, self.x0
+        if self.y1 < self.y0:
+            self.y0, self.y1 = self.y1, self.y0
 
     @property
     def length(self) -> float:

@@ -351,6 +351,8 @@ class ToUnicodeCMap:
         self.mapping: Dict[Tuple[int, int], str] = {}
         self.code_lengths: Set[int] = set()
         self.truncated = False
+        self._decode_lengths_key = None
+        self._decode_sizes = [1]
 
     def _mapping_full(self) -> bool:
         if len(self.mapping) >= MAX_MAPPING_ENTRIES:
@@ -361,7 +363,11 @@ class ToUnicodeCMap:
     def decode(self, data: bytes) -> str:
         # 긴 코드 우선 — 1/2바이트 혼재 CMap 에서 2바이트 코드가
         # 1바이트로 오매칭되는 것을 막는다 (감수 2차 M3)
-        sizes = sorted((s for s in self.code_lengths if s > 0), reverse=True) or [1]
+        # code_lengths is public and mutable; compare values, not identity or size.
+        if self.code_lengths != self._decode_lengths_key:
+            self._decode_lengths_key = self.code_lengths.copy()
+            self._decode_sizes = sorted((s for s in self.code_lengths if s > 0), reverse=True) or [1]
+        sizes = self._decode_sizes
         min_size = sizes[-1]
         out = []
         i = 0
@@ -420,10 +426,16 @@ class ToUnicodeCMap:
             else:
                 base = int(tokens[i + 2], 16)
                 digits = len(tokens[i + 2])
+                last = base + hi - lo
+                # A single non-surrogate UTF-16 unit is exactly chr(value).
+                # Wider destinations, surrogate ranges and overflow retain decoding.
+                scalar_range = digits <= 4 and (0 <= base <= last < 0xd800
+                                                or 0xe000 <= base <= last <= 0xffff)
                 for k in range(hi - lo + 1):
                     if self._mapping_full():
                         break
-                    self.mapping[(length, lo + k)] = _int_to_text(base + k, digits)
+                    self.mapping[(length, lo + k)] = (chr(base + k) if scalar_range
+                                                    else _int_to_text(base + k, digits))
                 i += 3
 
 

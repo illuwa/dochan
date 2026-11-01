@@ -31,7 +31,7 @@ from .headings import (candidate_geometry, finalize_emphasized_headings,
 from .pagination import (EDGE_FRACTION, HEADER_FOOTER_ZONE, HeadInfo, TailInfo, body_between,
                          continues, merge_continued, page_bounds, page_rotation,
                          repeated_header_rows)
-from .notes import detect_notes, detect_endnotes, endnote_references
+from .notes import detect_notes, detect_endnotes, endnote_references, horizontal_note_fragments
 from .running import detect_running
 from .annotations import CommentExtractor, DestinationResolver, attach_comments, attach_links, link_regions, text_string
 
@@ -100,6 +100,40 @@ _IMAGE_CONTENT_TYPES = {
     "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
     "jp2": "image/jp2", "tif": "image/tiff", "tiff": "image/tiff",
 }
+
+
+def _page_paragraphs(elements):
+    """Document.find_all paragraph order, identity guard and depth limit, without a document."""
+    from itertools import chain
+    from ..model.table import Table
+    from ..model.header_footer import HeaderFooter, Footnote
+
+    seen = set()
+    stack = [(iter(elements), 0)]
+    while stack:
+        iterator, depth = stack[-1]
+        try:
+            element = next(iterator)
+        except StopIteration:
+            stack.pop()
+            continue
+        identity = id(element)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if isinstance(element, Paragraph):
+            yield element
+        if depth >= 32:
+            continue
+        if isinstance(element, Table):
+            # Push caption before cells so the LIFO stack visits it last.
+            stack.append((iter(element.caption), depth + 1))
+            stack.append((chain.from_iterable(cell.paragraphs
+                                              for row in element.rows for cell in row), depth + 1))
+        elif isinstance(element, Image):
+            stack.append((iter(element.caption), depth + 1))
+        elif isinstance(element, (HeaderFooter, Footnote)):
+            stack.append((iter(element.paragraphs), depth + 1))
 
 
 def _image_asset(img: Image, page_number: int, index: int) -> AssetRef:
@@ -217,13 +251,18 @@ class PDFReader:
                                  allow_clipped_edges=True)
                     note_mcids = set()
                     try:
+                        note_horizontal = horizontal_note_fragments(page_content.fragments)
                         notes, consumed_notes, references, next_note_number = detect_notes(
                             page_content.fragments, page_content.segments, draft.bounds,
-                            page_number, next_note_number, pdf.warnings)
+                            page_number, next_note_number, pdf.warnings, _horizontal=note_horizontal)
                         draft.notes = notes
                         for fragment in page_content.fragments:
                             fragment.note_ref = references.get(fragment.order, 0)
-                        draft.note_markers = endnote_references(page_content.fragments, pdf.warnings)
+                        # Accepted split note markers can widen a fragment. Revalidate
+                        # those pages before endnotes, including arithmetic overflow.
+                        draft.note_markers = endnote_references(
+                            page_content.fragments, pdf.warnings,
+                            _horizontal=None if references else note_horizontal)
                         note_mcids = {mcid for fragment in page_content.fragments
                                       if fragment.order in consumed_notes for mcid in fragment.mcids}
                         page_content.fragments = [fragment for fragment in page_content.fragments
@@ -459,10 +498,10 @@ class PDFReader:
         draft.section.elements.extend(paragraph for paragraph in draft.links
                                       if paragraph.runs[0].link not in surviving)
         draft.section.elements.extend(draft.images)
-        anchored = {run.note_reference_number
-                    for paragraph in Document(sections=[Section(
-                        elements=draft.section.elements + draft.notes)]).find_all("paragraph")
-                    for run in paragraph.runs if run.note_reference_type == "comment"}
+        anchored = ({run.note_reference_number
+                     for paragraph in _page_paragraphs(draft.section.elements + draft.notes)
+                     for run in paragraph.runs if run.note_reference_type == "comment"}
+                    if draft.comments else set())
         draft.section.elements.extend(element for element in draft.comments
                                       if not (isinstance(element, Paragraph)
                                               and element.runs

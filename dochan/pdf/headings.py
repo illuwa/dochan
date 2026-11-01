@@ -30,6 +30,7 @@ def horizontal_bounds(pdf, page):
 def sized_runs(paragraph, lines, sizes):
     """조립된 런의 문자·링크·주석을 유지하고 조각 경계의 실제 크기를 복원한다."""
     spans = []
+    paragraph_text = paragraph.text
     offset = 0
     for line in lines:
         text = ''.join(run[0] for run in line.runs)
@@ -50,10 +51,10 @@ def sized_runs(paragraph, lines, sizes):
         offset += length
         if line is not lines[-1]:
             # 병합 줄은 공백 없이 이어질 수도 있다. 최종 문자열에서만 구분자를 확인한다.
-            if paragraph.text[offset:offset + 1].isspace():
+            if paragraph_text[offset:offset + 1].isspace():
                 _append_size_span(spans, offset, offset + 1, line.size)
                 offset += 1
-    if offset != len(paragraph.text):
+    if offset != len(paragraph_text):
         return paragraph.runs
     result = []
     position = 0

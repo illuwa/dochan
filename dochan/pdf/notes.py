@@ -33,8 +33,19 @@ _DIGITS = re.compile(r"^\s*\d{1,3}\s*$")
 
 
 def _finite_fragment(frag):
-    return all(math.isfinite(value) for value in
-               (frag.x, frag.y, frag.width, frag.size))
+    return (math.isfinite(frag.x) and math.isfinite(frag.y)
+            and math.isfinite(frag.width) and math.isfinite(frag.size))
+
+
+def horizontal_note_fragments(fragments):
+    """Share direction classification after extract_page's finite-coordinate filter.
+
+    Both content extraction paths filter non-finite geometry. Standalone note
+    calls still validate their own input; only the reader supplies this list.
+    """
+    if len(fragments) > MAX_NOTE_FRAGMENTS:
+        return []
+    return [frag for frag in fragments if frag.size > 0 and writing_direction(frag) == "ltr"]
 
 
 def _spend(budget, count, warnings, label="각주"):
@@ -173,7 +184,8 @@ def _paragraph(line, page_number, strip_marker=False):
     return Paragraph(runs=runs, provenance=provenance)
 
 
-def detect_notes(fragments, segments, bounds, page_number, first_number=1, warnings=None):
+def detect_notes(fragments, segments, bounds, page_number, first_number=1, warnings=None,
+                 *, _horizontal=None):
     """(Footnote 목록, 소비 정의 order 집합, 참조 order→번호, 다음 번호)를 반환한다."""
     empty = ([], set(), {}, first_number)
     if not fragments:
@@ -182,11 +194,11 @@ def detect_notes(fragments, segments, bounds, page_number, first_number=1, warni
         if warnings is not None:
             warnings.append("WARN: PDF 각주 조각 수 한도(50000) 초과 — 각주 복원 생략")
         return empty
-    if not all(_finite_fragment(frag) for frag in fragments):
+    if _horizontal is None and not all(_finite_fragment(frag) for frag in fragments):
         return empty
     if not all(math.isfinite(value) for value in bounds):
         return empty
-    horizontal = [frag for frag in fragments if frag.size > 0 and writing_direction(frag) == "ltr"]
+    horizontal = horizontal_note_fragments(fragments) if _horizontal is None else _horizontal
     if not horizontal:
         return empty
     bottom, top = bounds
@@ -337,14 +349,15 @@ MAX_ENDNOTE_LINES = 200000
 MAX_ENDNOTE_CHARACTERS = 4 * 1024 * 1024
 
 
-def endnote_references(fragments, warnings=None):
+def endnote_references(fragments, warnings=None, *, _horizontal=None):
     """앞 페이지의 확실한 위첨자 후보만 보존한다. 본문 전체를 중복 보관하지 않는다."""
     if len(fragments) > MAX_NOTE_FRAGMENTS:
         if warnings is not None:
             warnings.append("WARN: PDF 미주 조각 수 한도 초과 — 참조 복원 생략")
         return []
-    horizontal = [f for f in fragments if _finite_fragment(f) and f.size > 0
-                  and writing_direction(f) == "ltr"]
+    horizontal = (_horizontal if _horizontal is not None else
+                  [f for f in fragments if _finite_fragment(f) and f.size > 0
+                   and writing_direction(f) == "ltr"])
     markers = [(f, _ENDNOTE_MARKER.fullmatch(f.text)) for f in horizontal
                if not f.note_ref]
     markers = [(f, m) for f, m in markers if m]

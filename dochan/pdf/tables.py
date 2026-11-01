@@ -190,13 +190,14 @@ def _make_grid(horizontal, vertical, xs, ys, tolerance, page_number):
     return grid, owners, boxes
 
 
-def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=None):
+def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=None, reference_points=None):
     by_cell = defaultdict(list)
     cols = len(xs) - 1
     ascending_y = list(reversed(ys))
     consumed = set()
     for frag in fragments:
-        x, y = _reference_point(frag)
+        x, y = (reference_points[id(frag)] if reference_points is not None
+                else _reference_point(frag))
         c = bisect_right(xs, x) - 1
         r = len(ys) - 2 - (bisect_right(ascending_y, y) - 1)
         if not (0 <= c < cols and 0 <= r < len(grid)):
@@ -227,7 +228,8 @@ def _assign_text(grid, owners, boxes, xs, ys, fragments, page_number, breaks=Non
 _NUMBER = re.compile(r"[+−-]?\d[\d,]*(?:\.\d+)?%?")
 
 
-def _numeric_row_rules(horizontal, vertical, xs, ys, fragments, tolerance):
+def _numeric_row_rules(horizontal, vertical, xs, ys, fragments, tolerance,
+                       reference_points=None):
     """Split a ruled band only when three numeric columns agree on every row.
 
     No prose-based row inference: all text must align with the same baselines,
@@ -241,17 +243,27 @@ def _numeric_row_rules(horizontal, vertical, xs, ys, fragments, tolerance):
         h_runs[y].append((lo, hi))
     for x, lo, hi in vertical:
         v_runs[x].append((lo, hi))
+    # Assign each fragment to its original band once, preserving input order.
+    # Keep the original workload guard above: it is part of the output contract.
+    bands = defaultdict(list)
+    ascending_y = list(reversed(ys))
+    for fragment in fragments:
+        x, y = (reference_points[id(fragment)] if reference_points is not None
+                else _reference_point(fragment))
+        band = len(ys) - 1 - bisect_right(ascending_y, y)
+        if (0 <= band < len(ys) - 1
+                and ys[band + 1] + 0.5 < y < ys[band] - 0.5
+                and xs[0] + 0.5 < x < xs[-1] - 0.5):
+            bands[band].append((bisect_right(xs, x) - 1, fragment))
     additions = []
-    for top, bottom in zip(ys, ys[1:]):
+    for band, (top, bottom) in enumerate(zip(ys, ys[1:])):
         if (not _covered(h_runs[top], xs[0], xs[-1], tolerance)
                 or not _covered(h_runs[bottom], xs[0], xs[-1], tolerance)
                 or any(not _covered(v_runs[x], bottom, top, tolerance) for x in xs[1:-1])):
             continue
         columns = defaultdict(list)
-        for fragment in fragments:
-            x, y = _reference_point(fragment)
-            if bottom + 0.5 < y < top - 0.5 and xs[0] + 0.5 < x < xs[-1] - 0.5:
-                columns[bisect_right(xs, x) - 1].append(fragment)
+        for column, fragment in bands[band]:
+            columns[column].append(fragment)
         lines = [assemble_lines(sorted(columns[c], key=lambda f: (-across(f), along(f))))
                  for c in range(len(xs) - 1)]
         numeric = [column for column in lines if len(column) >= 2 and all(
@@ -463,11 +475,14 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
     vertical = _snap_runs(vertical, tolerance)
     dash_runs = _short_dash_runs(short_segments, tolerance)
     components = []
-    index = _fragment_index(fragments)
     grouped = _components(horizontal, vertical, tolerance)
     if grouped is None:
         _warn(warnings, 'WARN: PDF 괘선 교차 검사 수 한도(2000000) 초과 — 표 생략')
         return []
+    if not grouped:
+        return []
+    index = _fragment_index(fragments)
+    reference_points = {id(frag): point for point, frag in index[0]}
     separated = []
     component_boxes = {}
     split_budget = SplitBudget()
@@ -509,7 +524,7 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         bbox = (xs[0], ys[-1], xs[-1], ys[0])
         if bbox[2] - bbox[0] >= 8 and bbox[3] - bbox[1] >= 8:
             hs, ys = _numeric_row_rules(hs, vs, xs, ys,
-                                       _fragments_inside(index, bbox), tolerance)
+                                       _fragments_inside(index, bbox), tolerance, reference_points)
             components.append((bbox, hs, vs, xs, ys))
     components.sort(key=lambda v: -_area(v[0]))
     remaining = MAX_PAGE_CELLS
@@ -562,7 +577,7 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
             node.grid, node.owners, node.boxes, node.xs, node.ys,
             [frag for frag in _fragments_inside(index, node.bbox)
              if frag.order not in used_orders],
-            page_number, breaks)
+            page_number, breaks, reference_points)
         for child in node.children:
             events[child.owner_key].append((child.bbox[3], 1, child.anchor_order,
                                             Table(rows=child.grid)))

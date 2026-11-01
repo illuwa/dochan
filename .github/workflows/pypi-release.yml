@@ -162,9 +162,11 @@ jobs:
           - target: macos_arm64
             os: macos-14
             arch: arm64
+            host_platform: macosx-11.0-arm64
           - target: macos_x86_64
             os: macos-15-intel
             arch: x86_64
+            host_platform: macosx-10.13-x86_64
     defaults:
       run:
         shell: bash
@@ -200,12 +202,14 @@ jobs:
                 --requirements wheel-test-requirements.txt
             '
 
-      # The hosted macOS Python is universal2; without ARCHFLAGS both runners emit the
-      # same macosx_*_universal2 wheel name and one overwrites the other at publish time.
+      # The hosted macOS Python is universal2: ARCHFLAGS alone still tags the wheel
+      # universal2 (1.16.1 tag run), so the host platform is pinned per runner to get
+      # distinct macosx_11_0_arm64 / macosx_10_13_x86_64 wheels.
       - name: Build native wheel and verify installed artifact
         if: ${{ !startsWith(matrix.target, 'manylinux_') }}
         env:
           ARCHFLAGS: "-arch ${{ matrix.arch }}"
+          _PYTHON_HOST_PLATFORM: ${{ matrix.host_platform }}
         run: |
           python -m pip install --disable-pip-version-check "build==1.5.0"
           python -m build --wheel --outdir wheelhouse

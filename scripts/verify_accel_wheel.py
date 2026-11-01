@@ -8,7 +8,7 @@ import venv
 import zipfile
 
 
-EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects")
+EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap")
 TARGETS = {"manylinux_x86_64", "manylinux_aarch64", "macos_arm64", "macos_x86_64"}
 
 
@@ -103,12 +103,13 @@ import os, pathlib, sys
 import dochan
 import dochan.pdf.content as c
 from dochan.pdf.objects import OBJECT_PARSER_BACKEND
+from dochan.pdf.cmap import CMAP_BACKEND
 location = pathlib.Path(dochan.__file__).resolve()
 assert location.is_relative_to(pathlib.Path(sys.prefix).resolve()), location
-backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND)
+backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND, CMAP_BACKEND)
 expected = "python" if os.environ.get("DOCHAN_DISABLE_ACCEL") == "1" else "c"
 print("Installed:", location, "backends:", backends, flush=True)
-assert backends == (expected,) * 4, backends
+assert backends == (expected,) * 5, backends
 '''
         for disabled in (False, True):
             env = os.environ.copy()

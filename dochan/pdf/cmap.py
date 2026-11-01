@@ -4,12 +4,22 @@
 bfchar/bfrange 해석이 한글 텍스트 추출의 핵심이다.
 """
 import re
+import os
 import base64
 import bisect
 import heapq
 import zlib
 from functools import lru_cache
 from typing import Dict, Set, Tuple
+
+_ccmap = None
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from . import _ccmap
+    except ImportError:
+        pass
+CMAP_BACKEND = "c" if _ccmap is not None else "python"
+
 
 _TO_UNICODE_BLOCK_TOKEN = re.compile(rb"(begin|end)(codespacerange|bfchar|bfrange)")
 _HEX_RE = re.compile(rb"<([0-9A-Fa-f]+)>")
@@ -39,7 +49,7 @@ def _blocks(source, token_pattern, kinds):
             active = None
 
 
-def _flatten_ranges(rows, constant=False):
+def _flatten_ranges_python(rows, constant=False):
     """Overlay intersecting rows in source order, in O(n log n) time."""
     events = []
     for index, (lo, hi, cid) in enumerate(rows):
@@ -67,6 +77,15 @@ def _flatten_ranges(rows, constant=False):
             lo, _hi, cid = rows[index]
             result.append((point, events[pos][0] - 1, cid if constant else cid + point - lo))
     return result
+
+
+def _flatten_ranges(rows, constant=False):
+    if _ccmap is not None and (constant is True or constant is False):
+        try:
+            return _ccmap.flatten_ordered(rows)
+        except _ccmap.Bailout:
+            pass
+    return _flatten_ranges_python(rows, constant)
 
 
 class EncodingCMap:
@@ -193,7 +212,7 @@ class EncodingCMap:
             pos += size
 
 
-def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cmap=None):
+def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cmap=None, *, _python=False):
     """내장 CMap의 유한한 범위만 읽는다. usecmap은 이름으로 상속한다."""
     if len(data) > MAX_ENCODING_BYTES:
         if warnings is not None:
@@ -208,7 +227,7 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cm
         if name not in seen and len(seen) < 8:
             seen.add(name)
             if parents and name in parents:
-                parent = parse_encoding_cmap(parents[name], warnings, parents, seen)
+                parent = parse_encoding_cmap(parents[name], warnings, parents, seen, _python=_python)
             else:
                 parent = predefined_cmap(name) or parent
         elif warnings is not None:
@@ -219,6 +238,16 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cm
         fields[key] = match.group(1).decode("ascii") if match else ""
     supplement = re.search(rb"/Supplement\s+([0-9]{1,3})\b", source)
     mode = re.search(rb"/WMode\s+([01])\s+def\b", source)
+    spaces, ranges, notdef, truncated = (_encoding_rows_python(source) if _python
+                                        else _encoding_rows(source))
+    if truncated and warnings is not None:
+        warnings.append("WARN: Encoding CMap 항목 또는 범위 한도 초과 — 일부만 사용")
+    return EncodingCMap(spaces, ranges, notdef, parent, fields[b"Registry"],
+                        fields[b"Ordering"], int(supplement.group(1)) if supplement else 0,
+                        int(mode.group(1)) if mode else (parent.wmode if parent else 0), warnings)
+
+
+def _encoding_rows_python(source):
     spaces, ranges, notdef = [], [], []
     count = 0
     truncated = False
@@ -259,21 +288,32 @@ def parse_encoding_cmap(data, warnings=None, parents=None, _seen=None, parent_cm
             count += 1
         if truncated and count >= MAX_ENCODING_RANGES:
             break
-    if truncated and warnings is not None:
-        warnings.append("WARN: Encoding CMap 항목 또는 범위 한도 초과 — 일부만 사용")
-    return EncodingCMap(spaces, ranges, notdef, parent, fields[b"Registry"],
-                        fields[b"Ordering"], int(supplement.group(1)) if supplement else 0,
-                        int(mode.group(1)) if mode else (parent.wmode if parent else 0), warnings)
+    return spaces, ranges, notdef, truncated
+
+
+def _encoding_rows(source):
+    if (_ccmap is not None and MAX_ENCODING_BYTES == 4 * 1024 * 1024
+            and MAX_ENCODING_RANGES == 100_000 and MAX_CODESPACE_RANGES == 100
+            and MAX_CID_SPAN == 0x10ffff):
+        try:
+            return _ccmap.encoding_rows(source)
+        except _ccmap.Bailout:
+            pass
+    return _encoding_rows_python(source)
+
+
+def _parse_encoding_cmap_python(data, warnings=None, parents=None, _seen=None, parent_cmap=None):
+    return parse_encoding_cmap(data, warnings, parents, _seen, parent_cmap, _python=True)
 
 
 @lru_cache(maxsize=32)
 def predefined_cmap(name):
-    from .predefined_cmap_data import TABLES
-
     if name in ("Identity-H", "Identity-V"):
         return EncodingCMap(((2, 0, 65535),), ((2, 0, 65535, 0),),
                             registry="Adobe", ordering="Identity",
                             wmode=int(name == "Identity-V"))
+    from .predefined_cmap_data import TABLES
+
     payload = TABLES.get(name)
     if payload is None:
         return None
@@ -439,7 +479,7 @@ class ToUnicodeCMap:
                 i += 3
 
 
-def parse_tounicode(data: bytes, warnings=None) -> ToUnicodeCMap:
+def _parse_tounicode_python(data: bytes, warnings=None) -> ToUnicodeCMap:
     cmap = ToUnicodeCMap()
     if len(data) > MAX_TOUNICODE_BYTES:
         if warnings is not None:
@@ -475,6 +515,24 @@ def parse_tounicode(data: bytes, warnings=None) -> ToUnicodeCMap:
     if not cmap.code_lengths:
         cmap.code_lengths.add(1)
     return cmap
+
+
+def parse_tounicode(data: bytes, warnings=None) -> ToUnicodeCMap:
+    if (_ccmap is not None and MAX_TOUNICODE_BYTES == 16 * 1024 * 1024
+            and MAX_MAPPING_ENTRIES == 100_000 and _MAX_RANGE == 65536):
+        try:
+            mapping, lengths, truncated = _ccmap.tounicode(data)
+        except _ccmap.Bailout:
+            pass
+        else:
+            result = ToUnicodeCMap()
+            result.mapping, result.code_lengths, result.truncated = mapping, lengths, truncated
+            if truncated and warnings is not None:
+                warnings.append(
+                    f"WARN: ToUnicode CMap 매핑 수가 한도({MAX_MAPPING_ENTRIES})를 초과 — 일부만 사용"
+                )
+            return result
+    return _parse_tounicode_python(data, warnings)
 
 
 def _hex_to_text(hex_tok: bytes) -> str:

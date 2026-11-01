@@ -6,7 +6,7 @@ import pytest
 from scripts.verify_accel_wheel import validate_accel_wheel, validate_release
 
 
-def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects")):
+def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap")):
     with zipfile.ZipFile(path, "w") as archive:
         for name in extensions:
             archive.writestr(f"dochan/pdf/{name}.abi3.so", b"test")
@@ -87,4 +87,11 @@ def test_accel_wheel_requires_object_parser(tmp_path):
     wheel = _wheel(tmp_path / "dochan-1.15.0-cp39-abi3-macosx_11_0_arm64.whl",
                    ("_cscan", "_cinterp", "_clines"))
     with pytest.raises(ValueError, match="_cobjects"):
+        validate_accel_wheel(wheel)
+
+
+def test_accel_wheel_requires_font_preparation(tmp_path):
+    wheel = _wheel(tmp_path / "dochan-1.15.0-cp39-abi3-macosx_11_0_arm64.whl",
+                   ("_cscan", "_cinterp", "_clines", "_cobjects"))
+    with pytest.raises(ValueError, match="_ccmap"):
         validate_accel_wheel(wheel)

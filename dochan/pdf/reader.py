@@ -13,7 +13,7 @@ from ..model.document import Document, Paragraph, Section, TextRun
 from ..model.image import Image
 from .content import (MAX_FORM_CACHE_BYTES, ContentTextExtractor, FontInfo,
                       VerticalMetrics, assemble_lines, default_byte_decoder)
-from .cmap import encoding_wmode, parse_tounicode, parse_encoding_cmap, predefined_cmap
+from .cmap import _ccmap, encoding_wmode, parse_tounicode, parse_encoding_cmap, predefined_cmap
 from .cid_unicode import (CIDDecoder, MAX_FONT_BYTES, adobe_cid, adobe_space_cid,
                           reverse_truetype_cmap)
 from .images import extract_image_bytes
@@ -947,6 +947,11 @@ class PDFReader:
         arr = pdf.resolve(font.get("Widths"))
         if isinstance(first, int) and isinstance(arr, list):
             resolved = [pdf.resolve(w) for w in arr]
+            if _ccmap is not None:
+                try:
+                    return WidthMap(_ccmap.simple_widths(first, resolved), 500.0)
+                except _ccmap.Bailout:
+                    pass
             return WidthMap.simple(first, resolved, default=500.0)
         base, names = self._core14_encoding(pdf, font)
         if names is not None and "Widths" not in font:
@@ -1001,7 +1006,17 @@ class PDFReader:
                     budget -= min(len(value), budget)
                 else:
                     resolved.append(value)
-            widths = WidthMap.cid(resolved, default_width=default)
+            widths = None
+            if _ccmap is not None:
+                try:
+                    table, actual_default, warnings = _ccmap.cid_widths(resolved, default)
+                except _ccmap.Bailout:
+                    pass
+                else:
+                    widths = WidthMap(table, actual_default, cid_default=not warnings)
+                    widths.reliable, widths.warnings = not warnings, warnings
+            if widths is None:
+                widths = WidthMap.cid(resolved, default_width=default)
             if truncated:
                 pdf.warnings.append("WARN: PDF CID 폭 배열 항목 한도(65536) 초과")
                 widths.reliable = False

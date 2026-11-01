@@ -3,6 +3,7 @@
 AFM은 kerning 없이 PDF 텍스트 연산자가 사용하는 글리프 advance를 제공한다.
 명시적 Widths 또는 내장 폰트 프로그램보다 대체 글꼴 폭을 우선하지 않는다.
 """
+from .cmap import _ccmap
 from .core14_metrics import ENCODINGS, GLYPH_UNICODE, GLYPH_WIDTHS
 
 
@@ -49,6 +50,11 @@ def glyph_names(base_font, encoding, truetype=False):
     name = str(encoding) if encoding is not None else builtin
     if name not in ENCODINGS:
         return None
+    if _ccmap is not None and isinstance(differences, list):
+        try:
+            return _ccmap.differences(ENCODINGS[name], differences)
+        except _ccmap.Bailout:
+            pass
     names = dict(ENCODINGS[name])
     if isinstance(differences, list):
         code = -1

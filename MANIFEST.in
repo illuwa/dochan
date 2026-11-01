@@ -7,3 +7,4 @@ include dochan/pdf/_cinterp_show.h
 include dochan/pdf/_clines.c
 include dochan/utils/_cxml.c
 include dochan/pdf/_cobjects.c
+include dochan/pdf/_ccmap.c

@@ -6,7 +6,7 @@ import pytest
 from scripts.verify_accel_wheel import validate_accel_wheel
 
 
-@pytest.mark.parametrize('missing', ['_cnotes', '_cheadings', '_cbody'])
+@pytest.mark.parametrize('missing', ['_cnotes', '_cheadings', '_cbody', '_clayout'])
 def test_layout_wheel_requires_each_module(tmp_path, missing):
     path = tmp_path / 'dochan-1.0-cp39-abi3-macosx_11_0_arm64.whl'
     # Every accelerator the verifier knows about, so the first missing one is `missing`.

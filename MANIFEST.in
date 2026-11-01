@@ -16,3 +16,4 @@ include dochan/utils/_caes.c
 include dochan/pdf/_cnotes.c
 include dochan/pdf/_cheadings.c
 include dochan/pdf/_cbody.c
+include dochan/pdf/_clayout.c

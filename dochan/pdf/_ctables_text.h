@@ -2,6 +2,9 @@
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+#define CLAYOUT_EMBEDDED
+#include "_clayout.c"
+#undef CLAYOUT_EMBEDDED
 
 /* Intern attribute names once: GetAttrString would allocate each hot-loop key. */
 static const char *tx_attr_names[] = {
@@ -419,7 +422,7 @@ static PyObject *ct_assign_text(PyObject *self, PyObject *args)
         }
         bounds = tx_hold(&a, Py_BuildValue("(dd)", left + .5, right - .5)); if (!bounds) goto done;
         for (j = 0; j < PyList_Size(groups); j++) {
-            PyObject *blocks = tx_hold(&a, PyObject_CallFunctionObjArgs(merge, PyList_GetItem(groups, j), bounds, NULL));
+            PyObject *blocks = tx_hold(&a, ly_merge(PyList_GetItem(groups, j), bounds, layout));
             Py_ssize_t k, nb;
             if (!blocks) goto done;
             nb = PySequence_Size(blocks); if (nb < 0) goto done;
@@ -428,7 +431,7 @@ static PyObject *ct_assign_text(PyObject *self, PyObject *args)
                 if (!block) goto done;
                 y = tx_hold(&a, tx_getattr(block, "y"));
                 order = tx_hold(&a, tx_getattr(block, "order"));
-                paragraph = tx_hold(&a, PyObject_CallMethod(block, "paragraph", "O", page));
+                paragraph = tx_hold(&a, ly_paragraph(block, page, layout));
                 if (!y || !order || !paragraph) goto done;
                 event = tx_hold(&a, Py_BuildValue("(OiOO)", y, 0, order, paragraph)); bucket = tx_bucket(events, key);
                 if (!event || !bucket || PyList_Append(bucket, event) < 0) goto done;
@@ -465,22 +468,15 @@ static int tx_numeric_column(PyObject *lines, PyObject *number)
 {
     Py_ssize_t i, n = PySequence_Size(lines);
     if (n < 0) return -1;
+    (void)number;
     if (n < 2) return 0;
     for (i = 0; i < n; i++) {
-        PyObject *line = tx_item(lines, i), *text, *words; Py_ssize_t j, count; int ok;
+        PyObject *line = tx_item(lines, i), *text; int ok;
         if (!line) return -1;
         ok = tx_horizontal_line(line, 1); if (ok <= 0) return ok;
         text = tx_getattr(line, "text"); if (!text) return -1;
-        words = PyObject_CallMethod(text, "split", NULL); Py_DECREF(text); if (!words) return -1;
-        count = PySequence_Size(words);
-        if (count <= 0) { Py_DECREF(words); return count < 0 ? -1 : 0; }
-        for (j = 0; j < count; j++) {
-            PyObject *match = PyObject_CallMethod(number, "fullmatch", "O", tx_item(words, j));
-            if (!match) { Py_DECREF(words); return -1; }
-            ok = PyObject_IsTrue(match); Py_DECREF(match);
-            if (ok <= 0) { Py_DECREF(words); return ok; }
-        }
-        Py_DECREF(words);
+        ok = ly_numeric_text(text); Py_DECREF(text);
+        if (ok <= 0) return ok;
     }
     return 1;
 }
@@ -504,6 +500,18 @@ static PyObject *ct_numeric_row_rules(PyObject *self, PyObject *args)
     if (ny < 1) { PyErr_SetString(PyExc_ValueError, "ys must not be empty"); goto done; }
     if (tx_double(tolerance, &tol) < 0 || tx_number(xs, 0, &left) < 0 || tx_number(xs, nx - 1, &right) < 0) goto done;
     number = tx_hold(&a, tx_getattr(mod, "_NUMBER"));
+    if (!number) goto done;
+    {
+        PyObject *pattern = tx_hold(&a, tx_getattr(number, "pattern"));
+        PyObject *flags = tx_hold(&a, tx_getattr(number, "flags"));
+        PyObject *expected = tx_hold(&a, PyUnicode_FromString(
+            "[+\xe2\x88\x92-]?\\d[\\d,]*(?:\\.\\d+)?%?"));
+        int equal;
+        if (!pattern || !flags || !expected) goto done;
+        equal = PyObject_RichCompareBool(pattern, expected, Py_EQ);
+        if (equal < 0) goto done;
+        if (!equal || PyLong_AsLong(flags) != 32) { tx_bail(); goto done; }
+    }
     h_runs = tx_hold(&a, PyDict_New()); v_runs = tx_hold(&a, PyDict_New());
     bands = tx_hold(&a, PyDict_New()); additions = tx_hold(&a, PyList_New(0));
     if (!number || !h_runs || !v_runs || !bands || !additions) goto done;

@@ -1,4 +1,5 @@
 """페이지 본문과 표 셀에 공통으로 쓰는 줄바꿈 병합."""
+import os as _os
 import re
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
@@ -122,3 +123,57 @@ def merge_lines(lines, inner_bounds=None) -> List[TextBlock]:
                                     _trim_runs(line.runs), line.y, [line]))
         previous = line
     return blocks
+
+
+# Keep the mirrors callable for differential checks and unsupported inputs.
+_python_merge_lines = merge_lines
+_python_trim_runs = _trim_runs
+_python_paragraph = TextBlock.paragraph
+_original_join = _joins_without_space
+_original_load_model = load_model
+_c_merge_lines = _c_trim_runs = _c_paragraph = None
+_LayoutBailout = None
+LAYOUT_BACKEND = 'python'
+
+if _os.environ.get('DOCHAN_DISABLE_ACCEL') != '1':
+    try:
+        from ._clayout import (
+            merge_lines as _c_merge_lines, trim_runs as _c_trim_runs,
+            paragraph as _c_paragraph, Bailout as _LayoutBailout,
+        )
+    except ImportError:
+        pass
+    else:
+        LAYOUT_BACKEND = 'c'
+
+
+def merge_lines(lines, inner_bounds=None):
+    if (_c_merge_lines is not None and JOIN_OBSERVER is None
+            and _joins_without_space is _original_join
+            and load_model is _original_load_model):
+        try:
+            return _c_merge_lines(lines, inner_bounds)
+        except _LayoutBailout:
+            pass
+    return _python_merge_lines(lines, inner_bounds)
+
+
+def _trim_runs(runs):
+    if _c_trim_runs is not None:
+        try:
+            return _c_trim_runs(runs)
+        except _LayoutBailout:
+            pass
+    return _python_trim_runs(runs)
+
+
+def _paragraph(self, page_number=None):
+    if _c_paragraph is not None:
+        try:
+            return _c_paragraph(self, page_number)
+        except _LayoutBailout:
+            pass
+    return _python_paragraph(self, page_number)
+
+
+TextBlock.paragraph = _paragraph

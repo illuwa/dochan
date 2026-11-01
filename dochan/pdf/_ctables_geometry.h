@@ -106,10 +106,31 @@ static PyObject *geo_tables_attr(const char *name)
     if (!m) return NULL;
     value = PyObject_GetAttrString(m, name); Py_DECREF(m); return value;
 }
+/* Python 3.12 changed sum(float) to compensated summation. Preserve that
+ * runtime's implementation; replacing it with left addition changes bits. */
+static PyObject *geo_sum(PyObject *values)
+{
+    const char *version = Py_GetVersion();
+    PyObject *total, *next; Py_ssize_t i, n = PyList_Size(values);
+    if (strncmp(version, "3.9.", 4) && strncmp(version, "3.10.", 5) &&
+            strncmp(version, "3.11.", 5)) {
+        PyObject *sumfunc = PyDict_GetItemString(PyEval_GetBuiltins(), "sum");
+        if (!sumfunc) { PyErr_SetString(PyExc_RuntimeError, "sum is unavailable"); return NULL; }
+        return PyObject_CallFunctionObjArgs(sumfunc, values, NULL);
+    }
+    if (n < 0) return NULL;
+    total = PyLong_FromLong(0); if (!total) return NULL;
+    for (i = 0; i < n; i++) {
+        next = PyNumber_Add(total, PyList_GetItem(values, i)); Py_DECREF(total);
+        if (!next) return NULL;
+        total = next;
+    }
+    return total;
+}
 static PyObject *ct_snap_runs(PyObject *self, PyObject *args)
 {
     GeoPool pool = {0}; PyObject *input, *tol, *lines, *out, *res = NULL;
-    PyObject *sum, *coord, *spans, *start, *end, *item, *next, *lenobj, *values, *sumfunc;
+    PyObject *sum, *coord, *spans, *start, *end, *item, *next, *lenobj, *values;
     Py_ssize_t i, j, k, n; double tolerance, a, b;
     (void)self;
     if (!PyArg_ParseTuple(args, "OO", &input, &tol)) return NULL;
@@ -127,9 +148,7 @@ static PyObject *ct_snap_runs(PyObject *self, PyObject *args)
             GC(PyList_Append(values, GI(item, 0)));
             GK(next, PyTuple_Pack(2, GI(item, 1), GI(item, 2))); GC(PyList_Append(spans, next));
         }
-        sumfunc = PyDict_GetItemString(PyEval_GetBuiltins(), "sum");
-        if (!sumfunc) { PyErr_SetString(PyExc_RuntimeError, "sum is unavailable"); goto done; }
-        GK(sum, PyObject_CallFunctionObjArgs(sumfunc, values, NULL));
+        GK(sum, geo_sum(values));
         GK(lenobj, PyLong_FromSsize_t(j - i)); GK(coord, PyNumber_TrueDivide(sum, lenobj));
         GC(PyList_Sort(spans)); item = PyList_GetItem(spans, 0); start = GI(item, 0); end = GI(item, 1);
         for (k = 1; k < j - i; k++) {
@@ -198,7 +217,7 @@ done: PyMem_Free(parents); PyMem_Free(sizes); PyMem_Free(xs); return geo_finish(
 static int geo_covered(PyObject *runs, double lo, double hi, double tolerance)
 {
     Py_ssize_t i, n = PyList_Size(runs); double coverage, a, b, value;
-    PyObject *values = NULL, *number = NULL, *sum = NULL, *sumfunc;
+    PyObject *values = NULL, *number = NULL, *sum = NULL;
     int result = -1;
     if (n < 0) return -1;
     if (!n) return 0 >= (hi - lo) * 0.5;
@@ -219,9 +238,7 @@ static int geo_covered(PyObject *runs, double lo, double hi, double tolerance)
         if (!number) goto done;
         if (PyList_SetItem(values, i, number) < 0) goto done;
     }
-    sumfunc = PyDict_GetItemString(PyEval_GetBuiltins(), "sum");
-    if (!sumfunc) { PyErr_SetString(PyExc_RuntimeError, "sum is unavailable"); goto done; }
-    sum = PyObject_CallFunctionObjArgs(sumfunc, values, NULL); if (!sum) goto done;
+    sum = geo_sum(values); if (!sum) goto done;
     coverage = PyFloat_AsDouble(sum); if (PyErr_Occurred()) goto done;
     result = coverage >= (hi - lo) * 0.5;
 done:

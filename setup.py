@@ -30,6 +30,7 @@ if os.environ.get("DOCHAN_BUILD_ACCEL") == "1":
         _extension("dochan.utils._caes", ["dochan/utils/_caes.c"]),
         _extension("dochan.pdf._cnotes", ["dochan/pdf/_cnotes.c"]),
         _extension("dochan.pdf._cheadings", ["dochan/pdf/_cheadings.c"]),
+        _extension("dochan.pdf._clayout", ["dochan/pdf/_clayout.c"]),
         _extension("dochan.pdf._cbody", ["dochan/pdf/_cbody.c"]),
         _extension("dochan.utils._cxml", ["dochan/utils/_cxml.c"]),
         _extension("dochan.pdf._cscan", ["dochan/pdf/_cscan.c"]),
@@ -42,7 +43,7 @@ if os.environ.get("DOCHAN_BUILD_ACCEL") == "1":
         _extension("dochan.pdf._clines", ["dochan/pdf/_clines.c"],
                    depends=["dochan/pdf/_cinterp_profile.h"]),
         _extension("dochan.pdf._ctables", ["dochan/pdf/_ctables.c"],
-                   depends=["dochan/pdf/_ctables_geometry.h", "dochan/pdf/_ctables_text.h"]),
+                   depends=["dochan/pdf/_ctables_geometry.h", "dochan/pdf/_ctables_text.h", "dochan/pdf/_clayout.c"]),
     ]
 
 setup(
@@ -52,7 +53,7 @@ setup(
     exclude_package_data={"dochan.utils": ["_cxml.c", "_caes.c"], "dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
                                          "_cinterp_paths.h", "_cinterp_show.h", "_cinterp_profile.h",
                                          "_clines.c", "_cobjects.c", "_ccmap.c",
-                                         "_cnotes.c", "_cheadings.c", "_cbody.c",
+                                         "_cnotes.c", "_cheadings.c", "_cbody.c", "_clayout.c",
                                          "_ctables.c", "_ctables_geometry.h", "_ctables_text.h"]},
     options={"bdist_wheel": {"py_limited_api": "cp39"}} if extensions else {},
 )

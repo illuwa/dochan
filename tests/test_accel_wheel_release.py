@@ -7,7 +7,7 @@ from scripts.verify_accel_wheel import validate_accel_wheel, validate_release
 
 
 def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables", "_caes",
-                             "_cnotes", "_cheadings", "_cbody")):
+                             "_cnotes", "_cheadings", "_cbody", "_clayout")):
     with zipfile.ZipFile(path, "w") as archive:
         for name in extensions:
             package = "utils" if name == "_caes" else "pdf"

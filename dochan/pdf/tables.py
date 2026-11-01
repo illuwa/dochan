@@ -3,6 +3,7 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field
 from math import isclose
+import os
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -493,7 +494,7 @@ def _supplement_rules(horizontal, vertical, xs, ys, dash_runs):
     return union_overlaps(hs), union_overlaps(vs)
 
 
-def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
+def _build_tables_python(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
                  page_number: Optional[int] = None, warnings: Optional[List[str]] = None,
                  budget: Optional[TableBudget] = None,
                  short_segments: Optional[List[Segment]] = None) -> List[TableCandidate]:
@@ -660,3 +661,52 @@ def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: 
         else:
             node.parent.children.append(node)
     return sorted(result, key=lambda candidate: candidate.anchor_order)
+
+
+_c_build_tables = None
+_CTablesBailout = None
+TABLE_BACKEND = "python"
+# Keep instrumentation and intentional helper replacement observable.
+_TABLE_CALLBACKS = {name: globals()[name] for name in (
+    '_snap_runs', '_components', '_covered', '_rectangles', '_make_grid',
+    '_reading_key', '_cell_lines', '_assign_text', '_numeric_row_rules',
+    '_shared_extent', '_extend_to_rule_extents', '_inside', '_owner_region',
+    '_text_cell_count', '_area', '_reference_axes', '_reference_point',
+    '_fragment_index', '_fragments_inside', '_has_fragment_inside', '_empty_form',
+    '_short_dash_runs', '_supplement_rules', '_warn',
+    'assemble_lines', 'writing_direction', 'merge_lines',
+)}
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from ._ctables import build_tables as _c_build_tables, Bailout as _CTablesBailout
+    except ImportError:
+        pass
+    else:
+        TABLE_BACKEND = "c"
+
+
+def build_tables(segments: List[Segment], fragments: List[Fragment], tolerance: float = 1.5,
+                 page_number: Optional[int] = None, warnings: Optional[List[str]] = None,
+                 budget: Optional[TableBudget] = None,
+                 short_segments: Optional[List[Segment]] = None) -> List[TableCandidate]:
+    """Restore a page; unsupported native inputs replay without partial state."""
+    if (_c_build_tables is not None
+            and all(globals()[name] is original for name, original in _TABLE_CALLBACKS.items())
+            and (warnings is None or type(warnings) is list)
+            and (budget is None or type(budget) is TableBudget)):
+        pending_warnings = None if warnings is None else list(warnings)
+        pending_budget = None if budget is None else TableBudget(budget.remaining)
+        try:
+            result = _c_build_tables(segments, fragments, tolerance, page_number,
+                                     pending_warnings, pending_budget, short_segments)
+        except _CTablesBailout:
+            pass
+        else:
+            if warnings is not None:
+                warnings[:] = pending_warnings
+            if budget is not None:
+                budget.remaining = pending_budget.remaining
+            return result
+    # Outside the exception handler: Python errors keep their original context.
+    return _build_tables_python(segments, fragments, tolerance, page_number,
+                                warnings, budget, short_segments)

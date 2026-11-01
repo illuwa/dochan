@@ -6,7 +6,7 @@ import pytest
 from scripts.verify_accel_wheel import validate_accel_wheel, validate_release
 
 
-def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap")):
+def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables")):
     with zipfile.ZipFile(path, "w") as archive:
         for name in extensions:
             archive.writestr(f"dochan/pdf/{name}.abi3.so", b"test")

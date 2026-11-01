@@ -37,6 +37,8 @@ if os.environ.get("DOCHAN_BUILD_ACCEL") == "1":
                    depends=["dochan/pdf/_cinterp_profile.h"]),
         _extension("dochan.pdf._clines", ["dochan/pdf/_clines.c"],
                    depends=["dochan/pdf/_cinterp_profile.h"]),
+        _extension("dochan.pdf._ctables", ["dochan/pdf/_ctables.c"],
+                   depends=["dochan/pdf/_ctables_geometry.h", "dochan/pdf/_ctables_text.h"]),
     ]
 
 setup(
@@ -45,6 +47,7 @@ setup(
     # The sdist carries the build source; wheels carry executable packages.
     exclude_package_data={"dochan.utils": ["_cxml.c"], "dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
                                          "_cinterp_paths.h", "_cinterp_show.h", "_cinterp_profile.h",
-                                         "_clines.c", "_cobjects.c", "_ccmap.c"]},
+                                         "_clines.c", "_cobjects.c", "_ccmap.c",
+                                         "_ctables.c", "_ctables_geometry.h", "_ctables_text.h"]},
     options={"bdist_wheel": {"py_limited_api": "cp39"}} if extensions else {},
 )

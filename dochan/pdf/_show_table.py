@@ -76,11 +76,15 @@ def font_table(font):
     if font.encoding_cmap is not None:
         return _encoding_table(font)
     decode = font.decode
-    if type(decode) is not MethodType:
-        return _safe_fallback(font)
-    owner = decode.__self__
     step = font.code_bytes
-    if (type(owner) is ToUnicodeCMap and decode.__func__ is ToUnicodeCMap.decode
+    byte_default = decode is default_byte_decoder and step == 1
+    if not byte_default and type(decode) is not MethodType:
+        return _safe_fallback(font)
+    owner = None if byte_default else decode.__self__
+    if byte_default:
+        mapping = _byte_defaults()
+        missing = "\ufffd"
+    elif (type(owner) is ToUnicodeCMap and decode.__func__ is ToUnicodeCMap.decode
             and owner.code_lengths == {step} and type(owner.mapping) is dict):
         mapping = _snapshot_map(owner.mapping, 2, step)
         if mapping is False:
@@ -104,7 +108,7 @@ def font_table(font):
         mapping = tuple(mapping.get(code, missing) for code in range(256))
     return (step, mapping, missing, widths._widths, widths._default,
             widths.reliable, widths._cid_default, font.space_code, font.bold, font.italic,
-            font.link_metrics_reliable, None)
+            font.link_metrics_reliable, True if byte_default else None)
 
 
 def _safe_fallback(font):

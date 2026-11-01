@@ -121,7 +121,7 @@ static int show_get_table(Interpreter *s)
             return bail("invalid glyph flags");
     }
     if ((PyTuple_GetItem(table, 10) != Py_True && PyTuple_GetItem(table, 10) != Py_False) ||
-        (PyTuple_GetItem(table, 11) != Py_None && !sparse && !PyFrozenSet_CheckExact(PyTuple_GetItem(table, 11))))
+        (PyTuple_GetItem(table, 11) != Py_None && PyTuple_GetItem(table, 11) != Py_True && !sparse && !PyFrozenSet_CheckExact(PyTuple_GetItem(table, 11))))
         return bail("invalid glyph reliability");
     s->show_table = table; s->show_font = s->font;
     return 1;
@@ -420,6 +420,16 @@ static int show_can_decode(Interpreter *s, PyObject *raw)
     Py_ssize_t n = PyBytes_Size(raw);
     if (n % step) return 0;
     if (PyTuple_GetItem(s->show_table, 11) == Py_None) return 1;
+    /* cp1252 errors change the entire string to latin-1 in Python. Never
+     * consume even the first item of a TJ containing such an operand. */
+    if (PyTuple_GetItem(s->show_table, 11) == Py_True) {
+        const unsigned char *raw_data = (const unsigned char *)PyBytes_AsString(raw);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            unsigned c = raw_data[i];
+            if (c == 0x81 || c == 0x8d || c == 0x8f || c == 0x90 || c == 0x9d) return 0;
+        }
+        return 1;
+    }
     int sparse = PyTuple_CheckExact(PyTuple_GetItem(s->show_table, 11));
     PyObject *map = PyTuple_GetItem(s->show_table, 1);
     const unsigned char *data = (const unsigned char *)PyBytes_AsString(raw);

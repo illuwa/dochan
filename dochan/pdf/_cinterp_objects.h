@@ -343,6 +343,9 @@ static int objscan_init(ObjScanner *s, PyObject *data)
 
 /* 1 operand, 2 operator, 0 EOF, -1 exception; *value is a new reference.
  * Regex-cursor behavior is identical to _cscan, including position rewinds. */
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define scan_next(...) scan_next_measured(__VA_ARGS__)
+#endif
 static int scan_next(ObjScanner *s, PyObject **value)
 {
     PyObject *backing;
@@ -423,5 +426,16 @@ done:
     Py_DECREF(backing);
     return event;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef scan_next
+static int scan_next(ObjScanner *s, PyObject **value)
+{
+    INTERNAL_START;
+    int result = scan_next_measured(s, value);
+    INTERNAL_END(1);
+    return result;
+}
+#endif
+
 
 #endif

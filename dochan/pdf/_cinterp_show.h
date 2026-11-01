@@ -23,6 +23,10 @@ static PyObject *show_profile(PyObject *self, PyObject *unused)
 #define SHOW_OPERATOR_RESULT(handled) ((void)0)
 #endif
 static PyObject *ShowFields[22];
+enum { SHOW_RELIABLE, SHOW_DICT, SHOW_STACK, SHOW_OVERFLOW, SHOW_TRACK,
+       SHOW_CONTEXT, SHOW_BUDGET, SHOW_STRIP, SHOW_EMPTY, SHOW_NAMES };
+static PyObject *ShowNames[SHOW_NAMES];
+static int show_names_ready;
 /* Validate repository dictionaries without a Python generator per entry.
  * kind: 0 widths, 1 byte Unicode, 2 fixed ToUnicode (normalize keys),
  * 3 Encoding ToUnicode (retain tuple keys). */
@@ -58,11 +62,20 @@ invalid:
 }
 static int show_fields_init(void)
 {
+    if (show_names_ready) return 0;
     static const char *names[] = {"x","y","width","size","text","space_width","bold","italic","order","dir_x","dir_y","up_x","up_y","char_offsets","link_spans","note_ref","link_geometry_reliable","comment_spans","comment_markers","mcids","artifact","invisible"};
     for (int i = 0; i < 22; i++) {
         if (!ShowFields[i]) ShowFields[i] = PyUnicode_InternFromString(names[i]);
         if (!ShowFields[i]) return -1;
     }
+    static const char *attributes[] = {"_link_position_reliable", "__dict__",
+        "_marked_stack", "_marked_overflow", "track_char_positions",
+        "_form_context", "char_positions", "strip", ""};
+    for (int i = 0; i < SHOW_NAMES; i++) {
+        if (!ShowNames[i]) ShowNames[i] = PyUnicode_InternFromString(attributes[i]);
+        if (!ShowNames[i]) return -1;
+    }
+    show_names_ready = 1;
     return 0;
 }
 /* Full horizontal glyph execution. Font snapshots are conservative and no
@@ -71,7 +84,7 @@ static int show_fields_init(void)
 static int show_enter(Interpreter *s)
 {
     if (show_fields_init() < 0) return -1;
-    PyObject *value = PyObject_GetAttrString(s->owner, "_link_position_reliable");
+    PyObject *value = PyObject_GetAttr(s->owner, ShowNames[SHOW_RELIABLE]);
     if (!value) return -1;
     s->link_reliable = PyObject_IsTrue(value); Py_DECREF(value);
     if (s->link_reliable < 0) return -1;
@@ -126,14 +139,14 @@ static int show_get_table(Interpreter *s)
     s->show_table = table; s->show_font = s->font;
     return 1;
 }
-static int show_set(PyObject *dict, const char *key, PyObject *value)
+static int show_set(PyObject *dict, PyObject *key, PyObject *value)
 {
     if (!value) return -1;
-    int ok = PyDict_SetItemString(dict, key, value);
+    int ok = PyDict_SetItem(dict, key, value);
     Py_DECREF(value);
     return ok;
 }
-static int show_number(PyObject *dict, const char *key, Num n)
+static int show_number(PyObject *dict, PyObject *key, Num n)
 {
     return show_set(dict, key, num_obj(n));
 }
@@ -214,6 +227,9 @@ static int show_field_number(PyObject *dict, int index, Num n)
 {
     return show_field(dict, index, num_obj(n));
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define show_fragment(...) show_fragment_measured(__VA_ARGS__)
+#endif
 static int show_fragment(Interpreter *s, PyObject *text, Num start[6], double total,
                          double xs, double ys, double sw, double size,
                          PyObject *offsets, int geometry)
@@ -223,7 +239,7 @@ static int show_fragment(Interpreter *s, PyObject *text, Num start[6], double to
     if (!s->fragment_template) {
         PyObject *sample = PyObject_CallFunction(s->fragment_type, "ddddsd", 0.0, 0.0, 0.0, 0.0, "", 0.0);
         if (!sample) goto done;
-        s->fragment_template = PyObject_GetAttrString(sample, "__dict__"); Py_DECREF(sample);
+        s->fragment_template = PyObject_GetAttr(sample, ShowNames[SHOW_DICT]); Py_DECREF(sample);
         if (!s->fragment_template) goto done;
         if (!PyDict_CheckExact(s->fragment_template)) { bail("invalid Fragment dictionary"); goto done; }
     }
@@ -231,8 +247,8 @@ static int show_fragment(Interpreter *s, PyObject *text, Num start[6], double to
      * for each fragment costs both memory and downstream attribute lookups. */
     dict = PyDict_Copy(s->fragment_template);
     if (!dict) goto done;
-    stack = PyObject_GetAttrString(s->owner, "_marked_stack");
-    overflow = PyObject_GetAttrString(s->owner, "_marked_overflow");
+    stack = PyObject_GetAttr(s->owner, ShowNames[SHOW_STACK]);
+    overflow = PyObject_GetAttr(s->owner, ShowNames[SHOW_OVERFLOW]);
     mcids = PyList_New(0);
     if (!stack || !overflow || !mcids) goto done;
     if (!PyList_CheckExact(stack)) { bail("invalid marked stack"); goto done; }
@@ -273,13 +289,29 @@ static int show_fragment(Interpreter *s, PyObject *text, Num start[6], double to
     /* Generic allocation preserves the public dataclass type, fields, instance
      * dictionary and independent mutable defaults without its Python __init__. */
     frag = PyType_GenericAlloc((PyTypeObject *)s->fragment_type, 0);
-    if (!frag || PyObject_SetAttrString(frag, "__dict__", dict) < 0) goto done;
+    if (!frag || PyObject_SetAttr(frag, ShowNames[SHOW_DICT], dict) < 0) goto done;
     result = PyList_Append(s->frags, frag);
     (void)ys;
 done:
     Py_XDECREF(dict); Py_XDECREF(frag); Py_XDECREF(stack); Py_XDECREF(mcids); Py_XDECREF(overflow);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef show_fragment
+static int show_fragment(Interpreter *s, PyObject *text, Num start[6], double total,
+                         double xs, double ys, double sw, double size,
+                         PyObject *offsets, int geometry)
+{
+    INTERNAL_START;
+    int result = show_fragment_measured(s, text, start, total, xs, ys, sw, size, offsets, geometry);
+    INTERNAL_END(3);
+    return result;
+}
+#endif
+
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define show_raw(...) show_raw_measured(__VA_ARGS__)
+#endif
 static int show_raw(Interpreter *s, PyObject *raw)
 {
     Py_ssize_t bytes = PyBytes_Size(raw);
@@ -336,16 +368,16 @@ static int show_raw(Interpreter *s, PyObject *raw)
         if (n < 0 || length > PY_SSIZE_T_MAX - n) { if (!PyErr_Occurred()) PyErr_NoMemory(); goto done; }
         length += n;
     }
-    PyObject *empty = PyUnicode_FromString("");
-    if (!empty) goto done;
-    text = PyUnicode_Join(empty, pieces); Py_DECREF(empty);
+    /* Exact Unicode, already owned by pieces across width callbacks. */
+    if (count == 1) { text = PyList_GetItem(pieces, 0); Py_INCREF(text); }
+    else text = PyUnicode_Join(ShowNames[SHOW_EMPTY], pieces);
     if (!text) goto done;
     SHOW_PHASE(0);
-    tracking = PyObject_GetAttrString(s->owner, "track_char_positions");
-    context = PyObject_GetAttrString(s->owner, "_form_context");
+    tracking = PyObject_GetAttr(s->owner, ShowNames[SHOW_TRACK]);
+    context = PyObject_GetAttr(s->owner, ShowNames[SHOW_CONTEXT]);
     if (!tracking || !context) goto done;
     if (!PyDict_CheckExact(context)) { bail("invalid glyph context"); goto done; }
-    budget = PyDict_GetItemString(context, "char_positions");
+    budget = PyDict_GetItemWithError(context, ShowNames[SHOW_BUDGET]);
     if (!budget) { bail("missing glyph budget"); goto done; }
     Py_INCREF(budget);
     Num available;
@@ -353,7 +385,7 @@ static int show_raw(Interpreter *s, PyObject *raw)
     int track = PyObject_IsTrue(tracking);
     if (track < 0) goto done;
     track = track && length <= 50000 && length <= available.v;
-    if (track && show_number(context, "char_positions", ni(available.v - length)) < 0) goto done;
+    if (track && show_number(context, ShowNames[SHOW_BUDGET], ni(available.v - length)) < 0) goto done;
     if (matrix_mul(s->tm, s->ctm, start) < 0 || path_hypot(start[0], start[1], &xs) < 0 ||
         path_hypot(start[2], start[3], &ys) < 0) goto done;
     s->link_reliable = explicit_all;
@@ -399,7 +431,7 @@ static int show_raw(Interpreter *s, PyObject *raw)
     if (PyErr_Occurred()) goto done;
     size = s->fs.v * (root ? root : 1.0);
     SHOW_PHASE(2);
-    stripped = PyObject_CallMethod(text, "strip", NULL);
+    stripped = PyObject_CallMethodObjArgs(text, ShowNames[SHOW_STRIP], NULL);
     if (!stripped) goto done;
     if (PyUnicode_GetLength(stripped) && show_fragment(s, text, start, total, xs, ys, sw, size, offsets, geometry) < 0) goto done;
     identity(trans); trans[4] = nf(total);
@@ -413,6 +445,17 @@ done:
     PyMem_Free(widths);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef show_raw
+static int show_raw(Interpreter *s, PyObject *raw)
+{
+    INTERNAL_START;
+    int result = show_raw_measured(s, raw);
+    INTERNAL_END(2);
+    return result;
+}
+#endif
+
 static int show_can_decode(Interpreter *s, PyObject *raw)
 {
     if (!PyBytes_CheckExact(raw)) return 1;

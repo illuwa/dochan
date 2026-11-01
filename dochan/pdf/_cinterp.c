@@ -4,6 +4,7 @@
  * disabled by the build so the affine evaluation order remains unchanged. */
 #define Py_LIMITED_API 0x03090000
 #include <Python.h>
+#include "_cinterp_profile.h"
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -243,6 +244,9 @@ static int move_line(Interpreter *s, Num tx, Num ty)
     memcpy(s->tm, s->tlm, sizeof(s->tm)); return 0;
 }
 #define OP(lit) (size == (Py_ssize_t)(sizeof(lit)-1) && memcmp(op, lit, sizeof(lit)-1) == 0)
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define operate(...) operate_measured(__VA_ARGS__)
+#endif
 static int operate(Interpreter *s, const char *op, Py_ssize_t size)
 {
     Py_ssize_t count = PyList_Size(s->operands);
@@ -331,6 +335,17 @@ static int operate(Interpreter *s, const char *op, Py_ssize_t size)
     }
     return 0;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef operate
+static int operate(Interpreter *s, const char *op, Py_ssize_t size)
+{
+    INTERNAL_START;
+    int result = operate_measured(s, op, size);
+    INTERNAL_END(4);
+    return result;
+}
+#endif
+
 
 #include "_cinterp_show.h"
 
@@ -380,6 +395,9 @@ static PyObject *interp_next_inner(Interpreter *s)
         if (ok < 0 || PyList_SetSlice(s->operands, 0, PyList_Size(s->operands), NULL) < 0) return NULL;
     }
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define interp_next(...) interp_next_measured(__VA_ARGS__)
+#endif
 static PyObject *interp_next(Interpreter *s, PyObject *unused)
 {
     (void)unused;
@@ -388,11 +406,22 @@ static PyObject *interp_next(Interpreter *s, PyObject *unused)
     s->busy = 1;
     if (s->owner && show_enter(s) < 0) { s->busy = 0; return NULL; }
     result = interp_next_inner(s);
-    if (s->owner && result && PyObject_SetAttrString(s->owner, "_link_position_reliable",
+    if (s->owner && result && PyObject_SetAttr(s->owner, ShowNames[SHOW_RELIABLE],
                                                     s->link_reliable ? Py_True : Py_False) < 0) Py_CLEAR(result);
     s->busy = 0;
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef interp_next
+static PyObject *interp_next(Interpreter *s, PyObject *unused)
+{
+    INTERNAL_START;
+    PyObject *result = interp_next_measured(s, unused);
+    INTERNAL_END(0);
+    return result;
+}
+#endif
+
 /* Bulk reads/writes keep Python callbacks inexpensive; scalar properties are
  * also available for callers that only change one field. */
 static PyObject *interp_state(Interpreter *s, PyObject *unused)
@@ -478,6 +507,7 @@ static PyType_Slot slots[] = {
 static PyType_Spec spec = {"dochan.pdf._cinterp.Interpreter",sizeof(Interpreter),0,
                           Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,slots};
 static PyMethodDef module_methods[] = {
+    INTERNAL_METHOD
     {"_snapshot_map",show_snapshot_map,METH_VARARGS,NULL},
     {NULL,NULL,0,NULL}
 };

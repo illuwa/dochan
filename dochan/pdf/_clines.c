@@ -4,6 +4,7 @@
 #define Py_LIMITED_API 0x03090000
 #ifndef DOCHAN_CLINES_NUMERIC_ONLY
 #include <Python.h>
+#include "_cinterp_profile.h"
 #else
 #include <stddef.h>
 typedef void PyObject;
@@ -138,6 +139,9 @@ ordinary_spans(PyObject *spans, int links)
  * Only exact Fragment instances are inspected: a subclass may have getters
  * with side effects. All numeric inputs are finite floats or small exact ints.
  * Integers outside the exactly representable range need Python comparisons. */
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define read_fragment(...) read_fragment_measured(__VA_ARGS__)
+#endif
 static int
 read_fragment(FragmentData *f, PyObject *object, PyObject *fragment_type)
 {
@@ -277,6 +281,17 @@ error:
     }
     return -1;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef read_fragment
+static int read_fragment(FragmentData *f, PyObject *object, PyObject *fragment_type)
+{
+    INTERNAL_START;
+    int result = read_fragment_measured(f, object, fragment_type);
+    INTERNAL_END(1);
+    return result;
+}
+#endif
+
 #endif
 
 /* These functions also compile unchanged into the sanitizer harness. */
@@ -297,6 +312,14 @@ static void
 sort_row(FragmentData **items, FragmentData **scratch, Py_ssize_t n)
 {
     Py_ssize_t width, start;
+    /* PDF producers commonly emit a row in reading order already. The same
+     * strict comparison preserves ties (including signed zero) without any
+     * scratch writes. All coordinates were validated as finite beforehand. */
+    for (start = 1; start < n; start++)
+        if (items[start]->along < items[start - 1]->along)
+            break;
+    if (start == n || n < 2)
+        return;
     for (width = 1; width < n; ) {
         for (start = 0; start < n; ) {
             Py_ssize_t middle = start + (n - start < width ? n - start : width);
@@ -508,7 +531,7 @@ make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
     if (!line)
         goto error;
     orders = PyTuple_New(n);
-    segments = PyList_New(0);
+    segments = PyList_New(n);
     runs = PyList_New(0);
     parts = PyList_New(0);
     if (!orders || !segments || !runs || !parts)
@@ -558,9 +581,8 @@ make_plain_line(FragmentData **row, Py_ssize_t n, PyObject *line_type,
         segment = make_segment(segment_type, f);
         if (!segment)
             goto error;
-        compare = PyList_Append(segments, segment);
-        Py_DECREF(segment);
-        if (compare < 0)
+        /* One segment per fragment; SetItem transfers the owned reference. */
+        if (PyList_SetItem(segments, i, segment) < 0)
             goto error;
         prev_end = end;
         prev_space = f->value[SPACE];
@@ -624,6 +646,9 @@ error:
     return NULL;
 }
 
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define make_row(...) make_row_measured(__VA_ARGS__)
+#endif
 static PyObject *
 make_row(FragmentData *data, Py_ssize_t first, Py_ssize_t end,
          FragmentData **row, FragmentData **scratch, double *gaps, double *references,
@@ -660,6 +685,19 @@ make_row(FragmentData *data, Py_ssize_t first, Py_ssize_t end,
     Py_DECREF(fragments);
     return line;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef make_row
+static PyObject *make_row(FragmentData *data, Py_ssize_t first, Py_ssize_t end,
+         FragmentData **row, FragmentData **scratch, double *gaps, double *references,
+         PyObject *line_type, PyObject *segment_type, PyObject *empty, PyObject *space)
+{
+    INTERNAL_START;
+    PyObject *result = make_row_measured(data, first, end, row, scratch, gaps, references, line_type, segment_type, empty, space);
+    INTERNAL_END(2);
+    return result;
+}
+#endif
+
 
 static int
 object_same_row(FragmentData *f, FragmentData *first, double size, double minimum)
@@ -687,6 +725,9 @@ done:
     return result;
 }
 
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define assemble_lines(...) assemble_lines_measured(__VA_ARGS__)
+#endif
 static PyObject *
 assemble_lines(PyObject *module, PyObject *args)
 {
@@ -805,8 +846,20 @@ done:
     Py_XDECREF(snapshot);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef assemble_lines
+static PyObject *assemble_lines(PyObject *module, PyObject *args)
+{
+    INTERNAL_START;
+    PyObject *result = assemble_lines_measured(module, args);
+    INTERNAL_END(0);
+    return result;
+}
+#endif
+
 
 static PyMethodDef methods[] = {
+    INTERNAL_METHOD
     {"assemble_lines", assemble_lines, METH_VARARGS,
      "Assemble exact Fragment lists; return None when the whole call needs Python."},
     {NULL, NULL, 0, NULL}

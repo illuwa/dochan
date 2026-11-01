@@ -5,6 +5,7 @@
 #define PY_SSIZE_T_CLEAN
 #define Py_LIMITED_API 0x03090000
 #include <Python.h>
+#include "_cinterp_profile.h"
 #include <string.h>
 
 typedef struct { PyObject *bailout, *name, *ref; } ModuleState;
@@ -62,6 +63,9 @@ static int digits(const unsigned char *b, Py_ssize_t n)
 }
 /* Plain small integers avoid allocating a token. Unusual legal spellings
  * (underscores, exponents following a dot, huge integers) use CPython itself. */
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define number(...) number_measured(__VA_ARGS__)
+#endif
 static PyObject *number(Parser *s, Py_ssize_t start, Py_ssize_t size, int *real, int *negative)
 {
     const unsigned char *b = s->b + start;
@@ -117,6 +121,20 @@ static PyObject *number(Parser *s, Py_ssize_t start, Py_ssize_t size, int *real,
     }
     return value;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef number
+static PyObject *number(Parser *s, Py_ssize_t start, Py_ssize_t size, int *real, int *negative)
+{
+    INTERNAL_START;
+    PyObject *result = number_measured(s, start, size, real, negative);
+    INTERNAL_END(1);
+    return result;
+}
+#endif
+
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define name(...) name_measured(__VA_ARGS__)
+#endif
 static PyObject *name(Parser *s, int key)
 {
     Py_ssize_t start, size, i, used = 0;
@@ -152,6 +170,17 @@ static PyObject *name(Parser *s, int key)
     Py_DECREF(text);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef name
+static PyObject *name(Parser *s, int key)
+{
+    INTERNAL_START;
+    PyObject *result = name_measured(s, key);
+    INTERNAL_END(2);
+    return result;
+}
+#endif
+
 /* Two passes bound allocation by decoded string size, not remaining PDF size. */
 static int string_bytes(Parser *s, Py_ssize_t start, int literal,
                         unsigned char *out, Py_ssize_t *used, Py_ssize_t *end)
@@ -322,6 +351,9 @@ static int init_parser(Parser *s, PyObject *module, PyObject *data, Py_ssize_t p
     s->fuel = 32 * 1024 * 1024;
     return 0;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define parse(...) parse_measured(__VA_ARGS__)
+#endif
 static PyObject *parse(PyObject *module, PyObject *args)
 {
     PyObject *data, *value, *result;
@@ -336,6 +368,17 @@ static PyObject *parse(PyObject *module, PyObject *args)
     Py_DECREF(value);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef parse
+static PyObject *parse(PyObject *module, PyObject *args)
+{
+    INTERNAL_START;
+    PyObject *result = parse_measured(module, args);
+    INTERNAL_END(5);
+    return result;
+}
+#endif
+
 static PyObject *scan(PyObject *module, PyObject *args)
 {
     PyObject *data;
@@ -366,6 +409,9 @@ static PyObject *scan(PyObject *module, PyObject *args)
  * first-match duplicate numbers and the caller's xref-index fallback. Failed
  * objects stay absent: diagnostics are produced only when originally requested.
  * Work is bounded across the entire batch, including overlapping objects. */
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define batch(...) batch_measured(__VA_ARGS__)
+#endif
 static PyObject *batch(PyObject *module, PyObject *args)
 {
     PyObject *data, *pairs = NULL, *parsed = NULL, *num = NULL, *off = NULL;
@@ -425,9 +471,23 @@ done:
     Py_XDECREF(pair); Py_XDECREF(value); Py_XDECREF(entry);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef batch
+static PyObject *batch(PyObject *module, PyObject *args)
+{
+    INTERNAL_START;
+    PyObject *result = batch_measured(module, args);
+    INTERNAL_END(3);
+    return result;
+}
+#endif
+
 /* Parse header, object and stream keyword without Python method crossings.
  * Stream length callbacks and recovered-list side effects remain in Python,
  * after this transaction succeeds; no callback is ever replayed. */
+#ifdef DOCHAN_PROFILE_INTERNALS
+#define indirect(...) indirect_measured(__VA_ARGS__)
+#endif
 static PyObject *indirect(PyObject *module, PyObject *args)
 {
     PyObject *data, *num = NULL, *gen = NULL, *value = NULL, *result = NULL;
@@ -460,6 +520,17 @@ done:
     Py_XDECREF(num); Py_XDECREF(gen); Py_XDECREF(value); Py_XDECREF(stream_start);
     return result;
 }
+#ifdef DOCHAN_PROFILE_INTERNALS
+#undef indirect
+static PyObject *indirect(PyObject *module, PyObject *args)
+{
+    INTERNAL_START;
+    PyObject *result = indirect_measured(module, args);
+    INTERNAL_END(4);
+    return result;
+}
+#endif
+
 static PyObject *stream(PyObject *module, PyObject *args)
 {
     PyObject *data, *length;
@@ -497,6 +568,7 @@ static PyObject *stream(PyObject *module, PyObject *args)
 }
 
 static PyMethodDef methods[] = {
+    INTERNAL_METHOD
     {"indirect", indirect, METH_VARARGS, "Parse indirect header and stream start."},
     {"stream", stream, METH_VARARGS, "Select raw stream boundaries."},
     {"parse", parse, METH_VARARGS, "Parse one object transactionally."},

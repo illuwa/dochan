@@ -61,7 +61,7 @@ print(doc.to_markdown())
 ## Performance
 
 같은 파일을 같은 환경(Apple M5 Pro, Python 3.12, 도구 순서를 바꿔 3회 측정한 중앙값)에서 다른 변환 도구와 함께 쟀다. 배수는 두 도구가 모두 성공한 파일만 합산한 값이다.
-dochan 은 저장소 소스를 `DOCHAN_BUILD_ACCEL=1` 로 빌드한 상태(PDF 내용 스트림·줄 조립과 XML 검사의 선택적 C 확장 포함)다.
+dochan 은 저장소 소스를 `DOCHAN_BUILD_ACCEL=1` 로 빌드한 상태(PDF 내용 스트림·줄 조립, XML 검사, JSON 출력의 선택적 C 확장 포함)다.
 
 | 형식(무작위 표본) | 상대 도구 | dochan | 상대 | dochan 속도 |
 |---|---|---:|---:|---|
@@ -74,6 +74,9 @@ dochan 은 저장소 소스를 `DOCHAN_BUILD_ACCEL=1` 로 빌드한 상태(PDF �
 | PDF (300개) | PyMuPDF | 3.4초 | 1.5초 | **2.3배 느림** |
 
 이 표본에서 dochan 이 예외로 멈춘 파일은 0개다(다른 도구는 2~20개). 2026-10-04 측정에서는 PDF 가 PyMuPDF 보다 9.4배 느렸고, 선택적 C 가속(내용 스트림·글자 연산·객체 파서·줄 조립·표 복원·글꼴 준비·각주/제목·AES·괘선 전달·셀 글 조립)으로 2.3배까지 좁혔다(2026-11-01).
+
+2026-11-02 에는 PDF 밖의 모든 형식에 공통으로 걸리는 단계를 줄였다. JSON 출력은 새 C 모듈(들여쓰기 직렬화)로 형식과 무관하게 51~59% 짧아졌고(XLS 720개 35.1 → 12.9초), HWPX 파싱은 약 17%, HWP 파싱은 약 11% 빨라졌다(한가한 장비 교대 3회 중앙값, 공개 코퍼스 14,491건 출력 해시 동일).
+기록은 [속도 4차 통합 재측정](docs/benchmarks/2026-11-02-round4-integration.md)에 있다.
 
 PDF 는 아직 약점이다. PyMuPDF 는 C 엔진이고(AGPL 이라 가져다 쓸 수 없다) `get_text()` 는 글자만 뽑는 반면, dochan 은 표·제목·링크·각주까지 복원하고 Markdown 을 만든다.
 글꼴·좌표까지 뽑는 `get_text("dict")` 나 표 복원 `find_tables()` 와 비교하면 순위가 바뀐다. **`pip install dochan` 의 순수 Python 휠은 가속이 없어** PDF 가 PyMuPDF 보다

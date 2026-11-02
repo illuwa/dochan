@@ -3,9 +3,9 @@ output/json_out.py — 구조화 JSON 출력
 """
 
 from copy import deepcopy
-from ..conversion import Provenance
-from ..model.document import Document, Paragraph
-from ..model.table import Table
+from ..conversion import AssetRef, Provenance
+from ..model.document import Document, Paragraph, Section, TextRun
+from ..model.table import Cell, Table
 from ..model.equation import Equation
 from ..model.image import Image
 from ..model.header_footer import Comment, Footnote, HeaderFooter
@@ -16,8 +16,45 @@ def _as_list(items, count):
     return list(items)
 
 
+_MODEL_TYPES = (Document, Section, Paragraph, Cell, TextRun, Provenance, Table, Image,
+                Equation, HeaderFooter, Footnote, Comment, AssetRef)
+
+
+def _model_payload(value, role):
+    if role >= 100:
+        return json_indent.Stream((_model_payload(item, role - 100) for item in value), len(value))
+    if role == 0:
+        return value
+    if role == 9:
+        result = {}
+        _add_caption(result, value)
+        return result['caption']
+    if role == 8:
+        return {'latex': value.latex, 'script': value.script, 'script_format': value.script_format}
+    if role == 1:
+        return _document_to_dict(value, json_indent.Stream)
+    if role == 2:
+        return _section_to_dict(value, json_indent.Stream)
+    if role == 3:
+        return _element_to_dict(value, json_indent.Stream)
+    return {4: _cell_to_dict, 5: _run_to_dict, 6: _provenance_to_dict,
+            7: _asset_to_dict}[role](value)
+
+
+def _model_fallback(value, role, indent, depth):
+    if role == 0:
+        return json_indent._python_dumps_indented(
+            value, indent, _start_depth=depth, _check_circular=True)
+    # A one-item tuple is the native fallback protocol: re-walk the Python
+    # mirror lazily at the same depth, without materializing a subtree string.
+    return (_model_payload(value, role),)
+
+
 def to_json(doc: Document, indent: int = 2) -> str:
     """Document → JSON 문자열 (`json.dumps(to_dict(doc), ensure_ascii=False, indent=indent)` 와 같다)"""
+    if json_indent._cjson is not None and json_indent._native_indent(indent):
+        return json_indent._native_encode(doc, indent, types=_MODEL_TYPES,
+                                          fallback=_model_fallback, role=1)
     if indent is not None and not json_indent.STDLIB_INDENT_IS_NATIVE:
         try:
             # 섹션·요소·표의 행을 하나씩 만들어 쓰고 버린다. 문서 전체의 dict 트리를
@@ -34,6 +71,8 @@ def write_json(doc: Document, fp, indent=2) -> None:
 
     Rows are streamed on all supported Python versions, including indent=None.
     """
+    if json_indent._cjson is not None and json_indent._native_indent(indent):
+        return json_indent._native_encode(doc, indent, fp, _MODEL_TYPES, _model_fallback, 1)
     payload = _document_to_dict(doc, json_indent.Stream)
     json_indent.dump(payload, fp, indent)
 

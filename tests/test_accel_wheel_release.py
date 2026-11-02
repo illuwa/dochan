@@ -7,10 +7,10 @@ from scripts.verify_accel_wheel import validate_accel_wheel, validate_release
 
 
 def _wheel(path, extensions=("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables", "_caes",
-                             "_cnotes", "_cheadings", "_cbody", "_clayout")):
+                             "_cnotes", "_cheadings", "_cbody", "_clayout", "_cjson")):
     with zipfile.ZipFile(path, "w") as archive:
         for name in extensions:
-            package = "utils" if name == "_caes" else "pdf"
+            package = "output" if name == "_cjson" else "utils" if name == "_caes" else "pdf"
             archive.writestr(f"dochan/{package}/{name}.abi3.so", b"test")
     return path
 
@@ -103,4 +103,13 @@ def test_accel_wheel_requires_aes(tmp_path):
     wheel = _wheel(tmp_path / "dochan-1.15.0-cp39-abi3-macosx_11_0_arm64.whl",
                    ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables"))
     with pytest.raises(ValueError, match="_caes"):
+        validate_accel_wheel(wheel)
+
+
+def test_accel_wheel_requires_json_writer(tmp_path):
+    from scripts.verify_accel_wheel import EXTENSIONS
+
+    wheel = _wheel(tmp_path / "dochan-1.18.0-cp39-abi3-macosx_11_0_arm64.whl",
+                   tuple(name for name in EXTENSIONS if name != "_cjson"))
+    with pytest.raises(ValueError, match="_cjson"):
         validate_accel_wheel(wheel)

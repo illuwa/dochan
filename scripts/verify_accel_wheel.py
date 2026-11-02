@@ -9,7 +9,7 @@ import zipfile
 
 
 EXTENSIONS = ("_cscan", "_cinterp", "_clines", "_cobjects", "_ccmap", "_ctables", "_caes",
-              "_cnotes", "_cheadings", "_cbody", "_clayout")
+              "_cnotes", "_cheadings", "_cbody", "_clayout", "_cjson")
 TARGETS = {"manylinux_x86_64", "manylinux_aarch64", "macos_arm64", "macos_x86_64"}
 
 
@@ -19,7 +19,7 @@ def validate_accel_wheel(wheel):
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         for extension in EXTENSIONS:
-            package = "utils" if extension == "_caes" else "pdf"
+            package = "output" if extension == "_cjson" else "utils" if extension == "_caes" else "pdf"
             if not any(name.startswith(f"dochan/{package}/{extension}.")
                        and name.endswith((".so", ".pyd")) for name in names):
                 raise ValueError(f"Missing {extension} in {wheel.name}")
@@ -112,13 +112,14 @@ from dochan.pdf.notes import NOTES_BACKEND
 from dochan.pdf.headings import HEADING_BACKEND
 from dochan.pdf.reader import BODY_GROUPS_BACKEND
 from dochan.pdf.layout import LAYOUT_BACKEND
+from dochan.output.json_indent import JSON_BACKEND
 location = pathlib.Path(dochan.__file__).resolve()
 assert location.is_relative_to(pathlib.Path(sys.prefix).resolve()), location
 backends = (c.CONTENT_SCANNER_BACKEND, c.CONTENT_INTERPRETER_BACKEND, c.LINE_ASSEMBLY_BACKEND, OBJECT_PARSER_BACKEND, CMAP_BACKEND, TABLE_BACKEND,
-            AES_BACKEND, NOTES_BACKEND, HEADING_BACKEND, BODY_GROUPS_BACKEND, LAYOUT_BACKEND)
+            AES_BACKEND, NOTES_BACKEND, HEADING_BACKEND, BODY_GROUPS_BACKEND, LAYOUT_BACKEND, JSON_BACKEND)
 expected = "python" if os.environ.get("DOCHAN_DISABLE_ACCEL") == "1" else "c"
 print("Installed:", location, "backends:", backends, flush=True)
-assert backends == (expected,) * 11, backends
+assert backends == (expected,) * 12, backends
 '''
         for disabled in (False, True):
             env = os.environ.copy()

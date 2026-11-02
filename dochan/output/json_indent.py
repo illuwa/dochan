@@ -14,6 +14,7 @@ CPython 3.12 이하는 `indent` 를 주면 C 인코더를 쓰지 않고 토큰�
 """
 
 import json
+import os
 from json.encoder import encode_basestring as _encode_str
 
 _INF = float("inf")
@@ -23,6 +24,15 @@ _CONTAINERS = (list, tuple, dict)
 # 조각마다 붙는 str 객체 머리(약 50바이트)가 큰 표에서 본문만큼 메모리를 쓴다.
 _COMPACT_AFTER = 4096
 _fallbacks = 0
+JSON_BACKEND = "python"
+_cjson = None
+if os.environ.get("DOCHAN_DISABLE_ACCEL") != "1":
+    try:
+        from . import _cjson
+    except ImportError:
+        pass
+    else:
+        JSON_BACKEND = "c"
 
 
 def _probe_native_indent() -> bool:
@@ -134,7 +144,25 @@ def dump(payload, fp, indent=2) -> None:
     dumps_indented(payload, indent, _fp=fp)
 
 
+def _fallback_subtree(value, role, indent, depth):
+    return _python_dumps_indented(value, indent, _start_depth=depth, _check_circular=True)
+
+
+def _native_indent(indent):
+    return indent is None or type(indent) in (str, int, bool)
+
+
+def _native_encode(payload, indent, fp=None, types=None, fallback=_fallback_subtree, role=0):
+    return _cjson.encode(payload, indent, fp, Stream, types, fallback, role)
+
+
 def dumps_indented(payload, indent, _fp=None) -> str:
+    if _cjson is not None and _native_indent(indent):
+        return _native_encode(payload, indent, _fp)
+    return _python_dumps_indented(payload, indent, _fp)
+
+
+def _python_dumps_indented(payload, indent, _fp=None, _start_depth=0, _check_circular=False) -> str:
     """들여쓰기 JSON 을 조립하거나 파일에 쓴다. 잘못된 값은 표준 JSON 예외로 알린다.
 
     정확한 내장 타입은 바로 분기하고, 상속 타입(str·int·float 하위 클래스, tuple,
@@ -143,7 +171,7 @@ def dumps_indented(payload, indent, _fp=None) -> str:
     """
     unit = "" if indent is None else (indent if isinstance(indent, str) else " " * indent)
     newline = "" if indent is None else "\n"
-    pads = [newline]          # pads[깊이] = 줄바꿈 + 그 깊이의 들여쓰기
+    pads = [newline + unit * depth for depth in range(_start_depth + 1)]          # pads[깊이] = 줄바꿈 + 그 깊이의 들여쓰기
     out = []
     if _fp is None:
         append = out.append
@@ -264,7 +292,7 @@ def dumps_indented(payload, indent, _fp=None) -> str:
                     tail = len(out)
             append(pads[depth - 1] + "]")
 
-    if _fp is None:
+    if _fp is None and not _check_circular:
         walk = walk_container
 
     text = _scalar_text(payload)
@@ -275,7 +303,7 @@ def dumps_indented(payload, indent, _fp=None) -> str:
         return text
     if not isinstance(payload, _CONTAINERS) and type(payload) is not Stream:
         json.dumps(payload, ensure_ascii=False)
-    walk(payload, 0)
+    walk(payload, _start_depth)
     if _fp is not None:
         if out:
             _fp.write("".join(out))

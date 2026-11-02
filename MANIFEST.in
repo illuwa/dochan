@@ -20,3 +20,4 @@ include dochan/pdf/_cnotes.c
 include dochan/pdf/_cheadings.c
 include dochan/pdf/_cbody.c
 include dochan/pdf/_clayout.c
+include dochan/output/_cjson.c

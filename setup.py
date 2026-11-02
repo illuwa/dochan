@@ -27,6 +27,7 @@ def _extension(name, sources, depends=()):
 extensions = []
 if os.environ.get("DOCHAN_BUILD_ACCEL") == "1":
     extensions = [
+        _extension("dochan.output._cjson", ["dochan/output/_cjson.c"]),
         _extension("dochan.utils._caes", ["dochan/utils/_caes.c"]),
         _extension("dochan.pdf._cnotes", ["dochan/pdf/_cnotes.c"]),
         _extension("dochan.pdf._cheadings", ["dochan/pdf/_cheadings.c"]),
@@ -53,7 +54,7 @@ setup(
     ext_modules=extensions,
     cmdclass={"build_ext": AcceleratorBuildExt} if extensions else {},
     # The sdist carries the build source; wheels carry executable packages.
-    exclude_package_data={"dochan.utils": ["_cxml.c", "_caes.c"], "dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
+    exclude_package_data={"dochan.output": ["_cjson.c"], "dochan.utils": ["_cxml.c", "_caes.c"], "dochan.pdf": ["_cscan.c", "_cinterp.c", "_cinterp_objects.h",
                                          "_cinterp_paths.h", "_cinterp_show.h", "_cinterp_profile.h",
                                          "_csegments.h", "_cinterp_segments.h", "_cinterp_marked.h",
                                          "_clines.c", "_cobjects.c", "_ccmap.c",

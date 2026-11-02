@@ -11,6 +11,7 @@ KS X 6101:2011 / OWPML 표준 기반.
   BinData/ — 바이너리 데이터 (이미지 등)
 """
 import os
+from functools import lru_cache
 from io import StringIO
 
 import posixpath
@@ -131,6 +132,7 @@ NS = {
     'hc': 'http://www.hancom.co.kr/hwpml/2011/core',
     'hpf': 'urn:oasis:names:tc:opendocument:xmlns:container',
 }
+_SWITCH_TAG = '{%s}switch' % NS['hp']
 
 # <hp:switch>/<hp:case required-namespace="..."> 에서 우리가 해석할 수 있다고 선언하는 확장.
 # 이 목록에 없는 case 는 건너뛰고 <hp:default> 를 쓴다.
@@ -798,9 +800,10 @@ class HWPXParser:
 
         # Selected charts in unknown containers must be visible as unsupported;
         # unselected alternatives and revision-deleted nodes are not omissions.
-        for child in _selected_descendants(root):
-            if _local_tag(child.tag) == 'chart' and child not in self._chart_seen:
-                self._chart_error("unsupported_placement", part_name + ": chart in an unsupported container")
+        if self._section_has_charts:
+            for child in _selected_descendants(root):
+                if _local_tag(child.tag) == 'chart' and child not in self._chart_seen:
+                    self._chart_error("unsupported_placement", part_name + ": chart in an unsupported container")
         self._chart_seen.clear()
         if self._body_budget_exceeded and self._body_tail_run is None:
             self._body_tail_run = TextRun()
@@ -815,21 +818,21 @@ class HWPXParser:
         초과 이후에는 XML을 한 번만 훑어 표시 텍스트를 문서 꼬리에 모은다.
         """
         blocks = DRAWING_TAGS | {'tbl', 'pic', 'equation', 'chart', 'header', 'footer'}
-        # ElementTree child iterators skip the next sibling after removal.
-        # Snapshot each selected child sequence before this pass mutates it.
-        stack = [iter(list(_selected_children(root)))]
+        # Resolve each distinct expanded tag once instead of splitting it for
+        # every layout/text node. Bound the cache for hostile unique names.
+        costs = {}
+        self._section_has_charts = False
         removed = {}
-        while stack:
-            node = next(stack[-1], None)
-            if node is None:
-                stack.pop()
-                continue
-            tag = _local_tag(node.tag)
-            cost = 0
-            if tag in ('p', 'memo') or tag in blocks:
-                cost = 1
-            elif tag in ('footNote', 'endNote', 'hiddenComment'):
-                cost = 2
+        for node in _selected_descendants(root):
+            cost = costs.get(node.tag)
+            if cost is None:
+                tag = _local_tag(node.tag)
+                if tag == 'chart':
+                    self._section_has_charts = True
+                cost = (1 if tag in ('p', 'memo') or tag in blocks else
+                        2 if tag in ('footNote', 'endNote', 'hiddenComment') else 0)
+                if len(costs) < 1024:
+                    costs[node.tag] = cost
             if not self._body_budget_exceeded and cost > self._body_nodes_remaining:
                 self._body_budget_exceeded = True
                 self.errors.append(
@@ -845,8 +848,8 @@ class HWPXParser:
                     removed.setdefault(parent, set()).add(node)
             else:
                 self._body_nodes_remaining -= cost
-                if len(node):
-                    stack.append(iter(list(_selected_children(node))))
+        # Clearing the yielded node is safe: traversal only descends after
+        # resuming. Defer removal from its parent until all siblings are read.
         for parent, discarded in removed.items():
             parent[:] = [child for child in parent if child not in discarded]
 
@@ -1707,6 +1710,15 @@ def _local_tag(tag: str) -> str:
     """'{namespace}localname' → 'localname'"""
     if not isinstance(tag, str):
         return ""
+    # XML reuses expanded tag names. Keep a small bounded cache and never
+    # retain hostile, very long names after a document has been released.
+    if len(tag) <= 256:
+        return _split_local_tag(tag)
+    return tag.split('}', 1)[-1]
+
+
+@lru_cache(maxsize=1024)
+def _split_local_tag(tag):
     if '}' in tag:
         return tag.split('}', 1)[1]
     return tag
@@ -1741,28 +1753,33 @@ def _chart_input_counts(data: bytes) -> tuple[int, int]:
 
 def _selected_children(parent):
     """Flatten only selected switch branches, retaining XML document order."""
-    stack = [iter(parent)]
-    while stack:
-        child = next(stack[-1], None)
-        if child is None:
-            stack.pop()
-        elif child.tag == '{%s}switch' % NS['hp']:
+    for child in parent:
+        if child.tag == _SWITCH_TAG:
             branch = _choose_switch_branch(child)
             if branch is not None:
-                stack.append(iter(branch))
+                yield from _selected_children(branch)
         else:
             yield child
 
 
 def _selected_descendants(parent):
-    stack = [iter(_selected_children(parent))]
+    # Traverse ordinary children directly. No generator/list/iterator stack
+    # for leaf nodes, and no Python next() dispatch per node.
+    stack = [iter(parent)]
     while stack:
-        child = next(stack[-1], None)
-        if child is None:
-            stack.pop()
-        else:
+        for child in stack[-1]:
+            if child.tag == _SWITCH_TAG:
+                branch = _choose_switch_branch(child)
+                if branch is not None and len(branch):
+                    stack.append(iter(branch))
+                    break
+                continue
             yield child
-            stack.append(iter(_selected_children(child)))
+            if len(child):
+                stack.append(iter(child))
+                break
+        else:
+            stack.pop()
 
 
 def _choose_switch_branch(switch_elem):

@@ -7,7 +7,7 @@ their content and produce diagnostics, including in the default preserve mode.
 
 from dataclasses import dataclass, field
 
-from ..utils.safe_xml import parent_map
+from ..utils.safe_xml import Element, parent_map
 
 
 PARAGRAPH_NS = "http://www.hancom.co.kr/hwpml/2011/paragraph"
@@ -17,6 +17,10 @@ HH = "{" + HEAD_NS + "}"
 SECTION = "{http://www.hancom.co.kr/hwpml/2011/section}sec"
 MARKERS = {"insertBegin": "Insert", "insertEnd": "Insert",
            "deleteBegin": "Delete", "deleteEnd": "Delete"}
+_MARKER_SUFFIXES = tuple('}' + name for name in MARKERS)
+_PARA_PR_TAG = HH + 'paraPr'
+_TRACK_CHANGE_TAG = HH + 'trackChange'
+_MISSING_ATTRIBUTE = object()
 MAX_OPEN_RANGES = 128
 MAX_RANGES = 10000
 OBJECTS = {"tbl", "pic", "equation", "rect", "ellipse", "line", "connectLine",
@@ -28,12 +32,21 @@ FLOW_CONTENT = {HP + "p", HP + "run", HP + "t", HP + "compose", HP + "dutmal",
                 HP + "hyphen"} | TEXT_TOKENS
 
 
+def _mapping_attribute(element, name, default):
+    """Attribute access for compatible trees without Element.get()."""
+    return element.attrib.get(name, default)
+
+
 def _collect_relevant(root, parents=None):
     relevant = set()
+    get_attribute = Element.get if isinstance(root, Element) else _mapping_attribute
     for element in root.iter():
         if isinstance(element.tag, str) and (
-            element.tag.rsplit("}", 1)[-1] in MARKERS
-            or "paraTcId" in element.attrib or "charTcId" in element.attrib
+            (element.tag.endswith(_MARKER_SUFFIXES) or element.tag in MARKERS)
+            # Element.attrib materializes an empty dict on attribute-free
+            # nodes; get() reads the compact XML representation directly.
+            or get_attribute(element, "paraTcId", _MISSING_ATTRIBUTE) is not _MISSING_ATTRIBUTE
+            or get_attribute(element, "charTcId", _MISSING_ATTRIBUTE) is not _MISSING_ATTRIBUTE
         ):
             relevant.add(element)
     if not relevant:
@@ -138,15 +151,15 @@ class RevisionProjector:
         for element in root.iter():
             if not isinstance(element.tag, str):
                 continue
-            if element.tag == HH + "paraPr" and element.get("id") is not None:
+            if element.tag == _PARA_PR_TAG and element.get("id") is not None:
                 heading = element.find(HH + "heading")
                 if heading is not None:
                     self._para_headings[element.get("id")] = (
                         heading.get("type"), heading.get("level")
                     )
-            if element.tag.rsplit("}", 1)[-1] != "trackChange":
+            if not (element.tag.endswith('}trackChange') or element.tag == 'trackChange'):
                 continue
-            if element.tag != HH + "trackChange":
+            if element.tag != _TRACK_CHANGE_TAG:
                 self._report("namespace", "trackChange")
                 continue
             identity = element.get("id")

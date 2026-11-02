@@ -426,35 +426,30 @@ class SectionParser:
         """
         # 1단계: LIST_HEADER 뒤의 동일 레벨 레코드를 자식으로 level+1 보정
         # ★ 반복 적용으로 중첩 LH까지 처리
-        adjusted = list(records)
-        # At most five linear passes; n is bounded before allocating the tree.
+        # Only integer levels change during the five passes. Keep the input
+        # records intact and materialize each adjusted record once, rather
+        # than allocating a new dataclass on every pass over the same record.
+        levels = [rec.level for rec in records]
+        count = len(records)
         for _pass in range(5):
-            new_adjusted = []
             changed = False
             i = 0
-            while i < len(adjusted):
-                rec = adjusted[i]
-                if rec.tag_id == HWPTAG_LIST_HEADER:
-                    new_adjusted.append(rec)
+            while i < count:
+                if records[i].tag_id == HWPTAG_LIST_HEADER:
+                    level = levels[i]
                     i += 1
-                    while i < len(adjusted):
-                        next_rec = adjusted[i]
-                        if next_rec.level < rec.level:
+                    while i < count:
+                        next_level = levels[i]
+                        if next_level < level:
                             break
-                        if next_rec.level == rec.level and next_rec.tag_id == HWPTAG_LIST_HEADER:
+                        if next_level == level and records[i].tag_id == HWPTAG_LIST_HEADER:
                             break
-                        # 같은 레벨 → +1, 더 깊은 레벨 → 역시 +1
-                        new_adjusted.append(RawRecord(
-                            next_rec.tag_id, next_rec.level + 1,
-                            next_rec.size, next_rec.data, next_rec.offset
-                        ))
-                        if next_rec.level == rec.level:
+                        levels[i] = next_level + 1
+                        if next_level == level:
                             changed = True
                         i += 1
                 else:
-                    new_adjusted.append(rec)
                     i += 1
-            adjusted = new_adjusted
             if not changed:
                 break
 
@@ -462,7 +457,9 @@ class SectionParser:
         root = {'record': None, 'children': []}
         stack = [(-1, root)]
 
-        for rec in adjusted:
+        for rec, level in zip(records, levels):
+            if level != rec.level:
+                rec = RawRecord(rec.tag_id, level, rec.size, rec.data, rec.offset)
             node = {'record': rec, 'children': []}
             while stack and stack[-1][0] >= rec.level:
                 stack.pop()
@@ -689,6 +686,11 @@ class SectionParser:
             # 텍스트 없는 책갈피(영역 앵커 등)도 마커로 남긴다
             elements.append(Paragraph(runs=list(bookmark_markers)))
 
+        # No control objects or bookmark runs can be inserted. The remaining
+        # pipeline would only allocate and sort empty containers.
+        if not ctrl_nodes and not bookmark_markers:
+            return elements
+
         # 컨트롤 파싱 (GSO 는 이미지+도형 텍스트 등 여러 요소를 낼 수 있어 리스트 허용)
         inline_offsets = {}
         if text_result:
@@ -833,6 +835,23 @@ class SectionParser:
         shapes = getattr(self.doc_info, 'char_shapes', None)
         if not char_shape_data or len(char_shape_data) < 8 or not shapes:
             return [TextRun(text=text)], remaining == 0
+        # A single shape at raw position zero produces one run, with no
+        # boundary iterator, closures or temporary boundary tuples. Empty
+        # text and exhausted budgets retain the general path's exact rules.
+        if text and remaining > 0 and len(char_shape_data) == 8:
+            position, shape_id = struct.unpack_from('<II', char_shape_data)
+            if position == 0:
+                run = TextRun(text=text)
+                if 0 <= shape_id < len(shapes):
+                    cs = shapes[shape_id]
+                    run.bold = cs.bold
+                    run.italic = cs.italic
+                    run.font_size_pt = cs.size_pt
+                    run.underline = cs.has_underline
+                    run.strikeout = cs.has_strikeout
+                    run.superscript = cs.superscript
+                    run.subscript = cs.subscript
+                return [run], False
         # A memoryview and iter_unpack avoid an input-sized list of tuples.
         pairs = struct.iter_unpack(
             '<II', memoryview(char_shape_data)[:len(char_shape_data) // 8 * 8])

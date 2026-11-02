@@ -2,8 +2,15 @@
 hwp/records/para_text.py — PARA_TEXT 바이너리 파서
 제어 문자 크기 맵(control_char.py) 기반
 """
+import re
 import struct
 from ...control_char import get_advance_bytes, is_extended_ctrl
+
+
+# Aligned UTF-16LE BMP units, excluding controls and surrogates. Match from
+# the current WCHAR boundary only; payload bytes inside controls are skipped
+# by the unchanged control path below, never searched as text.
+_PLAIN_BMP = re.compile(b'(?:[\x20-\xff][\x00-\xd7\xe0-\xff]|[\x00-\x1f][\x01-\xd7\xe0-\xff])+')
 
 
 def parse_para_text(data: bytes) -> dict:
@@ -29,11 +36,22 @@ def parse_para_text(data: bytes) -> dict:
     inline_controls = []
     raw_to_text = [0]
     char_index = 0
+    text_offset = 0
     i = 0
 
     while i < len(data) - 1:
+        plain = _PLAIN_BMP.match(data, i)
+        if plain is not None:
+            end = plain.end()
+            width = (end - i) // 2
+            text_parts.append(bytes(data[i:end]).decode('utf-16-le'))
+            raw_to_text.extend(range(text_offset + 1, text_offset + width + 1))
+            text_offset += width
+            char_index += width
+            i = end
+            continue
         start_i = i
-        start_text_offset = len(text_parts)
+        start_text_offset = text_offset
         char_code = struct.unpack_from("<H", data, i)[0]
 
         if char_code >= 32:
@@ -44,9 +62,10 @@ def parse_para_text(data: bytes) -> dict:
                 if low is not None and 0xDC00 <= low <= 0xDFFF:
                     cp = 0x10000 + (char_code - 0xD800) * 0x400 + (low - 0xDC00)
                     text_parts.append(chr(cp))
+                    text_offset += 1
                     char_index += 1
                     i += 4
-                    raw_to_text.extend((start_text_offset, len(text_parts)))
+                    raw_to_text.extend((start_text_offset, text_offset))
                     continue
                 # 짝 없는 high surrogate → 대체 문자
                 text_parts.append('\ufffd')
@@ -55,6 +74,7 @@ def parse_para_text(data: bytes) -> dict:
                 text_parts.append('\ufffd')
             else:
                 text_parts.append(chr(char_code))
+            text_offset += 1
             char_index += 1
             i += 2
 
@@ -82,13 +102,16 @@ def parse_para_text(data: bytes) -> dict:
             elif char_code == 24:
                 text_parts.append('-')   # 하이픈
 
+            if char_code in (10, 9, 30, 31, 24):
+                text_offset += 1
+
             # 필드 경계 기록 — 하이퍼링크(%hlk) 적용 범위 계산용.
-            # 각 append 는 정확히 한 글자이므로 len(text_parts)가 곧 텍스트 오프셋.
+            # text_offset counts codepoints, including batched text fragments.
             if char_code == 3 and i + 6 <= len(data):
-                field_marks.append((len(text_parts), 'start', bytes(data[i + 2:i + 6])))
+                field_marks.append((text_offset, 'start', bytes(data[i + 2:i + 6])))
                 field_raw_marks.append(((i + advance) // 2, 'start', bytes(data[i + 2:i + 6])))
             elif char_code == 4:
-                field_marks.append((len(text_parts), 'end', None))
+                field_marks.append((text_offset, 'end', None))
                 field_raw_marks.append(((i + advance) // 2, 'end', None))
 
             # 확장 컨트롤은 위치 기록 (나중에 CTRL_HEADER와 매칭)
@@ -104,7 +127,7 @@ def parse_para_text(data: bytes) -> dict:
         # 경계는 해당 문자/제어 문자를 소비한 뒤의 출력 위치를 가리킨다.
         raw_width = (i - start_i) // 2
         raw_to_text.extend([start_text_offset] * (raw_width - 1))
-        raw_to_text.append(len(text_parts))
+        raw_to_text.append(text_offset)
 
     return {
         'text': ''.join(text_parts),

@@ -418,7 +418,9 @@ static int walk(Writer *w, PyObject *v, int depth, int role) {
     PyObject *s;
     int i, result;
     if (!role) {
-        if (exact(v, &PyUnicode_Type)) return quote(w, v);
+        /* A str subclass (e.g. the XLS reader's numeric cell text) serializes by its stored characters,
+           exactly as the standard encoder does; none of its Python-level hooks are consulted. */
+        if (PyUnicode_Check(v)) return quote(w, v);
         if (v == Py_None) return literal(w, "null");
         if (v == Py_True) return literal(w, "true");
         if (v == Py_False) return literal(w, "false");

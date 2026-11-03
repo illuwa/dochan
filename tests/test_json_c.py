@@ -324,3 +324,72 @@ def test_run_missing_note_reference_attribute_matches_python_dicts():
         assert json_out.to_json(doc, 2) == expected
     finally:
         TextRun.note_reference_type = saved if saved is not None else ""
+
+
+class _Hostile(str):
+    """Every Python-level hook lies; only the stored characters count for JSON."""
+
+    def __new__(cls, text, number=None):
+        instance = super().__new__(cls, text)
+        instance.number = number
+        return instance
+
+    def __str__(self):
+        raise AssertionError("__str__ must not be consulted")
+
+    def __repr__(self):
+        raise AssertionError("__repr__ must not be consulted")
+
+    def __len__(self):
+        raise AssertionError("__len__ must not be consulted")
+
+    def __iter__(self):
+        raise AssertionError("__iter__ must not be consulted")
+
+    def encode(self, *args, **kwargs):
+        raise AssertionError("encode must not be consulted")
+
+    def __getitem__(self, item):
+        raise AssertionError("__getitem__ must not be consulted")
+
+
+_TEXTS = ["", "plain", "한글", "q\"b\\n\n\t\x00\x1f\x7f", "\ud800", "\udfff", "😀𐀀￿ ",
+          "x" * 70000]
+
+
+def _no_fallback(*args):
+    raise AssertionError("string subclass fell back to Python")
+
+
+@pytest.mark.parametrize("indent", [None, 0, 2, "\t"])
+@pytest.mark.parametrize("text", _TEXTS, ids=range(len(_TEXTS)))
+def test_str_subclass_values_are_escaped_natively(text, indent):
+    if json_indent.JSON_BACKEND != "c":
+        pytest.skip("optional C accelerator unavailable")
+    value = {"a": [_Hostile(text, 1.5), {"b": _Hostile(text)}], "c": _Hostile(text, "fmt")}
+    expected = json.dumps({"a": [text, {"b": text}], "c": text}, ensure_ascii=False, indent=indent)
+    assert json_indent._native_encode(value, indent, fallback=_no_fallback) == expected
+    target = io.StringIO()
+    json_indent._native_encode(value, indent, target, fallback=_no_fallback)
+    assert target.getvalue() == expected
+    # The root value itself, too.
+    assert json_indent._native_encode(_Hostile(text), indent, fallback=_no_fallback) == \
+        json.dumps(text, ensure_ascii=False)
+
+
+def test_str_subclass_run_text_in_model_is_escaped_without_python_fallback(monkeypatch):
+    if json_indent.JSON_BACKEND != "c":
+        pytest.skip("optional C accelerator unavailable")
+    provenance = Provenance(source_format="xls", sheet="s", cell="A1")
+    run = TextRun(text=_Hostile("12.50 \ud800", 12.5), provenance=provenance)
+    doc = Document(sections=[Section(elements=[Table(rows=[[Cell(
+        paragraphs=[Paragraph(runs=[run], provenance=provenance)], row=0, col=0,
+        provenance=provenance)]])])])
+    plain = TextRun(text="12.50 \ud800", provenance=provenance)
+    reference = Document(sections=[Section(elements=[Table(rows=[[Cell(
+        paragraphs=[Paragraph(runs=[plain], provenance=provenance)], row=0, col=0,
+        provenance=provenance)]])])])
+    expected = json.dumps(json_out.to_dict(reference), ensure_ascii=False, indent=2)
+    monkeypatch.setattr(json_out, "_model_fallback", _no_fallback)
+    # Cell.text / Paragraph.text join run texts through Python, which the lying hooks must not break.
+    assert json_out.to_json(doc, 2) == expected

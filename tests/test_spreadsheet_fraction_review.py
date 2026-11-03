@@ -148,15 +148,19 @@ def test_fraction_fuzz_reaches_token_path_and_public_length_limit():
     short = '[Red]' + '#\\:' * 20 + '# ?/?'
     long = '[Red]' + '#\\:' * 48 + '# ?/?'
     assert len(long) <= 255
-    start = perf_counter()
-    for _ in range(500):
-        formatter._format_cell_value("1.5", short)
-    short_time = perf_counter() - start
-    start = perf_counter()
-    for _ in range(500):
-        formatter._format_cell_value("1.5", long)
-    long_time = perf_counter() - start
-    assert long_time < max(short_time * 4, 0.25)
+    def best_time(fmt):
+        # 한 번의 스케줄링 지연이 비율을 흔들지 않도록 여러 번 재서 최솟값을 쓴다.
+        best = None
+        for _ in range(7):
+            start = perf_counter()
+            for _ in range(200):
+                formatter._format_cell_value("1.5", fmt)
+            elapsed = perf_counter() - start
+            best = elapsed if best is None or elapsed < best else best
+        return best
+
+    # 길이는 약 2.2배이므로 선형이면 비율이 2 안팎이다. 절대 시간 상한 없이 상대 비율만 본다.
+    assert best_time(long) < best_time(short) * 4
     assert formatter._format_cell_value("1.5", long + "#" * 256) == "1.5"
 
 

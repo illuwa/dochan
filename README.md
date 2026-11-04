@@ -98,6 +98,26 @@ brew install tesseract tesseract-lang  # macOS
 
 ## Quick Start
 
+### MCP (stdio)
+
+MCP 클라이언트에서 로컬 문서를 읽으려면 `dochan`을 설치하고 서버를 등록합니다.
+별도 MCP 패키지는 필요하지 않습니다. 예를 들어 클라이언트의 MCP 설정에 다음을 추가합니다
+(`command`는 설치된 실행 파일의 절대 경로로 바꿀 수 있습니다).
+
+```json
+{
+  "mcpServers": {
+    "dochan": { "command": "dochan", "args": ["mcp"] }
+  }
+}
+```
+
+`convert_document` 도구에 절대 파일 경로 `path`를 전달합니다. `format`은
+`markdown`(기본), `text`, `json`이며 `ocr`, `pdf_text_tables`, `revision_mode`도
+선택할 수 있습니다. OCR은 별도 설치가 필요합니다. 파싱 경고는 결과에 함께 반환하고,
+실패는 MCP 도구 오류로 반환합니다. 서버는 실행 사용자 권한으로 로컬 파일을 읽으므로
+신뢰하는 MCP 클라이언트에서 사용하세요. 문서 암호 입력과 HTTP 전송은 지원하지 않습니다.
+
 ### Python API
 
 ```python

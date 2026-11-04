@@ -97,6 +97,8 @@ def main(argv=None):
     )
     subparsers = parser.add_subparsers(dest='command', help='명령')
 
+    subparsers.add_parser('mcp', help='stdio MCP 서버 실행', allow_abbrev=False)
+
     # convert
     conv = subparsers.add_parser('convert', help='문서 → Markdown/JSON/Text 변환', allow_abbrev=False)
     conv.add_argument('file', help='문서 파일 경로')
@@ -148,6 +150,9 @@ def main(argv=None):
         return _cmd_batch(args)
     if args.command == 'info':
         return _cmd_info(args)
+    if args.command == 'mcp':
+        from .mcp import serve
+        return serve()
     return 2
 
 

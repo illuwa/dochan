@@ -14,9 +14,13 @@ from dochan.office_binary.doc import DOCReader
 from dochan.office_binary.ppt import PPTReader
 from dochan.office_binary.xls import XLSReader, parse_biff_workbook
 
-# 폭주 방지 장치가 없으면 아래 테스트들은 수십 초~수 분을 소모한다.
-# 고쳐진 파서에서는 모두 1초 미만이므로 넉넉하게 잡아도 판별력이 있다.
-RUNAWAY_TIME_LIMIT_SECONDS = 5.0
+# 폭주 방지 장치가 없으면 아래 테스트들은 선언된 격자(최대 1677만 셀)를 실체화해 수십 초~수 분을 소모한다.
+# 절대 시간 상한은 CI 러너 속도에 따라 흔들리므로(느린 러너에서 정상 파서가 5초를 넘긴 적이 있다),
+# 같은 실제 셀을 가진 "선언이 정직한" 대조 입력과의 상대 비율로 판정한다.
+RUNAWAY_RATIO_LIMIT = 50.0
+RUNAWAY_FLOOR_SECONDS = 0.1  # 대조 입력이 밀리초 단위일 때 비율이 잡음이 되지 않게 하는 바닥
+RUNAWAY_ATTEMPTS = 3
+RUNAWAY_DEFINITELY_SLOW_SECONDS = 30.0  # 이만큼 걸리면 재시도 없이 실패(회귀 시 수 분을 더 쓰지 않는다)
 
 
 def _record(record_type, data=b""):
@@ -138,10 +142,53 @@ def _cell_count(table):
     return table.row_count * table.col_count
 
 
-def _timed_parse(workbook):
+def _timed_parse(workbook, parse=parse_biff_workbook):
     started = time.monotonic()
-    doc = parse_biff_workbook(workbook)
+    doc = parse(workbook)
     return doc, time.monotonic() - started
+
+
+def _best_parse_time(workbook, parse=parse_biff_workbook, attempts=3):
+    return min(_timed_parse(workbook, parse)[1] for _ in range(attempts))
+
+
+def _parse_without_runaway(workbook, control, parse=parse_biff_workbook):
+    """`workbook` 를 파싱해 문서를 돌려주되, 같은 실제 셀의 정직한 대조 입력보다 비정상적으로 느리면 실패한다.
+
+    러너가 느리면 두 쪽이 함께 느려지므로 비율은 유지된다. 한 번의 스케줄링 지연을 걸러 내려고
+    기준을 넘으면 몇 번 더 재서 최솟값으로 판정하고, 확실히 느리면(회귀) 반복하지 않는다.
+    """
+    baseline = _best_parse_time(control, parse)
+    limit = max(baseline * RUNAWAY_RATIO_LIMIT, RUNAWAY_FLOOR_SECONDS)
+    best = None
+    doc = None
+    for _ in range(RUNAWAY_ATTEMPTS):
+        doc, elapsed = _timed_parse(workbook, parse)
+        best = elapsed if best is None else min(best, elapsed)
+        if best < limit or elapsed > RUNAWAY_DEFINITELY_SLOW_SECONDS:
+            break
+    assert best < limit, f"parse took {best:.3f}s, limit {limit:.3f}s (control {baseline:.4f}s)"
+    return doc
+
+
+def test_runaway_check_detects_a_pathologically_slow_parse_and_ignores_uniform_slowness():
+    fast, slow = b"fast", b"slow"
+
+    def uniform(workbook):
+        time.sleep(0.2)  # 러너가 느린 경우: 두 입력이 함께 느리다
+        return object()
+
+    def runaway(workbook):
+        time.sleep(0.2 if workbook == slow else 0.001)
+        return object()
+
+    _parse_without_runaway(slow, fast, uniform)  # 비율 1 이므로 통과
+    try:
+        _parse_without_runaway(slow, fast, runaway)
+    except AssertionError as error:
+        assert "limit" in str(error)
+    else:
+        raise AssertionError("a 200x slowdown against the control must be reported")
 
 
 def _write_fake_ole(tmp_path, name):
@@ -218,16 +265,17 @@ def test_dimension_claiming_whole_sheet_does_not_materialize_declared_grid():
 
     고치기 전에는 선언값을 range() 로 풀어 1677만 셀을 실체화했다.
     """
-    body = _dimension_biff8(0, 65536, 0, 256) + _label(0, 0, "A") + _number(0, 1, 1)
+    cells = _label(0, 0, "A") + _number(0, 1, 1)
+    body = _dimension_biff8(0, 65536, 0, 256) + cells
 
-    doc, elapsed = _timed_parse(_workbook("Inflated", body))
+    doc = _parse_without_runaway(
+        _workbook("Inflated", body), _workbook("Inflated", _dimension_biff8(0, 1, 0, 2) + cells))
     table = _first_table(doc.sections[0])
 
     assert table.row_count == 1
     assert table.col_count == 2
     assert _cell_count(table) <= xls_module.MAX_SHEET_CELLS
     assert [cell.text for cell in table.rows[0]] == ["A", "1"]
-    assert elapsed < RUNAWAY_TIME_LIMIT_SECONDS
 
 
 def test_dense_large_sheet_is_not_truncated():
@@ -248,17 +296,16 @@ def test_dense_large_sheet_is_not_truncated():
 
 def test_inflated_dimension_keeps_dense_cells_and_drops_phantom_grid():
     """선언 격자는 실제 셀 범위로 되돌리되, 그 실제 셀은 한 칸도 잃지 않는다."""
-    body = _dimension_biff8(0, 65536, 0, 256) + b"".join(
-        _number(row, col, row * 100 + col) for row in range(700) for col in range(100)
-    )
+    cells = b"".join(_number(row, col, row * 100 + col) for row in range(700) for col in range(100))
 
-    doc, elapsed = _timed_parse(_workbook("DenseInflated", body))
+    doc = _parse_without_runaway(
+        _workbook("DenseInflated", _dimension_biff8(0, 65536, 0, 256) + cells),
+        _workbook("DenseInflated", _dimension_biff8(0, 700, 0, 100) + cells))
     table = _first_table(doc.sections[0])
 
     assert table.row_count == 700
     assert table.col_count == 100
     assert table.rows[699][99].text == "69999"
-    assert elapsed < RUNAWAY_TIME_LIMIT_SECONDS
 
 
 def test_scattered_cells_across_whole_sheet_are_capped():
@@ -285,14 +332,14 @@ def test_merged_range_claiming_whole_sheet_does_not_explode_but_keeps_span():
     """
     body = _label(0, 0, "Merged") + _merged_cells([(0, 65535, 0, 255)])
 
-    doc, elapsed = _timed_parse(_workbook("MergedRunaway", body))
+    control = _label(0, 0, "Merged") + _merged_cells([(0, 0, 0, 3)])
+    doc = _parse_without_runaway(_workbook("MergedRunaway", body), _workbook("MergedRunaway", control))
     table = _first_table(doc.sections[0])
 
     assert _cell_count(table) <= xls_module.MAX_SHEET_CELLS
     assert table.rows[0][0].text == "Merged"
     assert table.rows[0][0].row_span <= table.row_count
     assert table.rows[0][0].col_span <= table.col_count
-    assert elapsed < RUNAWAY_TIME_LIMIT_SECONDS
 
 
 def test_small_merged_range_still_fills_declared_cells():
@@ -315,12 +362,12 @@ def test_hyperlink_range_claiming_whole_sheet_fills_only_anchor():
     """HLINK 가 시트 전체를 주장하면 앵커 한 칸에만 링크를 붙인다."""
     body = _label(0, 0, "Site") + _hlink(0, 65535, 0, 255, "https://example.com/report")
 
-    doc, elapsed = _timed_parse(_workbook("LinkRunaway", body))
+    control = _label(0, 0, "Site") + _hlink(0, 0, 0, 0, "https://example.com/report")
+    doc = _parse_without_runaway(_workbook("LinkRunaway", body), _workbook("LinkRunaway", control))
     table = _first_table(doc.sections[0])
 
     assert _cell_count(table) <= xls_module.MAX_SHEET_CELLS
     assert table.rows[0][0].text == "Site <https://example.com/report>"
-    assert elapsed < RUNAWAY_TIME_LIMIT_SECONDS
 
 
 # --- 5. BIFF2/3/4 의 짧은 DIMENSION 레코드 -----------------------------------

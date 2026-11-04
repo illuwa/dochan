@@ -6,6 +6,7 @@ OLE 컨테이너는 FakeOle 로 흉내낸다.
 """
 
 import struct
+import sys
 import time
 
 from dochan.office_binary import doc as doc_module
@@ -142,10 +143,13 @@ def _cell_count(table):
     return table.row_count * table.col_count
 
 
+_clock = time.monotonic  # 판정 보조 함수의 자체 테스트가 가짜 시계로 바꿔 끼운다
+
+
 def _timed_parse(workbook, parse=parse_biff_workbook):
-    started = time.monotonic()
+    started = _clock()
     doc = parse(workbook)
-    return doc, time.monotonic() - started
+    return doc, _clock() - started
 
 
 def _best_parse_time(workbook, parse=parse_biff_workbook, attempts=3):
@@ -171,15 +175,18 @@ def _parse_without_runaway(workbook, control, parse=parse_biff_workbook):
     return doc
 
 
-def test_runaway_check_detects_a_pathologically_slow_parse_and_ignores_uniform_slowness():
+def test_runaway_check_detects_a_pathologically_slow_parse_and_ignores_uniform_slowness(monkeypatch):
+    """가짜 시계로 결정적으로 확인한다 — 실제 sleep 은 러너마다 오차가 달라 이 검사를 흔든다."""
+    now = [0.0]
+    monkeypatch.setattr(sys.modules[__name__], "_clock", lambda: now[0])
     fast, slow = b"fast", b"slow"
 
     def uniform(workbook):
-        time.sleep(0.2)  # 러너가 느린 경우: 두 입력이 함께 느리다
+        now[0] += 0.2  # 러너가 느린 경우: 두 입력이 함께 느리다
         return object()
 
     def runaway(workbook):
-        time.sleep(0.2 if workbook == slow else 0.001)
+        now[0] += 0.2 if workbook == slow else 0.001
         return object()
 
     _parse_without_runaway(slow, fast, uniform)  # 비율 1 이므로 통과

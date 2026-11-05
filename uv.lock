@@ -274,7 +274,7 @@ toml = [
 
 [[package]]
 name = "dochan"
-version = "1.20.0"
+version = "1.21.0"
 source = { editable = "." }
 
 [package.optional-dependencies]

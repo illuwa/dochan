@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-11-05
+
+### 추가
+
+- `dochan mcp` stdio MCP 서버와 `convert_document` 도구를 추가했다. 로컬 HWP/HWPX, Office, PDF 문서를 Markdown·텍스트·JSON으로 변환하며 OCR, PDF 표 복원, 변경 추적 옵션을 지원한다. 문서 암호 입력과 HTTP 전송은 지원하지 않는다.
+
 ## [1.20.0] - 2026-11-04
 
 1.19.0 뒤의 JSON 출력 C 후속 속도 릴리스다. 출력은 바뀌지 않는다. 새 모듈은 없고 `_cjson` 이 `str` 하위 클래스(XLS 셀 문자열 등)를 직접 이스케이프해 스프레드시트 JSON 이 약 14~15% 빨라진다.
